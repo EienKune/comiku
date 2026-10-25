@@ -48,6 +48,41 @@ function docker(...args) {
     });
   }
 }
+function createFixtureNetwork() {
+  // Static client/proxy IPs require an explicitly configured subnet on Linux.
+  // Keep dynamic addresses in the lower half, away from .248/.249/.250.
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const [second, third] = randomBytes(2);
+    const base = `10.${second}.${third}`;
+    try {
+      docker(
+        "network",
+        "create",
+        "--internal",
+        "--subnet",
+        `${base}.0/24`,
+        "--ip-range",
+        `${base}.0/25`,
+        "--gateway",
+        `${base}.1`,
+        prefix,
+      );
+      return base;
+    } catch (error) {
+      // Docker checks overlap atomically, including concurrently created networks.
+      if (
+        !/Pool overlaps with other one on this address space/i.test(
+          error.message,
+        )
+      )
+        throw error;
+      if (attempt === 31)
+        throw new Error("Could not allocate an isolated fixture subnet.", {
+          cause: error,
+        });
+    }
+  }
+}
 function launch(name, ...args) {
   containers.push(name);
   docker("run", "-d", "--name", name, "--network", prefix, ...args);
@@ -153,11 +188,8 @@ try {
   await writeFile(join(directory, "backup-password"), backupPassword, {
     mode: 0o644,
   });
-  docker("network", "create", "--internal", prefix);
+  const base = createFixtureNetwork();
   networkCreated = true;
-  const subnet = JSON.parse(docker("network", "inspect", prefix))[0].IPAM
-    .Config[0].Subnet;
-  const base = subnet.split("/")[0].split(".").slice(0, 3).join(".");
   const trustedClient = base + ".248",
     directClient = base + ".249",
     proxy = base + ".250";
