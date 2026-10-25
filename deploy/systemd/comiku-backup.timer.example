@@ -1,0 +1,12 @@
+# Example ONLY. Align the schedule with the confirmed policy before installing.
+[Unit]
+Description=Comiku backup schedule (requires confirmed policy)
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=comiku-backup.service
+
+[Install]
+WantedBy=timers.target

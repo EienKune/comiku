@@ -1,0 +1,29 @@
+import /etc/caddy/cloudflare.caddy {
+	admin off
+	servers {
+		import cloudflare-trust
+		trusted_proxies_strict
+		client_ip_headers CF-Connecting-IP
+	}
+}
+{$API_DOMAIN} {
+	tls /run/secrets/origin_certificate /run/secrets/origin_private_key
+	@cloudflare {
+		import cloudflare-peer
+	}
+	handle @cloudflare {
+		request_body {
+			max_size 32MB
+		}
+		header Strict-Transport-Security "max-age=31536000"
+		reverse_proxy api:3000 {
+			header_up X-Forwarded-For {client_ip}
+			header_up X-Forwarded-Proto https
+			header_up -CF-Connecting-IP
+			header_up -X-Real-IP
+		}
+	}
+	handle {
+		respond "Origin access is restricted." 403
+	}
+}

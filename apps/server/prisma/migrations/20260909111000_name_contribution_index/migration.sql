@@ -1,0 +1,2 @@
+ALTER INDEX "stage_contribution_submissions_participant_id_idempotency_key_k"
+  RENAME TO "stage_contribution_participant_idempotency_key";

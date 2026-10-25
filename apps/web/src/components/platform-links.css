@@ -1,0 +1,17 @@
+.platform-links {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  position: relative;
+  z-index: 1;
+}
+.platform-link--x {
+  color: var(--color-platform-x);
+}
+.platform-link--pixiv {
+  color: var(--color-platform-pixiv);
+}
+.platform-link:disabled {
+  color: var(--color-text-muted);
+  opacity: 0.4;
+}

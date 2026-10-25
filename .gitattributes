@@ -1,0 +1,13 @@
+* text=auto eol=lf
+
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+
+# LabelPlus fixtures verify their exact UTF-8 BOM and CRLF bytes.
+apps/server/test/fixtures/labelplus/*.txt binary

@@ -1,0 +1,1483 @@
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  moduleFormat           = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension    = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  reviewRevisionParticipations        ReviewRevisionParticipant[]
+  canSkipProofreading                 Boolean                           @default(false) @map("can_skip_proofreading")
+  id                                  String                        @id @default(uuid()) @db.Uuid
+  username                            String                        @unique @db.VarChar(64)
+  passwordHash                        String                        @map("password_hash") @db.Text
+  displayName                         String                        @map("display_name") @db.VarChar(100)
+  avatarObjectKey                     String?                       @map("avatar_object_key") @db.Text
+  avatarFileObjectId                  String?                       @map("avatar_file_object_id") @db.Uuid
+  avatarFileObject                    FileObject?                   @relation("UserAvatar", fields: [avatarFileObjectId], references: [id], onDelete: Restrict)
+  avatarUploadSessions                UserAvatarUploadSession[]
+  isActive                            Boolean                       @default(true) @map("is_active")
+  mustChangePassword                  Boolean                       @default(true) @map("must_change_password")
+  revision                            Int                           @default(0)
+  roles                               UserRole[]
+  languageCapabilities                UserLanguageCapability[]
+  sessions                            AuthSession[]
+  translationEditorPresences          TranslationEditorPresence[]
+  filesCreated                        FileObject[]                  @relation("FileCreatedBy")
+  authorEvidenceUploaded             AuthorAuthorizationEvidence[] @relation("AuthorEvidenceUploadedBy")
+  authorEvidenceDeleted              AuthorAuthorizationEvidence[] @relation("AuthorEvidenceDeletedBy")
+  fetchRunsRequested                  SourceFetchRun[]              @relation("FetchRunRequestedBy")
+  candidatesReviewed                  CandidatePost[]               @relation("CandidateReviewedBy")
+  typesetUploadSessions               TypesetUploadSession[]
+  candidateUploadSessions             CandidateUploadSession[]      @relation("CandidateUploadSessionCreatedBy")
+  candidateClassificationDecisions    CandidateClassificationDecision[] @relation("CandidateClassificationDecidedBy")
+  worksImported                       Work[]                        @relation("WorkImportedBy")
+  candidateActions                    CandidateActionLog[]          @relation("CandidateActionActor")
+  workParticipations                  WorkStageParticipant[]
+  workCreditAliases                   WorkCreditAlias[]
+  workEvents                          WorkEvent[]                   @relation("WorkEventActor")
+  reviewCasesOpened                   WorkReviewCase[]              @relation("ReviewCaseOpenedBy")
+  reviewCasesResolved                 WorkReviewCase[]              @relation("ReviewCaseResolvedBy")
+  translationEntriesCreated           TranslationEntry[]            @relation("TranslationEntryCreatedBy")
+  translationEntriesUpdated           TranslationEntry[]            @relation("TranslationEntryUpdatedBy")
+  translationVersionsCreated          TranslationVersion[]          @relation("TranslationVersionCreatedBy")
+  labelPlusFilesCreated               LabelPlusFile[]               @relation("LabelPlusFileCreatedBy")
+  typesetPackagesCreated              TypesetHandoffPackage[]       @relation("TypesetPackageCreatedBy")
+  typesetVersionsUploaded             TypesetImageVersion[]         @relation("TypesetVersionUploadedBy")
+  typesetVersionsDeleted              TypesetImageVersion[]         @relation("TypesetVersionDeletedBy")
+  publishTemplatesUpdated             PublishTemplate[]             @relation("PublishTemplateUpdatedBy")
+  publishRecords                      PublishRecord[]                @relation("PublishRecordPublishedBy")
+  workStageAssignmentsCreated         WorkStageAssignment[]         @relation("WorkStageAssignmentCreatedBy")
+  stageContributionSubmissionsCreated StageContributionSubmission[] @relation("StageContributionSubmissionCreatedBy")
+  createdAt                           DateTime                      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                           DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("users")
+}
+
+enum Role {
+  admin
+  source
+  translator
+  proofreader
+  typesetter
+  operator
+  reviewer
+}
+
+model UserRole {
+  userId    String   @map("user_id") @db.Uuid
+  role      Role
+  user      User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@id([userId, role])
+  @@map("user_roles")
+}
+
+enum LanguageCapability {
+  ja
+  ko
+}
+
+model UserLanguageCapability {
+  userId    String             @map("user_id") @db.Uuid
+  language  LanguageCapability
+  user      User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  createdAt DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@id([userId, language])
+  @@map("user_language_capabilities")
+}
+
+model AuthSession {
+  id                         String                      @id @default(uuid()) @db.Uuid
+  userId                     String                      @map("user_id") @db.Uuid
+  tokenHash                  String                      @unique @map("token_hash") @db.Char(64)
+  user                       User                        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  translationEditorPresences TranslationEditorPresence[]
+  createdAt                  DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt                 DateTime                    @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  expiresAt                  DateTime                    @map("expires_at") @db.Timestamptz(3)
+  revokedAt                  DateTime?                   @map("revoked_at") @db.Timestamptz(3)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+
+model AccountAudit {
+  id        String   @id @default(uuid()) @db.Uuid
+  actorId   String?  @map("actor_id") @db.Uuid
+  targetId  String?  @map("target_id") @db.Uuid
+  action    String   @db.VarChar(64)
+  detail    Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([createdAt])
+  @@map("account_audit")
+}
+
+enum AuthorizationStatus {
+  pending
+  authorized
+  expired
+  revoked
+}
+
+enum FirstSyncMode {
+  none
+  last_24_hours
+}
+
+enum FileLifecycleStatus {
+  active
+  pending_deletion
+  deleted
+}
+
+model FileObject {
+  id                   String                        @id @default(uuid()) @db.Uuid
+  objectKey            String                        @unique @map("object_key") @db.Text
+  bucketScope          String                        @map("bucket_scope") @db.VarChar(32)
+  kind                 String                        @db.VarChar(64)
+  contentType          String                        @map("content_type") @db.VarChar(255)
+  size                 BigInt
+  checksum             String                        @db.Char(64)
+  lifecycleStatus      FileLifecycleStatus           @default(active) @map("lifecycle_status")
+  createdById          String?                       @map("created_by") @db.Uuid
+  createdBy            User?                         @relation("FileCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  downloadPreparations DownloadPreparation[]
+  imageDerivatives     ImageDerivative[]             @relation("DerivativeSource")
+  derivativeOutputs    ImageDerivative[]             @relation("DerivativeOutput")
+  authorAvatars        Author[]                      @relation("AuthorAvatar")
+  accountAvatars       AuthorExternalAccount[]       @relation("ExternalAccountAvatar")
+  userAvatars          User[]                        @relation("UserAvatar")
+  authorEvidence       AuthorAuthorizationEvidence[]
+  candidateMedia       CandidateMedia[]
+  workImages           WorkImage[]
+  labelPlusFiles       LabelPlusFile[]
+  typesetPackages      TypesetHandoffPackage[]
+  typesetUploadImages  TypesetUploadImage[]
+  typesetImages        TypesetImageVersionImage[]
+  createdAt            DateTime                      @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt            DateTime?                     @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([bucketScope, kind, lifecycleStatus])
+  @@index([createdById])
+  @@map("file_objects")
+}
+
+model Author {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  displayName         String                  @map("display_name") @db.VarChar(100)
+  avatarFileObjectId  String?                 @map("avatar_file_object_id") @db.Uuid
+  avatarFileObject    FileObject?             @relation("AuthorAvatar", fields: [avatarFileObjectId], references: [id], onDelete: Restrict)
+  authorizationStatus AuthorizationStatus     @default(pending) @map("authorization_status")
+  sourceLanguage      SourceLanguage          @default(ja) @map("source_language")
+  revision            Int                     @default(0)
+  externalAccounts    AuthorExternalAccount[]
+  authorizationEvidence AuthorAuthorizationEvidence[]
+  tags                AuthorTag[]
+  candidates          CandidatePost[]
+  candidateUploadSessions CandidateUploadSession[]
+  works               Work[]
+  createdAt           DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt           DateTime?               @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([authorizationStatus, deletedAt])
+  @@map("authors")
+}
+
+model AuthorAuthorizationEvidence {
+  id           String      @id @default(uuid()) @db.Uuid
+  authorId     String      @map("author_id") @db.Uuid
+  author       Author      @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  fileObjectId String      @map("file_object_id") @db.Uuid
+  fileObject   FileObject  @relation(fields: [fileObjectId], references: [id], onDelete: Restrict)
+  orderIndex   Int         @map("order_index")
+  uploadedById String      @map("uploaded_by") @db.Uuid
+  uploadedBy   User        @relation("AuthorEvidenceUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+  deletedById  String?     @map("deleted_by") @db.Uuid
+  deletedBy    User?       @relation("AuthorEvidenceDeletedBy", fields: [deletedById], references: [id], onDelete: Restrict)
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  deletedAt    DateTime?   @map("deleted_at") @db.Timestamptz(3)
+
+  @@index([authorId, orderIndex])
+  @@index([authorId, deletedAt])
+  @@index([fileObjectId])
+  @@map("author_authorization_evidence")
+}
+
+model AuthorExternalAccount {
+  id                  String               @id @default(uuid()) @db.Uuid
+  authorId            String               @map("author_id") @db.Uuid
+  author              Author               @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  platform            String               @db.VarChar(32)
+  externalUserId      String               @map("external_user_id") @db.VarChar(255)
+  handle              String?              @db.VarChar(255)
+  profileUrl          String?              @map("profile_url") @db.VarChar(2048)
+  displayNameSnapshot String?              @map("display_name_snapshot") @db.VarChar(255)
+  avatarFileObjectId  String?              @map("avatar_file_object_id") @db.Uuid
+  avatarFileObject    FileObject?          @relation("ExternalAccountAvatar", fields: [avatarFileObjectId], references: [id], onDelete: Restrict)
+  fetchEnabled        Boolean              @default(true) @map("fetch_enabled")
+  firstSyncMode       FirstSyncMode        @default(none) @map("first_sync_mode")
+  metadataJson        Json                 @default("{}") @map("metadata_json")
+  revision            Int                  @default(0)
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt           DateTime?            @map("deleted_at") @db.Timestamptz(3)
+  fetchRunItems       SourceFetchRunItem[]
+  adapterStates       SourceAdapterState[]
+  sourceObservations  CandidateSourceObservation[]
+  candidates          CandidatePost[]
+
+  @@unique([platform, externalUserId])
+  // Partial active (author_id, platform) uniqueness is enforced in the forward SQL migration.
+  @@index([authorId, deletedAt])
+  @@index([platform, fetchEnabled, deletedAt])
+  @@map("author_external_accounts")
+}
+
+model Tag {
+  id             String      @id @default(uuid()) @db.Uuid
+  name           String      @db.VarChar(64)
+  normalizedName String      @unique @map("normalized_name") @db.VarChar(64)
+  revision       Int         @default(0)
+  authors        AuthorTag[]
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("tags")
+}
+
+model AuthorTag {
+  authorId  String   @map("author_id") @db.Uuid
+  tagId     String   @map("tag_id") @db.Uuid
+  author    Author   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@id([authorId, tagId])
+  @@index([tagId])
+  @@map("author_tags")
+}
+
+enum SourceFetchTrigger {
+  manual
+  scheduled
+}
+
+enum SourceFetchRunStatus {
+  queued
+  running
+  succeeded
+  partial_failed
+  failed
+}
+
+enum SourceFetchItemStatus {
+  running
+  succeeded
+  failed
+  skipped
+}
+
+enum SourceAdapterHealth {
+  idle
+  healthy
+  degraded
+  cooling_down
+  unavailable
+  disabled
+}
+
+enum CandidateVisualClass {
+  manga
+  photo
+}
+
+enum CandidateTagGroupKind {
+  valid
+  gray
+  blocked
+}
+
+enum CandidateTagDisposition {
+  valid
+  neutral
+  blocked
+}
+
+enum CandidateStatus {
+  pending
+  imported
+  discarded
+}
+
+enum CandidateUploadSessionStatus {
+  pending
+  finalizing
+  completed
+  expired
+}
+
+enum CandidateUploadItemStatus {
+  pending
+  created
+  failed
+}
+
+model CandidateUploadSession {
+  id          String                       @id @default(uuid()) @db.Uuid
+  actorId     String                       @map("actor_id") @db.Uuid
+  actor       User                         @relation("CandidateUploadSessionCreatedBy", fields: [actorId], references: [id], onDelete: Restrict)
+  authorId    String                       @map("author_id") @db.Uuid
+  author      Author                       @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  text        String?                      @db.Text
+  sourceUrl   String?                      @map("source_url") @db.VarChar(2048)
+  status      CandidateUploadSessionStatus @default(pending)
+  items       CandidateUploadItem[]
+  expiresAt   DateTime                     @map("expires_at") @db.Timestamptz(3)
+  completedAt DateTime?                    @map("completed_at") @db.Timestamptz(3)
+  createdAt   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([actorId, createdAt])
+  @@index([status, expiresAt])
+  @@map("candidate_upload_sessions")
+}
+
+model CandidateUploadItem {
+  id              String                    @id @default(uuid()) @db.Uuid
+  sessionId       String                    @map("session_id") @db.Uuid
+  session         CandidateUploadSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sourceName      String                    @map("source_name") @db.VarChar(255)
+  objectKey       String                    @unique @map("object_key") @db.Text
+  contentType     String                    @map("content_type") @db.VarChar(255)
+  size            BigInt
+  checksum        String                    @db.Char(64)
+  status          CandidateUploadItemStatus @default(pending)
+  resultMessage   String?                   @map("result_message") @db.VarChar(500)
+  warnings        Json?
+  candidatePostId String?                   @unique @map("candidate_post_id") @db.Uuid
+  candidatePost   CandidatePost?            @relation(fields: [candidatePostId], references: [id], onDelete: Restrict)
+  createdAt       DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([sessionId, status])
+  @@map("candidate_upload_items")
+}
+
+enum CandidateActionType {
+  import
+  discard
+  restore
+}
+
+enum ReferencedPostType {
+  reply
+  quote
+}
+
+enum WorkflowStatus {
+  pending_translate
+  translating
+  pending_proofread
+  proofreading
+  pending_typeset
+  typesetting
+  pending_publish
+  published
+  archived
+}
+
+enum ReviewStatus {
+  normal
+  needs_review
+  blocked
+}
+
+enum WorkStage {
+  translate
+  proofread
+  typeset
+  publish
+}
+
+enum WorkParticipationMode {
+  owner
+  collaborator
+}
+
+enum SourceLanguage {
+  ja
+  ko
+  en
+}
+
+enum WorkCollaborationMode {
+  single
+  multi
+}
+
+enum TranslationPresenceMode {
+  view
+  edit
+}
+
+enum MarkerPositionType {
+  inside
+  outside
+}
+
+enum TranslationVersionKind {
+  translate_submission
+  proofread_submission
+  revision
+  labelplus_import
+}
+
+enum LabelPlusFileDirection {
+  import
+  export
+}
+
+enum TypesetHandoffPackageKind {
+  source_images
+  unified_handoff
+}
+
+enum WorkEventAction {
+  review_withdrawn
+  review_revision_joined
+  review_revision_left
+  review_revision_pages_updated
+  review_revision_contribution_completed
+  review_revision_completed
+  typeset_version_reviewed
+  proofreading_skipped
+  imported
+  metadata_updated
+  collaboration_mode_updated
+  stage_joined
+  stage_assigned
+  stage_credit_updated
+  stage_assignment_updated
+  stage_contribution_completed
+  stage_left
+  stage_started
+  stage_submitted
+  stage_submission_cancelled
+  translation_revision_submitted
+  translation_imported
+  typeset_handoff_started
+  typeset_version_uploaded
+  typeset_version_selected
+  typeset_version_deleted
+  typeset_version_restored
+  publish_confirmed
+  review_opened
+  review_resumed
+  review_revised
+  review_kept_pending
+  review_blocked
+  archived
+  restored
+}
+
+enum ReviewCaseStatus {
+  open
+  resolved
+}
+
+enum ReviewRevisionStatus {
+  active
+  completed
+}
+
+enum ReviewPurpose {
+  production_decision
+  content_revision
+}
+
+enum ReviewResolution {
+  withdrawn
+  continue_production
+  discard
+  restore_production
+  approve_revision
+  resume
+  revise
+  keep_pending
+  block
+}
+
+model SourceFetchRun {
+  id            String               @id @default(uuid()) @db.Uuid
+  trigger       SourceFetchTrigger
+  status        SourceFetchRunStatus @default(running)
+  requestedById String?              @map("requested_by") @db.Uuid
+  requestedBy   User?                @relation("FetchRunRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  items         SourceFetchRunItem[]
+  startedAt     DateTime             @default(now()) @map("started_at") @db.Timestamptz(3)
+  completedAt   DateTime?            @map("completed_at") @db.Timestamptz(3)
+
+  @@index([startedAt])
+  @@map("source_fetch_runs")
+}
+
+model SourceFetchRunItem {
+  id                 String                @id @default(uuid()) @db.Uuid
+  runId              String                @map("run_id") @db.Uuid
+  run                SourceFetchRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
+  externalAccountId  String                @map("external_account_id") @db.Uuid
+  externalAccount    AuthorExternalAccount @relation(fields: [externalAccountId], references: [id], onDelete: Restrict)
+  adapterStateId     String                @map("adapter_state_id") @db.Uuid
+  adapterState       SourceAdapterState    @relation(fields: [adapterStateId], references: [id], onDelete: Restrict)
+  adapterKey         String                @map("adapter_key") @db.VarChar(64)
+  status             SourceFetchItemStatus @default(running)
+  cursorBefore       Json                  @map("cursor_before")
+  cursorAfter        Json?                 @map("cursor_after")
+  pagesFetched       Int                   @default(0) @map("pages_fetched")
+  itemsSeen          Int                   @default(0) @map("items_seen")
+  candidatesCreated  Int                   @default(0) @map("candidates_created")
+  candidatesExisting Int                   @default(0) @map("candidates_existing")
+  mediaStored        Int                   @default(0) @map("media_stored")
+  apiRequests        Int                   @default(0) @map("api_requests")
+  errorCode          String?               @map("error_code") @db.VarChar(64)
+  errorMessage       String?               @map("error_message") @db.VarChar(500)
+  startedAt          DateTime              @default(now()) @map("started_at") @db.Timestamptz(3)
+  completedAt        DateTime?             @map("completed_at") @db.Timestamptz(3)
+
+  @@unique([runId, externalAccountId, adapterKey], map: "source_fetch_run_items_run_id_external_account_id_adapter_key_k")
+  @@index([externalAccountId, startedAt])
+  @@index([adapterStateId, startedAt])
+  @@map("source_fetch_run_items")
+}
+
+model SourceAdapterState {
+  id                    String                  @id @default(uuid()) @db.Uuid
+  externalAccountId     String                  @map("external_account_id") @db.Uuid
+  externalAccount       AuthorExternalAccount   @relation(fields: [externalAccountId], references: [id], onDelete: Cascade)
+  adapterKey            String                  @map("adapter_key") @db.VarChar(64)
+  enabled               Boolean                 @default(true)
+  health                SourceAdapterHealth     @default(idle)
+  cursorJson            Json                    @default("{}") @map("cursor_json")
+  highWaterPublishedAt  DateTime?               @map("high_water_published_at") @db.Timestamptz(3)
+  highWaterExternalId   String?                 @map("high_water_external_id") @db.VarChar(255)
+  lastAttemptAt         DateTime?               @map("last_attempt_at") @db.Timestamptz(3)
+  lastSuccessAt         DateTime?               @map("last_success_at") @db.Timestamptz(3)
+  consecutiveFailures   Int                     @default(0) @map("consecutive_failures")
+  nextAttemptAt         DateTime?               @map("next_attempt_at") @db.Timestamptz(3)
+  lastErrorCode         String?                 @map("last_error_code") @db.VarChar(64)
+  lastErrorMessage      String?                 @map("last_error_message") @db.VarChar(500)
+  fetchLeaseId          String?                 @map("fetch_lease_id") @db.Uuid
+  fetchLeaseUntil       DateTime?               @map("fetch_lease_until") @db.Timestamptz(3)
+  revision              Int                     @default(0)
+  runItems              SourceFetchRunItem[]
+  observations          CandidateSourceObservation[]
+  createdAt             DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([externalAccountId, adapterKey])
+  @@index([adapterKey, enabled, health, nextAttemptAt], map: "source_adapter_states_adapter_key_enabled_health_next_attempt_a")
+  @@index([fetchLeaseUntil])
+  @@map("source_adapter_states")
+}
+
+model SourceAdapterBudgetUsage {
+  adapterKey String   @map("adapter_key") @db.VarChar(64)
+  periodKey  String   @map("period_key") @db.VarChar(16)
+  used       Int      @default(0)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@id([adapterKey, periodKey])
+  @@map("source_adapter_budget_usage")
+}
+
+model CandidatePost {
+  id                      String                 @id @default(uuid()) @db.Uuid
+  authorId                String                 @map("author_id") @db.Uuid
+  author                  Author                 @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  authorExternalAccountId String?                @map("author_external_account_id") @db.Uuid
+  authorExternalAccount   AuthorExternalAccount? @relation(fields: [authorExternalAccountId], references: [id], onDelete: Restrict)
+  platform                String                 @db.VarChar(32)
+  externalPostId          String                 @map("external_post_id") @db.VarChar(255)
+  externalPostUrl         String?                @map("external_post_url") @db.VarChar(2048)
+  text                    String?                @db.Text
+  referencedPostType      ReferencedPostType?    @map("referenced_post_type")
+  referencedPostId        String?                @map("referenced_post_id") @db.VarChar(255)
+  postedAt                DateTime               @map("posted_at") @db.Timestamptz(3)
+  rawJson                 Json                   @map("raw_json")
+  tagDisposition          CandidateTagDisposition @default(neutral) @map("tag_disposition")
+  status                  CandidateStatus        @default(pending)
+  fetchedAt               DateTime               @default(now()) @map("fetched_at") @db.Timestamptz(3)
+  reviewedById            String?                @map("reviewed_by") @db.Uuid
+  reviewedBy              User?                  @relation("CandidateReviewedBy", fields: [reviewedById], references: [id], onDelete: Restrict)
+  reviewedAt              DateTime?              @map("reviewed_at") @db.Timestamptz(3)
+  revision                Int                    @default(0)
+  media                   CandidateMedia[]
+  work                    Work?
+  actionLogs              CandidateActionLog[]
+  uploadItem              CandidateUploadItem?
+  hashtags                CandidateHashtag[]
+  sourceObservations      CandidateSourceObservation[]
+  classificationSuggestions CandidateClassificationSuggestion[]
+  classificationDecision CandidateClassificationDecision?
+  createdAt               DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([platform, externalPostId])
+  @@index([status, fetchedAt])
+  @@index([authorId, status, fetchedAt])
+  @@index([authorExternalAccountId, fetchedAt])
+  @@index([status, tagDisposition, postedAt, id])
+  @@map("candidate_posts")
+}
+
+model CandidateSourceObservation {
+  id                       String                 @id @default(uuid()) @db.Uuid
+  candidatePostId          String                 @map("candidate_post_id") @db.Uuid
+  candidatePost            CandidatePost          @relation(fields: [candidatePostId], references: [id], onDelete: Cascade)
+  externalAccountId        String?                @map("external_account_id") @db.Uuid
+  externalAccount          AuthorExternalAccount? @relation(fields: [externalAccountId], references: [id], onDelete: Restrict)
+  adapterStateId           String?                @map("adapter_state_id") @db.Uuid
+  adapterState             SourceAdapterState?    @relation(fields: [adapterStateId], references: [id], onDelete: Restrict)
+  adapterKey               String                 @map("adapter_key") @db.VarChar(64)
+  rawJson                  Json                    @map("raw_json")
+  observationCount         Int                    @default(1) @map("observation_count")
+  firstObservedAt          DateTime               @default(now()) @map("first_observed_at") @db.Timestamptz(3)
+  lastObservedAt           DateTime               @default(now()) @map("last_observed_at") @db.Timestamptz(3)
+
+  @@unique([candidatePostId, adapterKey])
+  @@index([externalAccountId, lastObservedAt], map: "candidate_source_observations_external_account_id_last_observed")
+  @@index([adapterStateId, lastObservedAt], map: "candidate_source_observations_adapter_state_id_last_observed_at")
+  @@map("candidate_source_observations")
+}
+
+model CandidateHashtag {
+  candidatePostId String        @map("candidate_post_id") @db.Uuid
+  normalizedValue String        @map("normalized_value") @db.VarChar(100)
+  displayValue    String        @map("display_value") @db.VarChar(100)
+  candidatePost   CandidatePost @relation(fields: [candidatePostId], references: [id], onDelete: Cascade)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@id([candidatePostId, normalizedValue])
+  @@index([normalizedValue, candidatePostId])
+  @@map("candidate_hashtags")
+}
+
+model CandidateTagGroup {
+  id        String                @id @default(uuid()) @db.Uuid
+  name      String                @unique @db.VarChar(100)
+  kind      CandidateTagGroupKind @default(valid)
+  enabled   Boolean               @default(true)
+  revision  Int                   @default(0)
+  aliases   CandidateTagAlias[]
+  createdAt DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([kind, enabled])
+  @@map("candidate_tag_groups")
+}
+
+model CandidateTagAlias {
+  id              String            @id @default(uuid()) @db.Uuid
+  groupId         String            @map("group_id") @db.Uuid
+  group           CandidateTagGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  displayValue    String            @map("display_value") @db.VarChar(100)
+  normalizedValue String            @unique @map("normalized_value") @db.VarChar(100)
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([groupId])
+  @@map("candidate_tag_aliases")
+}
+
+model CandidateClassificationSuggestion {
+  id             String               @id @default(uuid()) @db.Uuid
+  candidatePostId String               @map("candidate_post_id") @db.Uuid
+  candidatePost  CandidatePost        @relation(fields: [candidatePostId], references: [id], onDelete: Cascade)
+  label          CandidateVisualClass
+  classifierName String               @map("classifier_name") @db.VarChar(100)
+  classifierVersion String            @map("classifier_version") @db.VarChar(100)
+  score          Float
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([candidatePostId, createdAt], map: "candidate_classification_suggestions_candidate_post_id_created_")
+  @@map("candidate_classification_suggestions")
+}
+
+model CandidateClassificationDecision {
+  candidatePostId String               @id @map("candidate_post_id") @db.Uuid
+  candidatePost   CandidatePost        @relation(fields: [candidatePostId], references: [id], onDelete: Cascade)
+  label           CandidateVisualClass
+  decidedById     String               @map("decided_by") @db.Uuid
+  decidedBy       User                 @relation("CandidateClassificationDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
+  revision        Int                  @default(0)
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([label, updatedAt])
+  @@map("candidate_classification_decisions")
+}
+
+model CandidateMedia {
+  id              String        @id @default(uuid()) @db.Uuid
+  candidatePostId String        @map("candidate_post_id") @db.Uuid
+  candidatePost   CandidatePost @relation(fields: [candidatePostId], references: [id], onDelete: Cascade)
+  externalMediaId String        @map("external_media_id") @db.VarChar(255)
+  orderIndex      Int           @map("order_index")
+  fileObjectId    String        @map("file_object_id") @db.Uuid
+  fileObject      FileObject    @relation(fields: [fileObjectId], references: [id], onDelete: Restrict)
+  sourceUrl       String?       @map("source_url") @db.VarChar(2048)
+  width           Int?
+  height          Int?
+  mediaType       String        @map("media_type") @db.VarChar(32)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([candidatePostId, externalMediaId])
+  @@unique([candidatePostId, orderIndex])
+  @@index([fileObjectId])
+  @@map("candidate_media")
+}
+
+model Work {
+  reviewRevisions                   WorkReviewRevision[]
+  requiredHandoffVersionId          String?                     @map("required_handoff_version_id") @db.Uuid
+  requiredHandoffVersion            TranslationVersion?         @relation("RequiredHandoff", fields: [requiredHandoffVersionId], references: [id], onDelete: Restrict)
+  typesetReviewRequired             Boolean                     @default(false) @map("typeset_review_required")
+  discardedReviewCaseId String? @unique @map("discarded_review_case_id") @db.Uuid
+  discardedReviewCase WorkReviewCase? @relation("DiscardedReview", fields: [discardedReviewCaseId], references: [id], onDelete: Restrict)
+  translationContributorIds         String[]                    @default([]) @map("translation_contributor_ids") @db.Uuid
+  proofreadSkippedVersionId         String?                     @unique @map("proofread_skipped_version_id") @db.Uuid
+  proofreadSkippedVersion           TranslationVersion?         @relation("CurrentProofreadSkip", fields: [proofreadSkippedVersionId], references: [id], onDelete: Restrict)
+  id                                String                      @id @default(uuid()) @db.Uuid
+  workNumber                        Int                         @unique @default(autoincrement()) @map("work_number")
+  authorId                          String                      @map("author_id") @db.Uuid
+  author                            Author                      @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  uploadPreviews TypesetUploadPreview[]
+  sourceCandidatePostId             String                      @unique @map("source_candidate_post_id") @db.Uuid
+  sourceCandidatePost               CandidatePost               @relation(fields: [sourceCandidatePostId], references: [id], onDelete: Restrict)
+  sourcePostUrl                     String?                     @map("source_post_url") @db.VarChar(2048)
+  title                             String?                     @db.VarChar(200)
+  sourceLanguage                    SourceLanguage              @default(ja) @map("source_language")
+  collaborationMode                 WorkCollaborationMode       @default(single) @map("collaboration_mode")
+  sourceText                        String?                     @map("source_text") @db.Text
+  publicationBody                   String?                     @map("publication_body") @db.Text
+  workflowStatus                    WorkflowStatus              @default(pending_translate) @map("workflow_status")
+  reviewStatus                      ReviewStatus                @default(normal) @map("review_status")
+  priority                          Int                         @default(0)
+  importedById                      String                      @map("imported_by") @db.Uuid
+  importedBy                        User                        @relation("WorkImportedBy", fields: [importedById], references: [id], onDelete: Restrict)
+  importedAt                        DateTime                    @default(now()) @map("imported_at") @db.Timestamptz(3)
+  publishedAt                       DateTime?                   @map("published_at") @db.Timestamptz(3)
+  archivedFromWorkflowStatus        WorkflowStatus?             @map("archived_from_workflow_status")
+  revision                          Int                         @default(0)
+  editorEpoch                       Int                         @default(0) @map("editor_epoch")
+  typesetHandoffStartedAt           DateTime?                   @map("typeset_handoff_started_at") @db.Timestamptz(3)
+  currentTypesetVersionId           String?                     @unique @map("current_typeset_version_id") @db.Uuid
+  currentTypesetVersion             TypesetImageVersion?        @relation("CurrentTypesetVersion", fields: [currentTypesetVersionId], references: [id], onDelete: SetNull)
+  translationAttentionStage         WorkStage?                  @map("translation_attention_stage")
+  translationAttentionVersionNumber Int?                        @map("translation_attention_version_number")
+  images                            WorkImage[]
+  candidateActionLogs               CandidateActionLog[]
+  stageParticipants                 WorkStageParticipant[]
+  creditAliases                     WorkCreditAlias[]
+  events                            WorkEvent[]
+  reviewCases                       WorkReviewCase[]
+  translationVersions               TranslationVersion[]
+  labelPlusFiles                    LabelPlusFile[]
+  typesetHandoffPackages            TypesetHandoffPackage[]
+  typesetVersions                   TypesetImageVersion[]       @relation("WorkTypesetVersions")
+  publishRecords                    PublishRecord[]
+  translationEditorPresences        TranslationEditorPresence[]
+  createdAt                         DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                         DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([workflowStatus, reviewStatus, priority, importedAt])
+  @@index([reviewStatus, updatedAt])
+  @@index([authorId, importedAt])
+  @@map("works")
+}
+
+model CandidateActionLog {
+  id              String              @id @default(uuid()) @db.Uuid
+  candidatePostId String              @map("candidate_post_id") @db.Uuid
+  candidatePost   CandidatePost       @relation(fields: [candidatePostId], references: [id], onDelete: Restrict)
+  actorId         String              @map("actor_id") @db.Uuid
+  actor           User                @relation("CandidateActionActor", fields: [actorId], references: [id], onDelete: Restrict)
+  action          CandidateActionType
+  fromStatus      CandidateStatus     @map("from_status")
+  toStatus        CandidateStatus     @map("to_status")
+  workId          String?             @map("work_id") @db.Uuid
+  work            Work?               @relation(fields: [workId], references: [id], onDelete: Restrict)
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([candidatePostId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("candidate_action_logs")
+}
+
+model WorkImage {
+  id                        String                     @id @default(uuid()) @db.Uuid
+  workId                    String                     @map("work_id") @db.Uuid
+  work                      Work                       @relation(fields: [workId], references: [id], onDelete: Cascade)
+  originalFileObjectId      String                     @map("original_file_object_id") @db.Uuid
+  originalFileObject        FileObject                 @relation(fields: [originalFileObjectId], references: [id], onDelete: Restrict)
+  translationEntries        TranslationEntry[]
+  translationVersionEntries TranslationVersionEntry[]
+  stageAssignments          WorkStageAssignment[]
+  contributionPages         StageContributionPage[]
+  typesetVersionImages      TypesetImageVersionImage[]
+  orderIndex                Int                        @map("order_index")
+  width                     Int?
+  height                    Int?
+  translationRevision       Int                        @default(0) @map("translation_revision")
+  createdAt                 DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([workId, orderIndex])
+  @@index([originalFileObjectId])
+  @@map("work_images")
+}
+
+model TranslationEntry {
+  id                     String                    @id @default(uuid()) @db.Uuid
+  workImageId            String                    @map("work_image_id") @db.Uuid
+  workImage              WorkImage                 @relation(fields: [workImageId], references: [id], onDelete: Cascade)
+  orderIndex             Int                       @map("order_index")
+  markerX                Decimal                   @map("marker_x") @db.Decimal(4, 3)
+  markerY                Decimal                   @map("marker_y") @db.Decimal(4, 3)
+  markerPositionType     MarkerPositionType        @map("marker_position_type")
+  translatedText         String                    @default("") @map("translated_text") @db.Text
+  note                   String?                   @db.Text
+  revision               Int                       @default(0)
+  creationIdempotencyKey String                    @map("creation_idempotency_key") @db.Uuid
+  createdById            String                    @map("created_by") @db.Uuid
+  createdBy              User                      @relation("TranslationEntryCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedById            String                    @map("updated_by") @db.Uuid
+  updatedBy              User                      @relation("TranslationEntryUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  versionSnapshots       TranslationVersionEntry[] @relation("TranslationVersionEntrySource")
+  createdAt              DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([workImageId, orderIndex])
+  @@unique([workImageId, creationIdempotencyKey])
+  @@index([createdById, createdAt])
+  @@index([updatedById, updatedAt])
+  @@map("translation_entries")
+}
+
+model TranslationVersion {
+  reviewRevisionId           String?                   @map("review_revision_id") @db.Uuid
+  reviewRevision             WorkReviewRevision?       @relation(fields: [reviewRevisionId], references: [id], onDelete: Restrict)
+  requiredForWorks           Work[]                    @relation("RequiredHandoff")
+  handoffPackages            TypesetHandoffPackage[]
+  sourceForTypesetVersions   TypesetImageVersion[]     @relation("TypesetSourceText")
+  reviewedTypesetVersions    TypesetImageVersion[]     @relation("TypesetReviewedText")
+  proofreadSkipped           Boolean                   @default(false) @map("proofread_skipped")
+  contributorUserIds         String[]                  @default([]) @map("contributor_user_ids") @db.Uuid
+  sourceTranslationVersionId String?                   @map("source_translation_version_id") @db.Uuid
+  sourceTranslationVersion   TranslationVersion?       @relation("ProofreadSkipSource", fields: [sourceTranslationVersionId], references: [id], onDelete: Restrict)
+  derivedSkipVersions        TranslationVersion[]      @relation("ProofreadSkipSource")
+  skippedForWork             Work?                     @relation("CurrentProofreadSkip")
+  handoffStartedAt           DateTime?                 @map("handoff_started_at") @db.Timestamptz(3)
+  id            String                    @id @default(uuid()) @db.Uuid
+  workId        String                    @map("work_id") @db.Uuid
+  work          Work                      @relation(fields: [workId], references: [id], onDelete: Restrict)
+  versionNumber Int                       @map("version_number")
+  kind          TranslationVersionKind
+  stage         WorkStage?
+  workRevision  Int                       @map("work_revision")
+  editorEpoch   Int                       @map("editor_epoch")
+  createdById   String                    @map("created_by") @db.Uuid
+  createdBy     User                      @relation("TranslationVersionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  entries       TranslationVersionEntry[]
+  createdAt     DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([workId, versionNumber])
+  @@index([workId, createdAt])
+  @@index([createdById, createdAt])
+  @@map("translation_versions")
+}
+
+model TranslationVersionEntry {
+  id                 String             @id @default(uuid()) @db.Uuid
+  versionId          String             @map("version_id") @db.Uuid
+  version            TranslationVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  workImageId        String             @map("work_image_id") @db.Uuid
+  workImage          WorkImage          @relation(fields: [workImageId], references: [id], onDelete: Restrict)
+  sourceEntryId      String?            @map("source_entry_id") @db.Uuid
+  sourceEntry        TranslationEntry?  @relation("TranslationVersionEntrySource", fields: [sourceEntryId], references: [id], onDelete: SetNull)
+  orderIndex         Int                @map("order_index")
+  markerX            Decimal            @map("marker_x") @db.Decimal(4, 3)
+  markerY            Decimal            @map("marker_y") @db.Decimal(4, 3)
+  markerPositionType MarkerPositionType @map("marker_position_type")
+  translatedText     String             @map("translated_text") @db.Text
+  note               String?            @db.Text
+
+  @@unique([versionId, workImageId, orderIndex])
+  @@index([workImageId])
+  @@index([sourceEntryId])
+  @@map("translation_version_entries")
+}
+
+model LabelPlusFile {
+  id             String                 @id @default(uuid()) @db.Uuid
+  workId         String                 @map("work_id") @db.Uuid
+  work           Work                   @relation(fields: [workId], references: [id], onDelete: Restrict)
+  fileObjectId   String                 @map("file_object_id") @db.Uuid
+  fileObject     FileObject             @relation(fields: [fileObjectId], references: [id], onDelete: Restrict)
+  direction      LabelPlusFileDirection
+  formatVersion  String                 @map("format_version") @db.VarChar(32)
+  fileName       String                 @map("file_name") @db.VarChar(255)
+  imageCount     Int                    @map("image_count")
+  markerCount    Int                    @map("marker_count")
+  parseWarnings  Json                   @default("[]") @map("parse_warnings")
+  idempotencyKey String                 @map("idempotency_key") @db.Uuid
+  createdById    String                 @map("created_by") @db.Uuid
+  createdBy      User                   @relation("LabelPlusFileCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt      DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([workId, direction, idempotencyKey])
+  @@index([workId, createdAt])
+  @@index([fileObjectId])
+  @@index([createdById, createdAt])
+  @@map("labelplus_files")
+}
+
+model TypesetHandoffPackage {
+  translationVersionId String?                   @map("translation_version_id") @db.Uuid
+  translationVersion   TranslationVersion?       @relation(fields: [translationVersionId], references: [id], onDelete: Restrict)
+  id             String                    @id @default(uuid()) @db.Uuid
+  workId         String                    @map("work_id") @db.Uuid
+  work           Work                      @relation(fields: [workId], references: [id], onDelete: Restrict)
+  fileObjectId   String                    @map("file_object_id") @db.Uuid
+  fileObject     FileObject                @relation(fields: [fileObjectId], references: [id], onDelete: Restrict)
+  kind           TypesetHandoffPackageKind
+  fileName       String                    @map("file_name") @db.VarChar(255)
+  imageCount     Int                       @map("image_count")
+  markerCount    Int                       @default(0) @map("marker_count")
+  workRevision   Int                       @map("work_revision")
+  editorEpoch    Int                       @map("editor_epoch")
+  idempotencyKey String                    @map("idempotency_key") @db.Uuid
+  createdById    String                    @map("created_by") @db.Uuid
+  createdBy      User                      @relation("TypesetPackageCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt      DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([workId, kind, idempotencyKey])
+  @@index([workId, createdAt])
+  @@index([fileObjectId])
+  @@index([createdById, createdAt])
+  @@map("typeset_handoff_packages")
+}
+
+model TypesetImageVersion {
+  sourceTranslationVersionId   String?                    @map("source_translation_version_id") @db.Uuid
+  sourceTranslationVersion     TranslationVersion?        @relation("TypesetSourceText", fields: [sourceTranslationVersionId], references: [id], onDelete: Restrict)
+  reviewedTranslationVersionId String?                    @map("reviewed_translation_version_id") @db.Uuid
+  reviewedTranslationVersion   TranslationVersion?        @relation("TypesetReviewedText", fields: [reviewedTranslationVersionId], references: [id], onDelete: Restrict)
+  textReviewedAt               DateTime?                  @map("text_reviewed_at") @db.Timestamptz(3)
+  id                  String                     @id @default(uuid()) @db.Uuid
+  workId              String                     @map("work_id") @db.Uuid
+  work                Work                       @relation("WorkTypesetVersions", fields: [workId], references: [id], onDelete: Restrict)
+  versionNumber       Int                        @map("version_number")
+  note                String?                    @db.VarChar(1000)
+  automaticallySorted Boolean                    @default(false) @map("automatically_sorted")
+  idempotencyKey      String                     @map("idempotency_key") @db.Uuid
+  uploadedById        String                     @map("uploaded_by") @db.Uuid
+  uploadedBy          User                       @relation("TypesetVersionUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+  deletedAt           DateTime?                  @map("deleted_at") @db.Timestamptz(3)
+  purgeAfter          DateTime?                  @map("purge_after") @db.Timestamptz(3)
+  deletedById         String?                    @map("deleted_by") @db.Uuid
+  deletedBy           User?                      @relation("TypesetVersionDeletedBy", fields: [deletedById], references: [id], onDelete: Restrict)
+  images              TypesetImageVersionImage[]
+  currentForWork      Work?                      @relation("CurrentTypesetVersion")
+  uploadPreviews      TypesetUploadPreview[]
+  publishRecords      PublishRecord[]
+  openedReviewCases   WorkReviewCase[]           @relation("ReviewCaseOpenedTypesetVersion")
+  createdAt           DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([workId, versionNumber])
+  @@unique([workId, idempotencyKey])
+  @@index([workId, deletedAt, createdAt])
+  @@index([uploadedById, createdAt])
+  @@index([deletedById, deletedAt])
+  @@map("typeset_image_versions")
+}
+
+model PublishTemplate {
+  id          String          @id @default(uuid()) @db.Uuid
+  key         String          @unique @db.VarChar(64)
+  name        String          @db.VarChar(100)
+  content     String          @db.Text
+  revision    Int             @default(0)
+  isActive    Boolean         @default(true) @map("is_active")
+  updatedById String?         @map("updated_by") @db.Uuid
+  updatedBy   User?           @relation("PublishTemplateUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  records     PublishRecord[]
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([isActive, key])
+  @@map("publish_templates")
+}
+
+model PublishRecord {
+  id                      String              @id @default(uuid()) @db.Uuid
+  workId                  String              @map("work_id") @db.Uuid
+  work                    Work                @relation(fields: [workId], references: [id], onDelete: Restrict)
+  typesetVersionId        String              @map("typeset_version_id") @db.Uuid
+  typesetVersion          TypesetImageVersion @relation(fields: [typesetVersionId], references: [id], onDelete: Restrict)
+  templateId              String?             @map("template_id") @db.Uuid
+  template                PublishTemplate?    @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  templateNameSnapshot    String              @map("template_name_snapshot") @db.VarChar(100)
+  templateRevision        Int                 @map("template_revision")
+  templateContentSnapshot String              @map("template_content_snapshot") @db.Text
+  generatedTextSnapshot   String              @map("generated_text_snapshot") @db.Text
+  translationCreditsSnapshot Json?             @map("translation_credits_snapshot") @db.JsonB
+  proofreadCreditsSnapshot Json?               @map("proofread_credits_snapshot") @db.JsonB
+  typesetCreditsSnapshot  Json?                @map("typeset_credits_snapshot") @db.JsonB
+  note                    String?             @db.VarChar(1000)
+  idempotencyKey          String              @map("idempotency_key") @db.Uuid
+  publishedById           String              @map("published_by") @db.Uuid
+  publishedBy             User                @relation("PublishRecordPublishedBy", fields: [publishedById], references: [id], onDelete: Restrict)
+  publishedAt             DateTime            @default(now()) @map("published_at") @db.Timestamptz(3)
+  createdAt               DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([workId, idempotencyKey])
+  @@index([workId, publishedAt])
+  @@index([typesetVersionId])
+  @@index([publishedById, publishedAt])
+  @@map("publish_records")
+}
+
+model TypesetImageVersionImage {
+  id           String              @id @default(uuid()) @db.Uuid
+  versionId    String              @map("version_id") @db.Uuid
+  version      TypesetImageVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  workImageId  String?             @map("work_image_id") @db.Uuid
+  workImage    WorkImage?          @relation(fields: [workImageId], references: [id], onDelete: Restrict)
+  fileObjectId String              @map("file_object_id") @db.Uuid
+  fileObject   FileObject          @relation(fields: [fileObjectId], references: [id], onDelete: Restrict)
+  orderIndex   Int                 @map("order_index")
+  sourceName   String              @map("source_name") @db.VarChar(255)
+  width        Int
+  height       Int
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([versionId, orderIndex])
+  @@unique([versionId, workImageId])
+  @@index([workImageId])
+  @@index([fileObjectId])
+  @@map("typeset_image_version_images")
+}
+
+model WorkStageParticipant {
+  id                      String                        @id @default(uuid()) @db.Uuid
+  workId                  String                        @map("work_id") @db.Uuid
+  work                    Work                          @relation(fields: [workId], references: [id], onDelete: Cascade)
+  stage                   WorkStage
+  userId                  String                        @map("user_id") @db.Uuid
+  user                    User                          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  participationMode       WorkParticipationMode         @map("participation_mode")
+  creditNameSnapshot      String?                       @map("credit_name_snapshot") @db.VarChar(100)
+  joinedAt                DateTime                      @default(now()) @map("joined_at") @db.Timestamptz(3)
+  submittedAt             DateTime?                     @map("submitted_at") @db.Timestamptz(3)
+  leftAt                  DateTime?                     @map("left_at") @db.Timestamptz(3)
+  assignments             WorkStageAssignment[]
+  contributionSubmissions StageContributionSubmission[]
+
+  @@index([workId, stage, submittedAt, leftAt])
+  @@index([userId, joinedAt])
+  @@map("work_stage_participants")
+}
+
+model WorkCreditAlias {
+  stage      WorkStage
+  workId     String   @map("work_id") @db.Uuid
+  work       Work     @relation(fields: [workId], references: [id], onDelete: Cascade)
+  userId     String   @map("user_id") @db.Uuid
+  user       User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  creditName String   @map("credit_name") @db.VarChar(100)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@id([workId, userId, stage])
+  @@index([userId])
+  @@map("work_credit_aliases")
+}
+
+model WorkStageAssignment {
+  id            String               @id @default(uuid()) @db.Uuid
+  participantId String               @map("participant_id") @db.Uuid
+  participant   WorkStageParticipant @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  workImageId   String               @map("work_image_id") @db.Uuid
+  workImage     WorkImage            @relation(fields: [workImageId], references: [id], onDelete: Cascade)
+  assignedById  String               @map("assigned_by") @db.Uuid
+  assignedBy    User                 @relation("WorkStageAssignmentCreatedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+  assignedAt    DateTime             @default(now()) @map("assigned_at") @db.Timestamptz(3)
+
+  @@unique([participantId, workImageId])
+  @@index([workImageId])
+  @@map("work_stage_assignments")
+}
+
+model StageContributionSubmission {
+  id             String                  @id @default(uuid()) @db.Uuid
+  participantId  String                  @map("participant_id") @db.Uuid
+  participant    WorkStageParticipant    @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  createdById    String                  @map("created_by") @db.Uuid
+  createdBy      User                    @relation("StageContributionSubmissionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  idempotencyKey String                  @map("idempotency_key") @db.Uuid
+  pages          StageContributionPage[]
+  createdAt      DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([participantId, idempotencyKey], map: "stage_contribution_participant_idempotency_key")
+  @@index([participantId, createdAt])
+  @@map("stage_contribution_submissions")
+}
+
+model StageContributionPage {
+  submissionId  String                      @map("submission_id") @db.Uuid
+  submission    StageContributionSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  workImageId   String                      @map("work_image_id") @db.Uuid
+  workImage     WorkImage                   @relation(fields: [workImageId], references: [id], onDelete: Restrict)
+  imageRevision Int                         @map("image_revision")
+
+  @@id([submissionId, workImageId])
+  @@index([workImageId])
+  @@map("stage_contribution_pages")
+}
+
+model TranslationEditorPresence {
+  id         String                  @id @default(uuid()) @db.Uuid
+  workId     String                  @map("work_id") @db.Uuid
+  work       Work                    @relation(fields: [workId], references: [id], onDelete: Cascade)
+  userId     String                  @map("user_id") @db.Uuid
+  user       User                    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sessionId  String                  @map("session_id") @db.Uuid
+  session    AuthSession             @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  mode       TranslationPresenceMode
+  createdAt  DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt DateTime                @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+
+  @@unique([workId, sessionId])
+  @@index([workId, lastSeenAt])
+  @@index([sessionId])
+  @@map("translation_editor_presences")
+}
+
+model WorkEvent {
+  id                 String          @id @default(uuid()) @db.Uuid
+  workId             String          @map("work_id") @db.Uuid
+  work               Work            @relation(fields: [workId], references: [id], onDelete: Restrict)
+  actorId            String?         @map("actor_id") @db.Uuid
+  actor              User?           @relation("WorkEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+  action             WorkEventAction
+  fromWorkflowStatus WorkflowStatus? @map("from_workflow_status")
+  toWorkflowStatus   WorkflowStatus? @map("to_workflow_status")
+  fromReviewStatus   ReviewStatus?   @map("from_review_status")
+  toReviewStatus     ReviewStatus?   @map("to_review_status")
+  idempotencyKey     String?         @map("idempotency_key") @db.Uuid
+  detail             Json            @default("{}")
+  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([workId, idempotencyKey])
+  @@index([workId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("work_events")
+}
+
+model WorkReviewCase {
+  contentRevision          WorkReviewRevision?
+  purpose ReviewPurpose @default(production_decision)
+  baseline Json @default("{}")
+  discardedWork Work? @relation("DiscardedReview")
+  restoredAt DateTime? @map("restored_at") @db.Timestamptz(3)
+  id                       String            @id @default(uuid()) @db.Uuid
+  workId                   String            @map("work_id") @db.Uuid
+  work                     Work              @relation(fields: [workId], references: [id], onDelete: Restrict)
+  openedFromWorkflowStatus WorkflowStatus    @map("opened_from_workflow_status")
+  openedTypesetVersionId   String?           @map("opened_typeset_version_id") @db.Uuid
+  openedTypesetVersion     TypesetImageVersion? @relation("ReviewCaseOpenedTypesetVersion", fields: [openedTypesetVersionId], references: [id], onDelete: Restrict)
+  reason                   String            @db.Text
+  status                   ReviewCaseStatus  @default(open)
+  openedById               String            @map("opened_by") @db.Uuid
+  openedBy                 User              @relation("ReviewCaseOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
+  resolvedById             String?           @map("resolved_by") @db.Uuid
+  resolvedBy               User?             @relation("ReviewCaseResolvedBy", fields: [resolvedById], references: [id], onDelete: Restrict)
+  resolution               ReviewResolution?
+  targetWorkflowStatus     WorkflowStatus?   @map("target_workflow_status")
+  resolutionNote           String?           @map("resolution_note") @db.Text
+  revision                 Int               @default(0)
+  createdAt                DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  resolvedAt               DateTime?         @map("resolved_at") @db.Timestamptz(3)
+
+  @@index([status, createdAt])
+  @@index([workId, createdAt])
+  @@index([openedTypesetVersionId])
+  @@index([openedById, createdAt])
+  @@map("work_review_cases")
+}
+
+model TypesetUploadSession {
+  id String @id @default(uuid()) @db.Uuid
+  actorId String @map("actor_id") @db.Uuid
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  status String @default("pending") @db.VarChar(32)
+  files TypesetUploadFile[]
+  previews TypesetUploadPreview[]
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([actorId, createdAt])
+  @@index([expiresAt, status])
+  @@map("typeset_upload_sessions")
+}
+
+model TypesetUploadFile {
+  id String @id @default(uuid()) @db.Uuid
+  sessionId String @map("session_id") @db.Uuid
+  session TypesetUploadSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sourceName String @map("source_name") @db.VarChar(255)
+  orderIndex Int @map("order_index")
+  objectKey String @unique @map("object_key") @db.Text
+  contentType String @map("content_type") @db.VarChar(255)
+  size BigInt
+  checksum String @db.Char(64)
+  status String @default("pending") @db.VarChar(32)
+  error String? @db.VarChar(500)
+  images TypesetUploadImage[]
+
+  @@map("typeset_upload_files")
+}
+
+model TypesetUploadImage {
+  id String @id @default(uuid()) @db.Uuid
+  uploadFileId String @map("upload_file_id") @db.Uuid
+  uploadFile TypesetUploadFile @relation(fields: [uploadFileId], references: [id], onDelete: Cascade)
+  fileObjectId String @map("file_object_id") @db.Uuid
+  fileObject FileObject @relation(fields: [fileObjectId], references: [id], onDelete: Restrict)
+  sourceName String @map("source_name") @db.VarChar(255)
+  width Int
+  height Int
+  orderIndex Int @map("order_index")
+
+  @@index([uploadFileId, orderIndex])
+  @@map("typeset_upload_images")
+}
+
+model TypesetUploadPreview {
+  id String @id @default(uuid()) @db.Uuid
+  sessionId String @map("session_id") @db.Uuid
+  session TypesetUploadSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  workId String @map("work_id") @db.Uuid
+  work Work @relation(fields: [workId], references: [id], onDelete: Restrict)
+  workRevision Int @map("work_revision")
+  editorEpoch Int @map("editor_epoch")
+  handoffStartedAt DateTime @map("handoff_started_at") @db.Timestamptz(3)
+  imageIds Json @map("image_ids")
+  idempotencyKey String @unique @map("idempotency_key") @db.Uuid
+  versionId String? @map("version_id") @db.Uuid
+  version TypesetImageVersion? @relation(fields: [versionId], references: [id], onDelete: Restrict)
+
+  @@unique([sessionId, workId])
+  @@map("typeset_upload_previews")
+}
+
+model UserAvatarUploadSession {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  objectKey        String    @unique @map("object_key") @db.Text
+  sourceName       String    @map("source_name") @db.VarChar(255)
+  contentType      String    @map("content_type") @db.VarChar(255)
+  size             Int
+  checksum         String    @db.Char(64)
+  expectedRevision Int       @map("expected_revision")
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(3)
+  completedAt      DateTime? @map("completed_at") @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([userId, expiresAt])
+  @@map("user_avatar_upload_sessions")
+}
+
+model WorkReviewRevision {
+  id                        String                      @id @default(uuid()) @db.Uuid
+  workId                    String                      @map("work_id") @db.Uuid
+  work                      Work                        @relation(fields: [workId], references: [id], onDelete: Restrict)
+  reviewCaseId              String                      @unique @map("review_case_id") @db.Uuid
+  reviewCase                WorkReviewCase              @relation(fields: [reviewCaseId], references: [id], onDelete: Restrict)
+  targetStage               WorkStage                   @map("target_stage")
+  currentStage              WorkStage                   @map("current_stage")
+  status                    ReviewRevisionStatus        @default(active)
+  returnWorkflowStatus      WorkflowStatus              @map("return_workflow_status")
+  baseline                  Json
+  initialText               Json                        @map("initial_text")
+  translationVersionId      String?                     @map("translation_version_id") @db.Uuid
+  originalContributorIds    String[]                    @default([]) @map("original_contributor_ids") @db.Uuid
+  originalCollaborationMode WorkCollaborationMode       @map("original_collaboration_mode")
+  approvedById              String                      @map("approved_by_id") @db.Uuid
+  startedAt                 DateTime?                   @map("started_at") @db.Timestamptz(3)
+  completedAt               DateTime?                   @map("completed_at") @db.Timestamptz(3)
+  participants              ReviewRevisionParticipant[]
+  versions                  TranslationVersion[]
+  createdAt                 DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([workId, status])
+  @@map("work_review_revisions")
+}
+
+model ReviewRevisionParticipant {
+  id             String             @id @default(uuid()) @db.Uuid
+  revisionId     String             @map("revision_id") @db.Uuid
+  revision       WorkReviewRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  userId         String             @map("user_id") @db.Uuid
+  user           User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  stage          WorkStage
+  imageIds       String[]           @default([]) @map("image_ids") @db.Uuid
+  completedPages Json               @default("[]") @map("completed_pages")
+  joinedAt       DateTime           @default(now()) @map("joined_at") @db.Timestamptz(3)
+  leftAt         DateTime?          @map("left_at") @db.Timestamptz(3)
+  submittedAt    DateTime?          @map("submitted_at") @db.Timestamptz(3)
+
+  @@index([revisionId, stage, leftAt])
+  @@index([userId, joinedAt])
+  @@map("review_revision_participants")
+}
+
+enum JobStatus {
+  queued
+  running
+  succeeded
+  failed
+}
+
+enum JobLane {
+  network
+  heavy
+}
+
+model BackgroundJob {
+  id             String    @id @default(uuid()) @db.Uuid
+  kind           String    @db.VarChar(64)
+  resourceId     String    @map("resource_id") @db.Uuid
+  actorId        String?   @map("actor_id") @db.Uuid
+  idempotencyKey String    @unique @map("idempotency_key") @db.VarChar(255)
+  lane           JobLane   @default(heavy)
+  status         JobStatus @default(queued)
+  payload        Json      @default("{}")
+  priority       Int       @default(10)
+  attempts       Int       @default(0)
+  availableAt    DateTime  @default(now()) @map("available_at") @db.Timestamptz(3)
+  leaseId        String?   @map("lease_id") @db.Uuid
+  leaseUntil     DateTime? @map("lease_until") @db.Timestamptz(3)
+  lastError      String?   @map("last_error") @db.VarChar(500)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  startedAt      DateTime? @map("started_at") @db.Timestamptz(3)
+  completedAt    DateTime? @map("completed_at") @db.Timestamptz(3)
+  @@index([lane, status, availableAt, priority])
+  @@map("background_jobs")
+}
+
+model WorkerSchedule {
+  name   String   @id @db.VarChar(64)
+  dueAt  DateTime @map("due_at") @db.Timestamptz(3)
+  @@map("worker_schedules")
+}
+
+enum ImageDerivativeStatus {
+  queued
+  processing
+  ready
+  reused
+  failed
+}
+
+model ImageDerivative {
+  id            String                @id @default(uuid()) @db.Uuid
+  sourceFileId  String                @map("source_file_id") @db.Uuid
+  sourceFile    FileObject            @relation("DerivativeSource", fields: [sourceFileId], references: [id], onDelete: Cascade)
+  recipe        String                @db.VarChar(64)
+  status        ImageDerivativeStatus @default(queued)
+  outputFileId  String?               @map("output_file_id") @db.Uuid
+  outputFile    FileObject?           @relation("DerivativeOutput", fields: [outputFileId], references: [id], onDelete: Restrict)
+  width         Int?
+  height        Int?
+  lastError     String?               @map("last_error") @db.VarChar(500)
+  createdAt     DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@unique([sourceFileId, recipe])
+  @@index([status, createdAt])
+  @@map("image_derivatives")
+}
+
+enum DirectUploadPurpose {
+  author_avatar
+  author_evidence
+  typeset_single
+}
+
+enum DirectUploadStatus {
+  pending
+  queued
+  processing
+  completed
+  failed
+  expired
+}
+
+enum DownloadPurpose {
+  handoff
+  publication
+}
+
+model DirectUploadSession {
+  id               String              @id @default(uuid()) @db.Uuid
+  actorId          String              @map("actor_id") @db.Uuid
+  resourceId       String              @map("resource_id") @db.Uuid
+  purpose          DirectUploadPurpose
+  status           DirectUploadStatus  @default(pending)
+  expectedRevision Int                 @map("expected_revision")
+  manifest         Json
+  options          Json                @default("{}")
+  result           Json?
+  error            String?             @db.VarChar(500)
+  expiresAt        DateTime            @map("expires_at") @db.Timestamptz(3)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([actorId, createdAt])
+  @@index([status, expiresAt])
+  @@map("direct_upload_sessions")
+}
+
+model DownloadPreparation {
+  id                  String          @id @default(uuid()) @db.Uuid
+  actorId             String          @map("actor_id") @db.Uuid
+  workId              String          @map("work_id") @db.Uuid
+  purpose             DownloadPurpose
+  status              JobStatus       @default(queued)
+  expectedRevision    Int             @map("expected_revision")
+  expectedEditorEpoch Int             @map("expected_editor_epoch")
+  idempotencyKey      String          @map("idempotency_key") @db.Uuid
+  fileObjectId        String?         @map("file_object_id") @db.Uuid
+  fileObject          FileObject?     @relation(fields: [fileObjectId], references: [id], onDelete: Restrict)
+  packageId           String?         @map("package_id") @db.Uuid
+  fileName            String?         @map("file_name") @db.VarChar(255)
+  error               String?         @db.VarChar(500)
+  expiresAt           DateTime        @map("expires_at") @db.Timestamptz(3)
+  deliveredAt         DateTime?       @map("delivered_at") @db.Timestamptz(3)
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([actorId, idempotencyKey])
+  @@index([status, expiresAt])
+  @@map("download_preparations")
+}

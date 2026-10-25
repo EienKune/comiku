@@ -1,0 +1,26 @@
+# Local reference material; may contain source artwork and working translations.
+/external-references/
+/labelplus-example/
+
+# JavaScript / TypeScript
+node_modules/
+.pnpm-store/
+dist/
+.vite/
+coverage/
+dist-ops/
+*.tsbuildinfo
+/apps/server/src/generated/
+/.qa/
+/.comiku-data/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Deployment credentials and recovery artifacts.
+/deploy/.secrets/
+/deploy/.backups/
+/deploy/production.env
+*.comikubak

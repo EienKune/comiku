@@ -1,0 +1,12 @@
+[Unit]
+Description=Comiku encrypted PostgreSQL backup to private R2
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/comiku
+ExecStart=/usr/bin/docker compose --env-file deploy/production.env -f deploy/compose.production.yml --profile backup run --rm --no-deps backup backup
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal

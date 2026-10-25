@@ -1,0 +1,218 @@
+name: comiku
+
+x-logging: &logging
+  driver: local
+  options: { max-size: "10m", max-file: "3" }
+
+x-app: &app
+  image: comiku-server:${IMAGE_TAG:?Set IMAGE_TAG in deploy/production.env}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+    target: runtime
+    args: { COMIKU_RELEASE: "${IMAGE_TAG}" }
+  init: true
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  secrets: [runtime_env]
+  environment: &app-environment
+    NODE_ENV: production
+    HOST: 0.0.0.0
+    PORT: "3000"
+    APP_ORIGIN: "https://${APP_DOMAIN:?Set APP_DOMAIN}"
+    COMIKU_ENV_FILE: /run/secrets/runtime_env
+    COMIKU_RELEASE: "${IMAGE_TAG}"
+    TRUSTED_PROXY_CIDRS: 172.30.0.2/32
+    NODE_OPTIONS: --max-old-space-size=384
+  depends_on:
+    postgres: { condition: service_healthy }
+    migrate: { condition: service_completed_successfully }
+  stop_grace_period: 75s
+  logging: *logging
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: comiku
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+    secrets:
+      [postgres_admin_password, postgres_password, postgres_backup_password]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/10-comiku.sh:ro
+    networks: [database]
+    mem_limit: 768m
+    cpus: 0.5
+    shm_size: 128m
+    command:
+      [
+        postgres,
+        -c,
+        shared_buffers=128MB,
+        -c,
+        max_connections=40,
+        -c,
+        work_mem=4MB,
+      ]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d comiku"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  migrate:
+    image: comiku-tools:${IMAGE_TAG}
+    build:
+      {
+        context: ..,
+        dockerfile: deploy/Dockerfile,
+        target: tools,
+        args: { COMIKU_RELEASE: "${IMAGE_TAG}" },
+      }
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment: *app-environment
+    secrets: [runtime_env]
+    networks: [database]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=128m,uid=1000,gid=1000"]
+    mem_limit: 384m
+    cpus: 0.5
+    depends_on: { postgres: { condition: service_healthy } }
+    command: [pnpm, db:deploy]
+    logging: *logging
+
+  api:
+    <<: *app
+    networks: { edge: { ipv4_address: 172.30.0.3 }, database: {} }
+    mem_limit: 768m
+    cpus: 0.75
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m,uid=1000,gid=1000"]
+    healthcheck:
+      test: [CMD, node, dist/ops/healthcheck.js, api]
+      interval: 15s
+      timeout: 8s
+      retries: 3
+      start_period: 30s
+
+  worker:
+    <<: *app
+    command: [node, dist/worker.js]
+    environment:
+      <<: *app-environment
+      NODE_OPTIONS: --max-old-space-size=512
+      WORKER_HEALTH_FILE: /tmp/comiku-worker-health.json
+    networks: [database, outbound]
+    mem_limit: 1280m
+    cpus: 1.0
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=384m,uid=1000,gid=1000"]
+    healthcheck:
+      test: [CMD, node, dist/ops/healthcheck.js, worker]
+      interval: 15s
+      timeout: 8s
+      retries: 3
+      start_period: 30s
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    environment: { API_DOMAIN: "${API_DOMAIN:?Set API_DOMAIN}" }
+    ports: ["80:80", "443:443"]
+    networks: { edge: { ipv4_address: 172.30.0.2 } }
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./cloudflare.caddy:/etc/caddy/cloudflare.caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    secrets: [origin_certificate, origin_private_key]
+    mem_limit: 128m
+    cpus: 0.25
+    depends_on: { api: { condition: service_healthy } }
+    logging: *logging
+
+  tools:
+    profiles: [ops]
+    image: comiku-tools:${IMAGE_TAG}
+    environment: *app-environment
+    secrets: [runtime_env]
+    networks: [database]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=128m,uid=1000,gid=1000"]
+    mem_limit: 384m
+    cpus: 0.5
+    depends_on: { postgres: { condition: service_healthy } }
+    command: [pnpm, db:status]
+    logging: *logging
+
+  backup:
+    profiles: [backup]
+    image: comiku-backup:${IMAGE_TAG}
+    build:
+      {
+        context: ..,
+        dockerfile: deploy/Dockerfile,
+        target: backup,
+        args: { COMIKU_RELEASE: "${IMAGE_TAG}" },
+      }
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      COMIKU_BACKUP_ENV_FILE: /run/secrets/backup_env
+      COMIKU_RELEASE: "${IMAGE_TAG}"
+      NODE_OPTIONS: --max-old-space-size=128
+    secrets: [backup_env, backup_encryption_key]
+    networks: [database, outbound]
+    volumes: ["./.backups:/archives"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m,uid=1000,gid=1000"]
+    mem_limit: 384m
+    cpus: 0.5
+    depends_on: { postgres: { condition: service_healthy } }
+    logging: *logging
+
+  postgres-restore:
+    profiles: [restore]
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: comiku_restore_test
+      POSTGRES_USER: comiku
+      POSTGRES_PASSWORD_FILE: /run/secrets/restore_password
+    secrets: [restore_password]
+    networks: [database]
+    tmpfs: ["/var/lib/postgresql/data:rw,nosuid,size=512m"]
+    mem_limit: 512m
+    cpus: 0.5
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U comiku -d comiku_restore_test"]
+      interval: 5s
+      retries: 10
+    logging: *logging
+
+networks:
+  edge: { ipam: { config: [{ subnet: 172.30.0.0/24 }] } }
+  database: { internal: true }
+  outbound: {}
+
+volumes:
+  postgres_data: {}
+  caddy_data: {}
+  caddy_config: {}
+
+secrets:
+  runtime_env: { file: ./.secrets/runtime.env }
+  postgres_password: { file: ./.secrets/postgres-password }
+  postgres_admin_password: { file: ./.secrets/postgres-admin-password }
+  postgres_backup_password: { file: ./.secrets/postgres-backup-password }
+  backup_env: { file: ./.secrets/backup.env }
+  backup_encryption_key: { file: ./.secrets/backup-key }
+  restore_password: { file: ./.secrets/restore-password }
+  origin_certificate: { file: ./.secrets/origin-cert.pem }
+  origin_private_key: { file: ./.secrets/origin-key.pem }

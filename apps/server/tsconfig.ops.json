@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist-ops",
+    "rootDir": ".",
+    "sourceMap": false
+  },
+  "include": ["scripts/backup.ts"],
+  "exclude": ["dist", "dist-ops", "node_modules"]
+}

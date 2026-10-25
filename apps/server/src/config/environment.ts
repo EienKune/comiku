@@ -1,0 +1,257 @@
+import { isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { config } from "dotenv";
+import { parseTrustedProxies } from "./trusted-proxies.js";
+
+export interface Environment {
+  nodeEnv: "development" | "test" | "production";
+  host: string;
+  port: number;
+  databaseUrl: string;
+  appOrigin: string;
+  trustedProxyCidrs?: string[];
+  xBearerToken?: string;
+  xWebSession?: {
+    bearerToken: string;
+    authToken: string;
+    csrfToken: string;
+    userMediaQueryId: string;
+    userByScreenNameQueryId?: string;
+    features: Record<string, unknown>;
+  };
+  xOfficialDailyBudget: number;
+  xOfficialMonthlyBudget: number;
+  sourceOverlapMinutes: number;
+  sourceScheduleEnabled: boolean;
+  sourceScheduleMinutes: number;
+  sourceFailureThreshold: number;
+  sourceCooldownMinutes: number;
+  typesetBatchMaxBytes: number;
+  typesetBatchMaxWorks: number;
+  objectStorageDriver: "memory" | "local" | "r2";
+  localStoragePath?: string;
+  r2?: {
+    accountId: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    bucket: string;
+  };
+}
+
+export const ENVIRONMENT = Symbol("ENVIRONMENT");
+const workspaceRoot = fileURLToPath(new URL("../../../../", import.meta.url));
+
+// Both src/config and dist/config resolve to the workspace root.
+export function loadRootEnvironment(): void {
+  const secretFile = process.env.COMIKU_ENV_FILE;
+  if (secretFile && !isAbsolute(secretFile))
+    throw new Error("COMIKU_ENV_FILE must be an absolute secret-file path.");
+  const result = config({
+    path:
+      secretFile ?? fileURLToPath(new URL("../../../../.env", import.meta.url)),
+    override: false,
+    quiet: true,
+  });
+  if (
+    result.error &&
+    (secretFile || (result.error as NodeJS.ErrnoException).code !== "ENOENT")
+  ) {
+    throw new Error("Cannot read the environment file.");
+  }
+}
+
+export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
+  const nodeEnv = input.NODE_ENV ?? "development";
+  if (!["development", "test", "production"].includes(nodeEnv)) {
+    throw new Error("NODE_ENV must be development, test or production.");
+  }
+  const port = input.PORT ?? "3000";
+  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
+    throw new Error("PORT must be an integer between 1 and 65535.");
+  }
+  const host = input.HOST ?? "127.0.0.1";
+  if (!host.trim() || host !== host.trim() || /[\s/]/.test(host)) {
+    throw new Error("HOST must be a hostname or IP address.");
+  }
+  const databaseUrl = input.DATABASE_URL;
+  const integer = (name: string, fallback: number, minimum = 0) => {
+    const value = input[name] ?? String(fallback);
+    if (!/^\d+$/.test(value) || Number(value) < minimum) {
+      throw new Error(`${name} must be an integer of at least ${minimum}.`);
+    }
+    return Number(value);
+  };
+  const appOrigin =
+    input.APP_ORIGIN ??
+    (nodeEnv === "production" ? "" : "http://localhost:5173");
+  try {
+    const origin = new URL(appOrigin);
+    if (
+      origin.origin !== appOrigin ||
+      !["http:", "https:"].includes(origin.protocol) ||
+      (nodeEnv === "production" && origin.protocol !== "https:")
+    )
+      throw new Error();
+  } catch {
+    throw new Error(
+      "APP_ORIGIN must be an exact HTTP(S) origin; production requires HTTPS.",
+    );
+  }
+  if (
+    integer("TYPESET_BATCH_MAX_WORKS", 20, 1) > 20 ||
+    integer("TYPESET_BATCH_MAX_MIB", 512, 1) > 1024
+  ) {
+    throw new Error(
+      "Typeset batch limits must be at most 20 works and 1024 MiB.",
+    );
+  }
+  const r2Names = [
+    "R2_ACCOUNT_ID",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "R2_BUCKET",
+  ] as const;
+  const r2Values = r2Names.map((name) => input[name]?.trim() ?? "");
+  const configured = r2Values.filter(Boolean).length;
+  const webNames = [
+    "X_WEB_BEARER_TOKEN",
+    "X_WEB_AUTH_TOKEN",
+    "X_WEB_CSRF_TOKEN",
+    "X_WEB_USER_MEDIA_QUERY_ID",
+  ] as const;
+  const webValues = webNames.map((name) => input[name]?.trim() ?? "");
+  const webConfigured = webValues.filter(Boolean).length;
+  if (webConfigured > 0 && webConfigured < webNames.length) {
+    throw new Error(
+      "X web session configuration must provide all X_WEB_* variables.",
+    );
+  }
+  let xWebFeatures: Record<string, unknown> = {};
+  if (input.X_WEB_FEATURES_JSON?.trim()) {
+    try {
+      const parsed = JSON.parse(input.X_WEB_FEATURES_JSON) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+        throw new Error();
+      xWebFeatures = parsed as Record<string, unknown>;
+    } catch {
+      throw new Error("X_WEB_FEATURES_JSON must be a JSON object.");
+    }
+  }
+  if (configured > 0 && configured < r2Names.length) {
+    throw new Error("R2 configuration must provide all R2_* variables.");
+  }
+  if (nodeEnv === "production" && configured === 0) {
+    throw new Error("Production requires complete R2 configuration.");
+  }
+  if (
+    configured === r2Names.length &&
+    (!/^[a-f0-9]{32}$/i.test(r2Values[0]) ||
+      !/^[A-Za-z0-9._-]{3,255}$/.test(r2Values[3]))
+  ) {
+    throw new Error("R2_ACCOUNT_ID or R2_BUCKET is invalid.");
+  }
+  const requestedStorageDriver = input.OBJECT_STORAGE_DRIVER?.trim();
+  if (
+    requestedStorageDriver &&
+    !["memory", "local", "r2"].includes(requestedStorageDriver)
+  ) {
+    throw new Error("OBJECT_STORAGE_DRIVER must be memory, local or r2.");
+  }
+  const objectStorageDriver = (requestedStorageDriver ??
+    (nodeEnv === "test"
+      ? "memory"
+      : nodeEnv === "production" || configured === r2Names.length
+        ? "r2"
+        : "local")) as Environment["objectStorageDriver"];
+  if (nodeEnv === "production" && objectStorageDriver !== "r2") {
+    throw new Error("Production requires OBJECT_STORAGE_DRIVER=r2.");
+  }
+  if (objectStorageDriver === "r2" && configured !== r2Names.length) {
+    throw new Error("R2 storage requires complete R2 configuration.");
+  }
+  if (objectStorageDriver === "memory" && nodeEnv !== "test") {
+    throw new Error("Memory object storage is only available in tests.");
+  }
+  const configuredLocalPath =
+    input.LOCAL_STORAGE_PATH?.trim() || ".comiku-data/objects";
+  const localStoragePath = isAbsolute(configuredLocalPath)
+    ? resolve(configuredLocalPath)
+    : resolve(workspaceRoot, configuredLocalPath);
+  try {
+    const parsed = new URL(databaseUrl ?? "");
+    if (
+      !["postgres:", "postgresql:"].includes(parsed.protocol) ||
+      !parsed.hostname ||
+      parsed.pathname.length <= 1
+    ) {
+      throw new Error();
+    }
+  } catch {
+    // Never include the URL: it may contain credentials.
+    throw new Error(
+      "DATABASE_URL must be a PostgreSQL URL with a database name.",
+    );
+  }
+  if (
+    input.SOURCE_SCHEDULE_ENABLED &&
+    !["true", "false"].includes(input.SOURCE_SCHEDULE_ENABLED)
+  )
+    throw new Error("SOURCE_SCHEDULE_ENABLED must be true or false.");
+  return {
+    ...(input.TRUSTED_PROXY_CIDRS?.trim()
+      ? { trustedProxyCidrs: parseTrustedProxies(input.TRUSTED_PROXY_CIDRS) }
+      : {}),
+    sourceScheduleEnabled: input.SOURCE_SCHEDULE_ENABLED === "true",
+    sourceScheduleMinutes: integer("SOURCE_SCHEDULE_MINUTES", 60, 5),
+    nodeEnv: nodeEnv as Environment["nodeEnv"],
+    host,
+    port: Number(port),
+    databaseUrl: databaseUrl!,
+    appOrigin,
+    xOfficialDailyBudget: integer("X_OFFICIAL_DAILY_BUDGET", 0),
+    xOfficialMonthlyBudget: integer("X_OFFICIAL_MONTHLY_BUDGET", 0),
+    sourceOverlapMinutes: integer("SOURCE_OVERLAP_MINUTES", 10, 1),
+    sourceFailureThreshold: integer("SOURCE_FAILURE_THRESHOLD", 3, 1),
+    sourceCooldownMinutes: integer("SOURCE_COOLDOWN_MINUTES", 360, 1),
+    typesetBatchMaxBytes:
+      integer("TYPESET_BATCH_MAX_MIB", 512, 1) * 1024 * 1024,
+    typesetBatchMaxWorks: integer("TYPESET_BATCH_MAX_WORKS", 20, 1),
+    objectStorageDriver,
+    ...(objectStorageDriver === "local" ? { localStoragePath } : {}),
+    ...(input.X_BEARER_TOKEN?.trim()
+      ? { xBearerToken: input.X_BEARER_TOKEN.trim() }
+      : {}),
+    ...(webConfigured === webNames.length
+      ? {
+          xWebSession: {
+            bearerToken: webValues[0],
+            authToken: webValues[1],
+            csrfToken: webValues[2],
+            userMediaQueryId: webValues[3],
+            ...(input.X_WEB_USER_BY_SCREEN_NAME_QUERY_ID?.trim()
+              ? {
+                  userByScreenNameQueryId:
+                    input.X_WEB_USER_BY_SCREEN_NAME_QUERY_ID.trim(),
+                }
+              : {}),
+            features: xWebFeatures,
+          },
+        }
+      : {}),
+    ...(configured === r2Names.length
+      ? {
+          r2: {
+            accountId: r2Values[0],
+            accessKeyId: r2Values[1],
+            secretAccessKey: r2Values[2],
+            bucket: r2Values[3],
+          },
+        }
+      : {}),
+  };
+}
+
+export function loadEnvironment(): Environment {
+  loadRootEnvironment();
+  return parseEnvironment(process.env);
+}

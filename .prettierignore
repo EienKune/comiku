@@ -1,0 +1,16 @@
+node_modules/
+dist/
+dist-ops/
+coverage/
+*.tsbuildinfo
+pnpm-lock.yaml
+external-references/
+labelplus-example/
+apps/server/src/generated/
+apps/server/prisma/migrations/
+docs/api/openapi.json
+packages/api-client/src/schema.ts
+.qa/
+.env
+.env.*
+!.env.example

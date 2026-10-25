@@ -1,0 +1,53 @@
+{
+  "name": "comiku",
+  "version": "0.9.0",
+  "private": true,
+  "packageManager": "pnpm@9.1.2",
+  "engines": {
+    "node": "24.22.1",
+    "pnpm": "9.1.2"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @comiku/web --filter @comiku/server \"/^dev(:worker)?$/\"",
+    "dev:web": "pnpm --filter @comiku/web dev",
+    "dev:server": "pnpm --filter @comiku/server dev",
+    "build": "pnpm --recursive --if-present build",
+    "typecheck": "pnpm --recursive --if-present typecheck",
+    "preinstall": "node scripts/check-runtime.mjs",
+    "runtime:check": "node scripts/check-runtime.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings 0",
+    "test": "pnpm --recursive --if-present test",
+    "test:integration": "pnpm --filter @comiku/server test:integration",
+    "db:generate": "pnpm --filter @comiku/server db:generate",
+    "db:validate": "pnpm --filter @comiku/server db:validate",
+    "db:migrate": "pnpm --filter @comiku/server db:migrate",
+    "db:deploy": "pnpm --filter @comiku/server db:deploy",
+    "db:status": "pnpm --filter @comiku/server db:status",
+    "db:drift": "pnpm --filter @comiku/server db:drift",
+    "openapi:export": "pnpm --filter @comiku/server openapi:export",
+    "openapi:check": "pnpm --filter @comiku/server openapi:check",
+    "admin:init": "pnpm --filter @comiku/server admin:init",
+    "admin:recover": "pnpm --filter @comiku/server admin:recover",
+    "demo:init": "pnpm --filter @comiku/server demo:init",
+    "api:generate": "pnpm openapi:export && pnpm --filter @comiku/api-client generate",
+    "api:check": "pnpm openapi:check && pnpm --filter @comiku/api-client check",
+    "dev:worker": "pnpm --filter @comiku/server dev:worker",
+    "images:backfill": "pnpm --filter @comiku/server images:backfill",
+    "ops:status": "pnpm --filter @comiku/server ops:status",
+    "deploy:check": "pnpm --filter @comiku/server deploy:check",
+    "test:production": "node scripts/test-production-images.mjs",
+    "demo:image": "node scripts/generate-demo-image.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.10.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.6",
+    "globals": "17.12.0",
+    "prettier": "3.9.6",
+    "typescript-eslint": "8.69.0"
+  },
+  "license": "MIT"
+}
