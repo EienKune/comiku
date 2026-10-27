@@ -14,3 +14,9 @@ packages/api-client/src/schema.ts
 .env
 .env.*
 !.env.example
+
+.local-adapters/
+apps/server/src/image-analysis/adapters/ba-pixai/python/pixai/
+.local-docs/
+.superpowers/
+HANDOFF.MD

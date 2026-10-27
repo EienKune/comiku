@@ -1,6 +1,7 @@
 import { downloadPrepared, uploadDirect, pollTransfer } from "./transfers-api";
 import { useImageUrl } from "../../components/use-image-url";
 import { refreshReviewViews } from "./review-cache";
+import { useCandidateAnalysisRefresh } from "./use-candidate-analysis-refresh";
 import { MemberAvatar } from "../account/MemberAvatar";
 import {
   useCallback,
@@ -2605,12 +2606,12 @@ const candidateTriageSections: {
   {
     value: "valid_manga",
     title: "有效标签漫画 / 插画",
-    description: "已命中配置的作品标签，适合优先快速审核。",
+    description: "命中配置的作品标签或模型确认，优先审核。",
   },
   {
     value: "neutral_manga",
     title: "普通漫画 / 插画",
-    description: "没有命中有效或黑名单标签，按时间正常审核。",
+    description: "未命中有效标签或模型确认，保留人工判断。",
   },
   {
     value: "blocked_manga",
@@ -2666,6 +2667,7 @@ function CandidateGridSection({
   onToggle,
   onSelectLoaded,
   onClassify,
+  onRetryAnalysis,
   orderingCandidateId,
   onToggleOrdering,
 }: {
@@ -2681,6 +2683,7 @@ function CandidateGridSection({
     candidate: Candidate,
     label: components["schemas"]["CandidateVisualClass"],
   ) => void;
+  onRetryAnalysis: (candidate: Candidate) => void;
   orderingCandidateId: string | null;
   onToggleOrdering: (id: string) => void;
 }) {
@@ -2748,7 +2751,9 @@ function CandidateGridSection({
                 <div className="workspace-tags">
                   <Badge
                     tone={
-                      candidate.tagDisposition === "valid"
+                      candidate.tagDisposition === "valid" ||
+                      (candidate.tagDisposition === "neutral" &&
+                        group === "valid_manga")
                         ? "success"
                         : candidate.tagDisposition === "blocked"
                           ? "danger"
@@ -2759,7 +2764,9 @@ function CandidateGridSection({
                       ? "有效标签"
                       : candidate.tagDisposition === "blocked"
                         ? "黑名单标签"
-                        : "普通标签"}
+                        : group === "valid_manga"
+                          ? "模型命中"
+                          : "普通标签"}
                   </Badge>
                   <Badge>
                     {sourceLanguageLabels[candidate.sourceLanguage]}
@@ -2767,6 +2774,19 @@ function CandidateGridSection({
                   {candidate.hashtags.map((tag) => (
                     <Badge key={tag}>#{tag}</Badge>
                   ))}
+                  {(candidate.reviewPriority === "unprocessed" ||
+                    candidate.reviewPriority === "queued" ||
+                    candidate.reviewPriority === "failed") && (
+                    <Badge>
+                      {
+                        {
+                          unprocessed: "未识别",
+                          queued: "待识别",
+                          failed: "识别失败",
+                        }[candidate.reviewPriority]
+                      }
+                    </Badge>
+                  )}
                 </div>
                 <footer>
                   {user.permissions.includes("candidates:manage") && (
@@ -2818,6 +2838,16 @@ function CandidateGridSection({
                         : "标记为照片"}
                     </Button>
                   )}
+                  {candidate.reviewPriority === "failed" &&
+                    user.permissions.includes("candidates:manage") && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => onRetryAnalysis(candidate)}
+                      >
+                        重试识别
+                      </Button>
+                    )}
                 </footer>
                 {orderingCandidateId === candidate.id && (
                   <CandidateOrderPanel
@@ -2882,6 +2912,7 @@ function CandidateGridSection({
 export function CandidatesPage() {
   const user = useAccount();
   const action = useAction();
+  useCandidateAnalysisRefresh();
   const [sourceRunId, setSourceRunId] = useState<string | null>(null);
   const sourceRun = useQuery({
     queryKey: ["source-fetch", sourceRunId],
@@ -2921,6 +2952,17 @@ export function CandidatesPage() {
   );
   const runCandidateAction = action.run;
   const setCandidateSuccess = action.setSuccess;
+  async function retryAnalysis(candidate: Candidate) {
+    await action.run(async () => {
+      await unwrap(
+        await client.POST("/api/candidates/{id}/analysis-retry", {
+          params: { path: { id: candidate.id } },
+        }),
+      );
+      await queryClient.invalidateQueries({ queryKey: ["candidates"] });
+      action.setSuccess("识别已重新排队");
+    });
+  }
   async function classify(
     candidate: Candidate,
     label: components["schemas"]["CandidateVisualClass"],
@@ -3104,11 +3146,12 @@ export function CandidatesPage() {
             <Button
               variant="secondary"
               leadingIcon={<RefreshCw size={16} />}
+              title="同步全部已授权且已启用采集的作者账号"
               loading={action.busy}
               disabled={sourceActive}
               onClick={() => void fetchSources()}
             >
-              抓取来源
+              同步图源
             </Button>
           </>
         )}
@@ -3157,6 +3200,7 @@ export function CandidatesPage() {
                 }))
               }
               onClassify={(candidate, label) => void classify(candidate, label)}
+              onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
               orderingCandidateId={orderingCandidateId}
               onToggleOrdering={(id) =>
                 setOrderingCandidateId((current) =>
@@ -3183,6 +3227,7 @@ export function CandidatesPage() {
           }
           onSelectLoaded={() => undefined}
           onClassify={(candidate, label) => void classify(candidate, label)}
+          onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
           orderingCandidateId={orderingCandidateId}
           onToggleOrdering={(id) =>
             setOrderingCandidateId((current) => (current === id ? null : id))

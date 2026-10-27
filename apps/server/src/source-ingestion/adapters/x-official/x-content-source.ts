@@ -1,5 +1,8 @@
-import { requestSourceJson, SourceResponseError } from "./source-response.js";
-import type { FirstSyncMode } from "../generated/prisma/client.js";
+import {
+  requestSourceJson,
+  SourceResponseError,
+} from "../../source-response.js";
+import type { FirstSyncMode } from "../../../generated/prisma/client.js";
 import type {
   ContentSourceClient,
   NormalizedSourceContent,
@@ -7,7 +10,7 @@ import type {
   SourceAccountProfile,
   SourceCursor,
   SourcePage,
-} from "./content-source.js";
+} from "../../content-source.js";
 
 interface XMedia {
   media_key: string;

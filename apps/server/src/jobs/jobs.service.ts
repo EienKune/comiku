@@ -1,3 +1,4 @@
+import { jobEvent } from "./job-events.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { ConflictException, Inject, Injectable } from "@nestjs/common";
@@ -133,12 +134,13 @@ export class JobsService {
         .catch(() => controller.abort());
     }, 15_000);
     try {
+      console.info(JSON.stringify(jobEvent("started", job)));
       controller.signal.throwIfAborted();
       await this.leaseContext.run(job, () =>
         this.handlers.get(job.kind)!(job, controller.signal),
       );
       controller.signal.throwIfAborted();
-      await this.db.backgroundJob.updateMany({
+      const completed = await this.db.backgroundJob.updateMany({
         where: { id: job.id, leaseId: job.leaseId, status: "running" },
         data: {
           status: "succeeded",
@@ -148,18 +150,31 @@ export class JobsService {
           lastError: null,
         },
       });
+      if (completed.count)
+        console.info(JSON.stringify(jobEvent("succeeded", job)));
     } catch {
-      await this.db.backgroundJob.updateMany({
+      const retryAt = new Date(Date.now() + retryDelay(job.attempts));
+      const changed = await this.db.backgroundJob.updateMany({
         where: { id: job.id, leaseId: job.leaseId, status: "running" },
         data: {
           status: job.attempts >= 3 ? "failed" : "queued",
-          availableAt: new Date(Date.now() + retryDelay(job.attempts)),
+          availableAt: retryAt,
           leaseId: null,
           leaseUntil: null,
           lastError: "后台处理未完成，请检查资源权限或配置后重试",
           ...(job.attempts >= 3 ? { completedAt: new Date() } : {}),
         },
       });
+      if (changed.count)
+        console.info(
+          JSON.stringify(
+            jobEvent(
+              job.attempts >= 3 ? "failed" : "retry_scheduled",
+              job,
+              job.attempts >= 3 ? undefined : retryAt,
+            ),
+          ),
+        );
     } finally {
       clearInterval(heartbeat);
       stopping?.removeEventListener("abort", stop);
@@ -168,8 +183,11 @@ export class JobsService {
 
   async assertCurrentLease(tx: Prisma.TransactionClient) {
     const job = this.leaseContext.getStore();
+    if (!job) return;
+    // Hold ownership until this short protected transaction commits. A count
+    // alone allows a peer to replace the lease between verification and writes.
+    await tx.$queryRaw`SELECT id FROM background_jobs WHERE id = ${job.id}::uuid FOR UPDATE`;
     if (
-      job &&
       !(await tx.backgroundJob.count({
         where: {
           id: job.id,

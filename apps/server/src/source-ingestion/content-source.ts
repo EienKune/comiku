@@ -38,6 +38,8 @@ export interface SourcePage {
   items: NormalizedSourceContent[];
   nextCursor?: SourceCursor;
   complete: boolean;
+  /** When supplied, adapter coverage replaces the generic per-page date heuristic. */
+  boundaryReached?: boolean;
 }
 
 export interface ContentSourceClient {
@@ -49,6 +51,10 @@ export interface ContentSourceClient {
   readonly available: boolean;
   readonly allowedMediaHosts: readonly string[];
   initialCursor(mode: FirstSyncMode, now: Date): SourceCursor;
+  prepareCursor?(
+    account: SourceAccountIdentity,
+    cursor: SourceCursor,
+  ): SourceCursor;
   checkAccount(account: SourceAccountIdentity): Promise<SourceAccountProfile>;
   resolveProfileByHandle?(handle: string): Promise<SourceAccountProfile>;
   fetchPage(

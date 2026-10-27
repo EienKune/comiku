@@ -10,6 +10,15 @@ export interface Environment {
   databaseUrl: string;
   appOrigin: string;
   trustedProxyCidrs?: string[];
+  galleryDl?: {
+    python: string;
+    xConfigPath?: string;
+    pixivConfigPath?: string;
+  };
+  imageAnalysis?:
+    | { adapter: "example" }
+    | { adapter: "ba-pixai"; configFile: string }
+    | { adapter: "external"; modulePath: string; configFile: string };
   xBearerToken?: string;
   xWebSession?: {
     bearerToken: string;
@@ -35,6 +44,7 @@ export interface Environment {
     accessKeyId: string;
     secretAccessKey: string;
     bucket: string;
+    keyPrefix?: string;
   };
 }
 
@@ -74,6 +84,49 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
     throw new Error("HOST must be a hostname or IP address.");
   }
   const databaseUrl = input.DATABASE_URL;
+  const adapter = input.IMAGE_ANALYSIS_ADAPTER ?? "disabled";
+  if (!["disabled", "example", "ba-pixai", "external"].includes(adapter))
+    throw new Error(
+      "IMAGE_ANALYSIS_ADAPTER must be disabled, example, ba-pixai or external.",
+    );
+  const modulePath = input.IMAGE_ANALYSIS_MODULE;
+  const configFile = input.IMAGE_ANALYSIS_CONFIG_FILE;
+  if (
+    adapter === "external"
+      ? !modulePath ||
+        !configFile ||
+        !isAbsolute(modulePath) ||
+        !isAbsolute(configFile)
+      : adapter === "ba-pixai"
+        ? modulePath !== undefined || !configFile || !isAbsolute(configFile)
+        : modulePath !== undefined || configFile !== undefined
+  )
+    throw new Error(
+      "IMAGE_ANALYSIS requires an absolute config-file path for ba-pixai and absolute module/config-file paths for external adapters.",
+    );
+  const galleryPaths = [
+    input.GALLERY_DL_PYTHON,
+    input.GALLERY_DL_X_CONFIG,
+    input.GALLERY_DL_PIXIV_CONFIG,
+  ];
+  if (
+    galleryPaths.some(Boolean) &&
+    (!galleryPaths[0] ||
+      !galleryPaths.slice(1).some(Boolean) ||
+      galleryPaths.some((path) => path && !isAbsolute(path)))
+  ) {
+    throw new Error(
+      "gallery-dl requires an absolute Python path and platform config path.",
+    );
+  }
+  const keyPrefix = input.R2_KEY_PREFIX?.trim() ?? "";
+  if (
+    keyPrefix &&
+    (!/^(?:[a-zA-Z0-9_-]+\/)+$/.test(keyPrefix) || keyPrefix.length > 200)
+  )
+    throw new Error(
+      "R2_KEY_PREFIX must contain safe directory segments and end with /.",
+    );
   const integer = (name: string, fallback: number, minimum = 0) => {
     const value = input[name] ?? String(fallback);
     if (!/^\d+$/.test(value) || Number(value) < minimum) {
@@ -198,6 +251,33 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
   )
     throw new Error("SOURCE_SCHEDULE_ENABLED must be true or false.");
   return {
+    ...(adapter === "example"
+      ? { imageAnalysis: { adapter: "example" as const } }
+      : adapter === "ba-pixai"
+        ? {
+            imageAnalysis: {
+              adapter: "ba-pixai" as const,
+              configFile: configFile!,
+            },
+          }
+        : adapter === "external"
+          ? {
+              imageAnalysis: {
+                adapter: "external" as const,
+                modulePath: modulePath!,
+                configFile: configFile!,
+              },
+            }
+          : {}),
+    ...(galleryPaths[0]
+      ? {
+          galleryDl: {
+            python: galleryPaths[0],
+            ...(galleryPaths[1] ? { xConfigPath: galleryPaths[1] } : {}),
+            ...(galleryPaths[2] ? { pixivConfigPath: galleryPaths[2] } : {}),
+          },
+        }
+      : {}),
     ...(input.TRUSTED_PROXY_CIDRS?.trim()
       ? { trustedProxyCidrs: parseTrustedProxies(input.TRUSTED_PROXY_CIDRS) }
       : {}),
@@ -245,6 +325,7 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
             accessKeyId: r2Values[1],
             secretAccessKey: r2Values[2],
             bucket: r2Values[3],
+            keyPrefix,
           },
         }
       : {}),

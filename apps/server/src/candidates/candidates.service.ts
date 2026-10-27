@@ -13,6 +13,7 @@ import { extname } from "node:path";
 import { CandidateTagDisposition, Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../database/prisma.service.js";
 import { FileObjectsService } from "../files/file-objects.service.js";
+import { ImageAnalysisService } from "../image-analysis/image-analysis.service.js";
 import {
   collectHashtags,
   normalizeHashtag,
@@ -93,6 +94,9 @@ export class CandidatesService {
     @Inject(PrismaService) private readonly db: PrismaService,
     @Inject(FileObjectsService) private readonly files: FileObjectsService,
     @Optional() @Inject(JobsService) private readonly jobs?: JobsService,
+    @Optional()
+    @Inject(ImageAnalysisService)
+    private readonly analysis?: ImageAnalysisService,
   ) {}
 
   onModuleInit() {
@@ -160,13 +164,43 @@ export class CandidatesService {
     await this.jobs?.assertCurrentLease(tx);
   }
 
+  private analysisSummary(candidate: {
+    analysisModelKey: string | null;
+    analysisState: string;
+    analysisScore: number | null;
+  }) {
+    const key = this.analysis?.activeModelKey;
+    if (!key || candidate.analysisModelKey !== key)
+      return { state: "unprocessed", score: null };
+    return {
+      state: candidate.analysisState,
+      score:
+        candidate.analysisState === "succeeded"
+          ? candidate.analysisScore
+          : null,
+    };
+  }
+
   private dto(candidate: CandidateDetails): CandidateDto {
+    const analysis = this.analysisSummary(candidate);
     const account =
       candidate.authorExternalAccount ??
       candidate.author.externalAccounts.find((item) => item.platform === "x") ??
       candidate.author.externalAccounts[0];
     return {
       id: candidate.id,
+      reviewPriority:
+        analysis.score !== null
+          ? analysis.score >= 0.8
+            ? "high"
+            : analysis.score >= 0.5
+              ? "medium"
+              : "low"
+          : analysis.state === "failed"
+            ? "failed"
+            : analysis.state === "queued"
+              ? "queued"
+              : "unprocessed",
       authorId: candidate.authorId,
       authorName: candidate.author.displayName,
       authorHandle: account?.handle ?? null,
@@ -253,6 +287,10 @@ export class CandidatesService {
       select: {
         id: true,
         tagDisposition: true,
+        analysisScore: true,
+        analysisState: true,
+        analysisModelKey: true,
+        analysisPredictions: true,
         postedAt: true,
         classificationDecision: { select: { label: true } },
         classificationSuggestions: {
@@ -262,14 +300,24 @@ export class CandidatesService {
         },
       },
     });
-    const group = (row: (typeof rows)[number]) => {
+    const classifyGroup = (row: (typeof rows)[number]) => {
       const visual =
         row.classificationDecision?.label ??
         row.classificationSuggestions[0]?.label ??
         "manga";
       if (visual === "photo") return "photo" as const;
-      return `${row.tagDisposition}_manga` as const;
+      if (row.tagDisposition === "blocked") return "blocked_manga" as const;
+      if (
+        row.tagDisposition === "valid" ||
+        (this.analysisSummary(row).state === "succeeded" &&
+          this.analysis?.promotesReview(row.analysisPredictions))
+      )
+        return "valid_manga" as const;
+      return "neutral_manga" as const;
     };
+    // Resolve model policy once per candidate, rather than on every sort comparison.
+    const groups = new Map(rows.map((row) => [row.id, classifyGroup(row)]));
+    const group = (row: (typeof rows)[number]) => groups.get(row.id)!;
     const rank = {
       valid_manga: 0,
       neutral_manga: 1,
@@ -282,6 +330,10 @@ export class CandidatesService {
         (left, right) =>
           ((query.status ?? "pending") === "pending"
             ? rank[group(left)] - rank[group(right)]
+            : 0) ||
+          ((query.status ?? "pending") === "pending"
+            ? (this.analysisSummary(right).score ?? -1) -
+              (this.analysisSummary(left).score ?? -1)
             : 0) ||
           right.postedAt.getTime() - left.postedAt.getTime() ||
           right.id.localeCompare(left.id),

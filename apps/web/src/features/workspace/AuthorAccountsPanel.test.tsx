@@ -13,6 +13,7 @@ import { client, queryClient } from "../account/api";
 import { AuthorAccountsPanel } from "./AuthorAccountsPanel";
 import type { components } from "@comiku/api-client";
 type Account = components["schemas"]["ExternalAccountDto"];
+type Capability = components["schemas"]["SourceCapabilityDto"];
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -75,7 +76,11 @@ const pixiv: Account = {
 
 test("changing a platform identity requires an explicit replacement confirmation", async () => {
   vi.spyOn(client, "GET").mockImplementation(async (path) =>
-    success(String(path).endsWith("archived") ? [] : [pixiv]),
+    success(
+      String(path).endsWith("archived") || path === "/api/authors/sources"
+        ? []
+        : [pixiv],
+    ),
   );
   const patch = vi
     .spyOn(client, "PATCH")
@@ -103,7 +108,13 @@ test("Pixiv uses the numeric identity and exposes edit, confirmed unbind and res
   let live: Account[] = [];
   let archived: Account[] = [];
   vi.spyOn(client, "GET").mockImplementation(async (path) =>
-    success(String(path).endsWith("archived") ? archived : live),
+    success(
+      path === "/api/authors/sources"
+        ? []
+        : String(path).endsWith("archived")
+          ? archived
+          : live,
+    ),
   );
   const post = vi.spyOn(client, "POST").mockImplementation(async () => {
     live = [pixiv];
@@ -177,7 +188,11 @@ test("X profile sync passes the current author and edits the same identity; view
     firstSyncMode: "last_24_hours",
   };
   vi.spyOn(client, "GET").mockImplementation(async (path) =>
-    success(String(path).endsWith("archived") ? [] : [x]),
+    success(
+      String(path).endsWith("archived") || path === "/api/authors/sources"
+        ? []
+        : [x],
+    ),
   );
   const post = vi.spyOn(client, "POST").mockResolvedValue(
     success({
@@ -217,4 +232,226 @@ test("X profile sync passes the current author and edits the same identity; view
   setup([x], false);
   expect(screen.queryByRole("button", { name: "编辑账号" })).toBeNull();
   expect(screen.queryByRole("button", { name: "关联 X" })).toBeNull();
+});
+
+const pixivCapability: Capability = {
+  platform: "pixiv",
+  adapterKey: "pixiv_fixture",
+  priority: 10,
+  metered: false,
+  available: true,
+  supportedFirstSyncModes: ["none", "last_24_hours"],
+};
+
+function collectionFixture(
+  accounts: Account[] = [],
+  capabilities: Capability[] | Error = [pixivCapability],
+) {
+  vi.spyOn(client, "GET").mockImplementation(async (path) => {
+    if (path === "/api/authors/sources") {
+      if (capabilities instanceof Error) throw capabilities;
+      return success(capabilities);
+    }
+    return success(String(path).endsWith("archived") ? [] : accounts);
+  });
+}
+
+test("configured Pixiv collection stays off by default and saves an explicitly selected first-sync window", async () => {
+  collectionFixture();
+  const post = vi.spyOn(client, "POST").mockResolvedValue(success(pixiv));
+  setup();
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "关联 Pixiv" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "关联 Pixiv" }));
+  fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
+    target: { value: "123456" },
+  });
+  const checkbox = await screen.findByRole("checkbox", {
+    name: "启用自动抓取",
+  });
+  expect((checkbox as HTMLInputElement).checked).toBe(false);
+  fireEvent.click(checkbox);
+  fireEvent.click(screen.getByRole("combobox", { name: "首次同步范围" }));
+  fireEvent.click(screen.getByRole("option", { name: "最近 24 小时" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+  await waitFor(() => expect(post).toHaveBeenCalledOnce());
+  expect(post.mock.calls[0][1]).toMatchObject({
+    body: {
+      platform: "pixiv",
+      fetchEnabled: true,
+      firstSyncMode: "last_24_hours",
+    },
+  });
+});
+
+test("Pixiv exposes only windows supported by an available adapter", async () => {
+  collectionFixture(
+    [pixiv],
+    [
+      { ...pixivCapability, supportedFirstSyncModes: ["none"] },
+      { ...pixivCapability, adapterKey: "pixiv_offline", available: false },
+    ],
+  );
+  setup([pixiv]);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+  await screen.findByRole("checkbox", { name: "启用自动抓取" });
+  fireEvent.click(screen.getByRole("combobox", { name: "首次同步范围" }));
+  expect(screen.getByRole("option", { name: "仅后续内容" })).toBeTruthy();
+  expect(screen.queryByRole("option", { name: "最近 24 小时" })).toBeNull();
+});
+
+test("editing a Pixiv nickname preserves enabled collection if capabilities cannot be read", async () => {
+  const enabled = {
+    ...pixiv,
+    fetchEnabled: true,
+    firstSyncMode: "last_24_hours" as const,
+  };
+  collectionFixture([enabled], new Error("能力读取失败"));
+  const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(enabled));
+  setup([enabled]);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+  expect(
+    (screen.getByRole("checkbox", { name: "启用自动抓取" }) as HTMLInputElement)
+      .checked,
+  ).toBe(true);
+  fireEvent.change(screen.getByLabelText("平台显示昵称（可选）"), {
+    target: { value: "保留抓取设置" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+  await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+  expect(patch.mock.calls[0][1]).toMatchObject({
+    body: {
+      displayNameSnapshot: "保留抓取设置",
+      fetchEnabled: true,
+      firstSyncMode: "last_24_hours",
+    },
+  });
+});
+
+test.each([
+  ["pixiv", "removed", []],
+  ["pixiv", "unavailable", [{ ...pixivCapability, available: false }]],
+  ["pixiv", "unreadable", new Error("能力读取失败")],
+  [
+    "pixiv",
+    "missing the stored window",
+    [{ ...pixivCapability, supportedFirstSyncModes: ["none"] }],
+  ],
+  ["x", "removed", []],
+  ["x", "unreadable", new Error("能力读取失败")],
+] as [string, string, Capability[] | Error][])(
+  "an enabled %s account can pause and retain its window when capabilities are %s",
+  async (platform, _name, capabilities) => {
+    const enabled: Account = {
+      ...pixiv,
+      platform,
+      handle: platform === "x" ? "fixture" : null,
+      profileUrl: platform === "x" ? "https://x.com/fixture" : pixiv.profileUrl,
+      fetchEnabled: true,
+      firstSyncMode: "last_24_hours",
+    };
+    collectionFixture([enabled], capabilities);
+    const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(enabled));
+    setup([enabled]);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+    const checkbox = screen.getByRole("checkbox", {
+      name: "启用自动抓取",
+    }) as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+    expect(checkbox.disabled).toBe(false);
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(false);
+    expect(checkbox.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+    await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    expect(patch.mock.calls[0][1]).toMatchObject({
+      body: {
+        fetchEnabled: false,
+        firstSyncMode: "last_24_hours",
+        expectedRevision: 2,
+      },
+    });
+  },
+);
+
+test("an unavailable Pixiv adapter cannot enable collection", async () => {
+  collectionFixture([pixiv], [{ ...pixivCapability, available: false }]);
+  setup([pixiv]);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+  expect(screen.queryByRole("checkbox", { name: "启用自动抓取" })).toBeNull();
+});
+
+test("configured Pixiv adapter channels can be enabled from the account list", async () => {
+  const account: Account = {
+    ...pixiv,
+    adapterStates: [
+      {
+        adapterKey: "pixiv_fixture",
+        enabled: false,
+        available: true,
+        health: "disabled",
+        revision: 3,
+        consecutiveFailures: 0,
+        lastAttemptAt: null,
+        lastSuccessAt: null,
+        nextAttemptAt: null,
+        lastErrorMessage: null,
+      },
+    ],
+  };
+  collectionFixture([account]);
+  const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(account));
+  setup([account]);
+  const button = await screen.findByRole("button", { name: "启用通道" });
+  await waitFor(() =>
+    expect((button as HTMLButtonElement).disabled).toBe(false),
+  );
+  fireEvent.click(button);
+  await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+  expect(patch.mock.calls[0]).toMatchObject([
+    "/api/authors/{authorId}/accounts/{id}/adapters/{adapterKey}",
+    {
+      params: {
+        path: { authorId: "author", id: "pixiv", adapterKey: "pixiv_fixture" },
+      },
+      body: { enabled: true, expectedRevision: 3 },
+    },
+  ]);
+});
+
+test("a removed Pixiv channel can still be paused from its persisted account state", async () => {
+  const account: Account = {
+    ...pixiv,
+    adapterStates: [
+      {
+        adapterKey: "pixiv_fixture",
+        enabled: true,
+        available: false,
+        health: "unavailable",
+        revision: 3,
+        consecutiveFailures: 0,
+        lastAttemptAt: null,
+        lastSuccessAt: null,
+        nextAttemptAt: null,
+        lastErrorMessage: null,
+      },
+    ],
+  };
+  collectionFixture([account], []);
+  const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(account));
+  setup([account]);
+  const button = await screen.findByRole("button", { name: "停用通道" });
+  expect((button as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(button);
+  await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+  expect(patch.mock.calls[0][1]).toMatchObject({
+    params: {
+      path: { authorId: "author", id: "pixiv", adapterKey: "pixiv_fixture" },
+    },
+    body: { enabled: false, expectedRevision: 3 },
+  });
 });

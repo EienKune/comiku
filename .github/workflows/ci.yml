@@ -25,6 +25,13 @@ jobs:
       - run: pnpm db:validate
       - run: pnpm typecheck
       - run: pnpm test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r apps/server/src/source-ingestion/adapters/gallery-dl/python/requirements.txt
+      - run: python -m unittest discover -s apps/server/src/source-ingestion/adapters/gallery-dl/python
+      - run: python -m pip install Pillow==12.3.0
+      - run: python -m unittest discover -s apps/server/src/image-analysis/adapters/ba-pixai/python/tests
       - run: pnpm build
       - run: pnpm --filter @comiku/server build:ops
       - run: pnpm api:check

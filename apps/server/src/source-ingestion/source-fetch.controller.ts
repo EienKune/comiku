@@ -31,7 +31,7 @@ export class SourceFetchController {
   ) {}
 
   @Get("runs")
-  @Access({ permission: "candidates:read" })
+  @Access({ permission: "system:manage" })
   @ApiOperation({ operationId: "listSourceFetchRuns" })
   @ApiOkResponse({ type: SourceFetchRunDto, isArray: true })
   list() {

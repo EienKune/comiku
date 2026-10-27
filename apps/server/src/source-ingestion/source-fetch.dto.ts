@@ -12,6 +12,7 @@ import {
   SourceFetchRunStatus,
   SourceFetchTrigger,
   SourceAdapterHealth,
+  JobStatus,
 } from "../generated/prisma/client.js";
 
 export class RunSourceFetchDto {
@@ -57,6 +58,11 @@ export class SourceFetchRunItemDto {
 }
 
 export class SourceFetchRunDto {
+  @ApiProperty({ type: Number }) attempts!: number;
+  @ApiProperty({ enum: JobStatus, enumName: "JobStatus", nullable: true })
+  jobStatus!: JobStatus | null;
+  @ApiProperty({ type: String, format: "date-time", nullable: true })
+  nextRetryAt!: string | null;
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ enum: SourceFetchTrigger, enumName: "SourceFetchTrigger" })
   trigger!: SourceFetchTrigger;

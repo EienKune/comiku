@@ -13,6 +13,7 @@ import {
   PanelTopOpen,
   Sparkles,
   Settings,
+  Settings2,
   Users,
 } from "lucide-react";
 import {
@@ -87,6 +88,12 @@ const navigation: { label: string; items: NavItem[] }[] = [
         label: "账号管理",
         icon: Settings,
         permission: "accounts:manage",
+      },
+      {
+        to: "/settings/system",
+        label: "系统管理",
+        icon: Settings2,
+        permission: "system:manage",
       },
     ],
   },

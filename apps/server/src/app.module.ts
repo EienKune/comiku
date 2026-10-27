@@ -1,4 +1,5 @@
 import { TransfersModule } from "./transfers/transfers.module.js";
+import { ImageAnalysisModule } from "./image-analysis/image-analysis.module.js";
 import { JobsModule } from "./jobs/jobs.module.js";
 import { Module, type DynamicModule } from "@nestjs/common";
 import { HealthController } from "./health/health.controller.js";
@@ -22,6 +23,7 @@ import { PublishingModule } from "./publishing/publishing.module.js";
   imports: [
     DatabaseModule,
     JobsModule,
+    ImageAnalysisModule,
     TransfersModule,
     AuthModule,
     FilesModule,

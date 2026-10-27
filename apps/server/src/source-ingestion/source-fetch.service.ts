@@ -1,6 +1,11 @@
 import { JobsService } from "../jobs/jobs.service.js";
 import { SourceResponseError } from "./source-response.js";
-import { BadRequestException, Inject, Injectable } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+} from "@nestjs/common";
 import {
   CandidateTagDisposition,
   Prisma,
@@ -76,9 +81,28 @@ export class SourceFetchService {
         );
       } catch (error) {
         if (error instanceof BadRequestException || job.attempts >= 3) {
-          await this.db.sourceFetchRun.update({
-            where: { id: run.id },
-            data: { status: "failed", completedAt: new Date() },
+          await this.db.$transaction(async (tx) => {
+            await this.jobs.assertCurrentLease(tx);
+            await tx.sourceAdapterState.updateMany({
+              where: { fetchLeaseId: run.id },
+              data: { fetchLeaseId: null, fetchLeaseUntil: null },
+            });
+            await tx.sourceFetchRunItem.updateMany({
+              where: { runId: run.id, status: "running" },
+              data: {
+                status: "failed",
+                completedAt: new Date(),
+                errorCode:
+                  error instanceof BadRequestException
+                    ? "actor_unavailable"
+                    : "worker_attempts_exhausted",
+                errorMessage: "任务未完成，请检查权限或后台运行情况后重试",
+              },
+            });
+            await tx.sourceFetchRun.update({
+              where: { id: run.id },
+              data: { status: "failed", completedAt: new Date() },
+            });
           });
           return;
         }
@@ -87,22 +111,187 @@ export class SourceFetchService {
     });
   }
 
-  async runManual(requestedById: string, input: RunSourceFetchDto) {
-    const accounts = await this.accounts(input.accountIds);
-    if (
-      !accounts.length ||
-      (input.accountIds && accounts.length !== new Set(input.accountIds).size)
-    )
-      throw new BadRequestException("没有可抓取的授权账号");
-    const run = await this.db.$transaction((tx) =>
-      this.enqueueRun(
-        tx,
-        "manual",
-        requestedById,
-        accounts.map((item) => item.id),
+  async reconcileExhausted() {
+    const now = new Date();
+    const runs = await this.db.sourceFetchRun.findMany({
+      where: { completedAt: null },
+      select: { id: true },
+      orderBy: { startedAt: "asc" },
+      take: 100,
+    });
+    const jobs = await this.db.backgroundJob.findMany({
+      where: {
+        kind: "source_fetch",
+        ...this.terminalJobs(now),
+        resourceId: { in: runs.map((r) => r.id) },
+      },
+      select: { id: true, resourceId: true },
+    });
+    for (const job of jobs)
+      await this.db.$transaction((tx) =>
+        this.settleTerminalJob(tx, job.id, now),
+      );
+  }
+
+  private terminalJobs(now: Date): Prisma.BackgroundJobWhereInput {
+    return {
+      OR: [
+        { status: "failed" },
+        { status: "queued", attempts: { gte: 3 } },
+        {
+          status: "running",
+          attempts: { gte: 3 },
+          OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }],
+        },
+      ],
+    };
+  }
+
+  private async settleTerminalJob(
+    tx: Prisma.TransactionClient,
+    id: string,
+    now: Date,
+  ) {
+    // Serialize with worker claims/commits, then re-read terminal eligibility.
+    // A live final attempt is never reclaimed by a manual or scheduled request.
+    await tx.$queryRaw`SELECT id FROM background_jobs WHERE id = ${id}::uuid FOR UPDATE`;
+    const job = await tx.backgroundJob.findFirst({
+      where: { id, kind: "source_fetch", ...this.terminalJobs(now) },
+      select: { id: true, resourceId: true, status: true, completedAt: true },
+    });
+    if (!job) return;
+    await tx.backgroundJob.update({
+      where: { id: job.id },
+      data: {
+        status: "failed",
+        leaseId: null,
+        leaseUntil: null,
+        completedAt: job.completedAt ?? now,
+        ...(job.status === "failed" ? {} : { lastError: "重试次数已用尽" }),
+      },
+    });
+    await tx.sourceFetchRun.updateMany({
+      where: { id: job.resourceId, completedAt: null },
+      data: { status: "failed", completedAt: now },
+    });
+    await tx.sourceFetchRunItem.updateMany({
+      where: { runId: job.resourceId, status: "running" },
+      data: {
+        status: "failed",
+        errorCode: "worker_attempts_exhausted",
+        errorMessage: "后台重试已耗尽，请检查后重新抓取",
+        completedAt: now,
+      },
+    });
+    await tx.sourceAdapterState.updateMany({
+      where: { fetchLeaseId: job.resourceId },
+      data: { fetchLeaseId: null, fetchLeaseUntil: null },
+    });
+  }
+
+  private async settleTerminalLeases(
+    tx: Prisma.TransactionClient,
+    accountIds: string[],
+    now: Date,
+  ) {
+    const leases = await tx.sourceAdapterState.findMany({
+      where: {
+        externalAccountId: { in: accountIds },
+        fetchLeaseId: { not: null },
+      },
+      select: { fetchLeaseId: true },
+    });
+    const runIds = [
+      ...new Set(
+        leases.flatMap((state) =>
+          state.fetchLeaseId ? [state.fetchLeaseId] : [],
+        ),
       ),
-    );
+    ];
+    if (!runIds.length) return;
+    const jobs = await tx.backgroundJob.findMany({
+      where: {
+        kind: "source_fetch",
+        resourceId: { in: runIds },
+        ...this.terminalJobs(now),
+      },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    });
+    for (const job of jobs) await this.settleTerminalJob(tx, job.id, now);
+  }
+
+  async runManual(requestedById: string, input: RunSourceFetchDto) {
+    const ids = [...new Set(input.accountIds ?? [])].sort();
+    const run = await this.db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('comiku:source-schedule'))`;
+      await this.assertActor(requestedById, tx);
+      const accounts = await this.accounts(ids, tx);
+      if (!accounts.length || (ids.length && accounts.length !== ids.length))
+        throw new BadRequestException("没有可抓取的授权账号");
+      const accountIds = accounts.map((item) => item.id).sort();
+      const active = await this.activeRun(tx, accountIds);
+      if (active) return active;
+      return this.enqueueRun(tx, "manual", requestedById, accountIds);
+    });
     return this.get(run.id);
+  }
+
+  private async activeRun(tx: Prisma.TransactionClient, accountIds: string[]) {
+    const now = new Date();
+    await this.settleTerminalLeases(tx, accountIds, now);
+    // Expired executions with retries left still own a recoverable batch. Exhausted
+    // queued/expired jobs do not prevent a fresh request while reconciliation runs.
+    const jobs = await tx.backgroundJob.findMany({
+      where: {
+        kind: "source_fetch",
+        OR: [
+          { status: "queued", attempts: { lt: 3 } },
+          {
+            status: "running",
+            OR: [{ attempts: { lt: 3 } }, { leaseUntil: { gt: now } }],
+          },
+        ],
+      },
+      select: { resourceId: true, payload: true },
+    });
+    if (!jobs.length) return null;
+    const runs = await tx.sourceFetchRun.findMany({
+      where: {
+        id: { in: jobs.map((job) => job.resourceId) },
+        completedAt: null,
+        status: { in: ["queued", "running"] },
+      },
+      select: { id: true },
+    });
+    const activeIds = new Set(runs.map((run) => run.id));
+    const requested = new Set(accountIds);
+    let equivalent: { id: string } | null = null;
+    for (const job of jobs) {
+      if (!activeIds.has(job.resourceId)) continue;
+      const payload = job.payload as { accountIds?: unknown } | null;
+      const ids = Array.isArray(payload?.accountIds)
+        ? [
+            ...new Set(
+              payload.accountIds.filter(
+                (id): id is string => typeof id === "string",
+              ),
+            ),
+          ].sort()
+        : [];
+      if (!ids.length || ids.some((id) => requested.has(id))) {
+        if (
+          ids.length === accountIds.length &&
+          ids.every((id) => requested.has(id))
+        )
+          equivalent = { id: job.resourceId };
+        else
+          throw new ConflictException(
+            "所选账号已有重叠的同步批次，请等待完成后重试",
+          );
+      }
+    }
+    return equivalent;
   }
 
   private async enqueueRun(
@@ -146,10 +335,6 @@ export class SourceFetchService {
           ),
         },
       });
-      const active = await tx.backgroundJob.count({
-        where: { kind: "source_fetch", status: { in: ["queued", "running"] } },
-      });
-      if (active) return false;
       const accounts = await tx.authorExternalAccount.findMany({
         where: {
           fetchEnabled: true,
@@ -159,28 +344,61 @@ export class SourceFetchService {
         select: { id: true },
       });
       if (!accounts.length) return false;
-      await this.enqueueRun(
-        tx,
-        "scheduled",
-        null,
-        accounts.map((item) => item.id),
-      );
+      const accountIds = accounts.map((item) => item.id).sort();
+      try {
+        if (await this.activeRun(tx, accountIds)) return false;
+      } catch (error) {
+        if (error instanceof ConflictException) return false;
+        throw error;
+      }
+      await this.enqueueRun(tx, "scheduled", null, accountIds);
       return true;
     });
   }
 
   async get(id: string): Promise<SourceFetchRunDto> {
-    return this.dto(
-      await this.db.sourceFetchRun.findUniqueOrThrow({
-        where: { id },
-        include: runDetails,
-      }),
-    );
+    const run = await this.db.sourceFetchRun.findUniqueOrThrow({
+      where: { id },
+      include: runDetails,
+    });
+    return (await this.withExecution([run]))[0];
+  }
+  private async withExecution(
+    runs: RunDetails[],
+  ): Promise<SourceFetchRunDto[]> {
+    const jobs = await this.db.backgroundJob.findMany({
+      where: {
+        kind: "source_fetch",
+        idempotencyKey: { in: runs.map((run) => `source:${run.id}`) },
+      },
+      select: {
+        resourceId: true,
+        status: true,
+        attempts: true,
+        availableAt: true,
+      },
+    });
+    const byRun = new Map(jobs.map((job) => [job.resourceId, job]));
+    return runs.map((run) => {
+      const job = byRun.get(run.id);
+      return {
+        ...this.dto(run),
+        attempts: job?.attempts ?? 0,
+        jobStatus: job?.status ?? null,
+        nextRetryAt:
+          job?.status === "queued" && job.attempts > 0
+            ? job.availableAt.toISOString()
+            : null,
+      };
+    });
   }
 
-  private async assertActor(id: string | null) {
+  private async assertActor(
+    id: string | null,
+    db: Prisma.TransactionClient | PrismaService = this.db,
+  ) {
     if (!id) return;
-    const allowed = await this.db.user.count({
+    const allowed = await db.user.count({
       where: {
         id,
         isActive: true,
@@ -194,9 +412,9 @@ export class SourceFetchService {
     const runs = await this.db.sourceFetchRun.findMany({
       include: runDetails,
       orderBy: { startedAt: "desc" },
-      take: 100,
+      take: 20,
     });
-    return runs.map((run) => this.dto(run));
+    return this.withExecution(runs);
   }
 
   private async run(
@@ -216,6 +434,15 @@ export class SourceFetchService {
       where: { id: runId },
       data: { status: "running" },
     });
+    console.info(
+      JSON.stringify({
+        scope: "source_fetch",
+        event: "run_started",
+        runId,
+        trigger,
+        accounts: accounts.length,
+      }),
+    );
     await this.db.sourceFetchRunItem.updateMany({
       where: { runId, status: "running" },
       data: {
@@ -230,6 +457,7 @@ export class SourceFetchService {
       await this.assertActor(requestedById);
       await this.fetchWithFallback(run.id, account, requestedById, signal);
     }
+    signal.throwIfAborted();
     const statuses = await this.db.sourceFetchRunItem.findMany({
       where: { runId: run.id },
       select: { status: true },
@@ -244,6 +472,14 @@ export class SourceFetchService {
         : successes
           ? "partial_failed"
           : "failed";
+    console.info(
+      JSON.stringify({
+        scope: "source_fetch",
+        event: "run_finished",
+        runId,
+        status,
+      }),
+    );
     return this.dto(
       await this.db.sourceFetchRun.update({
         where: { id: run.id },
@@ -253,8 +489,11 @@ export class SourceFetchService {
     );
   }
 
-  private accounts(accountIds?: string[]): Promise<Account[]> {
-    return this.db.authorExternalAccount.findMany({
+  private accounts(
+    accountIds?: string[],
+    db: Prisma.TransactionClient | PrismaService = this.db,
+  ): Promise<Account[]> {
+    return db.authorExternalAccount.findMany({
       where: {
         ...(accountIds?.length ? { id: { in: accountIds } } : {}),
         fetchEnabled: true,
@@ -301,6 +540,24 @@ export class SourceFetchService {
         (item) => item.adapterKey === client.adapterKey,
       );
       if (!state) continue;
+      const previous = await this.db.sourceFetchRunItem.findUnique({
+        where: {
+          runId_externalAccountId_adapterKey: {
+            runId,
+            externalAccountId: account.id,
+            adapterKey: client.adapterKey,
+          },
+        },
+      });
+      if (previous?.status === "succeeded") return;
+      // One durable item per run/account/adapter. Resume it instead of violating its unique key.
+      if (previous && previous.errorCode !== "interrupted") {
+        if (!client.metered && previous.status === "failed")
+          allowMeteredFallback =
+            state.consecutiveFailures >=
+            this.environment.sourceFailureThreshold;
+        continue;
+      }
       const now = new Date();
       if (client.metered && !allowMeteredFallback) {
         await this.createSkippedItem(
@@ -323,43 +580,56 @@ export class SourceFetchService {
         await this.createSkippedItem(runId, account, state, client);
         continue;
       }
-      if (state.health === "unavailable" || state.health === "disabled") {
-        await this.db.sourceAdapterState.update({
-          where: { id: state.id },
-          data: { health: "idle" },
+      const leased = await this.db.$transaction(async (tx) => {
+        await this.lockSource(tx, account, state, createdById);
+        await this.assertEligible(account, state, undefined, tx);
+        return tx.sourceAdapterState.updateMany({
+          where: {
+            id: state.id,
+            revision: state.revision,
+            enabled: true,
+            OR: [
+              { fetchLeaseUntil: null },
+              { fetchLeaseUntil: { lt: now } },
+              { fetchLeaseId: runId },
+            ],
+          },
+          data: {
+            fetchLeaseId: runId,
+            fetchLeaseUntil: new Date(now.getTime() + 30 * 60 * 1000),
+            lastAttemptAt: now,
+            ...(["unavailable", "disabled"].includes(state.health)
+              ? { health: "idle" as const }
+              : {}),
+          },
         });
-      }
-      const leased = await this.db.sourceAdapterState.updateMany({
-        where: {
-          id: state.id,
-          OR: [
-            { fetchLeaseUntil: null },
-            { fetchLeaseUntil: { lt: now } },
-            { fetchLeaseId: runId },
-          ],
-        },
-        data: {
-          fetchLeaseId: runId,
-          fetchLeaseUntil: new Date(now.getTime() + 30 * 60 * 1000),
-          lastAttemptAt: now,
-        },
       });
-      const item = await this.db.sourceFetchRunItem.create({
-        data: {
-          runId,
-          externalAccountId: account.id,
-          adapterStateId: state.id,
-          adapterKey: client.adapterKey,
-          cursorBefore: state.cursorJson as Prisma.InputJsonValue,
-          status: leased.count ? "running" : "skipped",
-          ...(!leased.count
-            ? {
-                errorCode: "already_running",
-                errorMessage: "该适配器已有抓取任务",
-              }
-            : {}),
-        },
-      });
+      const item = previous
+        ? await this.db.sourceFetchRunItem.update({
+            where: { id: previous.id },
+            data: {
+              status: leased.count ? "running" : "skipped",
+              completedAt: null,
+              errorCode: leased.count ? null : "already_running",
+              errorMessage: leased.count ? null : "该适配器已有抓取任务",
+            },
+          })
+        : await this.db.sourceFetchRunItem.create({
+            data: {
+              runId,
+              externalAccountId: account.id,
+              adapterStateId: state.id,
+              adapterKey: client.adapterKey,
+              cursorBefore: state.cursorJson as Prisma.InputJsonValue,
+              status: leased.count ? "running" : "skipped",
+              ...(!leased.count
+                ? {
+                    errorCode: "already_running",
+                    errorMessage: "该适配器已有抓取任务",
+                  }
+                : {}),
+            },
+          });
       if (!leased.count) {
         await this.db.sourceFetchRunItem.update({
           where: { id: item.id },
@@ -367,6 +637,19 @@ export class SourceFetchService {
         });
         continue;
       }
+      if (previous)
+        console.info(
+          JSON.stringify({
+            scope: "source_fetch",
+            event: "adapter_resumed",
+            runId,
+            accountId: account.id,
+            adapter: client.adapterKey,
+            previousErrorCode: previous.errorCode,
+            pagesFetched: previous.pagesFetched,
+            mediaStored: previous.mediaStored,
+          }),
+        );
       try {
         await this.fetchAdapter(
           item.id,
@@ -379,21 +662,48 @@ export class SourceFetchService {
         );
         return;
       } catch (error) {
+        if (signal.aborted) throw error;
         const safe = this.safeError(error);
+        console.info(
+          JSON.stringify({
+            scope: "source_fetch",
+            event: "adapter_failed",
+            runId,
+            accountId: account.id,
+            adapter: client.adapterKey,
+            errorCode: safe.code,
+          }),
+        );
         const failures = state.consecutiveFailures + 1;
         const cooling = failures >= this.environment.sourceFailureThreshold;
-        await this.db.$transaction([
-          this.db.sourceFetchRunItem.update({
-            where: { id: item.id },
-            data: {
-              status: "failed",
-              errorCode: safe.code,
-              errorMessage: safe.message,
-              completedAt: new Date(),
+        const current = await this.db.$transaction(async (tx) => {
+          await this.lockSource(tx, account, state, createdById);
+          await this.jobs.assertCurrentLease(tx);
+          const eligible = await tx.authorExternalAccount.count({
+            where: this.eligibility(account, state, runId),
+          });
+          // A pause, identity change or replacement lease invalidates this failure.
+          // Only the still-current executor may change health or enable fallback.
+          if (!eligible) {
+            await tx.sourceFetchRunItem.updateMany({
+              where: { id: item.id, status: "running" },
+              data: {
+                status: "failed",
+                errorCode: "source_changed",
+                errorMessage: "来源账号、授权或执行租约已变化，请重新同步",
+                completedAt: new Date(),
+              },
+            });
+            return false;
+          }
+          const changed = await tx.sourceAdapterState.updateMany({
+            where: {
+              id: state.id,
+              revision: state.revision,
+              fetchLeaseId: runId,
+              fetchLeaseUntil: { gt: new Date() },
+              enabled: true,
             },
-          }),
-          this.db.sourceAdapterState.update({
-            where: { id: state.id },
             data: {
               health: cooling ? "cooling_down" : "degraded",
               consecutiveFailures: failures,
@@ -409,13 +719,32 @@ export class SourceFetchService {
               fetchLeaseUntil: null,
               revision: { increment: 1 },
             },
-          }),
-        ]);
+          });
+          if (!changed.count) return false;
+          await tx.sourceFetchRunItem.update({
+            where: { id: item.id },
+            data: {
+              status: "failed",
+              errorCode: safe.code,
+              errorMessage: safe.message,
+              completedAt: new Date(),
+            },
+          });
+          return true;
+        });
+        if (!current) return;
         if (!client.metered) allowMeteredFallback = cooling;
       } finally {
-        await this.db.sourceAdapterState.updateMany({
-          where: { id: state.id, fetchLeaseId: runId },
-          data: { fetchLeaseId: null, fetchLeaseUntil: null },
+        await this.db.$transaction(async (tx) => {
+          await this.jobs.assertCurrentLease(tx);
+          await tx.sourceAdapterState.updateMany({
+            where: {
+              id: state.id,
+              fetchLeaseId: runId,
+              revision: state.revision,
+            },
+            data: { fetchLeaseId: null, fetchLeaseUntil: null },
+          });
         });
       }
     }
@@ -445,13 +774,26 @@ export class SourceFetchService {
         ? "unavailable"
         : state.health;
     if (health !== state.health) {
-      await this.db.sourceAdapterState.update({
-        where: { id: state.id },
+      await this.db.sourceAdapterState.updateMany({
+        where: {
+          id: state.id,
+          revision: state.revision,
+          enabled: state.enabled,
+          fetchLeaseId: null,
+        },
         data: { health },
       });
     }
-    return this.db.sourceFetchRunItem.create({
-      data: {
+    return this.db.sourceFetchRunItem.upsert({
+      where: {
+        runId_externalAccountId_adapterKey: {
+          runId,
+          externalAccountId: account.id,
+          adapterKey: client.adapterKey,
+        },
+      },
+      update: { status: "skipped", errorCode: reason, completedAt: new Date() },
+      create: {
         runId,
         externalAccountId: account.id,
         adapterStateId: state.id,
@@ -490,25 +832,45 @@ export class SourceFetchService {
           }
         : client.initialCursor(account.firstSyncMode, new Date());
     }
-    await this.db.sourceAdapterState.updateMany({
-      where: { id: state.id, fetchLeaseId: leaseId },
-      data: { cursorJson: cursor as Prisma.InputJsonValue },
+    if (client.prepareCursor)
+      cursor = client.prepareCursor(
+        {
+          externalUserId: account.externalUserId,
+          handle: account.handle ?? undefined,
+        },
+        cursor,
+      );
+    await this.db.$transaction(async (tx) => {
+      await this.lockSource(tx, account, state, createdById);
+      await this.assertEligible(account, state, leaseId, tx);
+      await tx.sourceAdapterState.updateMany({
+        where: {
+          id: state.id,
+          revision: state.revision,
+          fetchLeaseId: leaseId,
+        },
+        data: { cursorJson: cursor as Prisma.InputJsonValue },
+      });
     });
     const initialBoundary =
       typeof cursor.startTime === "string" ? new Date(cursor.startTime) : null;
-    const counters = {
-      pagesFetched: 0,
-      itemsSeen: 0,
-      candidatesCreated: 0,
-      candidatesExisting: 0,
-      mediaStored: 0,
-      apiRequests: 0,
-    };
+    const counters = await this.db.sourceFetchRunItem.findUniqueOrThrow({
+      where: { id: itemId },
+      select: {
+        pagesFetched: true,
+        itemsSeen: true,
+        candidatesCreated: true,
+        candidatesExisting: true,
+        mediaStored: true,
+        apiRequests: true,
+      },
+    });
     let highTime = state.highWaterPublishedAt ?? initialBoundary;
     let highId = state.highWaterExternalId;
     for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
       signal.throwIfAborted();
       await this.assertActor(createdById);
+      await this.assertEligible(account, state, leaseId);
       if (client.metered) await this.consumeMeteredBudget(client.adapterKey);
       counters.apiRequests += 1;
       await this.db.sourceFetchRunItem.update({
@@ -524,7 +886,7 @@ export class SourceFetchService {
       );
       signal.throwIfAborted();
       await this.assertActor(createdById);
-      await this.assertEligible(account, state.id, leaseId);
+      await this.assertEligible(account, state, leaseId);
       counters.pagesFetched += 1;
       counters.itemsSeen += page.items.length;
       for (const content of page.items) {
@@ -546,6 +908,8 @@ export class SourceFetchService {
           client,
           content,
           createdById,
+          leaseId,
+          signal,
         );
         if (saved.created) {
           counters.candidatesCreated += 1;
@@ -555,60 +919,88 @@ export class SourceFetchService {
       if (!page.nextCursor)
         throw new Error("Source adapter did not return a durable cursor");
       cursor = page.nextCursor;
-      await this.db.$transaction([
-        this.db.sourceAdapterState.updateMany({
-          where: { id: state.id, fetchLeaseId: leaseId },
+      await this.db.$transaction(async (tx) => {
+        await this.lockSource(tx, account, state, createdById);
+        await this.assertEligible(account, state, leaseId, tx);
+        await tx.sourceAdapterState.updateMany({
+          where: {
+            id: state.id,
+            revision: state.revision,
+            fetchLeaseId: leaseId,
+          },
           data: {
             cursorJson: cursor as Prisma.InputJsonValue,
             fetchLeaseUntil: new Date(Date.now() + 30 * 60 * 1000),
           },
-        }),
-        this.db.sourceFetchRunItem.update({
+        });
+        await tx.sourceFetchRunItem.update({
           where: { id: itemId },
           data: counters,
-        }),
-      ]);
+        });
+      });
       const boundary = state.highWaterPublishedAt
         ? state.highWaterPublishedAt.getTime() -
           this.environment.sourceOverlapMinutes * 60_000
         : (initialBoundary?.getTime() ?? null);
       const crossed =
-        boundary !== null &&
-        page.items.length > 0 &&
-        page.items.every(
-          (item) => new Date(item.publishedAt).getTime() < boundary,
-        );
+        page.boundaryReached ??
+        (boundary !== null &&
+          page.items.length > 0 &&
+          page.items.every(
+            (item) => new Date(item.publishedAt).getTime() < boundary,
+          ));
       if (page.complete || crossed) break;
       if (pageNumber === 99)
         throw new Error("Source pagination exceeded the safety limit");
     }
-    await this.assertEligible(account, state.id, leaseId);
-    const changed = await this.db.sourceAdapterState.updateMany({
-      where: { id: state.id, fetchLeaseId: leaseId },
-      data: {
-        cursorJson: {},
-        highWaterPublishedAt: highTime,
-        highWaterExternalId: highId,
-        health: "healthy",
-        lastSuccessAt: new Date(),
-        consecutiveFailures: 0,
-        nextAttemptAt: null,
-        lastErrorCode: null,
-        lastErrorMessage: null,
-        revision: { increment: 1 },
-      },
+    await this.db.$transaction(async (tx) => {
+      await this.lockSource(tx, account, state, createdById);
+      await this.assertEligible(account, state, leaseId, tx);
+      const changed = await tx.sourceAdapterState.updateMany({
+        where: {
+          id: state.id,
+          revision: state.revision,
+          fetchLeaseId: leaseId,
+        },
+        data: {
+          cursorJson: {},
+          highWaterPublishedAt: highTime,
+          highWaterExternalId: highId,
+          health: "healthy",
+          lastSuccessAt: new Date(),
+          consecutiveFailures: 0,
+          nextAttemptAt: null,
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          fetchLeaseId: null,
+          fetchLeaseUntil: null,
+          revision: { increment: 1 },
+        },
+      });
+      if (!changed.count)
+        throw new Error("Adapter lease expired before committing watermarks");
+      await tx.sourceFetchRunItem.update({
+        where: { id: itemId },
+        data: {
+          status: "succeeded",
+          errorCode: null,
+          errorMessage: null,
+          cursorAfter: {},
+          ...counters,
+          completedAt: new Date(),
+        },
+      });
     });
-    if (!changed.count)
-      throw new Error("Adapter lease expired before committing watermarks");
-    await this.db.sourceFetchRunItem.update({
-      where: { id: itemId },
-      data: {
-        status: "succeeded",
-        cursorAfter: {},
+    console.info(
+      JSON.stringify({
+        scope: "source_fetch",
+        event: "adapter_succeeded",
+        runId: leaseId,
+        accountId: account.id,
+        adapter: client.adapterKey,
         ...counters,
-        completedAt: new Date(),
-      },
-    });
+      }),
+    );
   }
 
   async consumeMeteredBudget(adapterKey: string) {
@@ -650,6 +1042,8 @@ export class SourceFetchService {
     client: ContentSourceClient,
     content: NormalizedSourceContent,
     createdById: string | null,
+    leaseId: string,
+    signal: AbortSignal,
   ): Promise<{ created: boolean; mediaStored: number }> {
     const hashtags = collectHashtags(content.hashtags ?? [], content.text);
     const existing = await this.db.candidatePost.findUnique({
@@ -661,27 +1055,41 @@ export class SourceFetchService {
       },
     });
     if (existing) {
-      await this.observe(
-        existing.id,
-        account.id,
-        state.id,
-        client.adapterKey,
-        content.rawJson,
-      );
-      await this.db.candidateHashtag.createMany({
-        data: hashtags.map((tag) => ({ candidatePostId: existing.id, ...tag })),
-        skipDuplicates: true,
+      await this.db.$transaction(async (tx) => {
+        await this.lockSource(tx, account, state, createdById);
+        await this.assertEligible(account, state, leaseId, tx);
+        signal.throwIfAborted();
+        await this.observe(
+          tx,
+          existing.id,
+          account.id,
+          state.id,
+          client.adapterKey,
+          content.rawJson,
+        );
+        await tx.candidateHashtag.createMany({
+          data: hashtags.map((tag) => ({
+            candidatePostId: existing.id,
+            ...tag,
+          })),
+          skipDuplicates: true,
+        });
+        await this.refreshTagDisposition(tx, existing.id);
       });
-      await this.refreshTagDisposition(existing.id);
       return { created: false, mediaStored: 0 };
     }
     const stored: Prisma.FileObjectGetPayload<object>[] = [];
     try {
       for (const media of content.ownMedia) {
+        signal.throwIfAborted();
+        await this.assertActor(createdById);
+        await this.assertEligible(account, state, leaseId);
         const downloaded = await this.downloader.download(
           media.url,
           client.allowedMediaHosts,
         );
+        signal.throwIfAborted();
+        await this.assertEligible(account, state, leaseId);
         stored.push(
           await this.files.store({
             body: downloaded.body,
@@ -693,8 +1101,12 @@ export class SourceFetchService {
           }),
         );
       }
-      const tagDisposition = await this.tagDisposition(this.db, hashtags);
       const candidate = await this.db.$transaction(async (tx) => {
+        await this.lockSource(tx, account, state, createdById);
+        await this.assertEligible(account, state, leaseId, tx);
+        await this.assertActor(createdById, tx);
+        signal.throwIfAborted();
+        const tagDisposition = await this.tagDisposition(tx, hashtags);
         const created = await tx.candidatePost.create({
           data: {
             authorId: account.authorId,
@@ -762,29 +1174,35 @@ export class SourceFetchService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === "P2002"
       ) {
-        const duplicate = await this.db.candidatePost.findUniqueOrThrow({
-          where: {
-            platform_externalPostId: {
-              platform: account.platform,
-              externalPostId: content.externalContentId,
+        await this.db.$transaction(async (tx) => {
+          await this.lockSource(tx, account, state, createdById);
+          await this.assertEligible(account, state, leaseId, tx);
+          signal.throwIfAborted();
+          const duplicate = await tx.candidatePost.findUniqueOrThrow({
+            where: {
+              platform_externalPostId: {
+                platform: account.platform,
+                externalPostId: content.externalContentId,
+              },
             },
-          },
+          });
+          await this.observe(
+            tx,
+            duplicate.id,
+            account.id,
+            state.id,
+            client.adapterKey,
+            content.rawJson,
+          );
+          await tx.candidateHashtag.createMany({
+            data: hashtags.map((tag) => ({
+              candidatePostId: duplicate.id,
+              ...tag,
+            })),
+            skipDuplicates: true,
+          });
+          await this.refreshTagDisposition(tx, duplicate.id);
         });
-        await this.observe(
-          duplicate.id,
-          account.id,
-          state.id,
-          client.adapterKey,
-          content.rawJson,
-        );
-        await this.db.candidateHashtag.createMany({
-          data: hashtags.map((tag) => ({
-            candidatePostId: duplicate.id,
-            ...tag,
-          })),
-          skipDuplicates: true,
-        });
-        await this.refreshTagDisposition(duplicate.id);
         return { created: false, mediaStored: 0 };
       }
       throw error;
@@ -792,13 +1210,14 @@ export class SourceFetchService {
   }
 
   private observe(
+    tx: Prisma.TransactionClient,
     candidatePostId: string,
     externalAccountId: string,
     adapterStateId: string,
     adapterKey: string,
     rawJson: Record<string, unknown>,
   ) {
-    return this.db.candidateSourceObservation.upsert({
+    return tx.candidateSourceObservation.upsert({
       where: { candidatePostId_adapterKey: { candidatePostId, adapterKey } },
       create: {
         candidatePostId,
@@ -815,13 +1234,16 @@ export class SourceFetchService {
     });
   }
 
-  private async refreshTagDisposition(candidatePostId: string) {
-    const hashtags = await this.db.candidateHashtag.findMany({
+  private async refreshTagDisposition(
+    tx: Prisma.TransactionClient,
+    candidatePostId: string,
+  ) {
+    const hashtags = await tx.candidateHashtag.findMany({
       where: { candidatePostId },
       select: { normalizedValue: true },
     });
-    const tagDisposition = await this.tagDisposition(this.db, hashtags);
-    await this.db.candidatePost.update({
+    const tagDisposition = await this.tagDisposition(tx, hashtags);
+    await tx.candidatePost.update({
       where: { id: candidatePostId },
       data: { tagDisposition },
     });
@@ -857,27 +1279,63 @@ export class SourceFetchService {
     return left.localeCompare(right);
   }
 
-  private async assertEligible(
+  private async lockSource(
+    tx: Prisma.TransactionClient,
     account: Account,
-    adapterStateId: string,
-    leaseId: string,
+    state: SourceAdapterState,
+    actorId: string | null,
   ) {
-    const eligible = await this.db.authorExternalAccount.count({
-      where: {
-        id: account.id,
-        revision: account.revision,
-        fetchEnabled: true,
+    // Match management writes: archive locks author before accounts; account
+    // replacement/unbind locks account before states. Network I/O stays outside.
+    await this.jobs.assertCurrentLease(tx);
+    // Account administration updates the parent user before replacing roles.
+    // Hold that same row while checking actor eligibility and committing writes.
+    if (actorId) {
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${actorId}::uuid FOR SHARE`;
+      await this.assertActor(actorId, tx);
+    }
+    await tx.$queryRaw`SELECT id FROM authors WHERE id = ${account.authorId}::uuid FOR SHARE`;
+    await tx.$queryRaw`SELECT id FROM author_external_accounts WHERE id = ${account.id}::uuid FOR SHARE`;
+    await tx.$queryRaw`SELECT id FROM source_adapter_states WHERE id = ${state.id}::uuid FOR NO KEY UPDATE`;
+  }
+
+  private eligibility(
+    account: Account,
+    state: SourceAdapterState,
+    leaseId: string | undefined,
+  ): Prisma.AuthorExternalAccountWhereInput {
+    return {
+      id: account.id,
+      revision: account.revision,
+      fetchEnabled: true,
+      deletedAt: null,
+      author: {
         deletedAt: null,
-        author: { deletedAt: null, authorizationStatus: "authorized" },
-        adapterStates: {
-          some: {
-            id: adapterStateId,
-            enabled: true,
-            fetchLeaseId: leaseId,
-            fetchLeaseUntil: { gt: new Date() },
-          },
+        authorizationStatus: "authorized",
+        revision: account.author.revision,
+      },
+      adapterStates: {
+        some: {
+          id: state.id,
+          revision: state.revision,
+          enabled: true,
+          ...(leaseId
+            ? { fetchLeaseId: leaseId, fetchLeaseUntil: { gt: new Date() } }
+            : {}),
         },
       },
+    };
+  }
+
+  private async assertEligible(
+    account: Account,
+    state: SourceAdapterState,
+    leaseId: string | undefined,
+    db: Prisma.TransactionClient | PrismaService = this.db,
+  ) {
+    await this.jobs.assertCurrentLease(db);
+    const eligible = await db.authorExternalAccount.count({
+      where: this.eligibility(account, state, leaseId),
     });
     if (!eligible) {
       throw new Error("Source account changed while fetching");
@@ -897,6 +1355,9 @@ export class SourceFetchService {
 
   private dto(run: RunDetails): SourceFetchRunDto {
     return {
+      attempts: 0,
+      jobStatus: null,
+      nextRetryAt: null,
       id: run.id,
       trigger: run.trigger,
       status: run.status,

@@ -11,3 +11,8 @@
 
 # LabelPlus fixtures verify their exact UTF-8 BOM and CRLF bytes.
 apps/server/test/fixtures/labelplus/*.txt binary
+
+# Frozen PixAI runtime artifacts are validated by their exact SHA-256 bytes.
+apps/server/src/image-analysis/adapters/ba-pixai/python/pixai/tagger_pipeline.py -text
+apps/server/src/image-analysis/adapters/ba-pixai/python/pixai/frozen_feature_helper.py -text
+apps/server/src/image-analysis/adapters/ba-pixai/python/pixai/preprocessor_config.json -text whitespace=cr-at-eol

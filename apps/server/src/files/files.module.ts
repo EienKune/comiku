@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { PrefixedObjectStorage } from "./prefixed-object-storage.js";
 import { ENVIRONMENT, type Environment } from "../config/environment.js";
 import { DatabaseModule } from "../database/database.module.js";
 import { OBJECT_STORAGE } from "./object-storage.js";
@@ -25,9 +26,11 @@ import {
         if (environment.objectStorageDriver === "local") {
           return new LocalObjectStorage(environment.localStoragePath!);
         }
-        return environment.r2
-          ? new R2ObjectStorage(environment.r2)
-          : new UnavailableObjectStorage();
+        if (!environment.r2) return new UnavailableObjectStorage();
+        const storage = new R2ObjectStorage(environment.r2);
+        return environment.r2.keyPrefix
+          ? new PrefixedObjectStorage(storage, environment.r2.keyPrefix)
+          : storage;
       },
     },
     FileObjectsService,

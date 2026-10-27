@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SourceResponseError } from "../src/source-ingestion/source-response.js";
-import { XContentSourceClient } from "../src/source-ingestion/x-content-source.js";
-import { XWebSessionContentSourceClient } from "../src/source-ingestion/x-web-session-content-source.js";
+import { XContentSourceClient } from "../src/source-ingestion/adapters/x-official/x-content-source.js";
+import { XWebSessionContentSourceClient } from "../src/source-ingestion/adapters/x-web-session/x-web-session-content-source.js";
 
 test("X adapter maps own photo media, references and durable pagination cursor", async () => {
   const requested: string[] = [];

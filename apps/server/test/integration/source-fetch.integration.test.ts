@@ -1,3 +1,4 @@
+import { SourceFetchService } from "../../src/source-ingestion/source-fetch.service.js";
 import { JobsService } from "../../src/jobs/jobs.service.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
@@ -398,6 +399,108 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
         ]),
       [[1, 1, 1]],
     );
+    // Reclaim the SAME run after a crash; its unique run/account/adapter item must be reused.
+    const crashRun = await request<{ id: string }>(
+      source,
+      "POST",
+      "/api/source-fetch/runs",
+      { accountIds: [accountId] },
+    );
+    const crashJob = await moduleRef.get(JobsService).claim("network");
+    assert.equal(crashJob?.resourceId, crashRun.data.id);
+    const stableState = await db.sourceAdapterState.findUniqueOrThrow({
+      where: {
+        externalAccountId_adapterKey: {
+          externalAccountId: accountId,
+          adapterKey: "fixture_default",
+        },
+      },
+    });
+    await db.sourceAdapterState.update({
+      where: { id: stableState.id },
+      data: {
+        cursorJson: { page: 1 },
+        fetchLeaseId: crashRun.data.id,
+        fetchLeaseUntil: new Date(Date.now() + 1800000),
+      },
+    });
+    const oldItem = await db.sourceFetchRunItem.create({
+      data: {
+        runId: crashRun.data.id,
+        externalAccountId: accountId,
+        adapterStateId: stableState.id,
+        adapterKey: "fixture_default",
+        cursorBefore: { page: 0 },
+        status: "running",
+        pagesFetched: 1,
+      },
+    });
+    await db.backgroundJob.update({
+      where: { id: crashJob!.id },
+      data: { leaseUntil: new Date(0) },
+    });
+    await moduleRef.get(JobsService).runNext("network");
+    assert.equal(
+      (
+        await db.sourceFetchRun.findUniqueOrThrow({
+          where: { id: crashRun.data.id },
+        })
+      ).status,
+      "succeeded",
+    );
+    const recoveredItem = await db.sourceFetchRunItem.findUniqueOrThrow({
+      where: { id: oldItem.id },
+    });
+    assert.equal(recoveredItem.status, "succeeded");
+    assert.equal(recoveredItem.errorCode, null);
+    assert.equal(recoveredItem.errorMessage, null);
+    assert.equal(recoveredItem.pagesFetched, 2);
+    assert.equal(recoveredItem.candidatesCreated, 0);
+    assert.equal(
+      await db.sourceFetchRunItem.count({
+        where: { runId: crashRun.data.id, adapterKey: "fixture_default" },
+      }),
+      1,
+    );
+
+    const exhaustedRun = await request<{ id: string }>(
+      source,
+      "POST",
+      "/api/source-fetch/runs",
+      { accountIds: [accountId] },
+    );
+    const exhaustedJob = await moduleRef.get(JobsService).claim("network");
+    assert.equal(exhaustedJob?.resourceId, exhaustedRun.data.id);
+    await db.backgroundJob.update({
+      where: { id: exhaustedJob!.id },
+      data: { attempts: 3, leaseUntil: new Date(0) },
+    });
+    await db.sourceAdapterState.update({
+      where: { id: stableState.id },
+      data: {
+        fetchLeaseId: exhaustedRun.data.id,
+        fetchLeaseUntil: new Date(Date.now() + 1800000),
+      },
+    });
+    assert.equal(await moduleRef.get(JobsService).claim("network"), null);
+    await moduleRef.get(SourceFetchService).reconcileExhausted();
+    assert.equal(
+      (
+        await db.sourceFetchRun.findUniqueOrThrow({
+          where: { id: exhaustedRun.data.id },
+        })
+      ).status,
+      "failed",
+    );
+    assert.equal(
+      (
+        await db.sourceAdapterState.findUniqueOrThrow({
+          where: { id: stableState.id },
+        })
+      ).fetchLeaseId,
+      null,
+    );
+
     const revokedRun = await request<{ id: string }>(
       source,
       "POST",
@@ -431,6 +534,14 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
     assert.equal((await request(member, "GET", "/api/candidates")).status, 403);
     assert.equal(
       (await request(reviewer, "GET", "/api/source-fetch/runs")).status,
+      403,
+    );
+    assert.equal(
+      (await request(source, "GET", "/api/source-fetch/runs")).status,
+      403,
+    );
+    assert.equal(
+      (await request(admin, "GET", "/api/source-fetch/runs")).status,
       200,
     );
 
@@ -617,7 +728,7 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
 
     assert.equal(
       await db.sourceAdapterBudgetUsage.count({
-        where: { adapterKey: "fixture_default", used: 3 },
+        where: { adapterKey: "fixture_default", used: 4 },
       }),
       2,
     );

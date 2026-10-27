@@ -99,9 +99,17 @@ test("R2 is all-or-none and mandatory in production", () => {
     R2_ACCESS_KEY_ID: "fixture-access-key",
     R2_SECRET_ACCESS_KEY: "fixture-secret-key",
     R2_BUCKET: "comiku-private",
+    R2_KEY_PREFIX: " source-test/nested/ ",
   });
   assert.equal(parsed.r2?.bucket, "comiku-private");
+  assert.equal(parsed.r2?.keyPrefix, "source-test/nested/");
   assert.equal(parsed.objectStorageDriver, "r2");
+  for (const prefix of ["../", "/absolute/", "no-trailing-slash", "a//b/"])
+    assert.throws(
+      () =>
+        parseEnvironment({ DATABASE_URL: databaseUrl, R2_KEY_PREFIX: prefix }),
+      /R2_KEY_PREFIX/,
+    );
 });
 
 test("local storage is development-only and explicit drivers are validated", () => {

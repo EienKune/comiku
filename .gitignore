@@ -12,6 +12,14 @@ dist-ops/
 *.tsbuildinfo
 /apps/server/src/generated/
 /.qa/
+/.local-adapters/
+/.local-docs/
+/.superpowers/
+/HANDOFF.md
+/HANDOFF.MD
+/handoff.md
+/docs/superpowers/
+/docs/guides/source-trial.md
 /.comiku-data/
 
 # Local environment files
@@ -24,3 +32,7 @@ dist-ops/
 /deploy/.backups/
 /deploy/production.env
 *.comikubak
+
+# Python adapter runtime caches
+__pycache__/
+*.pyc

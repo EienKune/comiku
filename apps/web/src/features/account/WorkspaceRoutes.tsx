@@ -37,6 +37,10 @@ const ReviewDetailPage = lazy(async () => ({
 const BusinessAuditPage = lazy(async () => ({
   default: (await import("../workspace/BusinessPages")).BusinessAuditPage,
 }));
+const SystemManagementPage = lazy(async () => ({
+  default: (await import("../system/SystemManagementPage"))
+    .SystemManagementPage,
+}));
 
 export function WorkspaceRoutes() {
   const location = useLocation();
@@ -70,6 +74,7 @@ export function WorkspaceRoutes() {
           <Route path="/reviews/:id" element={<ReviewDetailPage />} />
           <Route path="/audit" element={<BusinessAuditPage />} />
           <Route path="/settings/users" element={<AccountsPage />} />
+          <Route path="/settings/system" element={<SystemManagementPage />} />
           <Route path="/members" element={<MembersPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

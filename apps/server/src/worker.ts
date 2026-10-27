@@ -1,4 +1,5 @@
 import { DownloadsService } from "./transfers/downloads.service.js";
+import { ImageAnalysisService } from "./image-analysis/image-analysis.service.js";
 import "reflect-metadata";
 import { setTimeout as delay } from "node:timers/promises";
 import { NestFactory } from "@nestjs/core";
@@ -19,6 +20,9 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
 const jobs = app.get(JobsService);
 const sources = app.get(SourceFetchService);
 const transfers = app.get(DownloadsService);
+const analysis = app.get(ImageAnalysisService);
+let nextAnalysisScan = 0;
+let nextSourceRecoveryScan = 0;
 let healthWriting = false;
 const heartbeat = async () => {
   if (!process.env.WORKER_HEALTH_FILE || healthWriting) return;
@@ -39,9 +43,23 @@ const healthTimer = setInterval(() => {
 async function loop(lane: "heavy" | "network") {
   while (!stopping.signal.aborted) {
     try {
-      if (lane === "network") await sources.scheduleDue();
-      else await transfers.scheduleCleanup();
-      if (await jobs.runNext(lane, stopping.signal)) continue;
+      if (lane === "network") {
+        if (Date.now() >= nextSourceRecoveryScan) {
+          await sources.reconcileExhausted();
+          nextSourceRecoveryScan = Date.now() + 60_000;
+        }
+        await sources.scheduleDue();
+      } else {
+        await transfers.scheduleCleanup();
+        if (Date.now() >= nextAnalysisScan) {
+          await analysis.schedulePending();
+          nextAnalysisScan = Date.now() + 60_000;
+        }
+      }
+      if (await jobs.runNext(lane, stopping.signal)) {
+        if (lane === "network") await analysis.schedulePending();
+        continue;
+      }
     } catch {
       console.error("后台任务轮询失败，稍后重试");
     }

@@ -104,6 +104,11 @@ export class CandidateMediaDto {
 }
 
 export class CandidateDto {
+  @ApiPropertyOptional({
+    enum: ["high", "medium", "low", "unprocessed", "queued", "failed"],
+  })
+  reviewPriority?:
+    "high" | "medium" | "low" | "unprocessed" | "queued" | "failed";
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: String, format: "uuid" }) authorId!: string;
   @ApiProperty({ type: String }) authorName!: string;
