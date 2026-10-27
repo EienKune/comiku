@@ -14,6 +14,7 @@ from urllib.parse import urlsplit, parse_qsl
 from gallery_dl import config, version
 from gallery_dl.extractor import twitter, pixiv
 from gallery_dl.util import NullResponse
+from pixiv_paging import PixivPager
 
 
 class AdapterError(Exception):
@@ -296,6 +297,7 @@ def collect(source, cursor):
         return exc
 
     def incomplete(exc, preserve_diagnostic=False):
+        result.pop("checkpoint", None)
         for post_id in observed_ids:
             if post_id not in handled_ids and post_id not in result["failed_ids"]:
                 result["failed_ids"].append(post_id)
@@ -548,20 +550,11 @@ def collect(source, cursor):
         config.set(("extractor", "twitter"), "showreplies", False)
         ext = twitter.TwitterWithRepliesExtractor.from_url("https://x.com/id:" + source_id + "/with_replies")
     elif source["platform"] == "pixiv":
-        previous, previous_ids = None, None
-        if cursor is not None:
-            from urllib.parse import urlencode
-            if not isinstance(cursor, dict):
-                raise AdapterError("cursor_invalid")
-            previous, previous_ids = cursor.get("_previous"), cursor.get("_ids")
-            if not isinstance(previous, dict) or not isinstance(previous_ids, list) or not previous_ids or len(previous_ids) > 1000 or any(not isinstance(post_id, str) or not post_id.isdecimal() for post_id in previous_ids):
-                raise AdapterError("cursor_invalid")
-            previous = pixiv_cursor("https://app-api.pixiv.net/v1/user/illusts?" + urlencode(previous), source_id)
-            cursor = pixiv_cursor("https://app-api.pixiv.net/v1/user/illusts?" + urlencode({k:v for k,v in cursor.items() if k not in {"_previous", "_ids"}}), source_id)
         ext = pixiv.PixivArtworksExtractor.from_url("https://www.pixiv.net/users/" + source_id + "/artworks")
     else:
         raise AdapterError("source_unresolved")
     ext.initialize()
+    pager = None
     if is_x:
         install_x_checks(ext)
     if is_x:
@@ -585,15 +578,17 @@ def collect(source, cursor):
         original = ext.tweets
         slot = "tweets"
     else:
-        call = ext.api._call
         native_extract_ajax = ext._extract_ajax
         def typed_extract_ajax(work, body):
-            # 1.32.11 resolves sanity metadata but leaves the numeric
-            # placeholder type intact. Never expose an animation's first
-            # JPEG frame as a complete static artwork.
             artwork_type = body.get("illustType") if isinstance(body, dict) else None
-            if type(artwork_type) is not int or artwork_type not in (0, 1, 2):
-                raise ValueError("native AJAX did not resolve artwork type")
+            if (type(artwork_type) is not int or artwork_type not in (0, 1, 2)
+                    or str(body.get("id")) != str(work.get("id"))
+                    or type(body.get("pageCount")) is not int or not 1 <= body["pageCount"] <= 1000):
+                raise ValueError("native AJAX did not resolve artwork identity/type")
+            pager.date(body.get("createDate"))
+            pager.identifier(body.get("userId"))
+            if pager.phase == "app" and not pager.same_publication_time(work.get("create_date"), body["createDate"]):
+                raise AdapterError("discovery_incomplete")
             files = native_extract_ajax(work, body)
             work["type"] = ("illust", "manga", "ugoira")[artwork_type]
             return () if artwork_type == 2 else files
@@ -604,73 +599,8 @@ def collect(source, cursor):
                 raise AdapterError("rate_limited")
             return wait(*args, **kwargs)
         ext.wait = rate_limit_wait
-        called = 0
-        def page_ids(data):
-            owner = str(data.get("user", {}).get("id", ""))
-            works = data.get("illusts")
-            if owner != source_id:
-                # Pixiv returns a placeholder user for an empty terminal list.
-                # Only a separately verified profile can make this a safe boundary.
-                if owner != "0" or works != [] or "next_url" not in data or data["next_url"] is not None:
-                    raise AdapterError("source_identity_conflict")
-                detail = call("/v1/user/detail", {"user_id": source_id})
-                user = detail.get("user") if isinstance(detail, dict) else None
-                if not isinstance(user, dict) or str(user.get("id", "")) != source_id:
-                    raise AdapterError("source_identity_conflict")
-                if user.get("is_access_blocking_user"):
-                    raise AdapterError("source_forbidden")
-            if not isinstance(works, list):
-                raise AdapterError("discovery_incomplete")
-            ids = []
-            malformed = False
-            for work in works:
-                if not isinstance(work, dict):
-                    malformed = True
-                    continue
-                post_id = str(work.get("id", ""))
-                user = work.get("user")
-                author = str(user.get("id", "")) if isinstance(user, dict) else ""
-                remember(post_id, author)
-                ids.append(post_id)
-                malformed |= not post_id.isdecimal() or not author.isdecimal()
-            if malformed:
-                raise AdapterError("discovery_incomplete")
-            return ids
-
-        def validate_previous(**kwargs):
-            data = call("/v1/user/illusts", dict(previous), **kwargs)
-            if page_ids(data) != previous_ids:
-                raise AdapterError("cursor_invalid")
-
-        def native_call(endpoint, params=None, **kwargs):
-            nonlocal called
-            if endpoint != "/v1/user/illusts":
-                return call(endpoint, params, **kwargs)
-            if called:
-                raise PageDone()
-            effective = dict(cursor or params)
-            if previous is not None:
-                validate_previous(**kwargs)
-            data = call(endpoint, dict(effective), **kwargs)
-            ids = page_ids(data)
-            # Even a terminal next page can have shifted during its request.
-            # Recheck the same complete ordered overlap before accepting it.
-            if previous is not None:
-                validate_previous(**kwargs)
-            called += 1
-            next_url = data.get("next_url")
-            result["next"] = pixiv_cursor(next_url, source_id) if next_url else None
-            if result["next"] is not None and result["next"] == effective:
-                raise AdapterError("cursor_invalid")
-            if result["next"] is not None:
-                if not ids:
-                    raise AdapterError("discovery_incomplete")
-                result["next"]["_ids"] = ids
-                result["next"]["_previous"] = dict(effective, offset=str(effective.get("offset", "0")))
-            result["terminal"] = not next_url
-            return data
-        ext.api._call = native_call
-        original = ext.works
+        pager = PixivPager(ext, source, cursor, result, pixiv_cursor, AdapterError, PageDone, remember)
+        original = pager.works
         slot = "works"
     # Preserve native enumeration, login, media and metadata transformation.
     # Isolate conversion per post so malformed metadata does not close the
@@ -735,12 +665,19 @@ def collect(source, cursor):
                     else:
                         raise ValueError("unexpected native message")
                 if not is_x:
+                    pager.validate_resolved(raw)
                     user = raw.get("user")
                     owner = str(user.get("id", "")) if isinstance(user, dict) else ""
                     if (not owner.isdecimal() or owner == "0"
                             or (sanity_placeholder and user is initial_user)):
                         raise ValueError("native conversion did not resolve source author")
                     if owner != source_id:
+                        handled_ids.add(post_id)
+                        continue
+                    # Native AJAX can resolve a minute-truncated list timestamp
+                    # outside this fixed window. Do not emit it or mark it seen
+                    # in the successful baseline for the next incremental run.
+                    if pager.defer_if_future(post_id, raw["create_date"]) or not pager.in_window(raw["create_date"]):
                         handled_ids.add(post_id)
                         continue
                     remember(post_id, owner)
@@ -774,7 +711,12 @@ def collect(source, cursor):
                 result["failed_ids"].append(post_id)
             finally:
                 setattr(ext, slot, original)
-        result["terminal"] = True
+        if result["failed_ids"] and pager is not None:
+            raise AdapterError("discovery_incomplete")
+        if pager is None:
+            result["terminal"] = True
+        else:
+            pager.finish()
     except PageDone:
         pass
     except AdapterError as exc:
@@ -801,7 +743,7 @@ def collect(source, cursor):
         for post_id in observed_ids:
             if post_id not in handled_ids and post_id not in result["failed_ids"]:
                 result["failed_ids"].append(post_id)
-    result["boundary"] = bool(target_count and all_old and not result["failed_ids"] and not result["order_anomaly"])
+    result["boundary"] = bool(is_x and target_count and all_old and not result["failed_ids"] and not result["order_anomaly"])
     result["neutral"] = bool(is_x and not target_count and all_old
                              and not result["failed_ids"] and not result["order_anomaly"])
     result["page_complete"] = True

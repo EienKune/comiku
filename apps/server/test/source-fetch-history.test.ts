@@ -22,9 +22,35 @@ test("technical sync history is restricted to system administrators", () => {
   assert.deepEqual(
     Reflect.getMetadata(ACCESS, SourceFetchController.prototype.get),
     {
-      permission: "candidates:read",
+      permission: "system:manage",
     },
   );
+});
+
+test("manual sync acceptance exposes only business fields for new and reused batches", async () => {
+  for (const trigger of ["manual", "scheduled"] as const) {
+    const controller = new SourceFetchController({
+      runManual: async () => ({
+        id: "shared-run",
+        trigger,
+        status: "running",
+        requestedById: "another-user",
+        attempts: 2,
+        jobStatus: "queued",
+        nextRetryAt: "2026-10-26T12:00:00.000Z",
+        startedAt: "2026-10-26T11:00:00.000Z",
+        completedAt: null,
+        items: [{ adapterKey: "private-adapter", errorCode: "private-error" }],
+      }),
+    } as unknown as SourceFetchService);
+    const accepted = await controller.run(
+      { actor: { userId: "source-user" } } as Parameters<
+        SourceFetchController["run"]
+      >[0],
+      {},
+    );
+    assert.deepEqual(accepted, { id: "shared-run", status: "running" });
+  }
 });
 
 test("reloaded source history includes durable attempt and retry timing without exposing job payload", async () => {

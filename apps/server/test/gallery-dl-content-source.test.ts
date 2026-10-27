@@ -95,6 +95,157 @@ test("a new worker scan replays from the head while retaining its lower boundary
   );
 });
 
+test("Pixiv resumes only a source- and window-bound v3 supplement cursor", () => {
+  const c = new GalleryDlContentSource("pixiv", {
+    python: "/python",
+    configPath: "/private/config.json",
+  });
+  const providerCursor = {
+    _v: 3,
+    _phase: "sanity",
+    _source: account.externalUserId,
+    _cutoff: initial.startTime,
+    _until: "2026-10-27T10:00:00+00:00",
+    _offset: 100,
+  };
+  const cursor = {
+    ...initial,
+    endTime: "2026-10-27T10:00:00Z",
+    providerCursor,
+  };
+  assert.deepEqual(c.prepareCursor(account, cursor), {
+    ...cursor,
+    sourceId: account.externalUserId,
+  });
+  for (const changed of [
+    { ...providerCursor, _source: "99" },
+    { ...providerCursor, _cutoff: "2026-10-20T00:00:00.000Z" },
+    { offset: "100" },
+  ])
+    assert.deepEqual(
+      c.prepareCursor(account, { ...cursor, providerCursor: changed }),
+      { ...initial, endTime: cursor.endTime, sourceId: account.externalUserId },
+    );
+});
+
+test("Pixiv passes the frozen upper bound and separate discovery cache through the bridge", async () => {
+  const checkpoint = {
+    version: 1,
+    sourceId: account.externalUserId,
+    ids: ["123"],
+  };
+  const c = new GalleryDlContentSource(
+    "pixiv",
+    { python: "/python", configPath: "/private/config.json" },
+    async (source) => {
+      assert.equal(source.until, "2026-10-27T10:00:00Z");
+      assert.deepEqual(source.checkpoint, checkpoint);
+      return page({
+        platform: "pixiv",
+        next: null,
+        terminal: true,
+        checkpoint,
+      });
+    },
+  );
+  const result = await c.fetchPage(
+    account,
+    { ...initial, endTime: "2026-10-27T10:00:00Z" },
+    { checkpoint },
+  );
+  assert.deepEqual(result.checkpoint, checkpoint);
+  assert.equal(result.nextCursor?.endTime, "2026-10-27T10:00:00Z");
+});
+
+test("Pixiv never persists partial, foreign, duplicated or extra-key discovery caches", async () => {
+  const valid = { version: 1, sourceId: account.externalUserId, ids: ["123"] };
+  for (const [checkpoint, terminal] of [
+    [valid, false],
+    [{ ...valid, sourceId: "99" }, true],
+    [{ ...valid, ids: ["123", "123"] }, true],
+    [{ ...valid, credential: "fixture-private" }, true],
+  ] as const) {
+    const c = new GalleryDlContentSource(
+      "pixiv",
+      { python: "/python", configPath: "/private/config.json" },
+      async () =>
+        page({
+          platform: "pixiv",
+          checkpoint,
+          terminal,
+          next: terminal ? null : "next",
+        }),
+    );
+    await assert.rejects(c.fetchPage(account, initial));
+  }
+});
+
+test("gallery fixed windows exclude future and old records before candidate normalization escapes", async () => {
+  const records = [
+    "2026-10-24 00:00:00",
+    "2026-10-23 23:59:59",
+    "2026-10-25 00:00:00",
+  ].map((date, index) => [
+    2,
+    {
+      tweet_id: String(10 + index),
+      author: { id: account.externalUserId },
+      date,
+      count: 0,
+    },
+  ]);
+  const result = await client([
+    page({ records, terminal: true, next: null, boundary: false }),
+  ]).fetchPage(account, { ...initial, endTime: "2026-10-25T00:00:00Z" });
+  assert.deepEqual(
+    result.items.map((item) => item.externalContentId),
+    ["10"],
+  );
+});
+
+test("Pixiv cursor drift replays the same window once, without retrying network errors", async () => {
+  const calls: unknown[] = [];
+  const c = new GalleryDlContentSource(
+    "pixiv",
+    { python: "/python", configPath: "/private/config.json" },
+    async (source, cursor) => {
+      calls.push({ source, cursor });
+      return cursor
+        ? { error: "cursor_invalid" }
+        : page({
+            platform: "pixiv",
+            boundary: false,
+            next: { _v: 2, _phase: "app" },
+          });
+    },
+  );
+  const result = await c.fetchPage(account, {
+    ...initial,
+    providerCursor: { _v: 2, _phase: "sanity" },
+  });
+  assert.equal(calls.length, 2);
+  assert.equal((calls[1] as { cursor: unknown }).cursor, null);
+  assert.equal(
+    (calls[1] as { source: { cutoff: string } }).source.cutoff,
+    initial.startTime,
+  );
+  assert.equal(result.complete, false);
+  let networkCalls = 0;
+  const failing = new GalleryDlContentSource(
+    "pixiv",
+    { python: "/python", configPath: "/private/config.json" },
+    async () => {
+      networkCalls++;
+      return { error: "network_error" };
+    },
+  );
+  await assert.rejects(
+    failing.fetchPage(account, { ...initial, providerCursor: {} }),
+    /暂时不可用/,
+  );
+  assert.equal(networkCalls, 1);
+});
+
 test("string IDs preserve all digits and only owned original photos become media", async () => {
   const metadata = {
     tweet_id: "2114345454486143109",

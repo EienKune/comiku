@@ -189,6 +189,11 @@ export class CandidatesService {
       candidate.author.externalAccounts[0];
     return {
       id: candidate.id,
+      classificationTags:
+        analysis.state === "succeeded"
+          ? (this.analysis?.classificationTags(candidate.analysisPredictions) ??
+            [])
+          : [],
       reviewPriority:
         analysis.score !== null
           ? analysis.score >= 0.8
@@ -250,6 +255,7 @@ export class CandidatesService {
   async list(query: CandidateQueryDto): Promise<CandidatePageDto> {
     const limit = query.limit ?? 24;
     const search = query.search?.replace(/^@/, "").trim();
+    const activeModelKey = this.analysis?.activeModelKey;
     const rows = await this.db.candidatePost.findMany({
       where: {
         status: query.status ?? "pending",
@@ -298,8 +304,54 @@ export class CandidatesService {
           take: 1,
           select: { label: true },
         },
+        ...(activeModelKey
+          ? {
+              _count: {
+                select: {
+                  media: {
+                    where: {
+                      fileObject: {
+                        lifecycleStatus: "active" as const,
+                        deletedAt: null,
+                      },
+                      candidatePost: { author: { deletedAt: null } },
+                      OR: [
+                        { analyses: { none: { modelKey: activeModelKey } } },
+                        {
+                          analyses: {
+                            some: {
+                              modelKey: activeModelKey,
+                              status: "queued",
+                            },
+                          },
+                        },
+                        {
+                          candidatePost: {
+                            OR: [
+                              { analysisModelKey: null },
+                              { analysisModelKey: { not: activeModelKey } },
+                            ],
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            }
+          : {}),
       },
     });
+    // Pending work can be outside the selected group or loaded page and still
+    // move into this view after analysis. Reuse the existing filtered summary.
+    const analysisPending = Boolean(
+      activeModelKey &&
+      rows.some(
+        (row) =>
+          row._count?.media > 0 &&
+          ["unprocessed", "queued"].includes(this.analysisSummary(row).state),
+      ),
+    );
     const classifyGroup = (row: (typeof rows)[number]) => {
       const visual =
         row.classificationDecision?.label ??
@@ -354,6 +406,7 @@ export class CandidatesService {
       loaded.map((candidate) => [candidate.id, candidate]),
     );
     return {
+      analysisPending,
       items: page.map((row) => this.dto(loadedById.get(row.id)!)),
       total: filtered.length,
       nextCursor:

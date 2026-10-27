@@ -94,7 +94,7 @@ test("existing current-model results rebuild bounded summaries without new infer
     analysisModelKey: model.modelKey,
     analysisState: "succeeded",
     analysisScore: 0.3,
-    analysisPredictions: [{ label: "comic", confidence: 0.7 }],
+    analysisPredictions: [{ label: "comic", confidence: 0.7, score: 0.3 }],
   });
   assert.deepEqual(updates.get("partial"), {
     analysisModelKey: model.modelKey,
@@ -104,7 +104,7 @@ test("existing current-model results rebuild bounded summaries without new infer
   });
   assert.deepEqual(updates.get("malformed")?.analysisPredictions, []);
   assert.deepEqual(updates.get("nonwinner")?.analysisPredictions, [
-    { label: "comic_related", confidence: 0.55 },
+    { label: "comic_related", confidence: 0.55, score: 0.99 },
   ]);
 });
 
@@ -174,6 +174,7 @@ test("review promotion uses declared labels and inclusive confidence, rejecting 
     activateImageAnalysisAdapter({
       ...example,
       identity: { ...example.identity, labels: ["accept", "reject"] },
+      labelPresentation: undefined,
       reviewPolicy: { positiveLabels: ["accept"], minimumConfidence: 0.8 },
     }),
   );

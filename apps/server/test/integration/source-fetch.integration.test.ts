@@ -334,6 +334,26 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
       { accountIds: [accountId] },
     );
     assert.equal(queuedRun.data.status, "queued");
+    assert.deepEqual(Object.keys(queuedRun.data).sort(), ["id", "status"]);
+    const reusedRun = await request<{ id: string; status: string }>(
+      source,
+      "POST",
+      "/api/source-fetch/runs",
+      { accountIds: [accountId] },
+    );
+    assert.equal(reusedRun.data.id, queuedRun.data.id);
+    assert.deepEqual(Object.keys(reusedRun.data).sort(), ["id", "status"]);
+    for (const actor of [source, reviewer])
+      assert.equal(
+        (
+          await request(
+            actor,
+            "GET",
+            `/api/source-fetch/runs/${queuedRun.data.id}`,
+          )
+        ).status,
+        403,
+      );
     await moduleRef.get(JobsService).runNext("network");
     const run = await request<{
       status: string;
@@ -342,7 +362,7 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
         candidatesExisting: number;
         mediaStored: number;
       }[];
-    }>(source, "GET", `/api/source-fetch/runs/${queuedRun.data.id}`);
+    }>(admin, "GET", `/api/source-fetch/runs/${queuedRun.data.id}`);
     assert.equal(run.status, 200);
     assert.equal(run.data.status, "failed", JSON.stringify(run.data));
     const interruptedState = await db.sourceAdapterState.findUniqueOrThrow({
@@ -356,7 +376,10 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
     assert.equal(interruptedState.highWaterPublishedAt, null);
     assert.equal(interruptedState.lastSuccessAt, null);
     assert.equal(interruptedState.lastErrorCode, "invalid_response");
-    assert.deepEqual(interruptedState.cursorJson, { page: 1 });
+    const interruptedCursor = interruptedState.cursorJson as SourceCursor;
+    assert.equal(interruptedCursor.page, 1);
+    assert.equal(typeof interruptedCursor.endTime, "string");
+    assert.equal(interruptedState.completedThroughAt, null);
     assert.deepEqual(
       run.data.items.map((item) => [
         item.candidatesCreated,
@@ -383,7 +406,7 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
         candidatesExisting: number;
         mediaStored: number;
       }[];
-    }>(source, "GET", `/api/source-fetch/runs/${resumedQueued.data.id}`);
+    }>(admin, "GET", `/api/source-fetch/runs/${resumedQueued.data.id}`);
     assert.equal(
       resumedRun.data.status,
       "succeeded",
@@ -416,10 +439,21 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
         },
       },
     });
+    const recoveryUpper = new Date().toISOString();
     await db.sourceAdapterState.update({
       where: { id: stableState.id },
       data: {
-        cursorJson: { page: 1 },
+        cursorJson: {
+          page: 1,
+          endTime: recoveryUpper,
+          _sourceScanWindow: {
+            sourceId: `account-${prefix}`,
+            adapterKey: "fixture_default",
+            firstSyncMode: "none",
+            startTime: null,
+            endTime: recoveryUpper,
+          },
+        },
         fetchLeaseId: crashRun.data.id,
         fetchLeaseUntil: new Date(Date.now() + 1800000),
       },

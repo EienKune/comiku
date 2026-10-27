@@ -530,6 +530,8 @@ model SourceFetchRun {
   completedAt   DateTime?            @map("completed_at") @db.Timestamptz(3)
 
   @@index([startedAt])
+  @@index([trigger, startedAt])
+  @@index([status, startedAt])
   @@map("source_fetch_runs")
 }
 
@@ -570,6 +572,8 @@ model SourceAdapterState {
   enabled               Boolean                 @default(true)
   health                SourceAdapterHealth     @default(idle)
   cursorJson            Json                    @default("{}") @map("cursor_json")
+  discoveryCheckpointJson Json                         @default("{}") @map("discovery_checkpoint_json")
+  completedThroughAt      DateTime?                    @map("completed_through_at") @db.Timestamptz(3)
   highWaterPublishedAt  DateTime?               @map("high_water_published_at") @db.Timestamptz(3)
   highWaterExternalId   String?                 @map("high_water_external_id") @db.VarChar(255)
   lastAttemptAt         DateTime?               @map("last_attempt_at") @db.Timestamptz(3)

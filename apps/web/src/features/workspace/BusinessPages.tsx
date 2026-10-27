@@ -2,6 +2,7 @@ import { downloadPrepared, uploadDirect, pollTransfer } from "./transfers-api";
 import { useImageUrl } from "../../components/use-image-url";
 import { refreshReviewViews } from "./review-cache";
 import { useCandidateAnalysisRefresh } from "./use-candidate-analysis-refresh";
+import { SourceSyncControl } from "./SourceSyncControl";
 import { MemberAvatar } from "../account/MemberAvatar";
 import {
   useCallback,
@@ -30,7 +31,6 @@ import {
   Grid2X2,
   List,
   Plus,
-  RefreshCw,
   ScanText,
   Search,
   Upload,
@@ -2749,11 +2749,14 @@ function CandidateGridSection({
                 </div>
                 <p>{candidate.text || "此原帖没有文字说明。"}</p>
                 <div className="workspace-tags">
+                  {candidate.classificationTags?.map((category) => (
+                    <Badge key={category.label} tone={category.tone}>
+                      {category.text}
+                    </Badge>
+                  ))}
                   <Badge
                     tone={
-                      candidate.tagDisposition === "valid" ||
-                      (candidate.tagDisposition === "neutral" &&
-                        group === "valid_manga")
+                      candidate.tagDisposition === "valid"
                         ? "success"
                         : candidate.tagDisposition === "blocked"
                           ? "danger"
@@ -2764,9 +2767,7 @@ function CandidateGridSection({
                       ? "有效标签"
                       : candidate.tagDisposition === "blocked"
                         ? "黑名单标签"
-                        : group === "valid_manga"
-                          ? "模型命中"
-                          : "普通标签"}
+                        : "普通标签"}
                   </Badge>
                   <Badge>
                     {sourceLanguageLabels[candidate.sourceLanguage]}
@@ -2774,19 +2775,6 @@ function CandidateGridSection({
                   {candidate.hashtags.map((tag) => (
                     <Badge key={tag}>#{tag}</Badge>
                   ))}
-                  {(candidate.reviewPriority === "unprocessed" ||
-                    candidate.reviewPriority === "queued" ||
-                    candidate.reviewPriority === "failed") && (
-                    <Badge>
-                      {
-                        {
-                          unprocessed: "未识别",
-                          queued: "待识别",
-                          failed: "识别失败",
-                        }[candidate.reviewPriority]
-                      }
-                    </Badge>
-                  )}
                 </div>
                 <footer>
                   {user.permissions.includes("candidates:manage") && (
@@ -2913,34 +2901,6 @@ export function CandidatesPage() {
   const user = useAccount();
   const action = useAction();
   useCandidateAnalysisRefresh();
-  const [sourceRunId, setSourceRunId] = useState<string | null>(null);
-  const sourceRun = useQuery({
-    queryKey: ["source-fetch", sourceRunId],
-    enabled: Boolean(sourceRunId),
-    queryFn: async () =>
-      unwrap(
-        await client.GET("/api/source-fetch/runs/{id}", {
-          params: { path: { id: sourceRunId! } },
-        }),
-      ),
-    refetchInterval: (query) =>
-      query.state.data &&
-      ["queued", "running"].includes(query.state.data.status)
-        ? 2_000
-        : false,
-  });
-  const sourceActive = Boolean(
-    sourceRunId &&
-    (!sourceRun.data || ["queued", "running"].includes(sourceRun.data.status)),
-  );
-  useEffect(() => {
-    if (
-      !sourceRun.data ||
-      ["queued", "running"].includes(sourceRun.data.status)
-    )
-      return;
-    void queryClient.invalidateQueries({ queryKey: ["candidates"] });
-  }, [sourceRun.data]);
   const [status, setStatus] = useState("pending");
   const [language, setLanguage] = useState<SourceLanguage | "all">("all");
   const [fetchedRange, setFetchedRange] = useState("all");
@@ -3010,19 +2970,6 @@ export function CandidatesPage() {
     },
     [runCandidateAction, selected, setCandidateSuccess],
   );
-  async function fetchSources() {
-    await action.run(async () => {
-      const run = await unwrap(
-        await client.POST("/api/source-fetch/runs", { body: {} }),
-      );
-      setSourceRunId(run.id);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["candidates"] }),
-        invalidateWorkViews(),
-      ]);
-      action.setSuccess("来源抓取已排队，后台完成后自动刷新候选");
-    });
-  }
   const selectedCount = Object.keys(selected).length;
   const topbarRegistration = useMemo(
     () =>
@@ -3078,15 +3025,6 @@ export function CandidatesPage() {
       <SectionHeading title="候选池">
         筛选已抓取的图片组，批量入库为作品。
       </SectionHeading>
-      {sourceRun.data && (
-        <p className="account-notice" role="status">
-          {sourceRun.data.status === "queued"
-            ? "抓取已排队，等待后台处理"
-            : sourceRun.data.status === "running"
-              ? `正在抓取：已读取 ${sourceRun.data.items.reduce((sum, item) => sum + item.pagesFetched, 0)} 页`
-              : `抓取结束：${sourceRun.data.status === "succeeded" ? "完成" : "部分通道未完成，请查看作者通道状态"}`}
-        </p>
-      )}
       <Toolbar>
         <SearchField
           placeholder="搜索作者昵称或 @账号"
@@ -3143,16 +3081,7 @@ export function CandidatesPage() {
             >
               手动上传
             </Button>
-            <Button
-              variant="secondary"
-              leadingIcon={<RefreshCw size={16} />}
-              title="同步全部已授权且已启用采集的作者账号"
-              loading={action.busy}
-              disabled={sourceActive}
-              onClick={() => void fetchSources()}
-            >
-              同步图源
-            </Button>
+            <SourceSyncControl onCompleted={invalidateWorkViews} />
           </>
         )}
       </Toolbar>

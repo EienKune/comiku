@@ -22,8 +22,23 @@ export interface ImageAnalysisResult {
   evidence: Record<string, unknown>[];
 }
 
+export const IMAGE_ANALYSIS_LABEL_TONES = [
+  "neutral",
+  "info",
+  "success",
+  "warning",
+  "danger",
+] as const;
+export interface ImageAnalysisLabelPresentation {
+  label: string;
+  text: string;
+  tone: (typeof IMAGE_ANALYSIS_LABEL_TONES)[number];
+}
+
 export interface ImageAnalysisAdapter {
   readonly identity: ImageAnalysisIdentity;
+  /** Display metadata does not change inference outputs or model identity. */
+  readonly labelPresentation?: readonly Readonly<ImageAnalysisLabelPresentation>[];
   /** Review routing reads cached class confidence; changing this does not change inference identity. */
   readonly reviewPolicy?: {
     readonly positiveLabels: readonly string[];
@@ -179,9 +194,33 @@ export function activateImageAnalysisAdapter(
           positiveLabels: Object.freeze([...policy.positiveLabels]),
           minimumConfidence: policy.minimumConfidence,
         });
+  const presentation = adapter.labelPresentation;
+  if (
+    presentation !== undefined &&
+    (!Array.isArray(presentation) ||
+      presentation.length > identity.labels.length ||
+      Array.from(presentation).some(
+        (entry) =>
+          !object(entry) ||
+          !identity.labels.includes(entry.label) ||
+          typeof entry.text !== "string" ||
+          !entry.text.trim() ||
+          entry.text.length > 256 ||
+          !IMAGE_ANALYSIS_LABEL_TONES.includes(entry.tone),
+      ) ||
+      new Set(presentation.map((entry) => entry.label)).size !==
+        presentation.length)
+  )
+    throw new Error("Invalid image analysis label presentation");
+  const labelPresentation = presentation?.map(({ label, text, tone }) =>
+    Object.freeze({ label, text, tone }),
+  );
   return Object.freeze({
     identity,
     modelKey,
+    ...(labelPresentation
+      ? { labelPresentation: Object.freeze(labelPresentation) }
+      : {}),
     ...(reviewPolicy ? { reviewPolicy } : {}),
     async analyze(itemId: string, body: Uint8Array, signal: AbortSignal) {
       try {

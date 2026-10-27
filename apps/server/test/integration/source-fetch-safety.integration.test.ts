@@ -2,6 +2,7 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { AuthorsService } from "../../src/authors/authors.service.js";
 import {
@@ -279,6 +280,187 @@ async function fixture() {
     },
   };
 }
+
+test("PostgreSQL successful empty scans persist coverage and keep discovery cache out of account and history projections", async () => {
+  const f = await fixture();
+  try {
+    const state = (await f.snapshot()).adapterStates[0];
+    const previousCoverage = new Date(Date.now() - 3_600_000);
+    const oldPublication = new Date("2020-01-01T00:00:00.000Z");
+    const cache = {
+      ids: Array.from({ length: 100_000 }, (_, i) => String(i + 1)),
+    };
+    await f.db.sourceAdapterState.update({
+      where: { id: state.id },
+      data: {
+        completedThroughAt: previousCoverage,
+        highWaterPublishedAt: oldPublication,
+        discoveryCheckpointJson: cache,
+      },
+    });
+    let fixedUpper = "";
+    f.client.fetchPage = async (_account, cursor, context) => {
+      assert.deepEqual(context?.checkpoint, cache);
+      assert.equal(
+        cursor.startTime,
+        new Date(previousCoverage.getTime() - 10 * 60_000).toISOString(),
+      );
+      fixedUpper = cursor.endTime as string;
+      return {
+        items: [],
+        complete: true,
+        nextCursor: {},
+        checkpoint: { ids: ["new"] },
+      };
+    };
+    const run = await f.manual();
+    await f.execute(run.id);
+    const stored = await f.db.sourceAdapterState.findUniqueOrThrow({
+      where: { id: state.id },
+    });
+    assert.equal(stored.completedThroughAt?.toISOString(), fixedUpper);
+    assert.equal(
+      stored.highWaterPublishedAt?.toISOString(),
+      oldPublication.toISOString(),
+    );
+    assert.deepEqual(stored.discoveryCheckpointJson, { ids: ["new"] });
+    assert.deepEqual(stored.cursorJson, {});
+    const accounts = await (f.service as any).accounts([f.account.id]);
+    assert.equal(
+      Object.hasOwn(accounts[0].adapterStates[0], "discoveryCheckpointJson"),
+      false,
+    );
+    assert.equal((await f.service.get(run.id)).status, "succeeded");
+    assert.equal(
+      JSON.stringify(await f.authors.listAccounts(f.author.id)).includes(
+        "discoveryCheckpointJson",
+      ),
+      false,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("PostgreSQL failed scans preserve coverage and discovery cache while retaining fixed resume bounds", async () => {
+  const f = await fixture();
+  try {
+    const state = (await f.snapshot()).adapterStates[0];
+    const previousCoverage = new Date(Date.now() - 3_600_000);
+    await f.db.sourceAdapterState.update({
+      where: { id: state.id },
+      data: {
+        completedThroughAt: previousCoverage,
+        discoveryCheckpointJson: { ids: ["old"] },
+      },
+    });
+    let page = 0;
+    let fixedUpper = "";
+    f.client.fetchPage = async (_account, cursor) => {
+      fixedUpper ||= cursor.endTime as string;
+      assert.equal(cursor.endTime, fixedUpper);
+      if (++page === 2) throw new Error("synthetic checkpoint interruption");
+      return {
+        items: [],
+        complete: false,
+        boundaryReached: false,
+        nextCursor: { page },
+        checkpoint: { ids: ["partial"] },
+      };
+    };
+    const failed = await f.manual();
+    await f.execute(failed.id);
+    const interrupted = await f.db.sourceAdapterState.findUniqueOrThrow({
+      where: { id: state.id },
+    });
+    assert.equal(
+      interrupted.completedThroughAt?.toISOString(),
+      previousCoverage.toISOString(),
+    );
+    assert.deepEqual(interrupted.discoveryCheckpointJson, { ids: ["old"] });
+    assert.equal((interrupted.cursorJson as any).endTime, fixedUpper);
+    f.client.fetchPage = async (_account, cursor, context) => {
+      assert.equal(cursor.endTime, fixedUpper);
+      assert.deepEqual(context?.checkpoint, { ids: ["old"] });
+      return {
+        items: [],
+        complete: true,
+        nextCursor: {},
+        checkpoint: { ids: ["complete"] },
+      };
+    };
+    const resumed = await f.manual();
+    await f.execute(resumed.id);
+    const completed = await f.db.sourceAdapterState.findUniqueOrThrow({
+      where: { id: state.id },
+    });
+    assert.equal(completed.completedThroughAt?.toISOString(), fixedUpper);
+    assert.deepEqual(completed.discoveryCheckpointJson, { ids: ["complete"] });
+  } finally {
+    await f.close();
+  }
+});
+
+test("PostgreSQL coverage migration backfills only a matching successful scan start", async () => {
+  const f = await fixture();
+  try {
+    const migration = await readFile(
+      new URL(
+        "../../prisma/migrations/20261027000400_source_scan_windows/migration.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    await f.db.$transaction(async (tx) => {
+      // Temporary relations shadow only this transaction's names; real fixture
+      // tables and the migration history remain untouched.
+      await tx.$executeRawUnsafe(`CREATE TEMP TABLE source_adapter_states (
+        id text PRIMARY KEY, external_account_id text, adapter_key text,
+        last_success_at timestamptz(3), high_water_published_at timestamptz(3)
+      ) ON COMMIT DROP`);
+      await tx.$executeRawUnsafe(`CREATE TEMP TABLE source_fetch_run_items (
+        adapter_state_id text, external_account_id text, adapter_key text,
+        status text, started_at timestamptz(3)
+      ) ON COMMIT DROP`);
+      await tx.$executeRawUnsafe(`INSERT INTO source_adapter_states VALUES
+        ('a', 'account-a', 'adapter', '2026-10-26T08:00:00Z', '2099-01-01T00:00:00Z'),
+        ('b', 'account-b', 'adapter', NULL, '2099-01-01T00:00:00Z'),
+        ('c', 'account-c', 'adapter', '2026-10-26T08:00:00Z', '2099-01-01T00:00:00Z')`);
+      await tx.$executeRawUnsafe(`INSERT INTO source_fetch_run_items VALUES
+        ('a', 'account-a', 'adapter', 'succeeded', '2026-10-26T06:00:00Z'),
+        ('a', 'account-a', 'adapter', 'succeeded', '2026-10-26T07:00:00Z'),
+        ('a', 'account-a', 'adapter', 'failed', '2026-10-26T07:30:00Z'),
+        ('a', 'account-a', 'adapter', 'succeeded', '2026-10-26T09:00:00Z'),
+        ('a', 'account-other', 'adapter', 'succeeded', '2026-10-26T07:45:00Z'),
+        ('a', 'account-a', 'adapter-other', 'succeeded', '2026-10-26T07:45:00Z'),
+        ('b', 'account-b', 'adapter', 'succeeded', '2026-10-26T07:00:00Z'),
+        ('c', 'account-c', 'adapter', 'failed', '2026-10-26T07:00:00Z')`);
+      for (const statement of migration.split(";").filter((sql) => sql.trim()))
+        await tx.$executeRawUnsafe(statement);
+      const rows = await tx.$queryRaw<
+        Array<{
+          id: string;
+          completed_through_at: Date | null;
+          discovery_checkpoint_json: unknown;
+        }>
+      >`SELECT id, completed_through_at, discovery_checkpoint_json FROM source_adapter_states ORDER BY id`;
+      assert.deepEqual(
+        rows.map((row) => [
+          row.id,
+          row.completed_through_at?.toISOString() ?? null,
+          row.discovery_checkpoint_json,
+        ]),
+        [
+          ["a", "2026-10-26T07:00:00.000Z", {}],
+          ["b", null, {}],
+          ["c", null, {}],
+        ],
+      );
+    });
+  } finally {
+    await f.close();
+  }
+});
 
 test("PostgreSQL concurrent manual requests reuse one batch across actors and reject overlapping subsets", async () => {
   const f = await fixture();
@@ -641,6 +823,42 @@ test("PostgreSQL interrupted recovery retains counters and clears current error 
   }
 });
 
+test("PostgreSQL long image transfers renew only the still-current source and job leases", async () => {
+  const f = await fixture();
+  const clock = test.mock.timers;
+  const now = new Date();
+  clock.enable({ apis: ["Date"], now });
+  try {
+    f.contents.splice(1);
+    f.contents[0].ownMedia = Array.from({ length: 6 }, (_, n) => ({
+      externalMediaId: `long_${n}`,
+      url: `https://fixture.invalid/long/${n}.png`,
+      type: "photo" as const,
+    }));
+    const run = await f.manual();
+    f.afterStore = async () => {
+      clock.tick(6 * 60_000);
+      // Keep the outer execution current as its real heartbeat would. Source
+      // lease renewal itself must retain all of its normal transaction fences.
+      await f.db.backgroundJob.update({
+        where: { idempotencyKey: `source:${run.id}` },
+        data: { leaseUntil: new Date(Date.now() + 60_000) },
+      });
+    };
+    await f.execute(run.id);
+    const completed = await f.service.get(run.id);
+    assert.equal(completed.status, "succeeded");
+    assert.equal(completed.items[0].mediaStored, 6);
+    const state = (await f.snapshot()).adapterStates[0];
+    assert.equal(state.completedThroughAt?.toISOString(), now.toISOString());
+    assert.equal(state.fetchLeaseId, null);
+    assert.equal(state.fetchLeaseUntil, null);
+  } finally {
+    clock.reset();
+    await f.close();
+  }
+});
+
 async function actorAdministration(f: Awaited<ReturnType<typeof fixture>>) {
   const password = "synthetic-admin-password";
   await f.db.user.update({
@@ -755,10 +973,22 @@ for (const terminal of ["failed", "queued", "running"] as const)
     try {
       const prepared = await f.prepareSave();
       const state = prepared.current.adapterStates[0];
+      const endTime = new Date().toISOString();
+      const recoveryCursor = {
+        page: 7,
+        endTime,
+        _sourceScanWindow: {
+          sourceId: f.account.externalUserId,
+          adapterKey: f.client.adapterKey,
+          firstSyncMode: f.account.firstSyncMode,
+          startTime: null,
+          endTime,
+        },
+      };
       await f.db.sourceAdapterState.update({
         where: { id: state.id },
         data: {
-          cursorJson: { page: 7 },
+          cursorJson: recoveryCursor,
           fetchLeaseUntil: new Date(Date.now() + 30 * 60_000),
         },
       });
@@ -787,7 +1017,7 @@ for (const terminal of ["failed", "queued", "running"] as const)
       const reclaimed = (await f.snapshot()).adapterStates[0];
       assert.equal(reclaimed.fetchLeaseId, null);
       assert.equal(reclaimed.fetchLeaseUntil, null);
-      assert.deepEqual(reclaimed.cursorJson, { page: 7 });
+      assert.deepEqual(reclaimed.cursorJson, recoveryCursor);
       assert.equal(
         (
           await f.db.sourceFetchRun.findUniqueOrThrow({
@@ -811,7 +1041,7 @@ for (const terminal of ["failed", "queued", "running"] as const)
         return fetchPage(account, cursor);
       };
       await f.execute(retry.id);
-      assert.deepEqual(seenCursor, { page: 7 });
+      assert.deepEqual(seenCursor, recoveryCursor);
       assert.equal((await f.service.get(retry.id)).status, "succeeded");
       assert.equal(
         await f.db.candidatePost.count({ where: { authorId: f.author.id } }),

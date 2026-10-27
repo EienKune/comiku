@@ -1,4 +1,5 @@
 import datetime
+import copy
 import json
 import io
 import unittest
@@ -178,7 +179,7 @@ class AdapterTests(unittest.TestCase):
         def response(api, endpoint, params=None, **kwargs):
             seen.append(dict(params))
             offset = int(params.get("offset", 0))
-            return {"user": {"id": 42}, "illusts": [{"id": offset+1, "user": {"id": 42}}, {"id": offset+2, "user": {"id": 99}}], "next_url": "https://app-api.pixiv.net/v1/user/illusts?user_id=42&offset=30&filter=for_ios" if offset == 0 else None}
+            return {"user": {"id": 42}, "illusts": [{"id": offset+1, "user": {"id": 42}, "type": "illust", "create_date": "2026-10-01T10:00:00+00:00", "page_count": 1, "meta_pages": []}, {"id": offset+2, "user": {"id": 99}}], "next_url": "https://app-api.pixiv.net/v1/user/illusts?user_id=42&offset=30&filter=for_ios" if offset == 0 else None}
         def conversion(extr):
             for work in extr.works():
                 yield 2, "", {"id": work["id"], "user": work["user"]}
@@ -194,7 +195,7 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual("0", seen[3]["offset"])
             self.assertEqual(4, len(seen))
 
-    def collect_pixiv_sanity_fixture(self, ajax_work):
+    def collect_pixiv_sanity_fixture(self, ajax_work, cutoff="2026-09-30T00:00:00Z"):
         config.set(("extractor", "pixiv"), "sanity", True)
         work = {
             "id": 100, "user": {"id": 42}, "type": "illust",
@@ -207,15 +208,46 @@ class AdapterTests(unittest.TestCase):
         def ajax(ext, path):
             if path == "/user/42/profile/all":
                 return {"illusts": {"100": {}, "200": {}}, "manga": {}}
+            if path.startswith("/user/42/profile/illusts?"):
+                baseline = self.pixiv_ajax_work()
+                value = ajax_work if isinstance(ajax_work, dict) else baseline
+                return {"works": {
+                    "100": {"id": "100", "userId": "42", "illustType": 0, "createDate": work["create_date"]},
+                    "200": {"id": "200", "userId": "42", "illustType": value.get("illustType") if type(value.get("illustType")) is int and value["illustType"] in (0, 1, 2) else 0,
+                            "createDate": value.get("createDate") or baseline["createDate"]},
+                }}
+            if path == "/illust/100":
+                value = self.pixiv_ajax_work()
+                value.update(id="100", createDate=work["create_date"])
+                value["urls"]["original"] = work["meta_single_page"]["original_image_url"]
+                return value
             self.assertEqual("/illust/200", path)
             if isinstance(ajax_work, Exception):
                 raise ajax_work
             return ajax_work
-        with patch.object(pixiv.PixivAppAPI, "_call", return_value=app_page), \
+        with patch.object(pixiv.PixivAppAPI, "_call", side_effect=lambda *args, **kwargs: copy.deepcopy(app_page)), \
                 patch.object(pixiv.PixivArtworksExtractor, "_request_ajax", ajax):
-            # Keep native works(), items(), _extend_sanity and _extract_ajax.
-            return adapter.collect({"platform": "pixiv", "remote_id": "42",
-                                    "cutoff": "2026-10-02T00:00:00Z"}, None)
+            records, cursor = [], None
+            for _ in range(5):
+                try:
+                    page = adapter.collect({"platform": "pixiv", "remote_id": "42", "cutoff": cutoff}, cursor)
+                except adapter.AdapterError as exc:
+                    page = exc.result
+                    if page is None:
+                        raise
+                    records.extend(page["records"])
+                    break
+                records.extend(page["records"])
+                if page["terminal"]:
+                    break
+                cursor = page["next"]
+            # Production persistence deduplicates observations across the union;
+            # this fixture combines those pages for the original media assertions.
+            unique = {}
+            for record in records:
+                unique.setdefault((record[0], str(record[-1]["id"]), record[-1].get("num")), record)
+            page["records"] = list(unique.values())
+            return page
 
     @staticmethod
     def pixiv_ajax_work(owner="42", date="2026-10-01T10:00:00+00:00"):
@@ -231,16 +263,17 @@ class AdapterTests(unittest.TestCase):
 
     def test_pixiv_sanity_resolves_author_before_collecting_missing_work(self):
         page = self.collect_pixiv_sanity_fixture(self.pixiv_ajax_work())
-        self.assertEqual([200, 100], [record[-1]["id"] for record in page["records"] if record[0] == 2])
+        self.assertEqual([100, 200], [record[-1]["id"] for record in page["records"] if record[0] == 2])
         self.assertEqual([42, 42], [record[-1]["user"]["id"] for record in page["records"] if record[0] == 3])
         self.assertEqual([], page["failed_ids"])
-        self.assertTrue(page["boundary"])
+        self.assertFalse(page["boundary"])
+        self.assertTrue(page["terminal"])
         self.assertTrue(page["terminal"])
         self.assertTrue(page["page_complete"])
 
     def test_pixiv_sanity_recent_resolved_work_prevents_old_boundary(self):
         page = self.collect_pixiv_sanity_fixture(self.pixiv_ajax_work(date="2026-10-03T10:00:00+00:00"))
-        self.assertEqual([200, 100], [record[-1]["id"] for record in page["records"] if record[0] == 2])
+        self.assertEqual([100, 200], [record[-1]["id"] for record in page["records"] if record[0] == 2])
         self.assertFalse(page["boundary"])
 
     def test_pixiv_sanity_static_types_are_preserved_after_native_conversion(self):
@@ -258,7 +291,7 @@ class AdapterTests(unittest.TestCase):
         payload["illustType"] = 2
         payload["urls"]["original"] = "https://i.pximg.net/img-original/img/2026/10/01/10/00/00/200_ugoira0.jpg"
         page = self.collect_pixiv_sanity_fixture(payload)
-        self.assertEqual(["ugoira"], [record[-1]["type"] for record in page["records"] if record[-1]["id"] == 200])
+        self.assertEqual([], [record for record in page["records"] if record[-1]["id"] == 200])
         self.assertEqual([100], [record[-1]["id"] for record in page["records"] if record[0] == 3])
         self.assertEqual([], page["failed_ids"])
         self.assertTrue(page["page_complete"])
@@ -280,7 +313,8 @@ class AdapterTests(unittest.TestCase):
     def test_pixiv_sanity_resolved_foreign_work_is_not_collected(self):
         page = self.collect_pixiv_sanity_fixture(self.pixiv_ajax_work(owner="99"))
         self.assertEqual([100], [record[-1]["id"] for record in page["records"] if record[0] == 2])
-        self.assertEqual([], page["failed_ids"])
+        self.assertIn("200", page["failed_ids"])
+        self.assertFalse(page["page_complete"])
 
     def test_pixiv_sanity_failed_resolution_cannot_complete_scan(self):
         missing_author = self.pixiv_ajax_work()
@@ -389,7 +423,7 @@ class AdapterTests(unittest.TestCase):
         ids = list(range(100, 240))
         def response(api, endpoint, params=None, **kwargs):
             offset = int(params.get("offset", 0))
-            works = [{"id": id, "user": {"id": 42}} for id in ids[offset:offset+30]]
+            works = [{"id": id, "user": {"id": 42}, "type": "illust", "create_date": "2026-10-01T10:00:00+00:00", "page_count": 1, "meta_pages": []} for id in ids[offset:offset+30]]
             next_url = "https://app-api.pixiv.net/v1/user/illusts?user_id=42&offset="+str(offset+30) if offset+30<len(ids) else None
             return {"user": {"id":42}, "illusts":works, "next_url":next_url}
         def conversion(ext):
@@ -933,7 +967,7 @@ class AdapterTests(unittest.TestCase):
         ids = [100, 101, 102, 103]
         def response(api, endpoint, params=None, **kwargs):
             offset = int(params.get("offset", 0))
-            return {"user": {"id": 42}, "illusts": [{"id": post_id, "user": {"id": 42}} for post_id in ids[offset:offset+2]],
+            return {"user": {"id": 42}, "illusts": [{"id": post_id, "user": {"id": 42}, "type": "illust", "create_date": "2026-10-01T10:00:00+00:00", "page_count": 1, "meta_pages": []} for post_id in ids[offset:offset+2]],
                     "next_url": "https://app-api.pixiv.net/v1/user/illusts?user_id=42&offset=2" if offset == 0 else None}
         def conversion(ext):
             for raw in ext.works():
@@ -1205,7 +1239,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(["100"], caught.result["failed_ids"])
 
     def test_pixiv_malformed_work_keeps_owned_later_sibling(self):
-        data = {"user": {"id": 42}, "illusts": [{"id": 999, "user": [1]}, {"id": 100, "user": {"id": 42}}], "next_url": None}
+        data = {"user": {"id": 42}, "illusts": [{"id": 999, "user": [1]}, {"id": 100, "user": {"id": 42}, "type": "illust", "create_date": "2026-10-01T10:00:00+00:00", "page_count": 1, "meta_pages": []}], "next_url": None}
         with patch.object(pixiv.PixivAppAPI, "_call", return_value=data), self.assertRaises(adapter.AdapterError) as caught:
             adapter.collect({"platform": "pixiv", "remote_id": "42"}, None)
         self.assertEqual(["100"], caught.exception.result["failed_ids"])
@@ -1244,7 +1278,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_pixiv_empty_fallback_rejects_nonterminal_nonempty_and_foreign_pages(self):
         for data in ({"user": {"id": 0}, "illusts": [], "next_url": "https://app-api.pixiv.net/v1/user/illusts?user_id=42&offset=30"},
-                     {"user": {"id": 0}, "illusts": [{"id": 100, "user": {"id": 42}}], "next_url": None},
+                     {"user": {"id": 0}, "illusts": [{"id": 100, "user": {"id": 42}, "type": "illust", "create_date": "2026-10-01T10:00:00+00:00", "page_count": 1, "meta_pages": []}], "next_url": None},
                      {"user": {"id": 99}, "illusts": [], "next_url": None}):
             def response(api, endpoint, params=None, **kwargs):
                 self.assertNotEqual("/v1/user/detail", endpoint)
@@ -1254,7 +1288,7 @@ class AdapterTests(unittest.TestCase):
                 adapter.collect({"platform": "pixiv", "remote_id": "42"}, None)
 
     def test_pixiv_conflicting_page_owner_does_not_expose_untrusted_ids(self):
-        data = {"user": {"id": 99}, "illusts": [{"id": 100, "user": {"id": 42}}], "next_url": None}
+        data = {"user": {"id": 99}, "illusts": [{"id": 100, "user": {"id": 42}, "type": "illust", "create_date": "2026-10-01T10:00:00+00:00", "page_count": 1, "meta_pages": []}], "next_url": None}
         with patch.object(pixiv.PixivAppAPI, "_call", return_value=data), self.assertRaisesRegex(adapter.AdapterError, "source_identity_conflict") as caught:
             adapter.collect({"platform": "pixiv", "remote_id": "42"}, None)
         self.assertEqual([], caught.exception.result["failed_ids"])
@@ -1290,7 +1324,7 @@ class AdapterTests(unittest.TestCase):
         mutate = False
         def response(api, endpoint, params=None, **kwargs):
             offset = int(params.get("offset", 0))
-            works = [{"id": post_id, "user": {"id": 42}} for post_id in ids[offset:offset+2]]
+            works = [{"id": post_id, "user": {"id": 42}, "type": "illust", "create_date": "2026-10-01T10:00:00+00:00", "page_count": 1, "meta_pages": []} for post_id in ids[offset:offset+2]]
             data = {"user": {"id": 42}, "illusts": works, "next_url": "https://app-api.pixiv.net/v1/user/illusts?user_id=42&offset=2" if offset == 0 else None}
             if mutate and offset == 2:
                 ids.pop(0)  # Saved last anchor 101 still occurs in previous page.

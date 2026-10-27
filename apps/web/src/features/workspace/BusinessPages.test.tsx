@@ -1187,9 +1187,28 @@ test("renders the scoped business audit feed with readable event context", async
   expect(screen.getByText(/流程变为 已发布/)).toBeTruthy();
 });
 
-test.each(["valid", "neutral"] as const)(
-  "candidate filters preserve human classification and distinguish %s tag evidence from model grouping",
-  async (tagDisposition) => {
+test.each([
+  {
+    tagDisposition: "valid",
+    label: "ba_art",
+    text: "BA 漫画／插画",
+    tone: "success",
+  },
+  {
+    tagDisposition: "neutral",
+    label: "ba_related",
+    text: "BA 相关",
+    tone: "info",
+  },
+  {
+    tagDisposition: "neutral",
+    label: "other",
+    text: "非 BA 内容",
+    tone: "neutral",
+  },
+] as const)(
+  "candidate filters preserve tag evidence and display classifier category $label",
+  async ({ tagDisposition, label, text, tone }) => {
     const user: CurrentUser = {
       canSkipProofreading: false,
       id: "00000000-0000-4000-8000-000000000001",
@@ -1213,6 +1232,8 @@ test.each(["valid", "neutral"] as const)(
       sourceAdapters: ["x_web_session"],
       hashtags: ["BlueArchive"],
       tagDisposition,
+      classificationTags: [{ label, text, tone }],
+      reviewPriority: "low",
       visualClass: "manga",
       visualClassSource: "default",
       classificationRevision: null,
@@ -1232,6 +1253,11 @@ test.each(["valid", "neutral"] as const)(
     const get = vi.spyOn(client, "GET").mockImplementation((async (
       ...args: unknown[]
     ) => {
+      if (args[0] === "/api/source-fetch/progress")
+        return {
+          data: { active: null, lastManual: null },
+          response: new Response(null, { status: 200 }),
+        };
       const options = args[1] as {
         params?: { query?: { triageGroup?: string } };
       };
@@ -1275,11 +1301,22 @@ test.each(["valid", "neutral"] as const)(
 
     expect(await screen.findByText("测试候选")).toBeTruthy();
     expect(screen.queryByText("同步记录")).toBeNull();
+    expect(screen.queryByText(/来源抓取已排队|正在抓取：/)).toBeNull();
     expect(screen.getByRole("button", { name: "同步图源" })).toBeTruthy();
     expect(screen.getByText("#BlueArchive")).toBeTruthy();
     expect(
-      screen.getByText(tagDisposition === "valid" ? "有效标签" : "模型命中"),
+      screen.getByText(tagDisposition === "valid" ? "有效标签" : "普通标签"),
     ).toBeTruthy();
+    expect(screen.getByText(text).className).toContain(`ui-badge--${tone}`);
+    for (const removed of [
+      "模型命中",
+      "未识别",
+      "待识别",
+      "识别失败",
+      "优先查看",
+      "正常优先级",
+    ])
+      expect(screen.queryByText(removed)).toBeNull();
     expect(screen.getByText("@test_artist")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("combobox", { name: "来源语言" }));
@@ -1358,6 +1395,11 @@ test("queued analysis refreshes all candidate groups and settles a cross-group c
     _path: unknown,
     options: { params?: { query?: { triageGroup?: string } } },
   ) => {
+    if (_path === "/api/source-fetch/progress")
+      return {
+        data: { active: null, lastManual: null },
+        response: new Response(null, { status: 200 }),
+      };
     calls++;
     const group = options?.params?.query?.triageGroup;
     // The first destination refresh observes the old state; the source refresh
@@ -1371,6 +1413,10 @@ test("queued analysis refreshes all candidate groups and settles a cross-group c
           {
             ...candidate,
             reviewPriority: phase === "queued" ? "queued" : "high",
+            classificationTags:
+              phase === "queued"
+                ? []
+                : [{ label: "ba_art", text: "BA 漫画／插画", tone: "success" }],
           },
         ]
       : [];
@@ -1391,7 +1437,8 @@ test("queued analysis refreshes all candidate groups and settles a cross-group c
         </MemoryRouter>
       </QueryClientProvider>,
     );
-    expect(await screen.findByText("待识别")).toBeTruthy();
+    expect(await screen.findByText("分组刷新候选")).toBeTruthy();
+    expect(screen.queryByText("待识别")).toBeNull();
     const beforeBackground = calls;
     focusManager.setFocused(false);
     await act(async () => {
@@ -1406,7 +1453,7 @@ test("queued analysis refreshes all candidate groups and settles a cross-group c
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5000);
     });
-    await waitFor(() => expect(screen.getByText("模型命中")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("BA 漫画／插画")).toBeTruthy());
     expect(screen.getAllByText("分组刷新候选")).toHaveLength(1);
     const settled = calls;
     mounted.unmount();

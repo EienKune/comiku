@@ -52,6 +52,8 @@ function fixture(source = client) {
     cursorJson: {},
     highWaterPublishedAt: null,
     highWaterExternalId: null,
+    completedThroughAt: null,
+    discoveryCheckpointJson: {},
     consecutiveFailures: 2,
     nextAttemptAt: null,
     fetchLeaseId: "run",
@@ -110,6 +112,9 @@ function fixture(source = client) {
           : 0,
     },
     sourceAdapterState: {
+      findUniqueOrThrow: async () => ({
+        discoveryCheckpointJson: live.discoveryCheckpointJson,
+      }),
       updateMany: async ({ where, data }: any) => {
         if (!stateMatches(where)) return { count: 0 };
         apply(data);
@@ -215,6 +220,541 @@ function fixture(source = client) {
   };
 }
 
+test("empty successful scans advance fixed coverage, independently of the latest publication", async () => {
+  const f = fixture();
+  const now = new Date("2026-10-27T04:00:00.000Z");
+  const next = new Date("2026-10-27T06:00:00.000Z");
+  f.snapshot.completedThroughAt = new Date("2026-10-26T04:00:00.000Z");
+  f.snapshot.highWaterPublishedAt = new Date("2026-10-01T00:00:00.000Z");
+  const cursors: any[] = [];
+  const source = {
+    ...client,
+    fetchPage: async (_account: unknown, cursor: any) => {
+      cursors.push(cursor);
+      if (cursors.length === 1) clock.setTime(now.getTime() + 5 * 60_000);
+      return { items: [], nextCursor: {}, complete: true };
+    },
+  };
+  const clock = test.mock.timers;
+  clock.enable({ apis: ["Date"], now });
+  try {
+    await f.service.fetchAdapter(
+      "item",
+      "run",
+      f.account,
+      f.snapshot,
+      source,
+      null,
+      new AbortController().signal,
+    );
+    assert.equal(cursors[0].startTime, "2026-10-26T03:00:00.000Z");
+    assert.equal(cursors[0].endTime, now.toISOString());
+    assert.equal(f.live.completedThroughAt.toISOString(), now.toISOString());
+    assert.equal(
+      f.live.lastSuccessAt.toISOString(),
+      "2026-10-27T04:05:00.000Z",
+    );
+    assert.equal(
+      f.live.highWaterPublishedAt.toISOString(),
+      "2026-10-01T00:00:00.000Z",
+    );
+    Object.assign(f.snapshot, f.live);
+    clock.setTime(next.getTime());
+    f.live.fetchLeaseId = "run";
+    f.live.fetchLeaseUntil = new Date(next.getTime() + 60_000);
+    await f.service.fetchAdapter(
+      "item",
+      "run",
+      f.account,
+      f.snapshot,
+      source,
+      null,
+      new AbortController().signal,
+    );
+    assert.equal(cursors[1].startTime, "2026-10-27T03:00:00.000Z");
+    assert.equal(f.live.completedThroughAt.toISOString(), next.toISOString());
+  } finally {
+    clock.reset();
+  }
+});
+
+test("first scans use the configured window and exclude the exact upper bound and future posts", async () => {
+  const f = fixture();
+  const upper = new Date("2026-10-27T04:00:00.000Z");
+  const source = {
+    ...client,
+    initialCursor: (mode: string, now: Date) => {
+      assert.equal(mode, "last_24_hours");
+      assert.equal(now.toISOString(), upper.toISOString());
+      return { startTime: "2026-10-26T04:00:00.000Z" };
+    },
+    fetchPage: async () => ({
+      items: [
+        { ...content("past"), publishedAt: "2026-10-26T03:59:59.999Z" },
+        { ...content("inside"), publishedAt: "2026-10-27T03:59:59.999Z" },
+        { ...content("upper"), publishedAt: upper.toISOString() },
+        { ...content("future"), publishedAt: "2099-01-01T00:00:00.000Z" },
+      ],
+      nextCursor: {},
+      complete: true,
+    }),
+  };
+  f.account.firstSyncMode = "last_24_hours";
+  test.mock.timers.enable({ apis: ["Date"], now: upper });
+  try {
+    await f.service.fetchAdapter(
+      "item",
+      "run",
+      f.account,
+      f.snapshot,
+      source,
+      null,
+      new AbortController().signal,
+    );
+    assert.deepEqual(f.committed, ["inside"]);
+    assert.equal(f.live.highWaterExternalId, "inside");
+    assert.equal(f.live.completedThroughAt.toISOString(), upper.toISOString());
+  } finally {
+    test.mock.timers.reset();
+  }
+});
+
+test("discovery cache is loaded once per scan and only the terminal checkpoint is committed", async () => {
+  const f = fixture();
+  f.live.discoveryCheckpointJson = { ids: ["old"] };
+  let reads = 0;
+  let page = 0;
+  f.db.sourceAdapterState.findUniqueOrThrow = async (query: any) => {
+    reads++;
+    assert.deepEqual(query.select, { discoveryCheckpointJson: true });
+    return { discoveryCheckpointJson: f.live.discoveryCheckpointJson };
+  };
+  const source = {
+    ...client,
+    fetchPage: async (_account: unknown, _cursor: unknown, context: any) => {
+      assert.deepEqual(context.checkpoint, { ids: ["old"] });
+      page++;
+      if (page === 2) throw new Error("interrupted cache");
+      return {
+        items: [],
+        nextCursor: { page },
+        complete: false,
+        boundaryReached: false,
+        checkpoint: { ids: ["uncommitted"] },
+      };
+    },
+  };
+  await assert.rejects(
+    f.service.fetchAdapter(
+      "item",
+      "run",
+      f.account,
+      f.snapshot,
+      source,
+      null,
+      new AbortController().signal,
+    ),
+    /interrupted cache/,
+  );
+  assert.equal(reads, 1);
+  assert.equal(f.live.completedThroughAt, null);
+  assert.deepEqual(f.live.discoveryCheckpointJson, { ids: ["old"] });
+  assert.equal(
+    JSON.stringify(f.live.cursorJson).includes("uncommitted"),
+    false,
+  );
+  Object.assign(f.snapshot, f.live);
+  source.fetchPage = async (
+    _account: unknown,
+    _cursor: unknown,
+    context: any,
+  ) => {
+    assert.deepEqual(context.checkpoint, { ids: ["old"] });
+    return {
+      items: [],
+      nextCursor: {},
+      complete: true,
+      boundaryReached: false,
+      checkpoint: { ids: ["new"] },
+    };
+  };
+  await f.service.fetchAdapter(
+    "item",
+    "run",
+    f.account,
+    f.snapshot,
+    source,
+    null,
+    new AbortController().signal,
+  );
+  assert.equal(reads, 2);
+  assert.deepEqual(f.live.discoveryCheckpointJson, { ids: ["new"] });
+});
+
+test("adapter cursor changes cannot replace the service window or its observed provenance", async () => {
+  const f = fixture();
+  const cursors: any[] = [];
+  const source = {
+    ...client,
+    initialCursor: () => ({ startTime: "2026-10-01T00:00:00.000Z" }),
+    fetchPage: async (_account: unknown, cursor: any) => {
+      cursors.push(cursor);
+      return {
+        items: [],
+        complete: cursors.length === 2,
+        boundaryReached: false,
+        nextCursor: {
+          startTime: "2098-01-01T00:00:00.000Z",
+          endTime: "2099-01-01T00:00:00.000Z",
+          _sourceScanWindow: { sourceId: "forged" },
+          _sourceWindowWatermark: {
+            externalId: "forged",
+            publishedAt: "2099-01-01T00:00:00.000Z",
+          },
+        },
+      };
+    },
+  };
+  await f.service.fetchAdapter(
+    "item",
+    "run",
+    f.account,
+    f.snapshot,
+    source,
+    null,
+    new AbortController().signal,
+  );
+  assert.equal(cursors[1].startTime, cursors[0].startTime);
+  assert.equal(cursors[1].endTime, cursors[0].endTime);
+  assert.deepEqual(cursors[1]._sourceScanWindow, cursors[0]._sourceScanWindow);
+  assert.equal(cursors[1]._sourceWindowWatermark, undefined);
+  assert.equal(f.live.highWaterPublishedAt, null);
+});
+
+test("a changed source, adapter or window binding is rejected before requesting a page", async () => {
+  const startTime = "2026-10-01T00:00:00.000Z";
+  const endTime = "2026-10-02T00:00:00.000Z";
+  for (const change of [
+    { sourceId: "2" },
+    { adapterKey: "different" },
+    { startTime: "2026-09-01T00:00:00.000Z" },
+    { endTime: "2026-10-03T00:00:00.000Z" },
+  ]) {
+    const f = fixture();
+    f.snapshot.cursorJson = {
+      startTime,
+      endTime,
+      _sourceScanWindow: {
+        sourceId: "1",
+        adapterKey: "synthetic",
+        firstSyncMode: "none",
+        startTime,
+        endTime,
+        ...change,
+      },
+    };
+    const source = {
+      ...client,
+      fetchPage: async () => {
+        assert.fail("invalid binding reached adapter");
+      },
+    };
+    await assert.rejects(
+      f.service.fetchAdapter(
+        "item",
+        "run",
+        f.account,
+        f.snapshot,
+        source,
+        null,
+        new AbortController().signal,
+      ),
+      /window binding changed/,
+    );
+    assert.equal(f.live.completedThroughAt, null);
+  }
+});
+
+test("changing the first window before success restarts from its new configuration", async () => {
+  const f = fixture();
+  const startTime = "2026-10-01T00:00:00.000Z";
+  const endTime = "2026-10-02T00:00:00.000Z";
+  f.snapshot.cursorJson = {
+    startTime,
+    endTime,
+    page: 8,
+    _sourceScanWindow: {
+      sourceId: "1",
+      adapterKey: "synthetic",
+      firstSyncMode: "last_24_hours",
+      startTime,
+      endTime,
+    },
+  };
+  const source = {
+    ...client,
+    initialCursor: (_mode: string, now: Date) => ({
+      startTime: now.toISOString(),
+    }),
+    fetchPage: async (_account: unknown, cursor: any) => {
+      assert.equal(cursor.startTime, cursor.endTime);
+      assert.equal(cursor.page, undefined);
+      assert.notEqual(cursor.endTime, endTime);
+      return { items: [], nextCursor: {}, complete: true };
+    },
+  };
+  await f.service.fetchAdapter(
+    "item",
+    "run",
+    f.account,
+    f.snapshot,
+    source,
+    null,
+    new AbortController().signal,
+  );
+  assert.ok(f.live.completedThroughAt > new Date(endTime));
+});
+
+test("invalid or oversized terminal discovery checkpoints cannot advance coverage", async () => {
+  for (const checkpoint of [[], { large: "x".repeat(4 * 1024 * 1024) }]) {
+    const f = fixture();
+    const source = {
+      ...client,
+      fetchPage: async () => ({
+        items: [],
+        nextCursor: {},
+        complete: true,
+        checkpoint,
+      }),
+    };
+    await assert.rejects(
+      f.service.fetchAdapter(
+        "item",
+        "run",
+        f.account,
+        f.snapshot,
+        source,
+        null,
+        new AbortController().signal,
+      ),
+      /checkpoint is invalid/,
+    );
+    assert.equal(f.live.completedThroughAt, null);
+    assert.deepEqual(f.live.discoveryCheckpointJson, {});
+  }
+});
+
+test("a resumed scan retains its observed watermark and ignores an adapter-supplied checkpoint", async () => {
+  const startTime = "2026-10-01T00:00:00.000Z";
+  let resumed = false;
+  let reads = 0;
+  const source = {
+    ...client,
+    initialCursor: () => ({ startTime }),
+    prepareCursor: (_account: unknown, cursor: unknown) => cursor,
+    fetchPage: async () => {
+      if (resumed)
+        return { items: [], nextCursor: { startTime }, complete: true };
+      if (++reads > 1) throw new Error("synthetic network interruption");
+      return {
+        items: [{ ...content("verified-post"), ownMedia: [] }],
+        nextCursor: {
+          startTime,
+          _sourceWindowWatermark: {
+            sourceId: "1",
+            adapterKey: "synthetic",
+            startTime,
+            publishedAt: "2099-01-01T00:00:00.000Z",
+            externalId: "forged",
+          },
+        },
+        complete: false,
+        boundaryReached: false,
+      };
+    },
+  };
+  const f = fixture(source);
+  await assert.rejects(
+    f.service.fetchAdapter(
+      "item",
+      "run",
+      f.account,
+      f.snapshot,
+      source,
+      null,
+      new AbortController().signal,
+    ),
+    /synthetic network interruption/,
+  );
+  assert.equal(f.live.highWaterPublishedAt, null);
+  assert.equal(
+    f.live.cursorJson._sourceWindowWatermark.publishedAt,
+    "2026-10-02T00:00:00.000Z",
+  );
+  resumed = true;
+  Object.assign(f.snapshot, f.live);
+  await f.service.fetchAdapter(
+    "item",
+    "run",
+    f.account,
+    f.snapshot,
+    source,
+    null,
+    new AbortController().signal,
+  );
+  assert.equal(
+    f.live.highWaterPublishedAt.toISOString(),
+    "2026-10-02T00:00:00.000Z",
+  );
+  assert.equal(f.live.highWaterExternalId, "verified-post");
+});
+
+test("unbound or noncanonical scan watermarks cannot advance the source", async () => {
+  const startTime = "2026-10-01T00:00:00.000Z";
+  const source = {
+    ...client,
+    prepareCursor: (_account: unknown, cursor: unknown) => cursor,
+    fetchPage: async () => ({
+      items: [],
+      nextCursor: { startTime },
+      complete: true,
+    }),
+  };
+  for (const change of [
+    { sourceId: "different" },
+    { adapterKey: "different" },
+    { startTime: "2026-09-01T00:00:00.000Z" },
+    { publishedAt: "2026-10-02" },
+    { publishedAt: "2026-09-01T00:00:00.000Z" },
+    { externalId: "" },
+  ]) {
+    const f = fixture(source);
+    f.snapshot.cursorJson = {
+      startTime,
+      _sourceWindowWatermark: {
+        sourceId: "1",
+        adapterKey: "synthetic",
+        startTime,
+        publishedAt: "2026-10-02T00:00:00.000Z",
+        externalId: "verified-post",
+        ...change,
+      },
+    };
+    await f.service.fetchAdapter(
+      "item",
+      "run",
+      f.account,
+      f.snapshot,
+      source,
+      null,
+      new AbortController().signal,
+    );
+    assert.equal(f.live.highWaterPublishedAt, null);
+    assert.equal(f.live.highWaterExternalId, null);
+  }
+});
+
+test("the hundred-page guard retains a checkpoint that a later run can complete", async () => {
+  const startTime = "2026-10-01T00:00:00.000Z";
+  const source = {
+    ...client,
+    initialCursor: () => ({ startTime, page: 0 }),
+    prepareCursor: (_account: unknown, cursor: unknown) => cursor,
+    fetchPage: async (_account: unknown, cursor: any) => ({
+      items: cursor.page === 0 ? [{ ...content("900"), ownMedia: [] }] : [],
+      nextCursor: { startTime, page: cursor.page + 1 },
+      complete: cursor.page === 100,
+      boundaryReached: false,
+    }),
+  };
+  const f = fixture(source);
+  await assert.rejects(
+    f.service.fetchAdapter(
+      "item",
+      "run",
+      f.account,
+      f.snapshot,
+      source,
+      null,
+      new AbortController().signal,
+    ),
+    /pagination exceeded the safety limit/,
+  );
+  assert.equal(f.live.cursorJson.page, 100);
+  assert.equal(f.live.highWaterPublishedAt, null);
+  assert.equal(f.live.completedThroughAt, null);
+  const retainedUpper = f.live.cursorJson.endTime;
+  Object.assign(f.snapshot, f.live);
+  await f.service.fetchAdapter(
+    "item",
+    "run",
+    f.account,
+    f.snapshot,
+    source,
+    null,
+    new AbortController().signal,
+  );
+  assert.equal(
+    f.live.highWaterPublishedAt.toISOString(),
+    "2026-10-02T00:00:00.000Z",
+  );
+  assert.equal(f.live.highWaterExternalId, "900");
+  assert.equal(f.live.completedThroughAt.toISOString(), retainedUpper);
+  assert.deepEqual(f.live.cursorJson, {});
+  assert.equal(f.row.pagesFetched, 101);
+});
+
+test("a recovered same-second watermark keeps the greater external ID without rolling state back", async () => {
+  const startTime = "2026-10-01T00:00:00.000Z";
+  const endTime = "2026-10-03T00:00:00.000Z";
+  const source = {
+    ...client,
+    prepareCursor: (_account: unknown, cursor: unknown) => cursor,
+    fetchPage: async () => ({
+      items: [],
+      nextCursor: { startTime },
+      complete: true,
+    }),
+  };
+  for (const [prior, recovered] of [
+    ["900", "901"],
+    ["902", "901"],
+  ]) {
+    const f = fixture(source);
+    f.snapshot.highWaterPublishedAt = new Date("2026-10-02T00:00:00.000Z");
+    f.snapshot.highWaterExternalId = prior;
+    f.snapshot.cursorJson = {
+      startTime,
+      endTime,
+      _sourceScanWindow: {
+        sourceId: "1",
+        adapterKey: "synthetic",
+        firstSyncMode: "none",
+        startTime,
+        endTime,
+      },
+      _sourceWindowWatermark: {
+        sourceId: "1",
+        adapterKey: "synthetic",
+        startTime,
+        endTime,
+        publishedAt: "2026-10-02T00:00:00.000Z",
+        externalId: recovered,
+      },
+    };
+    await f.service.fetchAdapter(
+      "item",
+      "run",
+      f.account,
+      f.snapshot,
+      source,
+      null,
+      new AbortController().signal,
+    );
+    assert.equal(f.live.highWaterExternalId, prior === "900" ? "901" : "902");
+  }
+});
+
 test("revocation during a media store purges its original and commits no page candidates", async () => {
   const f = fixture();
   const store = f.files.store;
@@ -273,6 +813,116 @@ test("a replaced lease prevents the next media download within the same candidat
   assert.deepEqual(f.purged, ["file1"]);
 });
 
+test("a long multi-image page keeps its current source lease alive until completion", async () => {
+  const f = fixture();
+  const now = new Date("2026-10-27T04:00:00.000Z");
+  const clock = test.mock.timers;
+  clock.enable({ apis: ["Date"], now });
+  f.live.fetchLeaseUntil = new Date(now.getTime() + 30 * 60_000);
+  f.snapshot.fetchLeaseUntil = f.live.fetchLeaseUntil;
+  const renewals: Date[] = [];
+  const update = f.db.sourceAdapterState.updateMany;
+  f.db.sourceAdapterState.updateMany = async (input: any) => {
+    if (input.data.fetchLeaseUntil) renewals.push(new Date());
+    return update(input);
+  };
+  f.downloader.download = async () => {
+    clock.tick(1000);
+    return { body: Buffer.from("synthetic"), contentType: "image/png" };
+  };
+  const store = f.files.store;
+  f.files.store = async () => {
+    clock.tick(1000);
+    return store();
+  };
+  try {
+    await f.service.fetchAdapter(
+      "item",
+      "run",
+      f.account,
+      f.snapshot,
+      {
+        ...client,
+        fetchPage: async () => ({
+          items: [content("long-manga", 1000)],
+          complete: true,
+          nextCursor: {},
+        }),
+      },
+      null,
+      new AbortController().signal,
+    );
+    assert.deepEqual(f.committed, ["long-manga"]);
+    assert.equal(f.row.mediaStored, 1000);
+    assert.equal(f.row.status, "succeeded");
+    assert.equal(f.live.completedThroughAt.toISOString(), now.toISOString());
+    assert.equal(f.purged.length, 0);
+    assert.ok(renewals.length >= 6 && renewals.length <= 7);
+    for (let i = 1; i < renewals.length - 1; i++)
+      assert.ok(
+        renewals[i].getTime() - renewals[i - 1].getTime() >= 5 * 60_000,
+      );
+  } finally {
+    clock.reset();
+  }
+});
+
+for (const change of [
+  "revoked",
+  "actor",
+  "replacement",
+  "expired",
+  "worker",
+] as const)
+  test(`a long-page lease renewal cannot overwrite ${change} ownership`, async () => {
+    const f = fixture();
+    const now = new Date("2026-10-27T04:00:00.000Z");
+    const clock = test.mock.timers;
+    clock.enable({ apis: ["Date"], now });
+    f.live.fetchLeaseUntil = new Date(now.getTime() + 30 * 60_000);
+    f.snapshot.fetchLeaseUntil = f.live.fetchLeaseUntil;
+    const store = f.files.store;
+    f.files.store = async () => {
+      clock.tick(5 * 60_000);
+      if (change === "revoked") f.revoke();
+      if (change === "actor") f.revokeActor();
+      if (change === "replacement") f.live.fetchLeaseId = "replacement";
+      if (change === "expired") f.live.fetchLeaseUntil = new Date();
+      if (change === "worker")
+        f.jobs.assertCurrentLease = async () => {
+          throw new Error("worker lease changed");
+        };
+      return store();
+    };
+    try {
+      await assert.rejects(
+        f.service.fetchAdapter(
+          "item",
+          "run",
+          f.account,
+          f.snapshot,
+          client,
+          "actor",
+          new AbortController().signal,
+        ),
+        /changed|权限已失效/,
+      );
+      assert.equal(f.live.completedThroughAt, null);
+      assert.equal(f.committed.length, 0);
+      assert.equal(f.purged.length, 1);
+      assert.equal(
+        f.live.fetchLeaseId,
+        change === "replacement" ? "replacement" : "run",
+      );
+      assert.equal(
+        f.live.fetchLeaseUntil.getTime(),
+        now.getTime() + (change === "expired" ? 5 : 30) * 60_000,
+      );
+    } finally {
+      clock.reset();
+    }
+  });
+
 test("existing-candidate observations cannot be written after revocation", async () => {
   const f = fixture();
   f.db.candidatePost.findUnique = async () => {
@@ -314,7 +964,8 @@ test("actor revocation after an existing lookup prevents observations, cursor an
   );
   assert.equal(f.observations, 0);
   assert.equal(f.live.highWaterPublishedAt, null);
-  assert.deepEqual(f.live.cursorJson, {});
+  assert.equal(f.live.cursorJson.done, undefined);
+  assert.equal(f.live.completedThroughAt, null);
   assert.notEqual(f.row.status, "succeeded");
 });
 

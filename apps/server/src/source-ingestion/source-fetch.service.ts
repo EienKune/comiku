@@ -1,5 +1,5 @@
 import { JobsService } from "../jobs/jobs.service.js";
-import { SourceResponseError } from "./source-response.js";
+import { jsonObject, SourceResponseError } from "./source-response.js";
 import {
   BadRequestException,
   ConflictException,
@@ -10,7 +10,9 @@ import {
   CandidateTagDisposition,
   Prisma,
   SourceFetchTrigger,
+  type JobStatus,
   type SourceAdapterState,
+  type SourceFetchRun,
 } from "../generated/prisma/client.js";
 import { ENVIRONMENT, type Environment } from "../config/environment.js";
 import { PrismaService } from "../database/prisma.service.js";
@@ -29,8 +31,13 @@ import { MEDIA_DOWNLOADER, type MediaDownloader } from "./media-downloader.js";
 import { ContentSourceRegistry } from "./source-registry.js";
 import type {
   RunSourceFetchDto,
+  SourceFetchProgressDto,
+  SourceFetchProgressSnapshotDto,
   SourceFetchRunDto,
 } from "./source-fetch.dto.js";
+
+const SOURCE_LEASE_MS = 30 * 60_000;
+const SOURCE_LEASE_RENEW_MS = 5 * 60_000;
 
 const runDetails = {
   items: {
@@ -38,7 +45,7 @@ const runDetails = {
       externalAccount: {
         include: { author: { select: { displayName: true } } },
       },
-      adapterState: true,
+      adapterState: { omit: { discoveryCheckpointJson: true } },
     },
     orderBy: { startedAt: "asc" },
   },
@@ -47,8 +54,26 @@ type RunDetails = Prisma.SourceFetchRunGetPayload<{
   include: typeof runDetails;
 }>;
 type Account = Prisma.AuthorExternalAccountGetPayload<{
-  include: { author: true; adapterStates: true };
+  include: {
+    author: true;
+    adapterStates: { omit: { discoveryCheckpointJson: true } };
+  };
 }>;
+type FetchState = Omit<SourceAdapterState, "discoveryCheckpointJson">;
+type ProgressRun = Pick<
+  SourceFetchRun,
+  "id" | "trigger" | "status" | "startedAt" | "completedAt"
+> & {
+  pagesFetched: bigint;
+  candidatesCreated: bigint;
+  mediaStored: bigint;
+  jobStatus: JobStatus | null;
+  attempts: number | null;
+  availableAt: Date | null;
+  leaseUntil: Date | null;
+  isActive: boolean;
+  isLastManual: boolean;
+};
 
 @Injectable()
 export class SourceFetchService {
@@ -363,6 +388,94 @@ export class SourceFetchService {
     });
     return (await this.withExecution([run]))[0];
   }
+
+  async progress(now = new Date()): Promise<SourceFetchProgressDto> {
+    // Select two shared business summaries in one read snapshot. The unique job
+    // key avoids loading the queue; only these run IDs enter item aggregation.
+    const runs = await this.db.$queryRaw<ProgressRun[]>`
+      WITH active AS (
+        SELECT r.id
+        FROM source_fetch_runs r
+        JOIN background_jobs j
+          ON j.idempotency_key = 'source:' || r.id::text
+          AND j.resource_id = r.id AND j.kind = 'source_fetch'
+        WHERE r.status IN ('queued', 'running') AND r.completed_at IS NULL
+          AND (
+            (j.status = 'queued' AND j.attempts < 3)
+            OR (j.status = 'running' AND j.lease_until IS NOT NULL
+              AND (j.attempts < 3 OR j.lease_until > ${now}))
+          )
+        ORDER BY CASE WHEN j.status = 'running' AND j.lease_until > ${now}
+          THEN 0 ELSE 1 END, r.started_at DESC, r.id DESC
+        LIMIT 1
+      ), last_manual AS (
+        SELECT id FROM source_fetch_runs WHERE trigger = 'manual'
+        ORDER BY started_at DESC, id DESC
+        LIMIT 1
+      ), selected AS (
+        SELECT id FROM active UNION SELECT id FROM last_manual
+      )
+      SELECT r.id, r.trigger, r.status,
+        r.started_at AS "startedAt", r.completed_at AS "completedAt",
+        totals.pages_fetched AS "pagesFetched",
+        totals.candidates_created AS "candidatesCreated",
+        totals.media_stored AS "mediaStored",
+        j.status AS "jobStatus", j.attempts,
+        j.available_at AS "availableAt", j.lease_until AS "leaseUntil",
+        EXISTS (SELECT 1 FROM active WHERE active.id = r.id) AS "isActive",
+        EXISTS (SELECT 1 FROM last_manual WHERE last_manual.id = r.id) AS "isLastManual"
+      FROM selected
+      JOIN source_fetch_runs r ON r.id = selected.id
+      LEFT JOIN background_jobs j
+        ON j.idempotency_key = 'source:' || r.id::text
+        AND j.resource_id = r.id AND j.kind = 'source_fetch'
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(i.pages_fetched), 0) AS pages_fetched,
+          COALESCE(SUM(i.candidates_created), 0) AS candidates_created,
+          COALESCE(SUM(i.media_stored), 0) AS media_stored
+        FROM source_fetch_run_items i WHERE i.run_id = r.id
+      ) totals ON true
+    `;
+    const result: SourceFetchProgressDto = { active: null, lastManual: null };
+    for (const run of runs) {
+      const live =
+        run.jobStatus === "running" &&
+        run.leaseUntil !== null &&
+        run.leaseUntil > now;
+      const terminal = run.status !== "queued" && run.status !== "running";
+      const recoverable =
+        !terminal &&
+        run.completedAt === null &&
+        ((run.jobStatus === "queued" && (run.attempts ?? 3) < 3) ||
+          (run.jobStatus === "running" &&
+            run.leaseUntil !== null &&
+            ((run.attempts ?? 3) < 3 || live)));
+      const snapshot: SourceFetchProgressSnapshotDto = {
+        id: run.id,
+        trigger: run.trigger,
+        status: terminal
+          ? run.status
+          : recoverable
+            ? live
+              ? "running"
+              : "queued"
+            : "failed",
+        startedAt: run.startedAt.toISOString(),
+        completedAt: run.completedAt?.toISOString() ?? null,
+        pagesFetched: Number(run.pagesFetched),
+        candidatesCreated: Number(run.candidatesCreated),
+        mediaStored: Number(run.mediaStored),
+        nextRetryAt:
+          recoverable && run.jobStatus === "queued" && (run.attempts ?? 0) > 0
+            ? (run.availableAt?.toISOString() ?? null)
+            : null,
+      };
+      if (run.isActive && recoverable) result.active = snapshot;
+      if (run.isLastManual) result.lastManual = snapshot;
+    }
+    return result;
+  }
+
   private async withExecution(
     runs: RunDetails[],
   ): Promise<SourceFetchRunDto[]> {
@@ -500,7 +613,10 @@ export class SourceFetchService {
         deletedAt: null,
         author: { deletedAt: null, authorizationStatus: "authorized" },
       },
-      include: { author: true, adapterStates: true },
+      include: {
+        author: true,
+        adapterStates: { omit: { discoveryCheckpointJson: true } },
+      },
       orderBy: { id: "asc" },
     });
   }
@@ -596,7 +712,7 @@ export class SourceFetchService {
           },
           data: {
             fetchLeaseId: runId,
-            fetchLeaseUntil: new Date(now.getTime() + 30 * 60 * 1000),
+            fetchLeaseUntil: new Date(now.getTime() + SOURCE_LEASE_MS),
             lastAttemptAt: now,
             ...(["unavailable", "disabled"].includes(state.health)
               ? { health: "idle" as const }
@@ -753,7 +869,7 @@ export class SourceFetchService {
   private async createSkippedItem(
     runId: string,
     account: Account,
-    state: SourceAdapterState,
+    state: FetchState,
     client: ContentSourceClient,
     forcedReason?: string,
   ) {
@@ -816,22 +932,98 @@ export class SourceFetchService {
     itemId: string,
     leaseId: string,
     account: Account,
-    state: SourceAdapterState,
+    state: FetchState,
     client: ContentSourceClient,
     createdById: string | null,
     signal: AbortSignal,
   ) {
-    let cursor = state.cursorJson as SourceCursor;
-    if (!Object.keys(cursor).length) {
-      cursor = state.highWaterPublishedAt
-        ? {
-            startTime: new Date(
-              state.highWaterPublishedAt.getTime() -
-                this.environment.sourceOverlapMinutes * 60_000,
-            ).toISOString(),
-          }
-        : client.initialCursor(account.firstSyncMode, new Date());
+    const scanStartedAt = new Date();
+    const timestamp = (value: unknown): string | null => {
+      if (typeof value !== "string") return null;
+      const at = new Date(value);
+      return Number.isFinite(at.getTime()) && at.toISOString() === value
+        ? value
+        : null;
+    };
+    const previous = jsonObject(state.cursorJson) ?? {};
+    const previousWindow = jsonObject(previous._sourceScanWindow);
+    const restartForMode = Boolean(
+      previousWindow &&
+      !state.completedThroughAt &&
+      previousWindow.firstSyncMode !== account.firstSyncMode,
+    );
+    let cursor: SourceCursor;
+    let startTime: string | null;
+    let endTime: string;
+    if (client.adapterKey !== state.adapterKey)
+      throw new Error("Source scan adapter binding changed");
+    if (previousWindow) {
+      const lower = timestamp(previousWindow.startTime);
+      const upper = timestamp(previousWindow.endTime);
+      if (
+        previousWindow.sourceId !== account.externalUserId ||
+        previousWindow.adapterKey !== client.adapterKey ||
+        (previousWindow.startTime !== null && !lower) ||
+        !upper ||
+        (previous.startTime ?? null) !== previousWindow.startTime ||
+        previous.endTime !== upper ||
+        (previous.sourceId !== undefined &&
+          previous.sourceId !== account.externalUserId) ||
+        (lower && lower > upper) ||
+        upper > scanStartedAt.toISOString() ||
+        (state.completedThroughAt && new Date(upper) < state.completedThroughAt)
+      )
+        throw new Error("Source scan window binding changed");
     }
+    if (previousWindow && !restartForMode) {
+      startTime = timestamp(previousWindow.startTime);
+      endTime = previousWindow.endTime as string;
+      cursor = { ...previous };
+    } else {
+      if (
+        previous.sourceId !== undefined &&
+        previous.sourceId !== account.externalUserId
+      )
+        throw new Error("Source scan account binding changed");
+      endTime = scanStartedAt.toISOString();
+      if (state.completedThroughAt && state.completedThroughAt > scanStartedAt)
+        throw new Error("Source scan clock precedes completed coverage");
+      const initial = client.initialCursor(
+        account.firstSyncMode,
+        scanStartedAt,
+      );
+      startTime = state.completedThroughAt
+        ? new Date(
+            state.completedThroughAt.getTime() -
+              this.environment.sourceOverlapMinutes * 60_000,
+          ).toISOString()
+        : timestamp(initial.startTime);
+      // Legacy cursors have no trustworthy upper bound. Start from the head,
+      // retaining their lower bound only when it widens the required window.
+      const legacyLower = restartForMode ? null : timestamp(previous.startTime);
+      if (startTime && legacyLower && legacyLower < startTime)
+        startTime = legacyLower;
+      cursor = { ...initial };
+      delete cursor._sourceWindowWatermark;
+    }
+    const scanWindow = {
+      sourceId: account.externalUserId,
+      adapterKey: client.adapterKey,
+      firstSyncMode: account.firstSyncMode,
+      startTime,
+      endTime,
+    };
+    const bindWindow = (value: SourceCursor): SourceCursor => {
+      const bound: SourceCursor = {
+        ...value,
+        endTime,
+        _sourceScanWindow: scanWindow,
+      };
+      if (startTime) bound.startTime = startTime;
+      else delete bound.startTime;
+      return bound;
+    };
+    cursor = bindWindow(cursor);
     if (client.prepareCursor)
       cursor = client.prepareCursor(
         {
@@ -840,6 +1032,23 @@ export class SourceFetchService {
         },
         cursor,
       );
+    if ((cursor.startTime ?? null) !== startTime || cursor.endTime !== endTime)
+      throw new Error("Source adapter changed the scan window");
+    cursor = bindWindow(cursor);
+    const discovery = await this.db.sourceAdapterState.findUniqueOrThrow({
+      where: { id: state.id },
+      select: { discoveryCheckpointJson: true },
+    });
+    const context = {
+      checkpoint: jsonObject(discovery.discoveryCheckpointJson) ?? {},
+    };
+    let terminalCheckpoint: Prisma.InputJsonValue | undefined;
+    const keepLease = this.sourceLeaseKeeper(
+      account,
+      state,
+      leaseId,
+      createdById,
+    );
     await this.db.$transaction(async (tx) => {
       await this.lockSource(tx, account, state, createdById);
       await this.assertEligible(account, state, leaseId, tx);
@@ -852,8 +1061,8 @@ export class SourceFetchService {
         data: { cursorJson: cursor as Prisma.InputJsonValue },
       });
     });
-    const initialBoundary =
-      typeof cursor.startTime === "string" ? new Date(cursor.startTime) : null;
+    const initialBoundary = startTime ? new Date(startTime) : null;
+    const upperBoundary = new Date(endTime);
     const counters = await this.db.sourceFetchRunItem.findUniqueOrThrow({
       where: { id: itemId },
       select: {
@@ -865,10 +1074,49 @@ export class SourceFetchService {
         apiRequests: true,
       },
     });
-    let highTime = state.highWaterPublishedAt ?? initialBoundary;
+    let highTime = state.highWaterPublishedAt;
     let highId = state.highWaterExternalId;
+    let observed: { publishedAt: string; externalId: string } | null = null;
+    const checkpoint = jsonObject(cursor._sourceWindowWatermark);
+    const checkpointAt =
+      typeof checkpoint?.publishedAt === "string"
+        ? new Date(checkpoint.publishedAt)
+        : null;
+    if (
+      checkpoint &&
+      checkpoint.sourceId === account.externalUserId &&
+      checkpoint.adapterKey === client.adapterKey &&
+      client.adapterKey === state.adapterKey &&
+      previousWindow &&
+      checkpoint.startTime === startTime &&
+      checkpoint.endTime === endTime &&
+      (!cursor.sourceId || cursor.sourceId === account.externalUserId) &&
+      checkpointAt &&
+      Number.isFinite(checkpointAt.getTime()) &&
+      checkpointAt.toISOString() === checkpoint.publishedAt &&
+      (!initialBoundary || checkpointAt >= initialBoundary) &&
+      checkpointAt < upperBoundary &&
+      typeof checkpoint.externalId === "string" &&
+      checkpoint.externalId.length > 0 &&
+      checkpoint.externalId.length <= 200
+    ) {
+      observed = {
+        publishedAt: checkpointAt.toISOString(),
+        externalId: checkpoint.externalId,
+      };
+      if (
+        !highTime ||
+        checkpointAt > highTime ||
+        (checkpointAt.getTime() === highTime.getTime() &&
+          this.compareExternalIds(observed.externalId, highId) > 0)
+      ) {
+        highTime = checkpointAt;
+        highId = observed.externalId;
+      }
+    }
     for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
       signal.throwIfAborted();
+      await keepLease();
       await this.assertActor(createdById);
       await this.assertEligible(account, state, leaseId);
       if (client.metered) await this.consumeMeteredBudget(client.adapterKey);
@@ -883,6 +1131,7 @@ export class SourceFetchService {
           handle: account.handle ?? undefined,
         },
         cursor,
+        context,
       );
       signal.throwIfAborted();
       await this.assertActor(createdById);
@@ -891,7 +1140,26 @@ export class SourceFetchService {
       counters.itemsSeen += page.items.length;
       for (const content of page.items) {
         const at = new Date(content.publishedAt);
-        if (initialBoundary && at < initialBoundary) continue;
+        if (!Number.isFinite(at.getTime()))
+          throw new Error("Source item has an invalid publication timestamp");
+        if ((initialBoundary && at < initialBoundary) || at >= upperBoundary)
+          continue;
+        if (
+          Number.isFinite(at.getTime()) &&
+          content.externalContentId.length > 0 &&
+          content.externalContentId.length <= 200 &&
+          (!observed ||
+            at > new Date(observed.publishedAt) ||
+            (at.getTime() === Date.parse(observed.publishedAt) &&
+              this.compareExternalIds(
+                content.externalContentId,
+                observed.externalId,
+              ) > 0))
+        )
+          observed = {
+            publishedAt: at.toISOString(),
+            externalId: content.externalContentId,
+          };
         if (
           !highTime ||
           at > highTime ||
@@ -910,6 +1178,7 @@ export class SourceFetchService {
           createdById,
           leaseId,
           signal,
+          keepLease,
         );
         if (saved.created) {
           counters.candidatesCreated += 1;
@@ -918,7 +1187,17 @@ export class SourceFetchService {
       }
       if (!page.nextCursor)
         throw new Error("Source adapter did not return a durable cursor");
-      cursor = page.nextCursor;
+      cursor = bindWindow(page.nextCursor);
+      // The adapter cannot supply provenance for the service's observed data.
+      delete cursor._sourceWindowWatermark;
+      if (observed)
+        cursor._sourceWindowWatermark = {
+          sourceId: account.externalUserId,
+          adapterKey: client.adapterKey,
+          startTime,
+          endTime,
+          ...observed,
+        };
       await this.db.$transaction(async (tx) => {
         await this.lockSource(tx, account, state, createdById);
         await this.assertEligible(account, state, leaseId, tx);
@@ -930,7 +1209,7 @@ export class SourceFetchService {
           },
           data: {
             cursorJson: cursor as Prisma.InputJsonValue,
-            fetchLeaseUntil: new Date(Date.now() + 30 * 60 * 1000),
+            fetchLeaseUntil: new Date(Date.now() + SOURCE_LEASE_MS),
           },
         });
         await tx.sourceFetchRunItem.update({
@@ -938,10 +1217,7 @@ export class SourceFetchService {
           data: counters,
         });
       });
-      const boundary = state.highWaterPublishedAt
-        ? state.highWaterPublishedAt.getTime() -
-          this.environment.sourceOverlapMinutes * 60_000
-        : (initialBoundary?.getTime() ?? null);
+      const boundary = initialBoundary?.getTime() ?? null;
       const crossed =
         page.boundaryReached ??
         (boundary !== null &&
@@ -949,7 +1225,19 @@ export class SourceFetchService {
           page.items.every(
             (item) => new Date(item.publishedAt).getTime() < boundary,
           ));
-      if (page.complete || crossed) break;
+      if (page.complete || crossed) {
+        if (page.checkpoint !== undefined) {
+          if (
+            !jsonObject(page.checkpoint) ||
+            Buffer.byteLength(JSON.stringify(page.checkpoint)) > 4 * 1024 * 1024
+          )
+            throw new Error(
+              "Source discovery checkpoint is invalid or exceeds the size limit",
+            );
+          terminalCheckpoint = page.checkpoint as Prisma.InputJsonValue;
+        }
+        break;
+      }
       if (pageNumber === 99)
         throw new Error("Source pagination exceeded the safety limit");
     }
@@ -966,6 +1254,10 @@ export class SourceFetchService {
           cursorJson: {},
           highWaterPublishedAt: highTime,
           highWaterExternalId: highId,
+          completedThroughAt: upperBoundary,
+          ...(terminalCheckpoint === undefined
+            ? {}
+            : { discoveryCheckpointJson: terminalCheckpoint }),
           health: "healthy",
           lastSuccessAt: new Date(),
           consecutiveFailures: 0,
@@ -1038,12 +1330,13 @@ export class SourceFetchService {
 
   private async saveCandidate(
     account: Account,
-    state: SourceAdapterState,
+    state: FetchState,
     client: ContentSourceClient,
     content: NormalizedSourceContent,
     createdById: string | null,
     leaseId: string,
     signal: AbortSignal,
+    keepLease = this.sourceLeaseKeeper(account, state, leaseId, createdById),
   ): Promise<{ created: boolean; mediaStored: number }> {
     const hashtags = collectHashtags(content.hashtags ?? [], content.text);
     const existing = await this.db.candidatePost.findUnique({
@@ -1082,6 +1375,7 @@ export class SourceFetchService {
     try {
       for (const media of content.ownMedia) {
         signal.throwIfAborted();
+        await keepLease();
         await this.assertActor(createdById);
         await this.assertEligible(account, state, leaseId);
         const downloaded = await this.downloader.download(
@@ -1101,6 +1395,7 @@ export class SourceFetchService {
           }),
         );
       }
+      await keepLease();
       const candidate = await this.db.$transaction(async (tx) => {
         await this.lockSource(tx, account, state, createdById);
         await this.assertEligible(account, state, leaseId, tx);
@@ -1279,10 +1574,39 @@ export class SourceFetchService {
     return left.localeCompare(right);
   }
 
+  private sourceLeaseKeeper(
+    account: Account,
+    state: FetchState,
+    leaseId: string,
+    actorId: string | null,
+  ) {
+    let renewAt = Date.now() + SOURCE_LEASE_RENEW_MS;
+    return async () => {
+      if (Date.now() < renewAt) return;
+      await this.db.$transaction(async (tx) => {
+        await this.lockSource(tx, account, state, actorId);
+        await this.assertEligible(account, state, leaseId, tx);
+        const changed = await tx.sourceAdapterState.updateMany({
+          where: {
+            id: state.id,
+            revision: state.revision,
+            enabled: true,
+            fetchLeaseId: leaseId,
+            fetchLeaseUntil: { gt: new Date() },
+          },
+          data: { fetchLeaseUntil: new Date(Date.now() + SOURCE_LEASE_MS) },
+        });
+        if (!changed.count)
+          throw new Error("Source account changed while renewing lease");
+      });
+      renewAt = Date.now() + SOURCE_LEASE_RENEW_MS;
+    };
+  }
+
   private async lockSource(
     tx: Prisma.TransactionClient,
     account: Account,
-    state: SourceAdapterState,
+    state: FetchState,
     actorId: string | null,
   ) {
     // Match management writes: archive locks author before accounts; account
@@ -1301,7 +1625,7 @@ export class SourceFetchService {
 
   private eligibility(
     account: Account,
-    state: SourceAdapterState,
+    state: FetchState,
     leaseId: string | undefined,
   ): Prisma.AuthorExternalAccountWhereInput {
     return {
@@ -1329,7 +1653,7 @@ export class SourceFetchService {
 
   private async assertEligible(
     account: Account,
-    state: SourceAdapterState,
+    state: FetchState,
     leaseId: string | undefined,
     db: Prisma.TransactionClient | PrismaService = this.db,
   ) {

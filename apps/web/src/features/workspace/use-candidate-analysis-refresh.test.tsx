@@ -12,12 +12,17 @@ import {
 import type { components } from "@comiku/api-client";
 import { useCandidateAnalysisRefresh } from "./use-candidate-analysis-refresh";
 
-type CandidatePage = InfiniteData<components["schemas"]["CandidatePageDto"]>;
+type CandidatePage = InfiniteData<
+  components["schemas"]["CandidatePageDto"] & { analysisPending?: boolean }
+>;
 const sourceKey = ["candidates", "pending", "neutral_manga"] as const;
 const destinationKey = ["candidates", "pending", "valid_manga"] as const;
 const disposers: (() => void)[] = [];
 
-function page(priority?: "queued" | "high"): CandidatePage {
+function page(
+  priority?: "unprocessed" | "queued" | "high" | "failed",
+  analysisPending?: boolean,
+): CandidatePage {
   return {
     pages: [
       {
@@ -31,6 +36,7 @@ function page(priority?: "queued" | "high"): CandidatePage {
           : [],
         total: priority ? 1 : 0,
         nextCursor: null,
+        ...(analysisPending === undefined ? {} : { analysisPending }),
       },
     ],
     pageParams: [null],
@@ -80,6 +86,83 @@ afterEach(() => {
   focusManager.setFocused(undefined);
   vi.useRealTimers();
 });
+
+test("range metadata follows an unprocessed candidate through queueing and completion", async () => {
+  const { client, observe, mount } = fixture();
+  let sourcePage = page("unprocessed", true);
+  const readSource = vi.fn(async () => sourcePage);
+  observe(sourceKey, readSource, sourcePage);
+  const readDestination = vi.fn(async () => page());
+  observe(destinationKey, readDestination, page(undefined, true));
+  const mounted = mount();
+  expect(vi.getTimerCount()).toBe(1);
+
+  sourcePage = page("queued", true);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
+  expect(
+    client.getQueryData<CandidatePage>(sourceKey)?.pages[0].items[0]
+      ?.reviewPriority,
+  ).toBe("queued");
+  expect(readSource).toHaveBeenCalledTimes(1);
+
+  sourcePage = page("high", false);
+  readDestination.mockResolvedValue(page(undefined, false));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
+  await waitFor(() =>
+    expect(
+      client.getQueryData<CandidatePage>(sourceKey)?.pages[0].items[0]
+        ?.reviewPriority,
+    ).toBe("high"),
+  );
+  expect(vi.getTimerCount()).toBe(0);
+  const readsAfterCompletion = readSource.mock.calls.length;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15_000);
+  });
+  expect(readSource).toHaveBeenCalledTimes(readsAfterCompletion);
+  mounted.unmount();
+});
+
+test("pending outside loaded pages and groups refreshes the current view in the foreground only", async () => {
+  const { observe, mount } = fixture();
+  const readSource = vi.fn(async () => page("high", true));
+  observe(sourceKey, readSource, page("high", true));
+  const readDestination = vi.fn(async () => page(undefined, true));
+  observe(destinationKey, readDestination, page(undefined, true));
+  const mounted = mount();
+  await act(async () => {
+    focusManager.setFocused(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+  });
+  expect(readSource).not.toHaveBeenCalled();
+  expect(readDestination).not.toHaveBeenCalled();
+  await act(async () => {
+    focusManager.setFocused(true);
+  });
+  await waitFor(() => expect(readSource).toHaveBeenCalledTimes(1));
+  expect(readDestination).toHaveBeenCalledTimes(1);
+  mounted.unmount();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test.each(["unprocessed", "failed"] as const)(
+  "disabled or terminal %s rows with no range work do not poll",
+  async (priority) => {
+    const { observe, mount } = fixture();
+    const readSource = vi.fn(async () => page(priority, false));
+    observe(sourceKey, readSource, page(priority, false));
+    mount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(readSource).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
 
 test("completion refetches a destination after its stale initial request settles", async () => {
   const { client, observe, mount } = fixture();

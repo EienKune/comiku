@@ -60,14 +60,22 @@ const authorDetails = {
   externalAccounts: {
     where: { deletedAt: null },
     orderBy: { createdAt: "asc" },
-    include: { adapterStates: { orderBy: { adapterKey: "asc" } } },
+    include: {
+      adapterStates: {
+        omit: { discoveryCheckpointJson: true },
+        orderBy: { adapterKey: "asc" },
+      },
+    },
   },
 } as const;
 type AuthorWithDetails = Prisma.AuthorGetPayload<{
   include: typeof authorDetails;
 }>;
 const accountDetails = {
-  adapterStates: { orderBy: { adapterKey: "asc" } },
+  adapterStates: {
+    omit: { discoveryCheckpointJson: true },
+    orderBy: { adapterKey: "asc" },
+  },
 } as const;
 type ExternalAccount = Prisma.AuthorExternalAccountGetPayload<{
   include: typeof accountDetails;
@@ -896,6 +904,7 @@ export class AuthorsService {
     });
     if (!changed.count) {
       const existing = await this.db.sourceAdapterState.findUnique({
+        select: { id: true },
         where: {
           externalAccountId_adapterKey: {
             externalAccountId: accountId,

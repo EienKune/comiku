@@ -20,15 +20,26 @@ function object(value: unknown): JsonObject | null {
     : null;
 }
 
-function walk(value: unknown, visit: (item: JsonObject) => void) {
+function walk(
+  value: unknown,
+  visit: (item: JsonObject, expandedContext: boolean) => void,
+  expandedContext = false,
+) {
   if (Array.isArray(value)) {
-    for (const child of value) walk(child, visit);
+    for (const child of value) walk(child, visit, expandedContext);
     return;
   }
   const item = object(value);
   if (!item) return;
-  visit(item);
-  for (const child of Object.values(item)) walk(child, visit);
+  visit(item, expandedContext);
+  for (const [key, child] of Object.entries(item))
+    walk(
+      child,
+      visit,
+      expandedContext ||
+        key === "quoted_status_result" ||
+        key === "retweeted_status_result",
+    );
 }
 
 export class XWebSessionContentSourceClient implements ContentSourceClient {
@@ -131,6 +142,21 @@ export class XWebSessionContentSourceClient implements ContentSourceClient {
     account: SourceAccountIdentity,
     cursor: SourceCursor,
   ): Promise<SourcePage> {
+    const startTime =
+      typeof cursor.startTime === "string" ? cursor.startTime : undefined;
+    const endTime =
+      typeof cursor.endTime === "string" ? cursor.endTime : undefined;
+    const lower = startTime ? Date.parse(startTime) : null;
+    const upper = endTime ? Date.parse(endTime) : null;
+    if (
+      endTime &&
+      (!Number.isFinite(upper) ||
+        (startTime && !Number.isFinite(lower)) ||
+        (lower !== null && lower > upper!))
+    )
+      throw new SourceResponseError("configuration");
+    if (endTime && lower === upper)
+      return { items: [], complete: true, nextCursor: { startTime, endTime } };
     const variables = {
       userId: account.externalUserId,
       count: 40,
@@ -164,8 +190,9 @@ export class XWebSessionContentSourceClient implements ContentSourceClient {
     if (!timeline || !Array.isArray(timeline.instructions))
       throw new SourceResponseError("invalid_response");
     const tweets = new Map<string, JsonObject>();
+    const primaryTweetIds = new Set<string>();
     let bottomCursor: string | undefined;
-    walk(timeline.instructions, (item) => {
+    walk(timeline.instructions, (item, expandedContext) => {
       const legacy = object(item.legacy);
       if (
         typeof item.rest_id === "string" &&
@@ -173,6 +200,7 @@ export class XWebSessionContentSourceClient implements ContentSourceClient {
         String(legacy.user_id_str ?? "") === account.externalUserId
       ) {
         tweets.set(item.rest_id, item);
+        if (!expandedContext) primaryTweetIds.add(item.rest_id);
       }
       if (item.cursorType === "Bottom") {
         if (
@@ -189,7 +217,7 @@ export class XWebSessionContentSourceClient implements ContentSourceClient {
       )
         throw new SourceResponseError("invalid_response");
     });
-    const items: NormalizedSourceContent[] = [...tweets.entries()].map(
+    const normalized: NormalizedSourceContent[] = [...tweets.entries()].map(
       ([id, tweet]) => {
         const legacy = object(tweet.legacy)!;
         if (
@@ -263,21 +291,74 @@ export class XWebSessionContentSourceClient implements ContentSourceClient {
     const terminated = timeline.instructions.some(
       (entry: unknown) => object(entry)?.type === "TimelineTerminateTimeline",
     );
-    if (items.length && !bottomCursor && !terminated)
+    if (normalized.length && !bottomCursor && !terminated)
       throw new SourceResponseError("invalid_response");
+    const nextCursor: SourceCursor = {
+      ...(startTime ? { startTime } : {}),
+      ...(endTime ? { endTime } : {}),
+      ...(bottomCursor ? { bottomCursor } : {}),
+    };
+    if (endTime) {
+      // Expanded quote/retweet targets remain normalizable but are not in the
+      // primary timeline order. Keep primary ID order even when an expanded
+      // target is also a real entry later in this same page.
+      const normalizedById = new Map(
+        normalized.map((item) => [item.externalContentId, item]),
+      );
+      const ownedTimes = [...primaryTweetIds]
+        .map((id) => normalizedById.get(id)!)
+        .filter((item) => item.type !== "repost")
+        .map((item) => Date.parse(item.publishedAt));
+      const previousOldest =
+        typeof cursor.oldestSeenAt === "string"
+          ? Date.parse(cursor.oldestSeenAt)
+          : null;
+      const orderUnsafe =
+        cursor.orderUnsafe === true ||
+        ownedTimes.some(
+          (at, index) => index > 0 && at > ownedTimes[index - 1],
+        ) ||
+        (previousOldest !== null &&
+          Number.isFinite(previousOldest) &&
+          ownedTimes.some((at) => at > previousOldest));
+      const oldPage =
+        lower !== null &&
+        ownedTimes.length > 0 &&
+        ownedTimes.every((at) => at < lower);
+      const priorStreak =
+        typeof cursor.oldPageStreak === "number" &&
+        Number.isInteger(cursor.oldPageStreak) &&
+        cursor.oldPageStreak >= 0 &&
+        cursor.oldPageStreak <= 2
+          ? cursor.oldPageStreak
+          : 0;
+      const oldPageStreak =
+        oldPage && !orderUnsafe ? Math.min(priorStreak + 1, 2) : 0;
+      const boundaryReached = oldPageStreak === 2 && !orderUnsafe;
+      const oldest = ownedTimes.length
+        ? Math.min(...ownedTimes)
+        : previousOldest;
+      Object.assign(nextCursor, {
+        oldPageStreak,
+        orderUnsafe,
+        ...(oldest !== null && Number.isFinite(oldest)
+          ? { oldestSeenAt: new Date(oldest).toISOString() }
+          : {}),
+      });
+      return {
+        items: normalized.filter((item) => {
+          const at = Date.parse(item.publishedAt);
+          return (lower === null || at >= lower) && at < upper!;
+        }),
+        complete: !bottomCursor || boundaryReached,
+        boundaryReached,
+        nextCursor,
+      };
+    }
     return {
-      items,
+      items: normalized,
       complete: !bottomCursor,
-      nextCursor: bottomCursor
-        ? {
-            ...(typeof cursor.startTime === "string"
-              ? { startTime: cursor.startTime }
-              : {}),
-            bottomCursor,
-          }
-        : typeof cursor.startTime === "string"
-          ? { startTime: cursor.startTime }
-          : {},
+      nextCursor,
     };
   }
 }

@@ -1,5 +1,7 @@
 # BA PixAI adapter
 
+Candidate category tags use the native classes: `ba_art` → **BA 漫画／插画** (success), `ba_related` → **BA 相关** (info), and `other` → **非 BA 内容** (neutral). Text and colors are adapter display metadata, separate from inference identity and review thresholds. They report predictions and do not assert human approval.
+
 This optional adapter includes a TypeScript HTTP client and an independently runnable Python CPU inference service. The implementation is public; the model config, INT8 checkpoint, frozen classifier head, credentials and real images are supplied privately. **Without those model artifacts, this adapter cannot classify images.** It never downloads a model or fabricates fallback scores.
 
 Comiku's default installation does not install PyTorch or start this service. Run one resident service separately and let the API and worker share it. The service and clients must share the same loopback network namespace.
@@ -102,7 +104,7 @@ The service retains the existing HTTP v2 identity and response protocol. Each re
 
 The frozen helper preserves PIL EXIF transpose, alpha handling and the upstream `RescalePadProcessor(size=1008)`. CPU INT8 restoration keeps the 131 quantized Linear layers and verifies native-logit feature replay on the first successful inference. The head uses the original Python L2, dot-product and stable three-class softmax operation order. The service reports `ba_art`, `ba_related`, `other`, with review score equal to the `ba_art` softmax component. This score is not a calibrated probability of suitability. Evidence retains the BA tag and strongest BA character, including characters outside the native top ten.
 
-The TS adapter preserves the service's BA-specific taxonomy: `ba_art` means Blue Archive comics and illustrations, `ba_related` means related content, and `other` means other content. It also preserves the original result in evidence. This classification does not establish sequential-panel detection. For a complete current-model candidate, its review policy promotes the candidate when at least one image's winning class is `ba_art` with confidence at least `0.5`; related, other and lower-confidence predictions do not promote it.
+The TS adapter preserves the service's BA-specific taxonomy: `ba_art` means Blue Archive comics and illustrations, `ba_related` means related content, and `other` means other content. It also preserves the original result in evidence. This classification does not establish sequential-panel detection. For a complete current-model candidate, its review policy promotes the candidate when at least one image's winning class is `ba_art`, without an extra confidence cutoff. The post's category tag represents its highest-ranking image; promotion still checks all images.
 
 Adapter version `2` replaces the earlier wrapper's generic `comic`/`comic_related` names with these native BA labels. This taxonomy change creates a new Comiku model key and new analysis results while retaining previous results as history. The Python protocol, model artifacts and frozen model revision remain unchanged.
 

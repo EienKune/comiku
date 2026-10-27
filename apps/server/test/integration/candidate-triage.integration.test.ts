@@ -19,7 +19,7 @@ const url = process.env.TEST_DATABASE_URL;
 if (!url || !new URL(url).pathname.endsWith("_test"))
   throw Error("Isolated TEST_DATABASE_URL required");
 
-test("current BA predictions rebuild into four promoted and three neutral posts while preserving manual and tag decisions", async () => {
+test("current BA winning classes rebuild into five promoted and two neutral posts while preserving manual and tag decisions", async () => {
   const model = activateImageAnalysisAdapter({
     identity: {
       adapterId: "triage-fixture",
@@ -30,7 +30,7 @@ test("current BA predictions rebuild into four promoted and three neutral posts 
       preprocessVersion: "fixture",
       labels: ["ba_art", "ba_related", "other"],
     },
-    reviewPolicy: { positiveLabels: ["ba_art"], minimumConfidence: 0.5 },
+    reviewPolicy: { positiveLabels: ["ba_art"], minimumConfidence: 0 },
     analyze: async () => {
       throw Error("Existing results must not repeat inference");
     },
@@ -153,11 +153,11 @@ test("current BA predictions rebuild into four promoted and three neutral posts 
     });
     assert.deepEqual(
       valid.items.map((row) => row.id).sort(),
-      postIds.slice(3).sort(),
+      [postIds[0], ...postIds.slice(3)].sort(),
     );
     assert.deepEqual(
       neutral.items.map((row) => row.id).sort(),
-      postIds.slice(0, 3).sort(),
+      postIds.slice(1, 3).sort(),
     );
     assert.ok(
       [...valid.items, ...neutral.items].every(
@@ -168,9 +168,9 @@ test("current BA predictions rebuild into four promoted and three neutral posts 
       ),
     );
     assert.equal(
-      neutral.items.find((row) => row.id === postIds[0])?.reviewPriority,
+      valid.items.find((row) => row.id === postIds[0])?.reviewPriority,
       "high",
-      "Independent ranking score must not substitute for winning-class confidence",
+      "Independent ranking score is preserved when the winning BA class promotes",
     );
     assert.equal(
       await db.candidateMediaAnalysis.count({
@@ -209,7 +209,7 @@ test("current BA predictions rebuild into four promoted and three neutral posts 
           triageGroup: "valid_manga",
         })
       ).total,
-      2,
+      3,
     );
     assert.deepEqual(
       (

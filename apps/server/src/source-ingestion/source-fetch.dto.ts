@@ -6,7 +6,7 @@ import {
   ArrayMinSize,
   ArrayUnique,
 } from "class-validator";
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional, PickType } from "@nestjs/swagger";
 import {
   SourceFetchItemStatus,
   SourceFetchRunStatus,
@@ -75,4 +75,32 @@ export class SourceFetchRunDto {
   @ApiProperty({ type: String, format: "date-time" }) startedAt!: string;
   @ApiProperty({ type: String, format: "date-time", nullable: true })
   completedAt!: string | null;
+}
+
+export class SourceFetchAcceptedDto extends PickType(SourceFetchRunDto, [
+  "id",
+  "status",
+] as const) {}
+
+export class SourceFetchProgressSnapshotDto {
+  @ApiProperty({ type: String, format: "uuid" }) id!: string;
+  @ApiProperty({ enum: SourceFetchTrigger, enumName: "SourceFetchTrigger" })
+  trigger!: SourceFetchTrigger;
+  @ApiProperty({ enum: SourceFetchRunStatus, enumName: "SourceFetchRunStatus" })
+  status!: SourceFetchRunStatus;
+  @ApiProperty({ type: String, format: "date-time" }) startedAt!: string;
+  @ApiProperty({ type: String, format: "date-time", nullable: true })
+  completedAt!: string | null;
+  @ApiProperty({ type: Number }) pagesFetched!: number;
+  @ApiProperty({ type: Number }) candidatesCreated!: number;
+  @ApiProperty({ type: Number }) mediaStored!: number;
+  @ApiProperty({ type: String, format: "date-time", nullable: true })
+  nextRetryAt!: string | null;
+}
+
+export class SourceFetchProgressDto {
+  @ApiProperty({ type: SourceFetchProgressSnapshotDto, nullable: true })
+  active!: SourceFetchProgressSnapshotDto | null;
+  @ApiProperty({ type: SourceFetchProgressSnapshotDto, nullable: true })
+  lastManual!: SourceFetchProgressSnapshotDto | null;
 }

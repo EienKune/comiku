@@ -25,9 +25,16 @@ export function useCandidateAnalysisRefresh() {
       const queries = cache.findAll({ queryKey: prefix, type: "active" });
       const queued = queries.some((query) => {
         const data = query.state.data as
-          InfiniteData<components["schemas"]["CandidatePageDto"]> | undefined;
-        return data?.pages.some((page) =>
-          page.items.some((item) => item.reviewPriority === "queued"),
+          | InfiniteData<
+              components["schemas"]["CandidatePageDto"] & {
+                analysisPending?: boolean;
+              }
+            >
+          | undefined;
+        return data?.pages.some(
+          (page) =>
+            page.analysisPending ??
+            page.items.some((item) => item.reviewPriority === "queued"),
         );
       });
       if (queued && timer === undefined) timer = setInterval(refresh, 5000);

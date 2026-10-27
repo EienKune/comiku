@@ -79,7 +79,7 @@ test("public BA adapter retains native BA labels and original evidence", async (
   assert.equal(original.evidence[0].label, "synthetic-character");
 });
 
-test("native BA winner confidence controls promotion and uses a distinct adapter identity", async () => {
+test("native BA winning class promotes without an extra confidence cutoff and preserves identity", async () => {
   const { createBaPixaiImageAnalysisAdapter } =
     await import("../src/image-analysis/adapters/ba-pixai/ba-pixai-adapter.js");
   const { activateImageAnalysisAdapter, imageAnalysisModelKey } =
@@ -88,7 +88,7 @@ test("native BA winner confidence controls promotion and uses a distinct adapter
     await import("../src/image-analysis/image-analysis.service.js");
   for (const { winner, probabilities, expected } of [
     { winner: "ba_art", probabilities: [0.8, 0.15, 0.05], expected: true },
-    { winner: "ba_art", probabilities: [0.485, 0.3, 0.215], expected: false },
+    { winner: "ba_art", probabilities: [0.485, 0.3, 0.215], expected: true },
     { winner: "ba_related", probabilities: [0.2, 0.7, 0.1], expected: false },
     { winner: "other", probabilities: [0.1, 0.2, 0.7], expected: false },
   ]) {

@@ -40,6 +40,13 @@ export interface SourcePage {
   complete: boolean;
   /** When supplied, adapter coverage replaces the generic per-page date heuristic. */
   boundaryReached?: boolean;
+  /** Adapter-owned discovery baseline, committed only after complete coverage. */
+  checkpoint?: Record<string, unknown>;
+}
+
+export interface SourceScanContext {
+  /** Last successful adapter-owned baseline. Never contains credentials. */
+  checkpoint?: Record<string, unknown>;
 }
 
 export interface ContentSourceClient {
@@ -60,6 +67,7 @@ export interface ContentSourceClient {
   fetchPage(
     account: SourceAccountIdentity,
     cursor: SourceCursor,
+    context?: SourceScanContext,
   ): Promise<SourcePage>;
 }
 

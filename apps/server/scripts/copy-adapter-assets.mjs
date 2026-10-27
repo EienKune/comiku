@@ -12,6 +12,7 @@ async function copyAdapterAssets(directory, names) {
 await copyAdapterAssets("source-ingestion/adapters/gallery-dl", [
   "README.md",
   "python/adapter.py",
+  "python/pixiv_paging.py",
   "python/requirements.txt",
 ]);
 

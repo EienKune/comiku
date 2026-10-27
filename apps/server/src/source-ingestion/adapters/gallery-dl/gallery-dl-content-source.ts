@@ -10,6 +10,7 @@ import type {
   SourceAccountIdentity,
   SourceCursor,
   SourcePage,
+  SourceScanContext,
 } from "../../content-source.js";
 import { jsonObject, SourceResponseError } from "../../source-response.js";
 
@@ -29,6 +30,24 @@ function id(value: unknown): string {
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
     return String(value);
   return invalid();
+}
+
+function discoveryCheckpoint(value: unknown, sourceId: string) {
+  const data = jsonObject(value);
+  if (
+    !data ||
+    Object.keys(data).sort().join(",") !== "ids,sourceId,version" ||
+    data.version !== 1 ||
+    data.sourceId !== sourceId ||
+    !Array.isArray(data.ids) ||
+    data.ids.length > 100_000 ||
+    data.ids.some(
+      (item) => typeof item !== "string" || !/^[1-9][0-9]{0,19}$/.test(item),
+    ) ||
+    new Set(data.ids).size !== data.ids.length
+  )
+    return undefined;
+  return { version: 1, sourceId, ids: data.ids as string[] };
 }
 
 /** gallery-dl owns platform protocols. Comiku owns coverage, identity and persistence. */
@@ -110,8 +129,26 @@ export class GalleryDlContentSource implements ContentSourceClient {
     account: SourceAccountIdentity,
     cursor: SourceCursor,
   ): SourceCursor {
-    // X cursors are not snapshots. Restart/retry at the head without advancing the window.
-    return { startTime: cursor.startTime, sourceId: account.externalUserId };
+    const provider = jsonObject(cursor.providerCursor);
+    if (
+      this.platform === "pixiv" &&
+      provider?._v === 3 &&
+      provider._source === account.externalUserId &&
+      typeof provider._cutoff === "string" &&
+      Date.parse(provider._cutoff) === Date.parse(String(cursor.startTime)) &&
+      (cursor.endTime === undefined
+        ? provider._until === ""
+        : typeof provider._until === "string" &&
+          Date.parse(provider._until) === Date.parse(String(cursor.endTime))) &&
+      ["app", "sanity"].includes(String(provider._phase))
+    )
+      return { ...cursor, sourceId: account.externalUserId };
+    // X and legacy Pixiv cursors restart without advancing the safe window.
+    return {
+      startTime: cursor.startTime,
+      ...(cursor.endTime !== undefined ? { endTime: cursor.endTime } : {}),
+      sourceId: account.externalUserId,
+    };
   }
   async checkAccount(account: SourceAccountIdentity) {
     if (!/^\d+$/.test(account.externalUserId)) invalid();
@@ -121,23 +158,43 @@ export class GalleryDlContentSource implements ContentSourceClient {
   async fetchPage(
     account: SourceAccountIdentity,
     cursor: SourceCursor,
+    context?: SourceScanContext,
   ): Promise<SourcePage> {
     if (
       !/^\d+$/.test(account.externalUserId) ||
       typeof cursor.startTime !== "string" ||
       !Number.isFinite(Date.parse(cursor.startTime)) ||
+      (cursor.endTime !== undefined &&
+        (typeof cursor.endTime !== "string" ||
+          !Number.isFinite(Date.parse(cursor.endTime)) ||
+          Date.parse(cursor.endTime) < Date.parse(cursor.startTime))) ||
       (cursor.sourceId && cursor.sourceId !== account.externalUserId)
     )
       invalid();
-    const page = await this.runner(
-      {
-        platform: this.platform,
-        remote_id: account.externalUserId,
-        handle: account.handle,
-        cutoff: cursor.startTime,
-      },
-      cursor.providerCursor ?? null,
-    );
+    const source = {
+      platform: this.platform,
+      remote_id: account.externalUserId,
+      handle: account.handle,
+      cutoff: cursor.startTime,
+      ...(cursor.endTime !== undefined ? { until: cursor.endTime } : {}),
+      ...(this.platform === "pixiv"
+        ? {
+            checkpoint: discoveryCheckpoint(
+              context?.checkpoint,
+              account.externalUserId,
+            ),
+          }
+        : {}),
+    };
+    let page = await this.runner(source, cursor.providerCursor ?? null);
+    // A changed source snapshot invalidates offsets. Replay the same lower
+    // boundary once; network/credential failures keep their existing retry path.
+    if (
+      this.platform === "pixiv" &&
+      cursor.providerCursor &&
+      page.error === "cursor_invalid"
+    )
+      page = await this.runner(source, null);
     if (page.error) {
       throw new SourceResponseError(
         ["auth_failed", "source_forbidden", "challenge_required"].includes(
@@ -162,6 +219,15 @@ export class GalleryDlContentSource implements ContentSourceClient {
       typeof page.terminal !== "boolean" ||
       typeof page.boundary !== "boolean" ||
       typeof page.neutral !== "boolean"
+    )
+      invalid();
+    const checkpoint =
+      page.checkpoint === undefined
+        ? undefined
+        : discoveryCheckpoint(page.checkpoint, account.externalUserId);
+    if (
+      page.checkpoint !== undefined &&
+      (this.platform !== "pixiv" || !page.terminal || !checkpoint)
     )
       invalid();
     const records = page.records as unknown[];
@@ -338,11 +404,19 @@ export class GalleryDlContentSource implements ContentSourceClient {
     const boundaryReached =
       this.platform === "x" ? oldBatches >= 2 : page.boundary === true;
     return {
-      items: [...grouped.values()],
+      items: [...grouped.values()].filter(
+        (item) =>
+          cursor.endTime === undefined ||
+          (Date.parse(item.publishedAt) >=
+            Date.parse(String(cursor.startTime)) &&
+            Date.parse(item.publishedAt) < Date.parse(String(cursor.endTime))),
+      ),
       complete: page.terminal === true || boundaryReached,
       boundaryReached,
+      ...(checkpoint ? { checkpoint } : {}),
       nextCursor: {
         startTime: cursor.startTime,
+        ...(cursor.endTime !== undefined ? { endTime: cursor.endTime } : {}),
         sourceId: account.externalUserId,
         providerCursor: page.next ?? null,
         oldBatches,

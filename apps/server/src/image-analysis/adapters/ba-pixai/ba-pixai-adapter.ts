@@ -17,7 +17,12 @@ export function createBaPixaiImageAnalysisAdapter(
       preprocessVersion: client.config.preprocessVersion,
       labels: Object.freeze(["ba_art", "ba_related", "other"]),
     }),
-    reviewPolicy: { positiveLabels: ["ba_art"], minimumConfidence: 0.5 },
+    labelPresentation: [
+      { label: "ba_art", text: "BA 漫画／插画", tone: "success" },
+      { label: "ba_related", text: "BA 相关", tone: "info" },
+      { label: "other", text: "非 BA 内容", tone: "neutral" },
+    ],
+    reviewPolicy: { positiveLabels: ["ba_art"], minimumConfidence: 0 },
     async analyze(itemId, body, signal) {
       const result = await client.analyze(itemId, body, signal);
       return {

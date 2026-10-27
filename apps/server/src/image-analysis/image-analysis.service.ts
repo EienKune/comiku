@@ -12,6 +12,7 @@ import { type BackgroundJob, Prisma } from "../generated/prisma/client.js";
 import {
   IMAGE_ANALYSIS_ADAPTER,
   type ActiveImageAnalysisAdapter,
+  type ImageAnalysisLabelPresentation,
   validateImageAnalysisResult,
 } from "./image-analysis-adapter.js";
 
@@ -29,17 +30,54 @@ export class ImageAnalysisService {
   }
   /** Cache entries contain only per-image winning classes, merged by maximum confidence. */
   promotesReview(predictions: unknown): boolean {
+    const policy = this.model?.reviewPolicy;
+    return Boolean(
+      policy &&
+      this.cachedPredictions(predictions).some(
+        (entry) =>
+          policy.positiveLabels.includes(entry.label) &&
+          entry.confidence >= policy.minimumConfidence,
+      ),
+    );
+  }
+  classificationTags(predictions: unknown): ImageAnalysisLabelPresentation[] {
+    const entries = this.cachedPredictions(predictions);
+    // Old summaries need rebuilding from real scores; confidence is not ranking.
+    if (entries.some((entry) => entry.score === undefined)) return [];
+    const byLabel = new Map(entries.map((entry) => [entry.label, entry.score]));
+    let winner: string | undefined;
+    let maximum = -1;
+    for (const label of this.model?.identity.labels ?? []) {
+      const score = byLabel.get(label);
+      if (score !== undefined && score > maximum) {
+        winner = label;
+        maximum = score;
+      }
+    }
+    if (!winner) return [];
+    const display = this.model?.labelPresentation?.find(
+      (entry) => entry.label === winner,
+    );
+    return [
+      {
+        label: winner,
+        text: display?.text ?? winner,
+        tone: display?.tone ?? "neutral",
+      },
+    ];
+  }
+  private cachedPredictions(
+    predictions: unknown,
+  ): { label: string; confidence: number; score?: number }[] {
     const model = this.model;
-    const policy = model?.reviewPolicy;
     if (
       !model ||
-      !policy ||
       !Array.isArray(predictions) ||
       predictions.length > model.identity.labels.length
     )
-      return false;
+      return [];
     const seen = new Set<string>();
-    let promote = false;
+    const entries: { label: string; confidence: number; score?: number }[] = [];
     for (const entry of Array.from(predictions)) {
       if (
         !entry ||
@@ -51,17 +89,22 @@ export class ImageAnalysisService {
         typeof entry.confidence !== "number" ||
         !Number.isFinite(entry.confidence) ||
         entry.confidence < 0 ||
-        entry.confidence > 1
+        entry.confidence > 1 ||
+        (entry.score !== undefined &&
+          (typeof entry.score !== "number" ||
+            !Number.isFinite(entry.score) ||
+            entry.score < 0 ||
+            entry.score > 1))
       )
-        return false;
+        return [];
       seen.add(entry.label);
-      if (
-        policy.positiveLabels.includes(entry.label) &&
-        entry.confidence >= policy.minimumConfidence
-      )
-        promote = true;
+      entries.push({
+        label: entry.label,
+        confidence: entry.confidence,
+        ...(entry.score === undefined ? {} : { score: entry.score }),
+      });
     }
-    return promote;
+    return entries;
   }
   onModuleInit() {
     this.jobs.register("image_analysis", async (job, signal) => {
@@ -280,10 +323,12 @@ export class ImageAnalysisService {
     const complete =
       results.length > 0 &&
       results.every((r) => r?.status === "succeeded" && r.score !== null);
-    let predictions: { label: string; confidence: number }[] = [];
+    let predictions: { label: string; confidence: number; score: number }[] =
+      [];
     if (complete && this.model?.modelKey === modelKey) {
       try {
         const confidenceByLabel = new Map<string, number>();
+        const scoreByLabel = new Map<string, number>();
         for (const row of results) {
           const result = validateImageAnalysisResult(
             row!.resultJson,
@@ -292,6 +337,13 @@ export class ImageAnalysisService {
           const confidence = result.classScores.find(
             (score) => score.label === result.predictedClass,
           )!.value;
+          const score = row!.score!;
+          if (!Number.isFinite(score) || score < 0 || score > 1)
+            throw Error("Invalid cached ranking score");
+          scoreByLabel.set(
+            result.predictedClass,
+            Math.max(scoreByLabel.get(result.predictedClass) ?? 0, score),
+          );
           confidenceByLabel.set(
             result.predictedClass,
             Math.max(
@@ -302,7 +354,9 @@ export class ImageAnalysisService {
         }
         predictions = this.model.identity.labels.flatMap((label) => {
           const confidence = confidenceByLabel.get(label);
-          return confidence === undefined ? [] : [{ label, confidence }];
+          return confidence === undefined
+            ? []
+            : [{ label, confidence, score: scoreByLabel.get(label)! }];
         });
       } catch {
         // Historical malformed results must never promote a candidate for review.
@@ -334,6 +388,18 @@ export class ImageAnalysisService {
           { analysisModelKey: null },
           { analysisModelKey: { not: modelKey } },
           { analysisPredictions: { equals: Prisma.DbNull } },
+          {
+            analysisState: "succeeded",
+            AND: [
+              { analysisPredictions: { not: [] } },
+              {
+                analysisPredictions: {
+                  path: ["0", "score"],
+                  equals: Prisma.DbNull,
+                },
+              },
+            ],
+          },
         ],
         media: { some: { analyses: { some: { modelKey } } } },
       },

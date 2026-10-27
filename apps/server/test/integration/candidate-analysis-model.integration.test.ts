@@ -21,6 +21,334 @@ const url = process.env.TEST_DATABASE_URL;
 if (!url || !new URL(url).pathname.endsWith("_test"))
   throw new Error("Isolated TEST_DATABASE_URL required");
 
+async function pendingMediaFixture() {
+  const model = activateImageAnalysisAdapter({
+    ...createExampleImageAnalysisAdapter(),
+    async analyze() {
+      assert.fail("Pending metadata must not repeat successful inference");
+    },
+  });
+  const module = await Test.createTestingModule({
+    imports: [
+      AppModule.forRoot(
+        parseEnvironment({ NODE_ENV: "test", DATABASE_URL: url }),
+      ),
+    ],
+  })
+    .overrideProvider(IMAGE_ANALYSIS_ADAPTER)
+    .useValue(model)
+    .compile();
+  const app = module.createNestApplication();
+  await app.init();
+  const db = app.get(PrismaService),
+    files = app.get(FileObjectsService);
+  const author = await db.author.create({
+    data: { displayName: "Pending media fixture" },
+  });
+  const fileIds: string[] = [];
+  return {
+    db,
+    author,
+    model,
+    candidates: app.get(CandidatesService),
+    analysis: app.get(ImageAnalysisService),
+    async file(name: string) {
+      const file = await files.store({
+        body: Buffer.from(name),
+        contentType: "image/jpeg",
+        bucketScope: "source",
+        kind: "analysis-pending-media-fixture",
+      });
+      fileIds.push(file.id);
+      return file;
+    },
+    async close() {
+      const media = await db.candidateMedia.findMany({
+        where: { candidatePost: { authorId: author.id } },
+        select: { id: true },
+      });
+      await db.backgroundJob.deleteMany({
+        where: {
+          kind: "image_analysis",
+          resourceId: { in: media.map((m) => m.id) },
+        },
+      });
+      await db.candidatePost.deleteMany({ where: { authorId: author.id } });
+      await db.author.delete({ where: { id: author.id } });
+      for (const id of fileIds) await files.purgeUnreferenced(id);
+      await app.close();
+    },
+  };
+}
+
+test("mixed media stops polling when only unavailable images lack current results", async () => {
+  const fixture = await pendingMediaFixture();
+  const { db, author, model, candidates } = fixture;
+  try {
+    const active = await fixture.file("active-complete");
+    const unavailable = await fixture.file("unavailable-unprocessed");
+    await db.fileObject.update({
+      where: { id: unavailable.id },
+      data: { lifecycleStatus: "pending_deletion" },
+    });
+    const post = await db.candidatePost.create({
+      data: {
+        authorId: author.id,
+        platform: "fixture",
+        externalPostId: randomUUID(),
+        postedAt: new Date(),
+        rawJson: {},
+        analysisModelKey: model.modelKey,
+        analysisState: "queued",
+        media: {
+          create: [active, unavailable].map((file, orderIndex) => ({
+            fileObjectId: file.id,
+            externalMediaId: String(orderIndex),
+            orderIndex,
+            mediaType: "photo",
+          })),
+        },
+      },
+      include: { media: { orderBy: { orderIndex: "asc" } } },
+    });
+    await db.candidateMediaAnalysis.create({
+      data: {
+        mediaId: post.media[0]!.id,
+        modelKey: model.modelKey,
+        modelRevision: model.identity.modelRevision,
+        decisionVersion: model.identity.decisionVersion,
+        sourceSha256: active.checksum,
+        status: "succeeded",
+        score: 0.75,
+        resultJson: (await createExampleImageAnalysisAdapter().analyze(
+          "fixture",
+          Buffer.from("fixture"),
+          new AbortController().signal,
+        )) as unknown as Prisma.InputJsonValue,
+      },
+    });
+    const query = { authorId: author.id, limit: 1 };
+    assert.equal((await candidates.list(query)).analysisPending, false);
+    await db.fileObject.update({
+      where: { id: unavailable.id },
+      data: { lifecycleStatus: "active" },
+    });
+    assert.equal((await candidates.list(query)).analysisPending, true);
+    await db.fileObject.update({
+      where: { id: unavailable.id },
+      data: { lifecycleStatus: "pending_deletion" },
+    });
+    await db.candidateMediaAnalysis.update({
+      where: {
+        mediaId_modelKey: {
+          mediaId: post.media[0]!.id,
+          modelKey: model.modelKey,
+        },
+      },
+      data: { status: "queued" },
+    });
+    assert.equal((await candidates.list(query)).analysisPending, true);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("cached current-model successes keep polling until an older summary is rebuilt", async () => {
+  const fixture = await pendingMediaFixture();
+  const { db, author, model, candidates, analysis } = fixture;
+  try {
+    const file = await fixture.file("cached-success");
+    const post = await db.candidatePost.create({
+      data: {
+        authorId: author.id,
+        platform: "fixture",
+        externalPostId: randomUUID(),
+        postedAt: new Date(),
+        rawJson: {},
+        analysisModelKey: "a".repeat(64),
+        analysisState: "succeeded",
+        analysisScore: 0.2,
+        media: {
+          create: {
+            fileObjectId: file.id,
+            externalMediaId: "image",
+            orderIndex: 0,
+            mediaType: "photo",
+          },
+        },
+      },
+      include: { media: true },
+    });
+    const result = await createExampleImageAnalysisAdapter().analyze(
+      "fixture",
+      Buffer.from("fixture"),
+      new AbortController().signal,
+    );
+    await db.candidateMediaAnalysis.create({
+      data: {
+        mediaId: post.media[0]!.id,
+        modelKey: model.modelKey,
+        modelRevision: model.identity.modelRevision,
+        decisionVersion: model.identity.decisionVersion,
+        sourceSha256: file.checksum,
+        status: "succeeded",
+        score: result.score,
+        resultJson: {
+          ...result,
+          identity: model.identity,
+          modelKey: model.modelKey,
+        } as unknown as Prisma.InputJsonValue,
+      },
+    });
+    const query = { authorId: author.id, limit: 1 };
+    assert.equal((await candidates.list(query)).analysisPending, true);
+    await analysis.schedulePending(post.id);
+    const page = await candidates.list(query);
+    assert.equal(page.analysisPending, false);
+    assert.equal(page.items[0]?.reviewPriority, "medium");
+    assert.equal(
+      await db.backgroundJob.count({
+        where: { kind: "image_analysis", resourceId: post.media[0]!.id },
+      }),
+      0,
+    );
+    assert.equal(
+      await db.candidateMediaAnalysis.count({
+        where: { mediaId: post.media[0]!.id },
+      }),
+      1,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("pending scope spans groups and pages but excludes analysis that cannot progress", async () => {
+  const model = activateImageAnalysisAdapter(
+    createExampleImageAnalysisAdapter(),
+  );
+  const module = await Test.createTestingModule({
+    imports: [
+      AppModule.forRoot(
+        parseEnvironment({ NODE_ENV: "test", DATABASE_URL: url }),
+      ),
+    ],
+  })
+    .overrideProvider(IMAGE_ANALYSIS_ADAPTER)
+    .useValue(model)
+    .compile();
+  const app = module.createNestApplication();
+  await app.init();
+  const db = app.get(PrismaService),
+    files = app.get(FileObjectsService),
+    candidates = app.get(CandidatesService);
+  const author = await db.author.create({
+    data: { displayName: "Analysis pending fixture" },
+  });
+  let fileId = "";
+  const postIds: string[] = [];
+  try {
+    const file = await files.store({
+      body: Buffer.from("pending-fixture"),
+      contentType: "image/jpeg",
+      bucketScope: "source",
+      kind: "analysis-pending-fixture",
+    });
+    fileId = file.id;
+    for (const completed of [true, false]) {
+      const post = await db.candidatePost.create({
+        data: {
+          authorId: author.id,
+          platform: "fixture",
+          externalPostId: randomUUID(),
+          postedAt: new Date(),
+          rawJson: {},
+          tagDisposition: completed ? "valid" : "neutral",
+          analysisModelKey: completed ? model.modelKey : null,
+          analysisState: completed ? "succeeded" : "unprocessed",
+          analysisScore: completed ? 0.9 : null,
+          media: {
+            create: {
+              fileObjectId: file.id,
+              externalMediaId: "image",
+              orderIndex: 0,
+              mediaType: "photo",
+            },
+          },
+        },
+      });
+      postIds.push(post.id);
+    }
+    const query = { authorId: author.id, limit: 1 };
+    const page = await candidates.list(query);
+    assert.equal(page.analysisPending, true);
+    assert.equal(page.items[0]?.id, postIds[0]);
+    assert.ok(page.nextCursor);
+    const group = await candidates.list({
+      ...query,
+      triageGroup: "valid_manga",
+    });
+    assert.equal(group.total, 1);
+    assert.equal(group.analysisPending, true);
+    const pendingId = postIds[1]!;
+    await db.candidatePost.update({
+      where: { id: pendingId },
+      data: { analysisModelKey: model.modelKey, analysisState: "queued" },
+    });
+    assert.equal((await candidates.list(query)).analysisPending, true);
+    await db.candidatePost.update({
+      where: { id: pendingId },
+      data: { analysisState: "failed" },
+    });
+    assert.equal((await candidates.list(query)).analysisPending, false);
+    await db.candidatePost.update({
+      where: { id: pendingId },
+      data: { analysisState: "unprocessed", analysisModelKey: null },
+    });
+    const disabled = new CandidatesService(
+      db,
+      files,
+      undefined,
+      new ImageAnalysisService(db, app.get(JobsService), files, null),
+    );
+    assert.equal((await disabled.list(query)).analysisPending, false);
+    await db.author.update({
+      where: { id: author.id },
+      data: { deletedAt: new Date() },
+    });
+    const deletedAuthor = await candidates.list(query);
+    assert.equal(deletedAuthor.analysisPending, false);
+    assert.equal(deletedAuthor.total, 2);
+    await db.author.update({
+      where: { id: author.id },
+      data: { deletedAt: null },
+    });
+    await db.fileObject.update({
+      where: { id: file.id },
+      data: { lifecycleStatus: "pending_deletion" },
+    });
+    assert.equal((await candidates.list(query)).analysisPending, false);
+    await db.fileObject.update({
+      where: { id: file.id },
+      data: { lifecycleStatus: "active", deletedAt: new Date() },
+    });
+    assert.equal((await candidates.list(query)).analysisPending, false);
+    await db.fileObject.update({
+      where: { id: file.id },
+      data: { deletedAt: null },
+    });
+    await db.candidateMedia.deleteMany({
+      where: { candidatePostId: pendingId },
+    });
+    assert.equal((await candidates.list(query)).analysisPending, false);
+  } finally {
+    await db.candidatePost.deleteMany({ where: { id: { in: postIds } } });
+    await db.author.delete({ where: { id: author.id } });
+    if (fileId) await files.purgeUnreferenced(fileId);
+    await app.close();
+  }
+});
+
 test("model switches hide stale summaries and rebuild existing history in bounded batches", async () => {
   const model = activateImageAnalysisAdapter(
     createExampleImageAnalysisAdapter(),
@@ -184,7 +512,10 @@ test("current-model SQL-null prediction caches rebuild from winners without infe
         analysisModelKey: model.modelKey,
         analysisScore: 0.99,
         analysisState: "succeeded",
-        analysisPredictions: Prisma.DbNull,
+        analysisPredictions: [
+          { label: "comic", confidence: 0.485 },
+          { label: "other", confidence: 0.8 },
+        ],
         media: {
           create: [0, 1].map((orderIndex) => ({
             fileObjectId: file.id,
@@ -248,8 +579,11 @@ test("current-model SQL-null prediction caches rebuild from winners without infe
     assert.equal(rebuilt.analysisModelKey, model.modelKey);
     assert.equal(rebuilt.analysisScore, 0.99);
     assert.deepEqual(rebuilt.analysisPredictions, [
-      { label: "comic", confidence: 0.485 },
-      { label: "other", confidence: 0.8 },
+      { label: "comic", confidence: 0.485, score: 0.99 },
+      { label: "other", confidence: 0.8, score: 0.1 },
+    ]);
+    assert.deepEqual(service.classificationTags(rebuilt.analysisPredictions), [
+      { label: "comic", text: "漫画／插画", tone: "success" },
     ]);
     assert.equal(service.promotesReview(rebuilt.analysisPredictions), false);
     const updatedPolicy = activateImageAnalysisAdapter({

@@ -24,6 +24,7 @@ test("binary analysis persists independent priority, retries failures and preser
   const model = {
     ...activateImageAnalysisAdapter({
       ...example,
+      labelPresentation: undefined,
       identity: {
         ...example.identity,
         adapterId: "binary-fixture",
@@ -131,7 +132,7 @@ test("binary analysis persists independent priority, retries failures and preser
     assert.equal(done.analysisState, "succeeded");
     assert.equal(done.analysisModelKey, model.modelKey);
     assert.deepEqual(done.analysisPredictions, [
-      { label: "reject", confidence: 0.75 },
+      { label: "reject", confidence: 0.75, score: 0.9 },
     ]);
     assert.equal(service.promotesReview(done.analysisPredictions), false);
     const persisted = await db.candidateMediaAnalysis.findUniqueOrThrow({
@@ -373,7 +374,7 @@ test("retired adapters settle safely with analysis disabled and replacement iden
     assert.equal(done.analysisScore, 0.75);
     assert.equal(done.analysisState, "succeeded");
     assert.deepEqual(done.analysisPredictions, [
-      { label: "comic", confidence: 0.75 },
+      { label: "comic", confidence: 0.75, score: 0.75 },
     ]);
     assert.equal(done.status, post.status);
     assert.equal(done.revision, post.revision);

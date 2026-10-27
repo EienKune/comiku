@@ -46,6 +46,7 @@ function fixture(activeModelKey: string | null) {
   return new CandidatesService(db, {} as FileObjectsService, undefined, {
     activeModelKey,
     promotesReview: () => false,
+    classificationTags: () => [],
   } as unknown as ImageAnalysisService);
 }
 
@@ -71,6 +72,174 @@ test("disabled analysis ignores cached scores but preserves the time order", asy
   assert.ok(page.items.every((row) => row.reviewPriority === "unprocessed"));
 });
 
+function pendingFixture(
+  state: string,
+  modelKey: string | null = "active",
+  enabled = true,
+  eligibility = { activeMedia: 1, authorDeleted: false },
+  currentMediaSucceeded = false,
+) {
+  const base = {
+    authorId: "author",
+    author: { displayName: "Fixture", externalAccounts: [] },
+    authorExternalAccount: null,
+    classificationDecision: null,
+    classificationSuggestions: [],
+    sourceObservations: [],
+    hashtags: [],
+    media: [],
+    postedAt: new Date(0),
+    fetchedAt: new Date(0),
+    work: null,
+  };
+  const rows = [
+    {
+      ...base,
+      id: "visible-complete",
+      tagDisposition: "valid",
+      analysisState: "succeeded",
+      analysisModelKey: "active",
+      analysisScore: 0.9,
+    },
+    {
+      ...base,
+      id: "outside-page",
+      tagDisposition: "neutral",
+      analysisState: state,
+      analysisModelKey: modelKey,
+      analysisScore: null,
+    },
+  ];
+  const db = {
+    candidatePost: {
+      findMany: async (input: {
+        where: { id?: { in: string[] } };
+        select?: {
+          _count?: { select: { media: { where: unknown } } };
+        };
+      }) => {
+        if (input.select) {
+          assert.equal(Boolean(input.select._count), enabled);
+          if (input.select._count)
+            assert.deepEqual(input.select._count.select.media.where, {
+              fileObject: { lifecycleStatus: "active", deletedAt: null },
+              candidatePost: { author: { deletedAt: null } },
+              OR: [
+                { analyses: { none: { modelKey: "active" } } },
+                {
+                  analyses: {
+                    some: { modelKey: "active", status: "queued" },
+                  },
+                },
+                {
+                  candidatePost: {
+                    OR: [
+                      { analysisModelKey: null },
+                      { analysisModelKey: { not: "active" } },
+                    ],
+                  },
+                },
+              ],
+            });
+        }
+        return rows
+          .filter(
+            (row) => !input.where.id || input.where.id.in.includes(row.id),
+          )
+          .map((row) => ({
+            ...row,
+            ...(input.select?._count
+              ? {
+                  _count: {
+                    media:
+                      row.id === "outside-page"
+                        ? eligibility.authorDeleted
+                          ? 0
+                          : currentMediaSucceeded && modelKey === "active"
+                            ? 0
+                            : eligibility.activeMedia
+                        : 1,
+                  },
+                }
+              : {}),
+          }));
+      },
+    },
+  } as unknown as PrismaService;
+  return new CandidatesService(db, {} as FileObjectsService, undefined, {
+    activeModelKey: enabled ? "active" : null,
+    promotesReview: () => false,
+    classificationTags: () => [],
+  } as unknown as ImageAnalysisService);
+}
+
+test("analysis pending covers unprocessed and queued candidates outside the selected group and page", async () => {
+  const cases: [string, string | null][] = [
+    ["unprocessed", null],
+    ["queued", "active"],
+    ["succeeded", "retired-model"],
+  ];
+  for (const [state, modelKey] of cases) {
+    const service = pendingFixture(state, modelKey);
+    const page = await service.list({ limit: 1 });
+    assert.deepEqual(
+      page.items.map((row) => row.id),
+      ["visible-complete"],
+    );
+    assert.equal(page.analysisPending, true);
+    const group = await service.list({ limit: 1, triageGroup: "valid_manga" });
+    assert.deepEqual(
+      group.items.map((row) => row.id),
+      ["visible-complete"],
+    );
+    assert.equal(group.analysisPending, true);
+  }
+});
+
+test("disabled analysis and current-model terminal results do not keep candidate polling alive", async () => {
+  for (const service of [
+    pendingFixture("queued", "active", false),
+    pendingFixture("unprocessed", null, false),
+    pendingFixture("failed"),
+    pendingFixture("succeeded"),
+  ]) {
+    assert.equal((await service.list({ limit: 1 })).analysisPending, false);
+  }
+});
+
+test("deleted authors and candidates without active media cannot keep analysis polling alive", async () => {
+  for (const state of ["unprocessed", "queued"]) {
+    for (const eligibility of [
+      { activeMedia: 1, authorDeleted: true },
+      { activeMedia: 0, authorDeleted: false },
+    ]) {
+      const service = pendingFixture(state, "active", true, eligibility);
+      const page = await service.list({ limit: 1 });
+      assert.equal(page.analysisPending, false);
+      assert.equal(page.total, 2, "Eligibility must not hide candidates");
+    }
+  }
+});
+
+test("completed active media cannot keep a mixed candidate with only unavailable work polling", async () => {
+  const service = pendingFixture(
+    "queued",
+    "active",
+    true,
+    { activeMedia: 1, authorDeleted: false },
+    true,
+  );
+  assert.equal((await service.list({ limit: 1 })).analysisPending, false);
+  const switchingBack = pendingFixture(
+    "succeeded",
+    "retired-model",
+    true,
+    { activeMedia: 1, authorDeleted: false },
+    true,
+  );
+  assert.equal((await switchingBack.list({ limit: 1 })).analysisPending, true);
+});
+
 async function groupedFixture(enabled = true, binary = false) {
   const { ImageAnalysisService } =
     await import("../src/image-analysis/image-analysis.service.js");
@@ -80,6 +249,9 @@ async function groupedFixture(enabled = true, binary = false) {
     await import("../src/image-analysis/example-adapter.js");
   const model = activateImageAnalysisAdapter({
     ...createExampleImageAnalysisAdapter(),
+    labelPresentation: binary
+      ? undefined
+      : createExampleImageAnalysisAdapter().labelPresentation,
     identity: {
       ...createExampleImageAnalysisAdapter().identity,
       ...(binary ? { labels: ["accept", "reject"] } : {}),
