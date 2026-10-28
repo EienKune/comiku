@@ -115,6 +115,10 @@ export class JobsService {
   }
 
   /** Scope lock serializes claims across processes; gates run before consuming an attempt. */
+  async lockScope(tx: Prisma.TransactionClient, lane: JobLane, scope: string) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${JSON.stringify(["comiku:jobs", lane, scope])}))`;
+  }
+
   async claim(
     lane: JobLane,
     now = new Date(),
@@ -122,7 +126,7 @@ export class JobsService {
   ): Promise<BackgroundJob | null> {
     let deferredEvent: ReturnType<typeof jobEvent> | undefined;
     const claimed = await this.db.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${JSON.stringify(["comiku:jobs", lane, executionScope])}))`;
+      await this.lockScope(tx, lane, executionScope);
       await tx.backgroundJob.updateMany({
         where: {
           lane,

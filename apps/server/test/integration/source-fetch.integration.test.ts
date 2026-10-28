@@ -197,6 +197,8 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
   configureApplication(app);
   const db = app.get(PrismaService);
   const authors = app.get(AuthorsService);
+  const generation = createHash("sha256").update(prefix).digest("hex");
+  app.get(SourceFetchService).platforms.fingerprint = async () => generation;
   const password = "fixture-password-12345";
   const userIds: string[] = [];
   let authorId = "";
@@ -354,7 +356,9 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
         ).status,
         403,
       );
-    await moduleRef.get(JobsService).runNext("network");
+    await moduleRef
+      .get(JobsService)
+      .runNext("network", undefined, "source:fixture");
     const run = await request<{
       status: string;
       items: {
@@ -364,7 +368,7 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
       }[];
     }>(admin, "GET", `/api/source-fetch/runs/${queuedRun.data.id}`);
     assert.equal(run.status, 200);
-    assert.equal(run.data.status, "failed", JSON.stringify(run.data));
+    assert.equal(run.data.status, "queued", JSON.stringify(run.data));
     const interruptedState = await db.sourceAdapterState.findUniqueOrThrow({
       where: {
         externalAccountId_adapterKey: {
@@ -397,7 +401,17 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
       "/api/source-fetch/runs",
       { accountIds: [accountId] },
     );
-    await moduleRef.get(JobsService).runNext("network");
+    assert.equal(resumedQueued.data.id, queuedRun.data.id);
+    const retryTask = await db.sourceFetchAccountTask.findUniqueOrThrow({
+      where: { runId_accountId: { runId: resumedQueued.data.id, accountId } },
+    });
+    await db.backgroundJob.update({
+      where: { id: retryTask.jobId! },
+      data: { availableAt: new Date() },
+    });
+    await moduleRef
+      .get(JobsService)
+      .runNext("network", undefined, "source:fixture");
     const resumedRun = await request<{
       status: string;
       items: {
@@ -420,7 +434,7 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
           item.candidatesExisting,
           item.mediaStored,
         ]),
-      [[1, 1, 1]],
+      [[2, 1, 3]],
     );
     // Reclaim the SAME run after a crash; its unique run/account/adapter item must be reused.
     const crashRun = await request<{ id: string }>(
@@ -429,8 +443,17 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
       "/api/source-fetch/runs",
       { accountIds: [accountId] },
     );
-    const crashJob = await moduleRef.get(JobsService).claim("network");
-    assert.equal(crashJob?.resourceId, crashRun.data.id);
+    const crashJob = await moduleRef
+      .get(JobsService)
+      .claim("network", new Date(), "source:fixture");
+    assert.equal(
+      (
+        await db.sourceFetchAccountTask.findUniqueOrThrow({
+          where: { id: crashJob!.resourceId },
+        })
+      ).runId,
+      crashRun.data.id,
+    );
     const stableState = await db.sourceAdapterState.findUniqueOrThrow({
       where: {
         externalAccountId_adapterKey: {
@@ -488,7 +511,9 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
       where: { id: crashJob!.id },
       data: { leaseUntil: new Date(0) },
     });
-    await moduleRef.get(JobsService).runNext("network");
+    await moduleRef
+      .get(JobsService)
+      .runNext("network", undefined, "source:fixture");
     assert.equal(
       (
         await db.sourceFetchRun.findUniqueOrThrow({
@@ -518,8 +543,17 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
       "/api/source-fetch/runs",
       { accountIds: [accountId] },
     );
-    const exhaustedJob = await moduleRef.get(JobsService).claim("network");
-    assert.equal(exhaustedJob?.resourceId, exhaustedRun.data.id);
+    const exhaustedJob = await moduleRef
+      .get(JobsService)
+      .claim("network", new Date(), "source:fixture");
+    assert.equal(
+      (
+        await db.sourceFetchAccountTask.findUniqueOrThrow({
+          where: { id: exhaustedJob!.resourceId },
+        })
+      ).runId,
+      exhaustedRun.data.id,
+    );
     await db.backgroundJob.update({
       where: { id: exhaustedJob!.id },
       data: { attempts: 3, leaseUntil: new Date(0) },
@@ -538,7 +572,12 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
         leaseUntil: new Date(Date.now() + 1800000),
       },
     });
-    assert.equal(await moduleRef.get(JobsService).claim("network"), null);
+    assert.equal(
+      await moduleRef
+        .get(JobsService)
+        .claim("network", new Date(), "source:fixture"),
+      null,
+    );
     await moduleRef.get(SourceFetchService).reconcileExhausted();
     assert.equal(
       (
@@ -580,7 +619,9 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
     await db.userRole.deleteMany({
       where: { userId: actorId, role: "source" },
     });
-    await moduleRef.get(JobsService).runNext("network");
+    await moduleRef
+      .get(JobsService)
+      .runNext("network", undefined, "source:fixture");
     assert.equal(
       (
         await db.sourceFetchRun.findUniqueOrThrow({
@@ -1043,6 +1084,9 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
     await db.userRole.deleteMany({ where: { userId: { in: userIds } } });
     await db.userLanguageCapability.deleteMany({
       where: { userId: { in: userIds } },
+    });
+    await db.sourcePlatformState.deleteMany({
+      where: { platform: "fixture", credentialGeneration: generation },
     });
     await db.user.deleteMany({ where: { id: { in: userIds } } });
     await app.close();

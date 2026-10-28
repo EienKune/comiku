@@ -58,6 +58,11 @@ export class SourceFetchRunItemDto {
 }
 
 export class SourceFetchRunDto {
+  @ApiPropertyOptional({ type: Number }) targetCount?: number;
+  @ApiPropertyOptional({ type: Number }) completedTargets?: number;
+  @ApiPropertyOptional({ type: Number }) waitingTargets?: number;
+  @ApiPropertyOptional({ type: String, nullable: true }) waitingReason?:
+    string | null;
   @ApiProperty({ type: Number }) attempts!: number;
   @ApiProperty({ enum: JobStatus, enumName: "JobStatus", nullable: true })
   jobStatus!: JobStatus | null;
@@ -83,6 +88,11 @@ export class SourceFetchAcceptedDto extends PickType(SourceFetchRunDto, [
 ] as const) {}
 
 export class SourceFetchProgressSnapshotDto {
+  @ApiPropertyOptional({ type: Number }) targetCount?: number;
+  @ApiPropertyOptional({ type: Number }) completedTargets?: number;
+  @ApiPropertyOptional({ type: Number }) waitingTargets?: number;
+  @ApiPropertyOptional({ type: String, nullable: true }) waitingReason?:
+    string | null;
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ enum: SourceFetchTrigger, enumName: "SourceFetchTrigger" })
   trigger!: SourceFetchTrigger;
@@ -103,4 +113,19 @@ export class SourceFetchProgressDto {
   active!: SourceFetchProgressSnapshotDto | null;
   @ApiProperty({ type: SourceFetchProgressSnapshotDto, nullable: true })
   lastManual!: SourceFetchProgressSnapshotDto | null;
+}
+
+export class SourcePlatformStateDto {
+  @ApiProperty({ type: String }) platform!: string;
+  @ApiProperty({ type: String }) status!: string;
+  @ApiProperty({ type: String }) credentialGeneration!: string;
+  @ApiProperty({ type: String, nullable: true }) errorCode!: string | null;
+  @ApiProperty({ type: String, format: "date-time", nullable: true })
+  cooldownUntil!: string | null;
+  @ApiProperty({ type: Number }) revision!: number;
+}
+
+export class SourcePlatformRecheckDto {
+  @ApiProperty({ type: String }) platform!: string;
+  @ApiProperty({ type: String }) status!: string;
 }

@@ -235,6 +235,7 @@ model AuthorExternalAccount {
   updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt           DateTime?            @map("deleted_at") @db.Timestamptz(3)
   fetchRunItems       SourceFetchRunItem[]
+  fetchAccountTasks  SourceFetchAccountTask[]
   scanState           SourceAccountScanState?
   adapterStates       SourceAdapterState[]
   sourceObservations  CandidateSourceObservation[]
@@ -528,6 +529,7 @@ model SourceFetchRun {
   requestedById String?              @map("requested_by") @db.Uuid
   requestedBy   User?                @relation("FetchRunRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
   items         SourceFetchRunItem[]
+  accountTasks  SourceFetchAccountTask[]
   startedAt     DateTime             @default(now()) @map("started_at") @db.Timestamptz(3)
   completedAt   DateTime?            @map("completed_at") @db.Timestamptz(3)
 
@@ -1538,4 +1540,49 @@ model JobQueueState {
   consecutive Int @default(0)
   @@id([lane, scope])
   @@map("job_queue_states")
+}
+
+enum SourceAccountTaskStatus {
+  queued
+  running
+  waiting
+  succeeded
+  failed
+}
+
+enum SourcePlatformStatus {
+  unverified
+  healthy
+  auth_paused
+  cooling_down
+}
+
+model SourceFetchAccountTask {
+  id String @id @default(uuid()) @db.Uuid
+  runId String @map("run_id") @db.Uuid
+  run SourceFetchRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  accountId String @map("account_id") @db.Uuid
+  account AuthorExternalAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  platform String @db.VarChar(32)
+  jobId String? @unique @map("job_id") @db.Uuid
+  status SourceAccountTaskStatus @default(queued)
+  credentialGeneration String? @map("credential_generation") @db.VarChar(64)
+  startedAt DateTime? @map("started_at") @db.Timestamptz(3)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  deferredUntil DateTime? @map("deferred_until") @db.Timestamptz(3)
+  failureCode String? @map("failure_code") @db.VarChar(64)
+  @@unique([runId, accountId])
+  @@index([status, deferredUntil])
+  @@index([accountId, status])
+  @@map("source_fetch_account_tasks")
+}
+
+model SourcePlatformState {
+  platform String @id @db.VarChar(32)
+  credentialGeneration String @map("credential_generation") @db.VarChar(64)
+  status SourcePlatformStatus @default(unverified)
+  cooldownUntil DateTime? @map("cooldown_until") @db.Timestamptz(3)
+  errorCode String? @map("error_code") @db.VarChar(64)
+  revision Int @default(0)
+  @@map("source_platform_states")
 }

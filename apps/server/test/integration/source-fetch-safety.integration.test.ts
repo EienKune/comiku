@@ -123,6 +123,19 @@ async function fixture(platform?: string) {
     { available: false } as any,
     environment,
   );
+  // Synthetic credential provider: actual platform materials are tested in D6's dedicated suite.
+  const generation = createHash("sha256").update(prefix).digest("hex");
+  service.platforms.fingerprint = async () => generation;
+  await db.sourcePlatformState.upsert({
+    where: { platform: client.platform },
+    create: { platform: client.platform, credentialGeneration: generation },
+    update: {
+      credentialGeneration: generation,
+      status: "unverified",
+      cooldownUntil: null,
+      errorCode: null,
+    },
+  });
   service.onModuleInit();
   const authors = new AuthorsService(
     db,
@@ -174,16 +187,24 @@ async function fixture(platform?: string) {
     runIds.add(run.id);
     return run;
   }
+  async function jobId(runId: string) {
+    return (
+      await db.sourceFetchAccountTask.findUniqueOrThrow({
+        where: { runId_accountId: { runId, accountId: account.id } },
+      })
+    ).jobId!;
+  }
   async function execute(runId: string) {
-    const job = await db.backgroundJob.update({
-      where: { idempotencyKey: `source:${runId}` },
-      data: {
-        status: "running",
-        attempts: { increment: 1 },
-        leaseId: randomUUID(),
-        leaseUntil: new Date(Date.now() + 60_000),
-      },
+    await db.backgroundJob.update({
+      where: { id: await jobId(runId) },
+      data: { availableAt: new Date() },
     });
+    const job = await jobs.claim(
+      "network",
+      new Date(),
+      `source:${client.platform}`,
+    );
+    assert.ok(job, "Expected account task claim");
     await jobs.execute(job);
   }
   async function prepareSave() {
@@ -201,7 +222,7 @@ async function fixture(platform?: string) {
       },
     });
     const job = await db.backgroundJob.findUniqueOrThrow({
-      where: { idempotencyKey: `source:${run.id}` },
+      where: { id: await jobId(run.id) },
     });
     const scan = await db.sourceAccountScanState.update({
       where: { accountId: account.id },
@@ -236,7 +257,10 @@ async function fixture(platform?: string) {
     for (const run of ownedRuns) runIds.add(run.id);
     const ids = [...runIds];
     await db.backgroundJob.deleteMany({
-      where: { kind: "source_fetch", resourceId: { in: ids } },
+      where: {
+        kind: { in: ["source_fetch", "source_account_fetch"] },
+        actorId: { in: [actor.id, peer.id] },
+      },
     });
     await db.sourceFetchRunItem.deleteMany({ where: { runId: { in: ids } } });
     await db.sourceFetchRun.deleteMany({ where: { id: { in: ids } } });
@@ -265,6 +289,9 @@ async function fixture(platform?: string) {
       where: { userId: { in: [actor.id, peer.id] } },
     });
     await db.user.deleteMany({ where: { id: { in: [actor.id, peer.id] } } });
+    await db.sourcePlatformState.deleteMany({
+      where: { platform: client.platform, credentialGeneration: generation },
+    });
     await db.onModuleDestroy();
   }
   return {
@@ -283,6 +310,7 @@ async function fixture(platform?: string) {
     fileIds,
     manual,
     execute,
+    jobId,
     snapshot,
     prepareSave,
     close,
@@ -511,7 +539,17 @@ test("PostgreSQL concurrent manual requests reuse one batch across actors and re
     assert.notEqual(disjoint.id, one.id);
     assert.equal(
       await f.db.backgroundJob.count({
-        where: { resourceId: { in: [...f.runIds] } },
+        where: {
+          kind: "source_account_fetch",
+          resourceId: {
+            in: (
+              await f.db.sourceFetchAccountTask.findMany({
+                where: { runId: { in: [...f.runIds] } },
+                select: { id: true },
+              })
+            ).map((task) => task.id),
+          },
+        },
       }),
       2,
     );
@@ -532,12 +570,12 @@ test("PostgreSQL empty selections reuse retry/expired recoverable batches; faile
     const duplicate = await f.service.runManual(f.peer.id, {});
     assert.equal(first.id, duplicate.id);
     await f.db.backgroundJob.update({
-      where: { idempotencyKey: `source:${first.id}` },
+      where: { id: await f.jobId(first.id) },
       data: { attempts: 2, availableAt: new Date(Date.now() + 60_000) },
     });
     assert.equal((await f.manual([])).id, first.id);
     await f.db.backgroundJob.update({
-      where: { idempotencyKey: `source:${first.id}` },
+      where: { id: await f.jobId(first.id) },
       data: {
         status: "running",
         leaseId: randomUUID(),
@@ -546,13 +584,13 @@ test("PostgreSQL empty selections reuse retry/expired recoverable batches; faile
     });
     assert.equal((await f.manual([])).id, first.id);
     await f.db.backgroundJob.update({
-      where: { idempotencyKey: `source:${first.id}` },
+      where: { id: await f.jobId(first.id) },
       data: { attempts: 3 },
     });
     const fresh = await f.manual([]);
     assert.notEqual(fresh.id, first.id);
     await f.db.backgroundJob.update({
-      where: { idempotencyKey: `source:${fresh.id}` },
+      where: { id: await f.jobId(fresh.id) },
       data: { status: "failed" },
     });
     const afterFailure = await f.manual([]);
@@ -580,17 +618,12 @@ test("PostgreSQL manual and scheduled enqueue share one advisory transaction loc
       update: { dueAt: new Date(0) },
     });
     const [manual] = await Promise.all([f.manual([]), f.service.scheduleDue()]);
-    const jobs = await f.db.backgroundJob.findMany({
-      where: { kind: "source_fetch", status: { in: ["queued", "running"] } },
+    const tasks = await f.db.sourceFetchAccountTask.findMany({
+      where: { accountId: f.account.id, completedAt: null },
     });
-    const relevant = jobs.filter((job) =>
-      (job.payload as { accountIds?: string[] }).accountIds?.includes(
-        f.account.id,
-      ),
-    );
-    relevant.forEach((job) => f.runIds.add(job.resourceId));
-    assert.equal(relevant.length, 1);
-    assert.equal(relevant[0].resourceId, manual.id);
+    tasks.forEach((task) => f.runIds.add(task.runId));
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0].runId, manual.id);
   } finally {
     if (old)
       await f.db.workerSchedule.update({
@@ -866,7 +899,7 @@ test("PostgreSQL long image transfers renew only the still-current source and jo
       // Keep the outer execution current as its real heartbeat would. Source
       // lease renewal itself must retain all of its normal transaction fences.
       await f.db.backgroundJob.update({
-        where: { idempotencyKey: `source:${run.id}` },
+        where: { id: await f.jobId(run.id) },
         data: { leaseUntil: new Date(Date.now() + 60_000) },
       });
     };
@@ -1029,7 +1062,7 @@ for (const terminal of ["failed", "queued", "running"] as const)
         },
       });
       await f.db.backgroundJob.update({
-        where: { idempotencyKey: `source:${prepared.run.id}` },
+        where: { id: await f.jobId(prepared.run.id) },
         data: {
           status: terminal,
           attempts: 3,
@@ -1089,7 +1122,7 @@ test("PostgreSQL manual retry never releases a live final-attempt source lease",
     const prepared = await f.prepareSave();
     const workerLease = randomUUID();
     await f.db.backgroundJob.update({
-      where: { idempotencyKey: `source:${prepared.run.id}` },
+      where: { id: await f.jobId(prepared.run.id) },
       data: {
         status: "running",
         attempts: 3,
@@ -1106,7 +1139,7 @@ test("PostgreSQL manual retry never releases a live final-attempt source lease",
     assert.equal(
       (
         await f.db.backgroundJob.findUniqueOrThrow({
-          where: { idempotencyKey: `source:${prepared.run.id}` },
+          where: { id: await f.jobId(prepared.run.id) },
         })
       ).leaseId,
       workerLease,

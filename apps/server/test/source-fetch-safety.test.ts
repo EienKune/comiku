@@ -1354,10 +1354,13 @@ test("interrupted items clear their current errors on running and success while 
 
 function manualFixture() {
   const jobs: any[] = [];
+  const tasks: any[] = [];
   const runs: any[] = [];
   const leases: any[] = [];
   const matches = (row: any, where: any): boolean =>
     Object.entries(where).every(([key, value]: [string, any]) => {
+      if (key === "accountTasks")
+        return tasks.some((task) => task.runId === row.id);
       if (key === "OR") return value.some((part: any) => matches(row, part));
       if (value && typeof value === "object") {
         if (value.in) return value.in.includes(row[key]);
@@ -1376,7 +1379,10 @@ function manualFixture() {
     user: { count: async () => 1 },
     authorExternalAccount: {
       findMany: async ({ where }: any) =>
-        [...new Set(where.id?.in ?? ["a", "b"])].map((id) => ({ id })),
+        [...new Set(where.id?.in ?? ["a", "b"])].map((id) => ({
+          id,
+          platform: "fixture",
+        })),
     },
     sourceFetchRun: {
       create: async ({ data }: any) => {
@@ -1385,12 +1391,36 @@ function manualFixture() {
         return run;
       },
       findMany: async ({ where }: any) =>
-        runs.filter((run) => matches(run, where)),
+        runs
+          .filter((run) => matches(run, where))
+          .map((run) => ({
+            ...run,
+            accountTasks: tasks.filter((task) => task.runId === run.id),
+          })),
       updateMany: async ({ where, data }: any) => {
         const rows = runs.filter((run) => matches(run, where));
         rows.forEach((run) => Object.assign(run, data));
         return { count: rows.length };
       },
+    },
+    sourceFetchAccountTask: {
+      create: async ({ data }: any) => {
+        const task = { id: `task${tasks.length}`, status: "queued", ...data };
+        tasks.push(task);
+        return task;
+      },
+      update: async ({ where, data }: any) =>
+        Object.assign(
+          tasks.find((task) => matches(task, where)),
+          data,
+        ),
+      updateMany: async ({ where, data }: any) => {
+        const found = tasks.filter((task) => matches(task, where));
+        found.forEach((task) => Object.assign(task, data));
+        return { count: found.length };
+      },
+      findMany: async ({ where }: any) =>
+        tasks.filter((task) => matches(task, where)),
     },
     sourceFetchRunItem: { updateMany: async () => ({ count: 1 }) },
     sourceAccountScanState: { updateMany: async () => ({ count: 1 }) },
@@ -1429,6 +1459,7 @@ function manualFixture() {
           status: "queued",
           attempts: 0,
         });
+        return jobs.at(-1);
       },
     } as any,
     db,
@@ -1449,7 +1480,7 @@ test("manual clicks from different actors reuse the same normalized active accou
     f.service.runManual("actor2", { accountIds: ["a", "b"] }),
   ]);
   assert.equal(results[0].id, results[1].id);
-  assert.equal(f.jobs.length, 1);
+  assert.equal(f.jobs.length, 2);
 });
 
 test("overlapping different account sets conflict while disjoint accounts can queue", async () => {
@@ -1469,7 +1500,7 @@ test("empty accountIds means all eligible accounts, and retrying active jobs are
   f.jobs[0].attempts = 2;
   const second = await f.service.runManual("actor2", {});
   assert.equal(first.id, second.id);
-  assert.equal(f.jobs.length, 1);
+  assert.equal(f.jobs.length, 2);
 });
 
 for (const terminal of ["failed", "queued", "running"] as const)
@@ -1575,4 +1606,47 @@ test("natural Pixiv duplicate updates nonempty source caption without media or h
     new AbortController().signal,
   );
   assert.ok(updates.every((call) => !("text" in call.data)));
+});
+
+test("an account's cooled first adapter does not block a ready fallback", async () => {
+  const f = fixture();
+  f.snapshot.nextAttemptAt = new Date(Date.now() + 60000);
+  const paid = { ...client, adapterKey: "paid", priority: 2, metered: true };
+  f.account.adapterStates.push({
+    ...f.snapshot,
+    id: "paid-state",
+    adapterKey: "paid",
+    nextAttemptAt: null,
+  });
+  f.service.sources.register(paid);
+  const skipped: string[] = [],
+    invoked: string[] = [];
+  f.service.createSkippedItem = async (
+    _run: any,
+    _account: any,
+    _state: any,
+    source: any,
+  ) => skipped.push(source.adapterKey);
+  f.service.lockSource = async () => {};
+  f.service.assertEligible = async () => {};
+  f.db.sourceAdapterState.updateMany = async () => ({ count: 1 });
+  f.service.fetchAdapter = async (
+    _item: any,
+    _run: any,
+    _account: any,
+    _state: any,
+    source: any,
+  ) => invoked.push(source.adapterKey);
+  await f.service.accountExecution.run(
+    { platform: "fixture", generation: "synthetic", job: {} },
+    () =>
+      f.service.fetchWithFallback(
+        "run",
+        f.account,
+        null,
+        new AbortController().signal,
+      ),
+  );
+  assert.deepEqual(skipped, ["synthetic"]);
+  assert.deepEqual(invoked, ["paid"]);
 });

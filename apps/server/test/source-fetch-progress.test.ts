@@ -194,3 +194,13 @@ test("new queued runs have zero counters and no retry countdown", async () => {
   assert.equal(result.active?.mediaStored, 0);
   assert.equal(result.active?.nextRetryAt, null);
 });
+
+test("platform diagnostics and controlled recheck require technical administration", () => {
+  for (const method of [
+    SourceFetchController.prototype.platforms,
+    SourceFetchController.prototype.recheck,
+  ])
+    assert.deepEqual(Reflect.getMetadata(ACCESS, method), {
+      permission: "system:manage",
+    });
+});

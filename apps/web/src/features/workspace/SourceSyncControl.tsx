@@ -195,12 +195,26 @@ export function SourceSyncControl({
     return (
       <div className="source-sync-summary">
         <strong>
-          {title} · {run.nextRetryAt ? "等待重试" : statusLabels[run.status]}
+          {title} ·{" "}
+          {run.waitingReason === "credential_unavailable"
+            ? "等待凭据复验"
+            : run.waitingReason === "platform_cooldown"
+              ? "等待平台冷却"
+              : run.waitingReason
+                ? "等待执行空位"
+                : run.nextRetryAt
+                  ? "等待重试"
+                  : statusLabels[run.status]}
         </strong>
         <time dateTime={run.completedAt ?? run.startedAt}>
           {when(run.completedAt ?? run.startedAt)}
         </time>
         <p>
+          {run.targetCount !== undefined && (
+            <>
+              账号 {run.completedTargets ?? 0}/{run.targetCount} ·{" "}
+            </>
+          )}
           已读取 {run.pagesFetched} 页 · 新增 {run.candidatesCreated} 项候选 ·
           原图 {run.mediaStored} 张
         </p>
@@ -228,7 +242,10 @@ export function SourceSyncControl({
       <Button
         variant="secondary"
         leadingIcon={
-          <RefreshCw size={16} className={active ? "ui-spin" : undefined} />
+          <RefreshCw
+            size={16}
+            className={active && !active.waitingReason ? "ui-spin" : undefined}
+          />
         }
         loading={busy}
         disabled={disabled}

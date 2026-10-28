@@ -61,6 +61,20 @@ export function SourceFetchHistory() {
                   {statusLabels[run.status] ?? run.status}
                 </Badge>
                 <div className="system-run-counts">
+                  {run.targetCount !== undefined && (
+                    <span>
+                      账号 {run.completedTargets ?? 0}/{run.targetCount}
+                    </span>
+                  )}
+                  {run.waitingReason && (
+                    <span>
+                      {run.waitingReason === "credential_unavailable"
+                        ? "等待凭据复验"
+                        : run.waitingReason === "platform_cooldown"
+                          ? "等待平台冷却"
+                          : "等待执行空位"}
+                    </span>
+                  )}
                   <span>
                     新增{" "}
                     {run.items.reduce(
