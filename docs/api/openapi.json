@@ -16222,7 +16222,8 @@
         "type": "string",
         "enum": [
           "none",
-          "last_24_hours"
+          "last_24_hours",
+          "last_7_days"
         ]
       },
       "SourceAdapterStateDto": {

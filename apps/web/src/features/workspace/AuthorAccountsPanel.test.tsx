@@ -455,3 +455,39 @@ test("a removed Pixiv channel can still be paused from its persisted account sta
     body: { enabled: false, expectedRevision: 3 },
   });
 });
+
+test("Pixiv can explicitly select seven days while retaining the disabled default", async () => {
+  collectionFixture(
+    [],
+    [
+      {
+        ...pixivCapability,
+        supportedFirstSyncModes: ["none", "last_24_hours", "last_7_days"],
+      },
+    ],
+  );
+  const post = vi.spyOn(client, "POST").mockResolvedValue(success(pixiv));
+  setup();
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "关联 Pixiv" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "关联 Pixiv" }));
+  fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
+    target: { value: "123456" },
+  });
+  const checkbox = await screen.findByRole("checkbox", {
+    name: "启用自动抓取",
+  });
+  expect((checkbox as HTMLInputElement).checked).toBe(false);
+  fireEvent.click(checkbox);
+  fireEvent.click(screen.getByRole("combobox", { name: "首次同步范围" }));
+  fireEvent.click(screen.getByRole("option", { name: "最近 7 天" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+  await waitFor(() => expect(post).toHaveBeenCalledOnce());
+  expect(post.mock.calls[0][1]).toMatchObject({
+    body: { firstSyncMode: "last_7_days", fetchEnabled: true },
+  });
+});

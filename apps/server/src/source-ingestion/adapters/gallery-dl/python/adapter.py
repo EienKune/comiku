@@ -15,6 +15,7 @@ from gallery_dl import config, version
 from gallery_dl.extractor import twitter, pixiv
 from gallery_dl.util import NullResponse
 from pixiv_paging import PixivPager
+from pixiv_caption import plain_caption
 
 
 class AdapterError(Exception):
@@ -747,6 +748,12 @@ def collect(source, cursor):
                     if expected_photos != converted_photos:
                         raise ValueError("native conversion omitted source photos")
                 # Native text-only X posts have no media and no records.
+                if not is_x:
+                    for record in records:
+                        metadata = record[-1]
+                        metadata["description"] = plain_caption(metadata.get("caption"))
+                        # The bridge exposes plain source fields, never caption HTML.
+                        metadata.pop("caption", None)
                 encoded = json.dumps(records, default=str)
                 byte_count += len(encoded.encode("utf-8"))
                 if byte_count > 12 * 1024 * 1024 or len(result["records"]) + len(records) > 10000:

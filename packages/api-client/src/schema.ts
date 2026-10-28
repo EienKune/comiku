@@ -2160,7 +2160,7 @@ export interface components {
             nextCursor: string | null;
         };
         /** @enum {string} */
-        FirstSyncMode: "none" | "last_24_hours";
+        FirstSyncMode: "none" | "last_24_hours" | "last_7_days";
         SourceAdapterStateDto: {
             adapterKey: string;
             enabled: boolean;

@@ -33,7 +33,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function fixture() {
+async function fixture(platform?: string) {
   const prefix = `safety_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
   const environment = parseEnvironment({
     NODE_ENV: "test",
@@ -57,7 +57,7 @@ async function fixture() {
     rawJson: { synthetic: true },
   }));
   const client: ContentSourceClient = {
-    platform: prefix,
+    platform: platform ?? prefix,
     adapterKey: prefix,
     priority: 1,
     available: true,
@@ -155,7 +155,7 @@ async function fixture() {
   const account = await db.authorExternalAccount.create({
     data: {
       authorId: author.id,
-      platform: prefix,
+      platform: platform ?? prefix,
       externalUserId: "1",
       fetchEnabled: true,
       firstSyncMode: "none",
@@ -1323,6 +1323,99 @@ test("PostgreSQL account scan migration executes against synthetic history and p
       );
     });
   } finally {
+    await f.close();
+  }
+});
+
+test("PostgreSQL Pixiv natural encounter preserves human work and seven-day mode coverage", async () => {
+  const f = await fixture("pixiv");
+  let workId: string | undefined;
+  try {
+    const prepared = await f.prepareSave();
+    const coverage = new Date("2026-10-20T00:00:00Z");
+    await f.db.authorExternalAccount.update({
+      where: { id: f.account.id },
+      data: { firstSyncMode: "last_7_days" },
+    });
+    await f.db.sourceAccountScanState.update({
+      where: { accountId: f.account.id },
+      data: { discoveredThroughAt: coverage },
+    });
+    await prepared.save();
+    const candidate = await f.db.candidatePost.findUniqueOrThrow({
+      where: {
+        platform_externalPostId: {
+          platform: "pixiv",
+          externalPostId: f.contents[0].externalContentId,
+        },
+      },
+    });
+    await f.db.candidatePost.update({
+      where: { id: candidate.id },
+      data: { revision: 7, status: "imported" },
+    });
+    const work = await f.db.work.create({
+      data: {
+        authorId: f.author.id,
+        sourceCandidatePostId: candidate.id,
+        importedById: f.actor.id,
+        sourceText: "Human edited source",
+        title: "Human title",
+        revision: 4,
+      },
+    });
+    workId = work.id;
+    const beforeDownloads = f.downloads;
+    const mediaCount = await f.db.candidateMedia.count({
+      where: { candidatePostId: candidate.id },
+    });
+    const description = "Source & entity\nLink label <student>";
+    await prepared.save({
+      ...f.contents[0],
+      text: description,
+      title: "Source title",
+      description,
+      rawJson: { synthetic: true, title: "Source title", description },
+    });
+    await prepared.save({
+      ...f.contents[0],
+      text: "Source title",
+      title: "Source title",
+      description: "",
+      rawJson: { synthetic: true },
+    });
+    const after = await f.db.candidatePost.findUniqueOrThrow({
+      where: { id: candidate.id },
+    });
+    assert.equal(after.text, description);
+    assert.equal(
+      (after.rawJson as { description: string }).description,
+      description,
+    );
+    assert.equal(after.revision, 7);
+    assert.equal(after.status, "imported");
+    assert.equal(f.downloads, beforeDownloads);
+    assert.equal(
+      await f.db.candidateMedia.count({
+        where: { candidatePostId: candidate.id },
+      }),
+      mediaCount,
+    );
+    assert.deepEqual(
+      await f.db.work.findUniqueOrThrow({ where: { id: work.id } }),
+      work,
+    );
+    assert.equal((await f.snapshot()).firstSyncMode, "last_7_days");
+    assert.deepEqual(
+      (
+        await f.db.sourceAccountScanState.findUniqueOrThrow({
+          where: { accountId: f.account.id },
+        })
+      ).discoveredThroughAt,
+      coverage,
+    );
+  } finally {
+    if (workId) await f.db.work.delete({ where: { id: workId } });
     await f.close();
   }
 });

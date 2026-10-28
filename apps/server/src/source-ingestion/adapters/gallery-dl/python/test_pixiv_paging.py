@@ -826,6 +826,28 @@ class PixivPagingTests(unittest.TestCase):
         self.assertEqual([], native_entries,
                          "pageCount must be rejected before native list allocation")
 
+    def test_existing_app_and_ajax_captions_are_plain_without_extra_enrichment(self):
+        for option in ("comments", "captions"):
+            config.set(("extractor", "pixiv"), option, True)
+        app = app_work(500)
+        app["title"] = "App title"
+        app["caption"] = 'First &amp; second<br><a href="https://example.invalid">Link label</a> &lt;student&gt;'
+        empty = app_work(501)
+        empty["caption"] = ""
+        ajax = ajax_work(100)
+        ajax["illustComment"] = '<p>AJAX &amp; entity</p><a href="/jump.php?https%3A%2F%2Fexample.invalid">Link text</a> &lt;student&gt;'
+        upstream = PixivUpstream(self, [[app, empty]], [ajax])
+        with upstream.installed():
+            pages = self.collect_all(upstream)
+        records = {str(record[-1]["id"]): record[-1] for page in pages for record in page["records"] if record[0] == 2}
+        self.assertEqual("First & second\nLink label <student>", records["500"]["description"])
+        self.assertEqual("AJAX & entity\nLink text <student>", records["100"]["description"])
+        self.assertEqual("", records["501"]["description"])
+        self.assertEqual(["100"], upstream.detail_ids,
+                         "empty App caption must not fetch extra detail")
+        # AJAX fixture rejects every unexpected endpoint, including comments.
+        self.assertEqual(0, upstream.user_detail_calls)
+
     def test_optional_metadata_enrichment_cannot_expand_collection_work(self):
         for option in ("metadata", "metadata-bookmark", "comments", "captions"):
             config.set(("extractor", "pixiv"), option, True)

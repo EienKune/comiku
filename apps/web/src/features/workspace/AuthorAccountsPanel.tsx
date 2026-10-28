@@ -574,6 +574,9 @@ function AccountEditor({
               {collectionModes.includes("none") && (
                 <option value="none">仅后续内容</option>
               )}
+              {collectionModes.includes("last_7_days") && (
+                <option value="last_7_days">最近 7 天</option>
+              )}
               {collectionModes.includes("last_24_hours") && (
                 <option value="last_24_hours">最近 24 小时</option>
               )}

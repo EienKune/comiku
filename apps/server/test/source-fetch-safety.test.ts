@@ -1519,3 +1519,60 @@ test("a live final-attempt execution is reused and its source lease remains owne
   assert.equal(f.leases[0].fetchLeaseId, first.id);
   assert.equal(f.jobs[0].status, "running");
 });
+
+test("natural Pixiv duplicate updates nonempty source caption without media or human revision writes", async () => {
+  const f = fixture();
+  f.account.platform = "pixiv";
+  f.db.candidatePost.findUnique = async () => ({
+    id: "existing",
+    text: "old title",
+    rawJson: { adapter: "old", postId: "10" },
+  });
+  f.db.candidatePost.findUniqueOrThrow = async () => ({
+    id: "existing",
+    text: "old title",
+    rawJson: {},
+  });
+  const updates: any[] = [];
+  f.db.candidatePost.update = async (args: any) => {
+    updates.push(args);
+    return {};
+  };
+  await f.service.saveCandidate(
+    f.account,
+    f.snapshot,
+    client,
+    {
+      ...content("10"),
+      title: "Title",
+      description: "Body & entity\nLink text",
+      text: "Body & entity\nLink text",
+    },
+    null,
+    "run",
+    new AbortController().signal,
+  );
+  assert.equal(f.downloads, 0);
+  assert.ok(
+    updates.some((call) => call.data.text === "Body & entity\nLink text"),
+  );
+  assert.ok(
+    updates.every(
+      (call) =>
+        !("revision" in call.data) &&
+        !("status" in call.data) &&
+        !("work" in call.data),
+    ),
+  );
+  updates.length = 0;
+  await f.service.saveCandidate(
+    f.account,
+    f.snapshot,
+    client,
+    { ...content("10"), title: "Title", description: "", text: "Title" },
+    null,
+    "run",
+    new AbortController().signal,
+  );
+  assert.ok(updates.every((call) => !("text" in call.data)));
+});

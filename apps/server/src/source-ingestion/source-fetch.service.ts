@@ -1524,6 +1524,33 @@ export class SourceFetchService {
         await this.lockSource(tx, account, state, createdById);
         await this.assertEligible(account, state, leaseId, tx);
         signal.throwIfAborted();
+        // Natural overlap can fill source metadata without downloading again or
+        // changing a promoted Work, review status or human revision.
+        if (account.platform === "pixiv" && content.description?.trim()) {
+          await tx.$queryRaw`SELECT id FROM candidate_posts WHERE id = ${existing.id}::uuid FOR UPDATE`;
+          const current = await tx.candidatePost.findUniqueOrThrow({
+            where: { id: existing.id },
+          });
+          const raw =
+            current.rawJson &&
+            typeof current.rawJson === "object" &&
+            !Array.isArray(current.rawJson)
+              ? current.rawJson
+              : {};
+          const rawJson = {
+            ...raw,
+            ...(content.title?.trim() ? { title: content.title } : {}),
+            description: content.description,
+          };
+          if (
+            current.text !== content.description ||
+            JSON.stringify(current.rawJson) !== JSON.stringify(rawJson)
+          )
+            await tx.candidatePost.update({
+              where: { id: existing.id },
+              data: { text: content.description, rawJson },
+            });
+        }
         await this.observe(
           tx,
           existing.id,

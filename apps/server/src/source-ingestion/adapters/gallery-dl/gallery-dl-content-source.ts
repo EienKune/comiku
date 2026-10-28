@@ -158,7 +158,11 @@ export class GalleryDlContentSource implements ContentSourceClient {
   readonly priority = 5;
   readonly metered = false;
   readonly available = true;
-  readonly supportedFirstSyncModes = ["none", "last_24_hours"] as const;
+  readonly supportedFirstSyncModes = [
+    "none",
+    "last_24_hours",
+    "last_7_days",
+  ] as const;
   readonly allowedMediaHosts: readonly string[];
   private readonly runner: PageRunner;
   private readonly configPath: string;
@@ -233,7 +237,12 @@ export class GalleryDlContentSource implements ContentSourceClient {
   initialCursor(mode: FirstSyncMode, now: Date): SourceCursor {
     return {
       startTime: new Date(
-        now.getTime() - (mode === "last_24_hours" ? 86_400_000 : 0),
+        now.getTime() -
+          (mode === "last_7_days"
+            ? 604_800_000
+            : mode === "last_24_hours"
+              ? 86_400_000
+              : 0),
       ).toISOString(),
     };
   }
@@ -477,12 +486,24 @@ export class GalleryDlContentSource implements ContentSourceClient {
         post = {
           externalContentId: postId,
           type: reply !== "0" ? "reply" : quote !== "0" ? "quote" : "post",
+          title:
+            this.platform === "pixiv" && typeof data.title === "string"
+              ? data.title
+              : undefined,
+          description:
+            this.platform === "pixiv" && typeof data.description === "string"
+              ? data.description
+              : undefined,
           text:
-            typeof data.content === "string"
-              ? data.content
-              : typeof data.title === "string"
-                ? data.title
-                : undefined,
+            this.platform === "pixiv" &&
+            typeof data.description === "string" &&
+            data.description.trim()
+              ? data.description
+              : typeof data.content === "string"
+                ? data.content
+                : typeof data.title === "string"
+                  ? data.title
+                  : undefined,
           permalink:
             this.platform === "x"
               ? `https://x.com/i/web/status/${postId}`
@@ -503,7 +524,21 @@ export class GalleryDlContentSource implements ContentSourceClient {
               typeof tag === "string" ? tag : jsonObject(tag)?.name,
             )
             .filter((tag): tag is string => typeof tag === "string"),
-          rawJson: { adapter: this.adapterKey, postId },
+          rawJson: {
+            adapter: this.adapterKey,
+            postId,
+            ...(this.platform === "pixiv"
+              ? {
+                  ...(typeof data.title === "string" && data.title.trim()
+                    ? { title: data.title }
+                    : {}),
+                  ...(typeof data.description === "string" &&
+                  data.description.trim()
+                    ? { description: data.description }
+                    : {}),
+                }
+              : {}),
+          },
         };
         grouped.set(postId, post);
       }

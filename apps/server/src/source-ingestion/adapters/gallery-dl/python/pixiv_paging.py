@@ -108,6 +108,10 @@ class PixivPager:
         ext.meta_bookmark = False
         ext.meta_comments = False
         ext.meta_captions = False
+        # Native AJAX conversion unescapes entities before the metadata boundary.
+        # Keep existing HTML intact until the bridge parses it once, preserving
+        # encoded literal angle brackets as text. Link URLs are not needed.
+        ext._sanitize_ajax_caption = lambda caption: caption or ""
         ext.load_ugoira = False
         ext.metadata = lambda: {}
         if self.phase == "app":

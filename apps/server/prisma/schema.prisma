@@ -133,6 +133,7 @@ enum AuthorizationStatus {
 enum FirstSyncMode {
   none
   last_24_hours
+  last_7_days
 }
 
 enum FileLifecycleStatus {

@@ -711,3 +711,63 @@ test("Pixiv structured tags survive normalization when the title has no hashtags
     "漫画",
   ]);
 });
+
+test("gallery initial windows preserve defaults and include exactly seven days", () => {
+  const now = new Date("2026-10-28T12:34:56.789Z");
+  for (const platform of ["x", "pixiv"] as const) {
+    const source = new GalleryDlContentSource(platform, {
+      python: "/none",
+      configPath: "/none",
+    });
+    assert.deepEqual(source.supportedFirstSyncModes, [
+      "none",
+      "last_24_hours",
+      "last_7_days",
+    ]);
+    for (const [mode, milliseconds] of [
+      ["none", 0],
+      ["last_24_hours", 86_400_000],
+      ["last_7_days", 604_800_000],
+    ] as const) {
+      assert.equal(
+        Date.parse(source.initialCursor(mode, now).startTime as string),
+        now.getTime() - milliseconds,
+      );
+    }
+  }
+});
+
+test("Pixiv preserves native plain caption, line breaks, link text and entities", async () => {
+  const description = "First & second\nLink label <literal>\n日本語";
+  const metadata = {
+    id: "123",
+    user: { id: account.externalUserId },
+    type: "illust",
+    count: 1,
+    page_count: 1,
+    date: "2026-10-25 13:16:53",
+    title: "Fixture title",
+    description,
+    num: 0,
+    extension: "jpg",
+  };
+  const source = new GalleryDlContentSource(
+    "pixiv",
+    { python: "/none", configPath: "/none" },
+    async () =>
+      page({
+        platform: "pixiv",
+        terminal: true,
+        next: null,
+        records: [
+          [2, metadata],
+          [3, "https://i.pximg.net/img-original/fixture.jpg", metadata],
+        ],
+      }),
+  );
+  const item = (await source.fetchPage(account, initial)).items[0];
+  assert.equal(item.title, "Fixture title");
+  assert.equal(item.description, description);
+  assert.equal(item.text, description);
+  assert.equal(item.rawJson.description, description);
+});

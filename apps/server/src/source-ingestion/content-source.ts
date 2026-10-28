@@ -26,6 +26,8 @@ export interface NormalizedSourceContent {
   externalContentId: string;
   type: "post" | "reply" | "quote" | "repost";
   text?: string;
+  title?: string;
+  description?: string;
   permalink: string;
   publishedAt: string;
   ownMedia: NormalizedSourceMedia[];
