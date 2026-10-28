@@ -2826,7 +2826,8 @@ function CandidateGridSection({
                         : "标记为照片"}
                     </Button>
                   )}
-                  {candidate.reviewPriority === "failed" &&
+                  {(candidate.canRetryAnalysis ??
+                    candidate.reviewPriority === "failed") &&
                     user.permissions.includes("candidates:manage") && (
                       <Button
                         size="sm"

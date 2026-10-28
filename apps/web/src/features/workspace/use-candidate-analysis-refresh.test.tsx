@@ -274,3 +274,24 @@ test("unmount clears a polling interval while analysis remains queued", async ()
   expect(readSource).not.toHaveBeenCalled();
   expect(vi.getTimerCount()).toBe(0);
 });
+
+test("failed plus queued media keep polling even with a successful score, then stop when all media are terminal", async () => {
+  const { client, observe, mount } = fixture();
+  const readSource = vi.fn(async () => page("high", true));
+  observe(sourceKey, readSource, page("high", true));
+  mount();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
+  expect(readSource).toHaveBeenCalledTimes(1);
+  readSource.mockResolvedValue(page("high", false));
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: sourceKey });
+  });
+  const reads = readSource.mock.calls.length;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15_000);
+  });
+  expect(readSource).toHaveBeenCalledTimes(reads);
+  expect(vi.getTimerCount()).toBe(0);
+});

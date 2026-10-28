@@ -623,6 +623,7 @@ model CandidatePost {
   tagDisposition          CandidateTagDisposition @default(neutral) @map("tag_disposition")
   analysisScore           Float?                 @map("analysis_score")
   analysisState           String                 @default("unprocessed") @map("analysis_state") @db.VarChar(20)
+  analysisSummaryVersion  Int                    @default(0) @map("analysis_summary_version")
   analysisModelKey        String?                @map("analysis_model_key") @db.VarChar(64)
   analysisPredictions     Json?                  @map("analysis_predictions")
   status                  CandidateStatus        @default(pending)

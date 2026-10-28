@@ -2420,6 +2420,7 @@ export interface components {
             mediaType: string;
         };
         CandidateDto: {
+            canRetryAnalysis?: boolean;
             classificationTags?: components["schemas"]["CandidateClassificationTagDto"][];
             /** @enum {string} */
             reviewPriority?: "high" | "medium" | "low" | "unprocessed" | "queued" | "failed";

@@ -168,20 +168,50 @@ export class CandidatesService {
     analysisModelKey: string | null;
     analysisState: string;
     analysisScore: number | null;
+    analysisPredictions: unknown;
   }) {
     const key = this.analysis?.activeModelKey;
     if (!key || candidate.analysisModelKey !== key)
       return { state: "unprocessed", score: null };
     return {
       state: candidate.analysisState,
-      score:
-        candidate.analysisState === "succeeded"
-          ? candidate.analysisScore
-          : null,
+      score: this.analysis?.hasEvidence(
+        candidate.analysisScore,
+        candidate.analysisPredictions,
+      )
+        ? candidate.analysisScore
+        : null,
     };
   }
 
-  private dto(candidate: CandidateDetails): CandidateDto {
+  private detailsWithAnalysis() {
+    return {
+      ...details,
+      _count: {
+        select: {
+          media: {
+            where: {
+              fileObject: {
+                lifecycleStatus: "active" as const,
+                deletedAt: null,
+              },
+              candidatePost: { author: { deletedAt: null } },
+              analyses: {
+                some: {
+                  modelKey: this.analysis?.activeModelKey ?? "",
+                  status: "failed" as const,
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+  }
+
+  private dto(
+    candidate: CandidateDetails & { _count?: { media: number } },
+  ): CandidateDto {
     const analysis = this.analysisSummary(candidate);
     const account =
       candidate.authorExternalAccount ??
@@ -189,8 +219,11 @@ export class CandidatesService {
       candidate.author.externalAccounts[0];
     return {
       id: candidate.id,
+      canRetryAnalysis: Boolean(
+        this.analysis?.activeModelKey && candidate._count?.media,
+      ),
       classificationTags:
-        analysis.state === "succeeded"
+        analysis.score !== null
           ? (this.analysis?.classificationTags(candidate.analysisPredictions) ??
             [])
           : [],
@@ -326,10 +359,12 @@ export class CandidatesService {
                           },
                         },
                         {
+                          analyses: { some: { modelKey: activeModelKey } },
                           candidatePost: {
                             OR: [
                               { analysisModelKey: null },
                               { analysisModelKey: { not: activeModelKey } },
+                              { analysisSummaryVersion: { lt: 1 } },
                             ],
                           },
                         },
@@ -345,12 +380,11 @@ export class CandidatesService {
     // Pending work can be outside the selected group or loaded page and still
     // move into this view after analysis. Reuse the existing filtered summary.
     const analysisPending = Boolean(
-      activeModelKey &&
-      rows.some(
-        (row) =>
-          row._count?.media > 0 &&
-          ["unprocessed", "queued"].includes(this.analysisSummary(row).state),
-      ),
+      activeModelKey && rows.some((row) => row._count?.media > 0),
+    );
+    // Validate each bounded prediction cache once, not on every sort comparison.
+    const summaries = new Map(
+      rows.map((row) => [row.id, this.analysisSummary(row)]),
     );
     const classifyGroup = (row: (typeof rows)[number]) => {
       const visual =
@@ -361,7 +395,7 @@ export class CandidatesService {
       if (row.tagDisposition === "blocked") return "blocked_manga" as const;
       if (
         row.tagDisposition === "valid" ||
-        (this.analysisSummary(row).state === "succeeded" &&
+        (summaries.get(row.id)!.score !== null &&
           this.analysis?.promotesReview(row.analysisPredictions))
       )
         return "valid_manga" as const;
@@ -384,8 +418,8 @@ export class CandidatesService {
             ? rank[group(left)] - rank[group(right)]
             : 0) ||
           ((query.status ?? "pending") === "pending"
-            ? (this.analysisSummary(right).score ?? -1) -
-              (this.analysisSummary(left).score ?? -1)
+            ? (summaries.get(right.id)!.score ?? -1) -
+              (summaries.get(left.id)!.score ?? -1)
             : 0) ||
           right.postedAt.getTime() - left.postedAt.getTime() ||
           right.id.localeCompare(left.id),
@@ -399,7 +433,7 @@ export class CandidatesService {
     const loaded = page.length
       ? await this.db.candidatePost.findMany({
           where: { id: { in: page.map((row) => row.id) } },
-          include: details,
+          include: this.detailsWithAnalysis(),
         })
       : [];
     const loadedById = new Map(
@@ -419,7 +453,7 @@ export class CandidatesService {
   async get(id: string): Promise<CandidateDto> {
     const candidate = await this.db.candidatePost.findUnique({
       where: { id },
-      include: details,
+      include: this.detailsWithAnalysis(),
     });
     if (!candidate) throw new NotFoundException("候选不存在");
     return this.dto(candidate);

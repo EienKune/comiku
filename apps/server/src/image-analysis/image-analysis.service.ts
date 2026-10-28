@@ -28,6 +28,18 @@ export class ImageAnalysisService {
   get activeModelKey(): string | null {
     return this.model?.modelKey ?? null;
   }
+  /** Evidence validity is independent from sibling completion and retry state. */
+  hasEvidence(score: number | null, predictions: unknown): boolean {
+    const entries = this.cachedPredictions(predictions);
+    return (
+      score !== null &&
+      Number.isFinite(score) &&
+      score >= 0 &&
+      score <= 1 &&
+      entries.length > 0 &&
+      entries.every((entry) => entry.score !== undefined)
+    );
+  }
   /** Cache entries contain only per-image winning classes, merged by maximum confidence. */
   promotesReview(predictions: unknown): boolean {
     const policy = this.model?.reviewPolicy;
@@ -320,59 +332,64 @@ export class ImageAnalysisService {
       },
     });
     const results = media.map((m) => m.analyses[0]);
-    const complete =
-      results.length > 0 &&
-      results.every((r) => r?.status === "succeeded" && r.score !== null);
-    let predictions: { label: string; confidence: number; score: number }[] =
-      [];
-    if (complete && this.model?.modelKey === modelKey) {
-      try {
-        const confidenceByLabel = new Map<string, number>();
-        const scoreByLabel = new Map<string, number>();
-        for (const row of results) {
+    const valid: {
+      score: number;
+      predictedClass: string;
+      confidence: number;
+    }[] = [];
+    if (this.model?.modelKey === modelKey) {
+      for (const row of results) {
+        if (row?.status !== "succeeded" || row.score === null) continue;
+        try {
           const result = validateImageAnalysisResult(
-            row!.resultJson,
+            row.resultJson,
             this.model.identity.labels,
           );
-          const confidence = result.classScores.find(
-            (score) => score.label === result.predictedClass,
-          )!.value;
-          const score = row!.score!;
-          if (!Number.isFinite(score) || score < 0 || score > 1)
-            throw Error("Invalid cached ranking score");
-          scoreByLabel.set(
-            result.predictedClass,
-            Math.max(scoreByLabel.get(result.predictedClass) ?? 0, score),
-          );
-          confidenceByLabel.set(
-            result.predictedClass,
-            Math.max(
-              confidenceByLabel.get(result.predictedClass) ?? 0,
-              confidence,
-            ),
-          );
+          if (!Number.isFinite(row.score) || row.score < 0 || row.score > 1)
+            continue;
+          valid.push({
+            score: row.score,
+            predictedClass: result.predictedClass,
+            confidence: result.classScores.find(
+              (entry) => entry.label === result.predictedClass,
+            )!.value,
+          });
+        } catch {
+          // A malformed sibling provides no evidence and cannot erase valid images.
         }
-        predictions = this.model.identity.labels.flatMap((label) => {
-          const confidence = confidenceByLabel.get(label);
-          return confidence === undefined
-            ? []
-            : [{ label, confidence, score: scoreByLabel.get(label)! }];
-        });
-      } catch {
-        // Historical malformed results must never promote a candidate for review.
       }
     }
+    const complete = results.length > 0 && valid.length === results.length;
+    const predictions = (
+      this.model?.modelKey === modelKey ? this.model.identity.labels : []
+    ).flatMap((label) => {
+      const matches = valid.filter((entry) => entry.predictedClass === label);
+      return matches.length
+        ? [
+            {
+              label,
+              confidence: Math.max(...matches.map((entry) => entry.confidence)),
+              score: Math.max(...matches.map((entry) => entry.score)),
+            },
+          ]
+        : [];
+    });
     await tx.candidatePost.update({
       where: { id: candidateId },
       data: {
         analysisModelKey: modelKey,
+        // Without the configured taxonomy this is not a completed reconstruction.
+        // Re-enabling the same key must rebuild its persisted successful evidence.
+        analysisSummaryVersion: this.model?.modelKey === modelKey ? 1 : 0,
         analysisState: complete
           ? "succeeded"
-          : results.some((r) => r?.status === "failed")
+          : results.some((r) => r?.status === "failed") ||
+              results.filter((r) => r?.status === "succeeded").length >
+                valid.length
             ? "failed"
             : "queued",
-        analysisScore: complete
-          ? Math.max(...results.map((r) => r!.score!))
+        analysisScore: valid.length
+          ? Math.max(...valid.map((entry) => entry.score))
           : null,
         analysisPredictions: predictions,
       },
@@ -387,19 +404,7 @@ export class ImageAnalysisService {
         OR: [
           { analysisModelKey: null },
           { analysisModelKey: { not: modelKey } },
-          { analysisPredictions: { equals: Prisma.DbNull } },
-          {
-            analysisState: "succeeded",
-            AND: [
-              { analysisPredictions: { not: [] } },
-              {
-                analysisPredictions: {
-                  path: ["0", "score"],
-                  equals: Prisma.DbNull,
-                },
-              },
-            ],
-          },
+          { analysisSummaryVersion: { lt: 1 } },
         ],
         media: { some: { analyses: { some: { modelKey } } } },
       },

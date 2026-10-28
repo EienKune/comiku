@@ -17336,6 +17336,9 @@
       "CandidateDto": {
         "type": "object",
         "properties": {
+          "canRetryAnalysis": {
+            "type": "boolean"
+          },
           "classificationTags": {
             "type": "array",
             "items": {

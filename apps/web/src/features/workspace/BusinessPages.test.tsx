@@ -1234,6 +1234,7 @@ test.each([
       tagDisposition,
       classificationTags: [{ label, text, tone }],
       reviewPriority: "low",
+      canRetryAnalysis: true,
       visualClass: "manga",
       visualClassSource: "default",
       classificationRevision: null,
@@ -1300,6 +1301,7 @@ test.each([
     );
 
     expect(await screen.findByText("测试候选")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重试识别" })).toBeTruthy();
     expect(screen.queryByText("同步记录")).toBeNull();
     expect(screen.queryByText(/来源抓取已排队|正在抓取：/)).toBeNull();
     expect(screen.getByRole("button", { name: "同步图源" })).toBeTruthy();

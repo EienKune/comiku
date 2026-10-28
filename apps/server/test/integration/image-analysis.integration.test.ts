@@ -5,9 +5,12 @@ import test from "node:test";
 import { Test } from "@nestjs/testing";
 import { AppModule } from "../../src/app.module.js";
 import { parseEnvironment } from "../../src/config/environment.js";
+import { Prisma } from "../../src/generated/prisma/client.js";
 import { PrismaService } from "../../src/database/prisma.service.js";
 import { FileObjectsService } from "../../src/files/file-objects.service.js";
 import { JobsService } from "../../src/jobs/jobs.service.js";
+import { CandidatesService } from "../../src/candidates/candidates.service.js";
+import { createBaPixaiImageAnalysisAdapter } from "../../src/image-analysis/adapters/ba-pixai/ba-pixai-adapter.js";
 import { ImageAnalysisService } from "../../src/image-analysis/image-analysis.service.js";
 import {
   IMAGE_ANALYSIS_ADAPTER,
@@ -431,6 +434,276 @@ test("retired adapters settle safely with analysis disabled and replacement iden
     });
     if (candidateId)
       await db.candidatePost.delete({ where: { id: candidateId } });
+    await db.author.delete({ where: { id: author.id } });
+    if (fileId) await files.purgeUnreferenced(fileId);
+    await app.close();
+  }
+});
+
+test("partial BA evidence survives failures and malformed siblings, with independent retry and pending state", async () => {
+  const model = activateImageAnalysisAdapter({
+    ...createBaPixaiImageAnalysisAdapter({
+      url: "http://127.0.0.1:19123",
+      token: "synthetic-partial-token",
+      modelRevision: "fixture",
+      decisionVersion: "fixture",
+      preprocessVersion: "original-whole-v1",
+    }),
+    async analyze() {
+      assert.fail("Persisted successful images must not repeat inference");
+    },
+  });
+  const module = await Test.createTestingModule({
+    imports: [
+      AppModule.forRoot(
+        parseEnvironment({ NODE_ENV: "test", DATABASE_URL: url }),
+      ),
+    ],
+  })
+    .overrideProvider(IMAGE_ANALYSIS_ADAPTER)
+    .useValue(model)
+    .compile();
+  const app = module.createNestApplication();
+  await app.init();
+  const db = app.get(PrismaService),
+    files = app.get(FileObjectsService);
+  const analysis = app.get(ImageAnalysisService),
+    candidates = app.get(CandidatesService);
+  const author = await db.author.create({
+    data: { displayName: "Partial BA fixture" },
+  });
+  let postId = "",
+    fileId = "";
+  try {
+    const file = await files.store({
+      body: Buffer.from("partial-ba-fixture"),
+      contentType: "image/jpeg",
+      bucketScope: "source",
+      kind: "partial-ba-fixture",
+    });
+    fileId = file.id;
+    const post = await db.candidatePost.create({
+      data: {
+        authorId: author.id,
+        platform: "fixture",
+        externalPostId: randomUUID(),
+        postedAt: new Date(),
+        rawJson: {},
+        revision: 7,
+        status: "pending",
+        analysisModelKey: model.modelKey,
+        media: {
+          create: [0, 1, 2, 3].map((orderIndex) => ({
+            fileObjectId: file.id,
+            externalMediaId: String(orderIndex),
+            orderIndex,
+            mediaType: "photo",
+          })),
+        },
+      },
+      include: { media: { orderBy: { orderIndex: "asc" } } },
+    });
+    postId = post.id;
+    const result = {
+      score: 0.4,
+      predictedClass: "ba_art",
+      classScores: [
+        { label: "ba_art", value: 0.4 },
+        { label: "ba_related", value: 0.35 },
+        { label: "other", value: 0.25 },
+      ],
+      evidence: [],
+    };
+    await db.candidateMediaAnalysis.createMany({
+      data: post.media.map((media, index) => ({
+        mediaId: media.id,
+        modelKey: model.modelKey,
+        modelRevision: model.identity.modelRevision,
+        decisionVersion: model.identity.decisionVersion,
+        sourceSha256: file.checksum,
+        status: index === 1 ? "failed" : index === 2 ? "queued" : "succeeded",
+        ...(index === 0
+          ? {
+              score: result.score,
+              resultJson: {
+                ...result,
+                identity: model.identity,
+                modelKey: model.modelKey,
+              } as unknown as Prisma.InputJsonValue,
+            }
+          : index === 3
+            ? { score: 0.99, resultJson: { malformed: true } }
+            : {}),
+      })),
+    });
+    await db.backgroundJob.createMany({
+      data: [1, 2].map((index) => ({
+        kind: "image_analysis",
+        resourceId: post.media[index].id,
+        idempotencyKey: `image-analysis:${post.media[index].id}:${model.modelKey}`,
+        status: index === 1 ? "failed" : "queued",
+        payload: { modelKey: model.modelKey },
+      })),
+    });
+    const successBefore = await db.candidateMediaAnalysis.findUniqueOrThrow({
+      where: {
+        mediaId_modelKey: {
+          mediaId: post.media[0].id,
+          modelKey: model.modelKey,
+        },
+      },
+    });
+    await Promise.all([
+      analysis.schedulePending(post.id),
+      analysis.schedulePending(post.id),
+    ]);
+    const summary = await db.candidatePost.findUniqueOrThrow({
+      where: { id: post.id },
+    });
+    assert.equal(summary.analysisSummaryVersion, 1);
+    assert.equal(summary.analysisState, "failed");
+    assert.equal(summary.analysisScore, 0.4);
+    assert.deepEqual(summary.analysisPredictions, [
+      { label: "ba_art", confidence: 0.4, score: 0.4 },
+    ]);
+    assert.equal(summary.revision, 7);
+    assert.equal(summary.status, "pending");
+    const page = await candidates.list({
+      authorId: author.id,
+      limit: 24,
+      triageGroup: "valid_manga",
+    });
+    assert.equal(
+      page.analysisPending,
+      true,
+      "A failed sibling cannot hide queued media",
+    );
+    assert.equal(page.items[0]?.id, post.id);
+    assert.equal(page.items[0]?.canRetryAnalysis, true);
+    assert.equal(page.items[0]?.reviewPriority, "low");
+    assert.deepEqual(page.items[0]?.classificationTags, [
+      { label: "ba_art", text: "BA 漫画／插画", tone: "success" },
+    ]);
+    await db.candidateClassificationSuggestion.create({
+      data: {
+        candidatePostId: post.id,
+        label: "photo",
+        classifierName: "legacy-fixture",
+        classifierVersion: "1",
+        score: 1,
+      },
+    });
+    assert.equal(
+      (
+        await candidates.list({
+          authorId: author.id,
+          limit: 24,
+          triageGroup: "photo",
+        })
+      ).items[0]?.id,
+      post.id,
+    );
+    await db.candidateClassificationSuggestion.deleteMany({
+      where: { candidatePostId: post.id },
+    });
+    await db.candidatePost.update({
+      where: { id: post.id },
+      data: { tagDisposition: "blocked" },
+    });
+    assert.equal(
+      (
+        await candidates.list({
+          authorId: author.id,
+          limit: 24,
+          triageGroup: "blocked_manga",
+        })
+      ).items[0]?.id,
+      post.id,
+    );
+    const disabled = new ImageAnalysisService(
+      db,
+      app.get(JobsService),
+      files,
+      null,
+    );
+    await disabled.schedulePending(post.id);
+    const retired = await db.candidatePost.findUniqueOrThrow({
+      where: { id: post.id },
+    });
+    assert.equal(retired.analysisSummaryVersion, 0);
+    assert.equal(retired.status, post.status);
+    assert.equal(retired.revision, 7);
+    assert.equal(
+      (await candidates.list({ authorId: author.id, limit: 24 }))
+        .analysisPending,
+      true,
+      "Same-key re-enable advertises the pending bounded repair",
+    );
+    assert.equal(
+      (
+        await db.candidateMediaAnalysis.findUniqueOrThrow({
+          where: {
+            mediaId_modelKey: {
+              mediaId: post.media[2].id,
+              modelKey: model.modelKey,
+            },
+          },
+        })
+      ).status,
+      "failed",
+    );
+    // Same-key re-enable must restore the successful evidence without inference.
+    await analysis.schedulePending(post.id);
+    const restored = await db.candidatePost.findUniqueOrThrow({
+      where: { id: post.id },
+    });
+    assert.equal(restored.analysisSummaryVersion, 1);
+    assert.equal(restored.analysisScore, summary.analysisScore);
+    assert.deepEqual(restored.analysisPredictions, summary.analysisPredictions);
+    assert.equal(restored.status, post.status);
+    assert.equal(restored.revision, 7);
+    assert.equal(analysis.promotesReview(restored.analysisPredictions), true);
+    assert.deepEqual(
+      (await candidates.get(post.id)).classificationTags,
+      page.items[0]?.classificationTags,
+    );
+    assert.equal((await candidates.get(post.id)).canRetryAnalysis, true);
+    assert.equal(
+      (await candidates.list({ authorId: author.id, limit: 24 }))
+        .analysisPending,
+      false,
+    );
+    assert.deepEqual(await analysis.retryFailed(post.id), { queued: 2 });
+    assert.equal(
+      (await candidates.list({ authorId: author.id, limit: 24 }))
+        .analysisPending,
+      true,
+    );
+    assert.equal((await candidates.get(post.id)).canRetryAnalysis, false);
+    const successAfter = await db.candidateMediaAnalysis.findUniqueOrThrow({
+      where: { id: successBefore.id },
+    });
+    assert.deepEqual(successAfter, successBefore);
+    assert.equal(
+      await db.candidateMediaAnalysis.count({
+        where: { media: { candidatePostId: post.id } },
+      }),
+      4,
+    );
+    assert.equal(
+      await db.backgroundJob.count({ where: { resourceId: post.media[0].id } }),
+      0,
+    );
+  } finally {
+    if (postId) {
+      const media = await db.candidateMedia.findMany({
+        where: { candidatePostId: postId },
+      });
+      await db.backgroundJob.deleteMany({
+        where: { resourceId: { in: media.map((item) => item.id) } },
+      });
+      await db.candidatePost.delete({ where: { id: postId } });
+    }
     await db.author.delete({ where: { id: author.id } });
     if (fileId) await files.purgeUnreferenced(fileId);
     await app.close();

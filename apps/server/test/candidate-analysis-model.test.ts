@@ -24,6 +24,10 @@ function fixture(activeModelKey: string | null) {
     authorExternalAccount: null,
     tagDisposition: "neutral",
     analysisState: row.id === "incomplete" ? "queued" : "succeeded",
+    analysisSummaryVersion: 1,
+    analysisPredictions: [
+      { label: "comic", confidence: 0.8, score: row.analysisScore },
+    ],
     classificationDecision: null,
     classificationSuggestions: [],
     sourceObservations: [],
@@ -47,20 +51,21 @@ function fixture(activeModelKey: string | null) {
     activeModelKey,
     promotesReview: () => false,
     classificationTags: () => [],
+    hasEvidence: () => true,
   } as unknown as ImageAnalysisService);
 }
 
-test("priority and sorting only use a complete summary from the active model", async () => {
+test("priority and sorting only use a valid partial summary from the active model", async () => {
   const service = fixture("model-b");
   const page = await service.list({ limit: 24 });
   assert.deepEqual(
     page.items.map((row) => row.id),
-    ["current", "incomplete", "legacy", "old"],
+    ["incomplete", "current", "legacy", "old"],
   );
-  assert.equal(page.items[0].reviewPriority, "low");
+  assert.equal(page.items[0].reviewPriority, "high");
   assert.equal((await service.get("old")).reviewPriority, "unprocessed");
   assert.equal((await service.get("legacy")).reviewPriority, "unprocessed");
-  assert.equal((await service.get("incomplete")).reviewPriority, "queued");
+  assert.equal((await service.get("incomplete")).reviewPriority, "high");
 });
 
 test("disabled analysis ignores cached scores but preserves the time order", async () => {
@@ -132,10 +137,12 @@ function pendingFixture(
                   },
                 },
                 {
+                  analyses: { some: { modelKey: "active" } },
                   candidatePost: {
                     OR: [
                       { analysisModelKey: null },
                       { analysisModelKey: { not: "active" } },
+                      { analysisSummaryVersion: { lt: 1 } },
                     ],
                   },
                 },
@@ -158,7 +165,7 @@ function pendingFixture(
                           : currentMediaSucceeded && modelKey === "active"
                             ? 0
                             : eligibility.activeMedia
-                        : 1,
+                        : 0,
                   },
                 }
               : {}),
@@ -170,6 +177,7 @@ function pendingFixture(
     activeModelKey: enabled ? "active" : null,
     promotesReview: () => false,
     classificationTags: () => [],
+    hasEvidence: () => true,
   } as unknown as ImageAnalysisService);
 }
 
@@ -177,6 +185,7 @@ test("analysis pending covers unprocessed and queued candidates outside the sele
   const cases: [string, string | null][] = [
     ["unprocessed", null],
     ["queued", "active"],
+    ["failed", "active"],
     ["succeeded", "retired-model"],
   ];
   for (const [state, modelKey] of cases) {
@@ -200,8 +209,14 @@ test("disabled analysis and current-model terminal results do not keep candidate
   for (const service of [
     pendingFixture("queued", "active", false),
     pendingFixture("unprocessed", null, false),
-    pendingFixture("failed"),
-    pendingFixture("succeeded"),
+    pendingFixture("failed", "active", true, {
+      activeMedia: 0,
+      authorDeleted: false,
+    }),
+    pendingFixture("succeeded", "active", true, {
+      activeMedia: 0,
+      authorDeleted: false,
+    }),
   ]) {
     assert.equal((await service.list({ limit: 1 })).analysisPending, false);
   }
@@ -267,10 +282,11 @@ async function groupedFixture(enabled = true, binary = false) {
     authorExternalAccount: null,
     tagDisposition: "neutral",
     analysisState: "succeeded",
+    analysisSummaryVersion: 1,
     analysisModelKey: model.modelKey,
     analysisScore: 0.9,
     analysisPredictions: [
-      { label: binary ? "accept" : "comic", confidence: 0.8 },
+      { label: binary ? "accept" : "comic", confidence: 0.8, score: 0.9 },
     ],
     classificationDecision: null,
     classificationSuggestions: [],
@@ -289,18 +305,24 @@ async function groupedFixture(enabled = true, binary = false) {
           ...base,
           id: "threshold",
           analysisScore: 0.1,
-          analysisPredictions: [{ label: "comic", confidence: 0.5 }],
+          analysisPredictions: [
+            { label: "comic", confidence: 0.5, score: 0.1 },
+          ],
         },
         {
           ...base,
           id: "uncertain",
           analysisScore: 0.99,
-          analysisPredictions: [{ label: "comic", confidence: 0.485 }],
+          analysisPredictions: [
+            { label: "comic", confidence: 0.485, score: 0.99 },
+          ],
         },
         {
           ...base,
           id: "related",
-          analysisPredictions: [{ label: "comic_related", confidence: 0.9 }],
+          analysisPredictions: [
+            { label: "comic_related", confidence: 0.9, score: 0.9 },
+          ],
         },
         {
           ...base,
@@ -332,8 +354,8 @@ async function groupedFixture(enabled = true, binary = false) {
           ...base,
           id: "multi",
           analysisPredictions: [
-            { label: "other", confidence: 0.9 },
-            { label: "comic", confidence: 0.7 },
+            { label: "other", confidence: 0.9, score: 0.9 },
+            { label: "comic", confidence: 0.7, score: 0.9 },
           ],
         },
         {
@@ -376,6 +398,7 @@ test("complete confident winning classes promote neutral candidates without over
     "human-manga",
     "multi",
     "positive",
+    "queued",
     "tagged",
     "threshold",
   ]);
@@ -384,7 +407,6 @@ test("complete confident winning classes promote neutral candidates without over
     "missing",
     "old",
     "other",
-    "queued",
     "related",
     "uncertain",
   ]);

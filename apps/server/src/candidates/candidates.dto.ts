@@ -115,6 +115,7 @@ export class CandidateClassificationTagDto implements ImageAnalysisLabelPresenta
 }
 
 export class CandidateDto {
+  @ApiPropertyOptional({ type: Boolean }) canRetryAnalysis?: boolean;
   @ApiPropertyOptional({ type: CandidateClassificationTagDto, isArray: true })
   classificationTags?: CandidateClassificationTagDto[];
   @ApiPropertyOptional({
