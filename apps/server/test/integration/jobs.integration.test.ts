@@ -23,6 +23,118 @@ const url = process.env.TEST_DATABASE_URL;
 if (!url || !new URL(url).pathname.endsWith("_test"))
   throw new Error("Explicit isolated TEST_DATABASE_URL required");
 
+test("execution deferral restores only its live lease-owned durable queue receipt", async () => {
+  const db = new PrismaService(
+    parseEnvironment({ NODE_ENV: "test", DATABASE_URL: url }),
+  );
+  await db.$connect();
+  const kind = `refund_${randomUUID()}`;
+  const scopes: string[] = [];
+  try {
+    for (const scenario of [
+      "absent",
+      "zero",
+      "primary",
+      "secondary",
+      "expired",
+      "replacement",
+    ] as const) {
+      const scope = `${kind}:${scenario}`;
+      scopes.push(scope);
+      const prior =
+        scenario === "absent"
+          ? null
+          : {
+              lastQueue: "scan",
+              consecutive:
+                scenario === "zero" ? 0 : scenario === "secondary" ? 3 : 1,
+            };
+      if (prior)
+        await db.jobQueueState.create({
+          data: { lane: "network", scope, ...prior },
+        });
+      const worker = () => {
+        const jobs = new JobsService(db);
+        jobs.registerQueuePolicy("network", scope, {
+          primary: "scan",
+          secondary: "recovery",
+          primaryWeight: 3,
+        });
+        jobs.register(kind, async () => {
+          throw new JobDeferred(new Date(Date.now() + 60_000), "capacity");
+        });
+        return jobs;
+      };
+      const jobs = worker();
+      for (const queueName of ["scan", "recovery"])
+        await jobs.enqueue({
+          kind,
+          resourceId: randomUUID(),
+          idempotencyKey: `${scope}:${queueName}`,
+          lane: "network",
+          executionScope: scope,
+          queueName,
+          priority: 100,
+        });
+      const claimed = await jobs.claim("network", new Date(), scope);
+      assert.ok(claimed);
+      assert.equal(
+        claimed.queueName,
+        scenario === "secondary" ? "recovery" : "scan",
+      );
+      const where = { lane_scope: { lane: "network" as const, scope } };
+      const receipt = await db.jobQueueState.findUniqueOrThrow({ where });
+      assert.equal(receipt.advanceLeaseId, claimed.leaseId);
+      assert.equal(receipt.priorLastQueue, prior?.lastQueue ?? null);
+      assert.equal(receipt.priorConsecutive, prior?.consecutive ?? null);
+      if (scenario === "expired" || scenario === "replacement")
+        await db.backgroundJob.update({
+          where: { id: claimed.id },
+          data: { leaseUntil: new Date(0) },
+        });
+      let replacement = null;
+      if (scenario === "replacement") {
+        replacement = await worker().claim("network", new Date(), scope);
+        assert.ok(replacement);
+        assert.equal(replacement.id, claimed.id);
+        assert.notEqual(replacement.leaseId, claimed.leaseId);
+      }
+      const before = await db.jobQueueState.findUniqueOrThrow({ where });
+      await jobs.execute(claimed);
+      const row = await db.backgroundJob.findUniqueOrThrow({
+        where: { id: claimed.id },
+      });
+      const state = await db.jobQueueState.findUnique({ where });
+      if (scenario === "expired" || scenario === "replacement") {
+        assert.deepEqual(state, before, scenario);
+        assert.equal(row.status, "running");
+        assert.equal(row.attempts, replacement ? 2 : 1);
+        assert.equal(row.leaseId, replacement?.leaseId ?? claimed.leaseId);
+      } else {
+        assert.equal(row.status, "queued");
+        assert.equal(row.attempts, 0);
+        assert.equal(row.leaseId, null);
+        assert.equal(row.lastError, "capacity");
+        if (!prior) assert.equal(state, null);
+        else {
+          assert.ok(state);
+          assert.equal(state.lastQueue, prior.lastQueue);
+          assert.equal(state.consecutive, prior.consecutive);
+          assert.equal(state.advanceLeaseId, null);
+          assert.equal(state.priorLastQueue, null);
+          assert.equal(state.priorConsecutive, null);
+        }
+      }
+    }
+  } finally {
+    await db.backgroundJob.deleteMany({ where: { kind } });
+    await db.jobQueueState.deleteMany({
+      where: { lane: "network", scope: { in: scopes } },
+    });
+    await db.$disconnect();
+  }
+});
+
 test("claim rejects concurrent retirement and scope moves, and gates read post-selection payload updates", async () => {
   const module = await Test.createTestingModule({
     imports: [

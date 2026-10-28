@@ -1,4 +1,7 @@
-import { SourceDiscoveryService } from "./source-discovery.service.js";
+import {
+  SourceDiscoveryService,
+  stableSourceAssetIdentity,
+} from "./source-discovery.service.js";
 import { SourceRecoveryService } from "./source-recovery.service.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { SourceAccountTasks } from "./source-account-tasks.js";
@@ -317,6 +320,8 @@ export class SourceFetchService {
             where: { id: post.id },
             include: { media: true },
           });
+          if (current.state === "needs_attention")
+            throw new RecoveryMediaIncompleteError("Discovery needs attention");
           if (!["complete", "excluded"].includes(current.state)) {
             let content =
               current.metadataJson as unknown as NormalizedSourceContent | null;
@@ -444,6 +449,21 @@ export class SourceFetchService {
                 error,
               );
             });
+            console.info(
+              JSON.stringify({
+                scope: "source_recovery",
+                event: "platform_failed",
+                ...sourceDiagnostic(error, {
+                  ...diagnosticContext,
+                  ...this.jobs.diagnosticContext?.(),
+                  campaignId: campaign.id,
+                  campaign: campaign.number,
+                  accountId: account.id,
+                  platform: post.platform,
+                  adapter: post.adapterKey,
+                }),
+              }),
+            );
             throw new JobDeferred(
               shared.cooldownUntil ?? new Date(Date.now() + 900000),
               shared.status === "auth_paused"
@@ -1064,9 +1084,13 @@ export class SourceFetchService {
                 ),
               )
                 ? "credential_unavailable"
-                : waiting.length
+                : waiting.some(
+                      (task) => task.failureCode === "platform_cooldown",
+                    )
                   ? "platform_cooldown"
-                  : null,
+                  : waiting.some((task) => task.failureCode === "capacity")
+                    ? "capacity"
+                    : null,
             }
           : {}),
         attempts: children.length
@@ -1331,6 +1355,20 @@ export class SourceFetchService {
               },
             });
           });
+          console.info(
+            JSON.stringify({
+              scope: "source_fetch",
+              event: "platform_failed",
+              ...sourceDiagnostic(error, {
+                ...diagnosticContext,
+                ...this.jobs.diagnosticContext?.(),
+                runId,
+                accountId: account.id,
+                platform: account.platform,
+                adapter: client.adapterKey,
+              }),
+            }),
+          );
           throw new JobDeferred(
             shared.cooldownUntil ?? new Date(Date.now() + 900000),
             shared.status === "auth_paused"
@@ -2154,7 +2192,7 @@ export class SourceFetchService {
     });
     if (existing) {
       diagnosticContext.stage = "candidate_observation";
-      await this.db.$transaction(async (tx) => {
+      const pending = await this.db.$transaction(async (tx) => {
         await this.lockSource(tx, account, state, createdById);
         await this.assertEligible(account, state, leaseId, tx);
         signal.throwIfAborted();
@@ -2210,7 +2248,11 @@ export class SourceFetchService {
             },
           },
         });
-        if (discovery && discovery.state !== "complete") {
+        let unresolved = discovery?.state === "needs_attention";
+        if (
+          discovery &&
+          !["complete", "needs_attention", "excluded"].includes(discovery.state)
+        ) {
           const persisted = await tx.candidateMedia.findMany({
             where: { candidatePostId: existing.id },
             orderBy: { orderIndex: "asc" },
@@ -2222,7 +2264,20 @@ export class SourceFetchService {
             const prior = persisted.find(
               (m) => m.externalMediaId === media.externalMediaId,
             );
-            if (prior && !media.fileObjectId)
+            const manifest = content.ownMedia.find(
+              (m) => m.externalMediaId === media.externalMediaId,
+            );
+            const identity = stableSourceAssetIdentity(manifest?.url);
+            const ledgerIdentity = stableSourceAssetIdentity(
+              (media.metadataJson as { url?: unknown })?.url,
+            );
+            if (
+              prior &&
+              identity &&
+              identity === ledgerIdentity &&
+              stableSourceAssetIdentity(prior.sourceUrl) === identity &&
+              !media.fileObjectId
+            )
               await this.discovery.attach(
                 tx,
                 discovery.id,
@@ -2238,7 +2293,8 @@ export class SourceFetchService {
             refreshed.every((m) => m.fileObjectId)
           )
             await this.discovery.complete(tx, discovery.id);
-          else
+          else {
+            unresolved = true;
             await tx.sourceDiscoveryPost.update({
               where: { id: discovery.id },
               data: {
@@ -2247,9 +2303,15 @@ export class SourceFetchService {
                 nextRetryAt: null,
               },
             });
+          }
         }
+        return unresolved;
       });
-      return { created: false, mediaStored: 0 };
+      return {
+        created: false,
+        mediaStored: 0,
+        ...(pending ? { pending: true } : {}),
+      };
     }
     const ledger = await this.db.sourceDiscoveryPost.findUniqueOrThrow({
       where: {

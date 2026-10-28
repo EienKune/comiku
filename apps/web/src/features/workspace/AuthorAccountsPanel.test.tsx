@@ -74,6 +74,29 @@ const pixiv: Account = {
   deletedAt: null,
 };
 
+test("unavailable persisted seven-day mode keeps its actual label", async () => {
+  const saved = {
+    ...pixiv,
+    fetchEnabled: true,
+    firstSyncMode: "last_7_days" as const,
+  };
+  vi.spyOn(client, "GET").mockImplementation(async (path) =>
+    success(
+      path === "/api/authors/sources" || String(path).endsWith("archived")
+        ? []
+        : [saved],
+    ),
+  );
+  setup([saved]);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+  const select = screen.getByRole("combobox", {
+    name: "首次同步范围",
+  }) as HTMLButtonElement;
+  expect(select.textContent).toContain("最近 7 天");
+  expect(select.textContent).toContain("当前不可用");
+  expect(select.disabled).toBe(true);
+});
+
 test("changing a platform identity requires an explicit replacement confirmation", async () => {
   vi.spyOn(client, "GET").mockImplementation(async (path) =>
     success(

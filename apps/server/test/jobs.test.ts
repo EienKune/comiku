@@ -6,6 +6,19 @@ import { JobDeferred, JobsService } from "../src/jobs/jobs.service.js";
 import type { BackgroundJob } from "../src/generated/prisma/client.js";
 import type { PrismaService } from "../src/database/prisma.service.js";
 
+function executionDb<T>(boundary: T) {
+  const tx = {
+    ...boundary,
+    $executeRaw: async () => 1,
+    $queryRaw: async () => [],
+    jobQueueState: { findUnique: async () => null },
+  };
+  return {
+    ...tx,
+    $transaction: async (body: (value: typeof tx) => unknown) => body(tx),
+  } as unknown as PrismaService;
+}
+
 test("deferral rejects arbitrary runtime reason strings", () => {
   assert.throws(
     () => new JobDeferred(new Date(), "upstream-secret" as "capacity"),
@@ -22,7 +35,7 @@ test("expired retry time cannot turn refunded attempts into a hot loop", async (
       },
     },
   };
-  const jobs = new JobsService(db as unknown as PrismaService);
+  const jobs = new JobsService(executionDb(db));
   jobs.register("fixture", async () => {
     throw new JobDeferred(new Date(0), "capacity");
   });
@@ -74,7 +87,7 @@ test("typed deferral on third claim preserves a nonterminal job and restores att
       },
     },
   };
-  const jobs = new JobsService(db as unknown as PrismaService);
+  const jobs = new JobsService(executionDb(db));
   const retryAt = new Date("2030-01-01T00:00:00Z");
   jobs.register("fixture", async () => {
     throw new JobDeferred(retryAt, "capacity");
@@ -162,7 +175,18 @@ test("claim gate denial persists a delay without a claim or fair budget write", 
     assert.equal(transaction, tx);
     return new JobDeferred(retryAt, "platform_cooldown");
   });
-  assert.equal(await jobs.claim("network", new Date(), "X"), null);
+  const events: string[] = [];
+  const log = console.info;
+  console.info = (line: string) => {
+    events.push(line);
+  };
+  try {
+    assert.equal(await jobs.claim("network", new Date(), "X"), null);
+  } finally {
+    console.info = log;
+  }
+  assert.equal(events.length, 1);
+  assert.equal(JSON.parse(events[0]).reason, "platform_cooldown");
   assert.deepEqual(writes, [
     {
       where: { id: "job" },
@@ -335,4 +359,124 @@ test("paused history cannot block new work after the three-primary fairness budg
       .slice(0, 100)
       .every((r) => r.attempts === 0 && r.availableAt.getTime() === 0),
   );
+});
+
+test("execution deferral refunds only its durable primary or secondary fairness advance", async () => {
+  type Budget = {
+    lastQueue: string;
+    consecutive: number;
+    advanceLeaseId?: string | null;
+    priorLastQueue?: string | null;
+    priorConsecutive?: number | null;
+  };
+  type Job = Pick<
+    BackgroundJob,
+    | "id"
+    | "kind"
+    | "lane"
+    | "executionScope"
+    | "queueName"
+    | "status"
+    | "attempts"
+    | "availableAt"
+    | "leaseId"
+    | "leaseUntil"
+  >;
+  for (const queue of ["scan", "recovery"])
+    for (const stale of [false, true]) {
+      const prior = {
+        lastQueue: "scan",
+        consecutive: queue === "scan" ? 1 : 3,
+      };
+      let state: Budget | null = { ...prior };
+      let job: Job = {
+        id: "job",
+        kind: "fixture",
+        lane: "network",
+        executionScope: "X",
+        queueName: queue,
+        status: "queued",
+        attempts: 0,
+        availableAt: new Date(0),
+        leaseId: null,
+        leaseUntil: null,
+      };
+      const locks: string[] = [];
+      const tx = {
+        $executeRaw: async () => {
+          locks.push("scope");
+        },
+        $queryRaw: async () => {
+          locks.push("job");
+          return [];
+        },
+        backgroundJob: {
+          updateMany: async ({
+            where,
+            data,
+          }: {
+            where: { id?: string; leaseId?: string };
+            data: Partial<Omit<Job, "attempts">>;
+          }) => {
+            if (
+              where.id !== job.id ||
+              where.leaseId !== job.leaseId ||
+              job.status !== "running"
+            )
+              return { count: 0 };
+            job = { ...job, ...data, attempts: job.attempts - 1 };
+            return { count: 1 };
+          },
+          count: async () => 0,
+          groupBy: async () => [{ queueName: queue }],
+          findFirst: async () => job,
+          findUnique: async () => job,
+          update: async ({ data }: { data: Partial<Omit<Job, "attempts">> }) =>
+            (job = { ...job, ...data, attempts: job.attempts + 1 }),
+        },
+        jobQueueState: {
+          findUnique: async () => state,
+          upsert: async ({ update }: { update: Budget }) =>
+            (state = { ...state, ...update }),
+          update: async ({ data }: { data: Partial<Budget> }) =>
+            (state = { ...prior, ...state, ...data }),
+          delete: async () => {
+            state = null;
+          },
+        },
+      };
+      const db = {
+        ...tx,
+        $transaction: async (fn: (value: typeof tx) => Promise<unknown>) =>
+          fn(tx),
+      };
+      const jobs = new JobsService(db as unknown as PrismaService);
+      jobs.registerQueuePolicy("network", "X", {
+        primary: "scan",
+        secondary: "recovery",
+        primaryWeight: 3,
+      });
+      jobs.register("fixture", async () => {
+        throw new JobDeferred(new Date(Date.now() + 60000), "capacity");
+      });
+      const claimed = await jobs.claim("network", new Date(), "X");
+      if (stale) {
+        job = { ...job, leaseId: "replacement" };
+        state = {
+          ...state,
+          lastQueue: "replacement",
+          advanceLeaseId: "replacement",
+        };
+      }
+      locks.length = 0;
+      await jobs.execute(claimed!);
+      assert.ok(state);
+      assert.equal(state.lastQueue, stale ? "replacement" : prior.lastQueue);
+      assert.equal(
+        state.consecutive,
+        stale ? (queue === "scan" ? 2 : 1) : prior.consecutive,
+      );
+      assert.deepEqual(locks.slice(0, 2), ["scope", "job"]);
+      assert.equal(job.status, stale ? "running" : "queued");
+    }
 });

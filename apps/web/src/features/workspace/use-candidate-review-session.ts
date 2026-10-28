@@ -13,11 +13,18 @@ export function useCandidateReviewSession(filter: CandidateBaseFilter) {
   const cache = useQueryClient();
   const key = ["candidate-review-session", filter] as const;
   const scope = JSON.stringify(filter);
-  const pending = useRef<{ scope: string; promise: Promise<void> } | null>(
+  const active = useRef({ scope, generation: 0 });
+  if (active.current.scope !== scope)
+    active.current = { scope, generation: active.current.generation + 1 };
+  const generation = active.current.generation;
+  const pending = useRef<{ generation: number; promise: Promise<void> } | null>(
     null,
   );
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [state, setState] = useState<{
+    generation: number;
+    refreshing: boolean;
+    error: string | null;
+  }>({ generation, refreshing: false, error: null });
   const query = useQuery({
     queryKey: key,
     staleTime: Infinity,
@@ -31,14 +38,14 @@ export function useCandidateReviewSession(filter: CandidateBaseFilter) {
   });
   const refresh = useCallback(
     (expiredSessionId?: string): Promise<void> => {
-      if (pending.current?.scope === scope) return pending.current.promise;
+      if (pending.current?.generation === generation)
+        return pending.current.promise;
       const current = cache.getQueryData<
         components["schemas"]["CandidateReviewSessionDto"]
       >(["candidate-review-session", filter]);
       if (expiredSessionId && current?.sessionId !== expiredSessionId)
         return Promise.resolve();
-      setRefreshing(true);
-      setError(null);
+      setState({ generation, refreshing: true, error: null });
       const promise = (async () => {
         try {
           const next = await unwrap(
@@ -51,26 +58,36 @@ export function useCandidateReviewSession(filter: CandidateBaseFilter) {
               },
             }),
           );
-          cache.setQueryData(["candidate-review-session", filter], next);
+          if (active.current.generation === generation)
+            cache.setQueryData(["candidate-review-session", filter], next);
         } catch (failure) {
-          setError(failure instanceof Error ? failure.message : "刷新列表失败");
+          if (active.current.generation === generation)
+            setState({
+              generation,
+              refreshing: true,
+              error:
+                failure instanceof Error ? failure.message : "刷新列表失败",
+            });
         } finally {
-          if (pending.current?.scope === scope) {
+          if (pending.current?.generation === generation) {
             pending.current = null;
-            setRefreshing(false);
+            if (active.current.generation === generation)
+              setState((current) => ({ ...current, refreshing: false }));
           }
         }
       })();
-      pending.current = { scope, promise };
+      pending.current = { generation, promise };
       return promise;
     },
-    [cache, filter, scope],
+    [cache, filter, generation],
   );
   return {
     session: query.data,
     refresh,
-    refreshing,
-    error: error ?? query.error?.message,
+    refreshing: state.generation === generation && state.refreshing,
+    error:
+      (state.generation === generation ? state.error : null) ??
+      query.error?.message,
     isPending: query.isPending,
   };
 }

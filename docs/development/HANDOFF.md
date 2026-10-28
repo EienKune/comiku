@@ -4,7 +4,8 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## Source ingestion
 
-- Post/ordinal media IDs are stable slots, not immutable assets. Before reusing a stored slot, compare the original asset origin/path; signed query-only refresh may reuse it, but changed asset paths require an explicit unresolved ledger outcome and must not mix old and new files. Keep that terminal attention state through campaign reconciliation.
+- Post/ordinal media IDs are stable slots, not immutable assets. Before reusing a stored slot, including a historical candidate created before discovery ledgers, compare its proven source origin/path with the verified manifest. Signed query-only refresh may reuse it; missing identity or changed asset paths require an explicit unresolved ledger outcome and must not certify an old file as a new asset. Preserve terminal attention/excluded reasons and human candidate/Work state through adoption and campaign reconciliation.
+- Execution-time gate deferral must refund the attempt and the lease's own durable fairness advance in one transaction. Lock the scope before the job; require a live matching job lease and the same queue receipt token before restoring its prior budget. An absent prior row differs from an existing zero budget. An expired/replaced executor must never restore an old budget over a later claim.
 - Partial media failures need a sanitized diagnostic event at the absorption boundary, and post recovery needs its own job/attempt/campaign context. Keep structured media/storage/native scope and reason, do not duplicate already emitted per-media failures in the recovery summary, and do not label gate waits as business failures.
 - A generic native HTTP hook cannot certify a metadata 404: only the exact active Pixiv `/illust/<id>` AJAX GET may establish that evidence. CDN HEAD 404s belong to native media fallback and cannot authorize a complete metadata-pending stub.
 

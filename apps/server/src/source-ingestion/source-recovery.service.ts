@@ -1,4 +1,5 @@
 import type { PrismaService } from "../database/prisma.service.js";
+import { ConflictException } from "@nestjs/common";
 import type {
   BackgroundJob,
   Prisma,
@@ -75,7 +76,14 @@ export class SourceRecoveryService {
           const post = await tx.sourceDiscoveryPost.findUniqueOrThrow({
             where: { id },
           });
-          await this.platforms.actor(tx, post.actorId);
+          try {
+            await this.platforms.actor(tx, post.actorId);
+          } catch (error) {
+            // Actor revocation after the due query is an expected eligibility
+            // change. Database/transaction errors still reach the safe event.
+            if (error instanceof ConflictException) return;
+            throw error;
+          }
           await this.lockAccount(tx, post);
           await tx.$queryRaw`SELECT id FROM source_discovery_posts WHERE id=${id}::uuid FOR UPDATE`;
           const current = await tx.sourceDiscoveryPost.findUniqueOrThrow({
@@ -115,7 +123,16 @@ export class SourceRecoveryService {
             data: { jobId: job.id },
           });
         })
-        .catch(() => undefined);
+        .catch(() => {
+          console.info(
+            JSON.stringify({
+              scope: "source_recovery",
+              event: "schedule_failed",
+              discoveryId: id,
+              code: "schedule_transaction_failed",
+            }),
+          );
+        });
   }
   async lockAccount(tx: Prisma.TransactionClient, post: SourceDiscoveryPost) {
     const account = await tx.authorExternalAccount.findUnique({

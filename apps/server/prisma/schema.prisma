@@ -1581,6 +1581,9 @@ model JobQueueState {
   scope String @db.VarChar(128)
   lastQueue String @map("last_queue") @db.VarChar(64)
   consecutive Int @default(0)
+  advanceLeaseId String? @map("advance_lease_id") @db.Uuid
+  priorLastQueue String? @map("prior_last_queue") @db.VarChar(64)
+  priorConsecutive Int? @map("prior_consecutive")
   @@id([lane, scope])
   @@map("job_queue_states")
 }

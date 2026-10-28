@@ -89,7 +89,9 @@ export function decodeCandidateCursor(
       typeof value.postedAt !== "string" ||
       !Number.isFinite(Date.parse(value.postedAt)) ||
       typeof value.id !== "string" ||
-      !/^[0-9a-f-]{36}$/i.test(value.id)
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        value.id,
+      )
     )
       throw Error();
     return value;

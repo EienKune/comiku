@@ -200,6 +200,33 @@ def http_failure_diagnostic(response, url, method):
             "http_response_excerpt": private_text(response.text, 4096)}
 
 
+def attach_http_diagnostic(ext, exc):
+    detail = getattr(ext, "_collection_http_failure", None)
+    if detail:
+        exc._collection_http_diagnostic = detail
+    return exc
+
+
+def install_x_http_checks(ext):
+    """Share one passive HTTP boundary for timeline and internal post calls."""
+    native_request = ext.request
+    ext._collection_http_failure = None
+    def checked_request(*args, **kwargs):
+        ext._collection_http_failure = None
+        response = native_request(*args, **kwargs)
+        # Native fatal=None returns a synthetic {}; it is transport failure,
+        # never evidence that an account/post is absent.
+        if isinstance(response, NullResponse):
+            raise AdapterError("network_error", guard="transport_null_response", detail={"transport_reason": response.reason})
+        if response.status_code >= 400:
+            try:
+                ext._collection_http_failure = http_failure_diagnostic(response, args[0] if args else kwargs.get("url", ""), kwargs.get("method", "GET"))
+            except Exception:
+                ext._collection_http_failure = {"http_diagnostic_error": "response_capture_failed"}
+        return response
+    ext.request = checked_request
+
+
 def parse_cutoff(value):
     """Normalize Go's variable precision to Python's six fractional digits."""
     normalized = value.replace("Z", "+00:00")
@@ -389,10 +416,7 @@ def collect(source, cursor):
             coverage["unknown_date"] += 1
 
     def with_http_diagnostic(exc):
-        detail = getattr(ext, "_collection_http_failure", None)
-        if detail:
-            exc._collection_http_diagnostic = detail
-        return exc
+        return attach_http_diagnostic(ext, exc)
 
     def incomplete(exc, preserve_diagnostic=False):
         result.pop("checkpoint", None)
@@ -417,24 +441,7 @@ def collect(source, cursor):
         return exc
 
     def install_x_checks(ext):
-        native_request = ext.request
-        ext._collection_http_failure = None
-        def checked_request(*args, **kwargs):
-            ext._collection_http_failure = None
-            response = native_request(*args, **kwargs)
-            # Native fatal=None converts exhausted transport errors into an
-            # empty synthetic response; its {} must not become NotFoundError.
-            if isinstance(response, NullResponse):
-                raise AdapterError("network_error", guard="transport_null_response", detail={"transport_reason": response.reason})
-            if response.status_code >= 400:
-                try:
-                    ext._collection_http_failure = http_failure_diagnostic(response, args[0] if args else kwargs.get("url", ""), kwargs.get("method", "GET"))
-                except Exception:
-                    # Instrumentation must not replace the native failure or
-                    # change successful parsing/retry semantics.
-                    ext._collection_http_failure = {"http_diagnostic_error": "response_capture_failed"}
-            return response
-        ext.request = checked_request
+        install_x_http_checks(ext)
         call = ext.api._call
         def checked_call(*args, **kwargs):
             nonlocal response_cursor, native_checked, all_old
@@ -883,6 +890,7 @@ def collect_post(source, post_id):
     result = {"version":1,"platform":platform,"source_id":source_id,"post_id":post_id,
               "records":[],"failed_ids":[],"page_complete":True,"terminal":True,
               "boundary":False,"neutral":False,"next":None}
+    ext = None
     def date(value):
         if not isinstance(value,str):
             raise AdapterError("discovery_incomplete")
@@ -937,6 +945,7 @@ def collect_post(source, post_id):
                 config.set(("extractor","twitter"),key,value)
             ext=twitter.TwitterTweetExtractor.from_url("https://x.com/i/web/status/"+post_id)
             ext.initialize()
+            install_x_http_checks(ext)
             ext.metadata=lambda:{}
             ext.login()
             raw=ext.api.tweet_result_by_rest_id(post_id)
@@ -981,10 +990,14 @@ def collect_post(source, post_id):
             raise AdapterError("discovery_incomplete")
         result.update(post_status="ready",records=records)
         return result
-    except AdapterError:
-        raise
     except Exception as exc:
-        raise AdapterError(safe_error(exc)) from None
+        # Preserve the original exception and captured native HTTP response
+        # before converting to a bounded, fail-closed protocol error.
+        error = exc if isinstance(exc, AdapterError) else AdapterError(safe_error(exc))
+        result.update(error=str(error), page_complete=False, terminal=False,
+                      diagnostic=safe_diagnostic(attach_http_diagnostic(ext, exc), "fetch_post"))
+        error.result = result
+        raise error from None
 
 
 def stringify_ids(value):

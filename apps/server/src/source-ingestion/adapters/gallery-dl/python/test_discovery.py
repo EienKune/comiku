@@ -132,6 +132,51 @@ class DiscoveryTests(unittest.TestCase):
         self.assertNotIn("enumeration_proof",result)
         self.assertNotIn("discovery_failures",result)
 
+    def test_x_post_http_failures_keep_safe_context_without_extra_requests(self):
+        from unittest.mock import Mock
+        for status, message, code in ((401, "authentication failed", "auth_failed"),
+                                      (429, "429 rate limit", "rate_limited"),
+                                      (503, "opaque native failure", "connector_failed")):
+            adapter.diagnostic_secrets[:] = ["fixture-secret-token"]
+            response = x_fixtures.AdapterTests.http_response(self, status, "upstream token=fixture-secret-token")
+            request = Mock(return_value=response)
+            def failed(api, post_id):
+                api.extractor.request("https://x.com/graphql/op-a7d9/TweetResultByRestId?token=fixture-secret-token", method="GET")
+                raise RuntimeError(message)
+            with self.subTest(status=status), patch.object(twitter.TwitterTweetExtractor, "login", lambda ext: None), \
+                    patch.object(twitter.TwitterExtractor, "request", request), \
+                    patch.object(twitter.TwitterAPI, "tweet_result_by_rest_id", failed):
+                with self.assertRaisesRegex(adapter.AdapterError, code) as caught:
+                    adapter.collect_post({"platform": "x", "remote_id": "42"}, "100")
+            detail = caught.exception.result["diagnostic"]
+            self.assertEqual("RuntimeError", detail["exception_type"])
+            self.assertEqual(str(status), detail["http_status"])
+            self.assertEqual("GET", detail["http_method"])
+            self.assertEqual("https://x.com/graphql/op-a7d9/TweetResultByRestId", detail["http_endpoint"])
+            self.assertEqual("req-9c5e7a1b", json.loads(detail["http_response_headers"])["x-request-id"])
+            self.assertNotIn("fixture-secret-token", json.dumps(detail))
+            self.assertFalse(caught.exception.result["page_complete"])
+            self.assertEqual(1, request.call_count)
+
+    def test_x_post_null_response_is_transport_failure_with_safe_guard(self):
+        from gallery_dl.util import NullResponse
+        from unittest.mock import Mock
+        adapter.diagnostic_secrets[:] = ["fixture-secret-token"]
+        request = Mock(return_value=NullResponse("https://x.com/graphql/fixture?token=fixture-secret-token", "ProxyError token=fixture-secret-token"))
+        def missing(api, post_id):
+            return api.extractor.request("https://x.com/graphql/fixture?token=fixture-secret-token").json()
+        with patch.object(twitter.TwitterTweetExtractor, "login", lambda ext: None), \
+                patch.object(twitter.TwitterExtractor, "request", request), \
+                patch.object(twitter.TwitterAPI, "tweet_result_by_rest_id", missing):
+            with self.assertRaisesRegex(adapter.AdapterError, "network_error") as caught:
+                adapter.collect_post({"platform": "x", "remote_id": "42"}, "100")
+        detail = caught.exception.result["diagnostic"]
+        self.assertEqual("transport_null_response", detail["guard"])
+        self.assertIn("ProxyError", detail["transport_reason"])
+        self.assertNotIn("fixture-secret-token", json.dumps(detail))
+        self.assertFalse(caught.exception.result["page_complete"])
+        self.assertEqual(1, request.call_count)
+
 
 if __name__ == "__main__":
     unittest.main()

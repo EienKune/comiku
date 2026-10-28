@@ -80,3 +80,37 @@ test("signed ordinal cursors reject body tampering and another session secret", 
     ),
   );
 });
+
+test("live cursor rejects noncanonical UUID layout before reaching SQL", () => {
+  const binding = {
+    sessionId: null,
+    filterHash: "filter",
+    modelKey: null,
+    group: null,
+  };
+  const value = {
+    ...binding,
+    rank: 0,
+    score: -1,
+    postedAt: "2026-10-29T00:00:00Z",
+  };
+  for (const id of [
+    "a".repeat(36),
+    "-".repeat(36),
+    "000000000-000-4000-8000-000000000000",
+  ])
+    assert.throws(
+      () =>
+        decodeCandidateCursor(encodeCandidateCursor({ ...value, id }), binding),
+      (error: unknown) =>
+        !!error &&
+        typeof error === "object" &&
+        "getStatus" in error &&
+        (error as { getStatus(): number }).getStatus() === 400,
+    );
+  const id = "ABCDEF12-3456-7890-ABCD-EF1234567890";
+  assert.equal(
+    decodeCandidateCursor(encodeCandidateCursor({ ...value, id }), binding).id,
+    id,
+  );
+});

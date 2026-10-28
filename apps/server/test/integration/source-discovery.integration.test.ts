@@ -628,3 +628,165 @@ test("recovery refuses a changed original asset path at stable ordinals and reta
     await f.cleanup();
   }
 });
+
+test("pre-ledger candidate adoption proves historical assets and preserves terminal and human Work state", async () => {
+  const f = await fixture();
+  const workIds: string[] = [];
+  const variants = [
+    "changed",
+    "unknown",
+    "query",
+    "needs_attention",
+    "excluded",
+  ] as const;
+  const histories: {
+    candidateId: string;
+    fileId: string;
+    work: Awaited<ReturnType<typeof f.db.work.create>>;
+    reviewedAt: Date;
+  }[] = [];
+  try {
+    f.contents.splice(
+      0,
+      f.contents.length,
+      ...variants.map((_variant, index) => ({
+        ...f.contents[0],
+        externalContentId: String(100 + index),
+        ownMedia: [
+          {
+            externalMediaId: `${100 + index}:0`,
+            type: "photo" as const,
+            url: `https://fixture.invalid/original/${100 + index}.png?fresh=1`,
+          },
+        ],
+      })),
+    );
+    for (const [index, variant] of variants.entries()) {
+      const content = f.contents[index];
+      const file = await f.store();
+      const reviewedAt = new Date("2026-10-01T00:00:00Z");
+      const candidate = await f.db.candidatePost.create({
+        data: {
+          authorId: f.author.id,
+          authorExternalAccountId: f.account.id,
+          platform: f.account.platform,
+          externalPostId: content.externalContentId,
+          postedAt: new Date(content.publishedAt),
+          rawJson: {},
+          status: "imported",
+          revision: 7,
+          reviewedAt,
+          reviewedById: f.actor.id,
+          media: {
+            create: {
+              externalMediaId: content.ownMedia[0].externalMediaId,
+              fileObjectId: file.id,
+              orderIndex: 0,
+              mediaType: "photo",
+              sourceUrl:
+                variant === "unknown"
+                  ? null
+                  : variant === "changed"
+                    ? `https://fixture.invalid/old/${100 + index}.png`
+                    : content.ownMedia[0].url.replace("fresh=1", "old=1"),
+            },
+          },
+        },
+      });
+      const work = await f.db.work.create({
+        data: {
+          authorId: f.author.id,
+          sourceCandidatePostId: candidate.id,
+          importedById: f.actor.id,
+          title: "Human title",
+          sourceText: "Human text",
+          workflowStatus: "translating",
+          revision: 3,
+        },
+      });
+      workIds.push(work.id);
+      histories.push({
+        candidateId: candidate.id,
+        fileId: file.id,
+        work,
+        reviewedAt,
+      });
+      if (variant === "needs_attention" || variant === "excluded") {
+        const post = await f.db.$transaction((tx) =>
+          f.service.discovery.record(
+            tx,
+            {
+              accountId: f.account.id,
+              platform: f.account.platform,
+              sourceUserId: "42",
+              adapterKey: f.client.adapterKey,
+              actorId: f.actor.id,
+              discoveredRunId: randomUUID(),
+              windowJson: {},
+            },
+            content,
+          ),
+        );
+        await f.db.sourceDiscoveryPost.update({
+          where: { id: post.id },
+          data: {
+            state: variant,
+            failureCode: "preserve_reason",
+            nextRetryAt: null,
+          },
+        });
+      }
+    }
+    await f.scan();
+    assert.deepEqual(
+      f.requests,
+      [],
+      "known historical candidates must not redownload media",
+    );
+    for (const [index, variant] of variants.entries()) {
+      const history = histories[index];
+      const post = await f.db.sourceDiscoveryPost.findUniqueOrThrow({
+        where: {
+          accountId_platform_externalPostId: {
+            accountId: f.account.id,
+            platform: f.account.platform,
+            externalPostId: String(100 + index),
+          },
+        },
+        include: { media: true },
+      });
+      assert.equal(
+        post.state,
+        variant === "query"
+          ? "complete"
+          : variant === "excluded"
+            ? "excluded"
+            : "needs_attention",
+        variant,
+      );
+      assert.equal(
+        post.media[0].fileObjectId,
+        variant === "query" ? history.fileId : null,
+        variant,
+      );
+      if (variant === "needs_attention" || variant === "excluded")
+        assert.equal(post.failureCode, "preserve_reason");
+      const candidate = await f.db.candidatePost.findUniqueOrThrow({
+        where: { id: history.candidateId },
+        include: { media: true },
+      });
+      assert.equal(candidate.status, "imported");
+      assert.equal(candidate.revision, 7);
+      assert.deepEqual(candidate.reviewedAt, history.reviewedAt);
+      assert.equal(candidate.reviewedById, f.actor.id);
+      assert.equal(candidate.media[0].fileObjectId, history.fileId);
+      assert.deepEqual(
+        await f.db.work.findUniqueOrThrow({ where: { id: history.work.id } }),
+        history.work,
+      );
+    }
+  } finally {
+    await f.db.work.deleteMany({ where: { id: { in: workIds } } });
+    await f.cleanup();
+  }
+});

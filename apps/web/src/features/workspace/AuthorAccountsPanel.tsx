@@ -23,6 +23,11 @@ type Account = components["schemas"]["ExternalAccountDto"];
 type Summary = components["schemas"]["ExternalAccountSummaryDto"];
 type Profile = components["schemas"]["ResolvedXProfileDto"];
 type Capability = components["schemas"]["SourceCapabilityDto"];
+const firstSyncModeLabels: Record<Account["firstSyncMode"], string> = {
+  none: "仅后续内容",
+  last_24_hours: "最近 24 小时",
+  last_7_days: "最近 7 天",
+};
 
 export function AuthorAccountsPanel({
   authorId,
@@ -567,18 +572,22 @@ function AccountEditor({
             >
               {!collectionModes.includes(firstSyncMode) && (
                 <option value={firstSyncMode} disabled>
-                  {firstSyncMode === "none" ? "仅后续内容" : "最近 24 小时"}
+                  {firstSyncModeLabels[firstSyncMode]}
                   （当前不可用）
                 </option>
               )}
               {collectionModes.includes("none") && (
-                <option value="none">仅后续内容</option>
+                <option value="none">{firstSyncModeLabels.none}</option>
               )}
               {collectionModes.includes("last_7_days") && (
-                <option value="last_7_days">最近 7 天</option>
+                <option value="last_7_days">
+                  {firstSyncModeLabels.last_7_days}
+                </option>
               )}
               {collectionModes.includes("last_24_hours") && (
-                <option value="last_24_hours">最近 24 小时</option>
+                <option value="last_24_hours">
+                  {firstSyncModeLabels.last_24_hours}
+                </option>
               )}
             </SelectField>
           </>

@@ -476,6 +476,7 @@ function fixture(source = client) {
         [...media.values()].map((m) => ({
           ...m,
           fileObjectId: "existing-file",
+          sourceUrl: m.metadataJson.url,
         })),
     },
     candidateSourceObservation: {
@@ -2080,4 +2081,296 @@ test("recovery fetchPost failures log one sanitized event; gate waits log no fai
   } finally {
     console.info = log;
   }
+});
+
+test("historical candidate adoption proves asset identity and preserves terminal attention", async () => {
+  for (const variant of [
+    "changed",
+    "unknown",
+    "query",
+    "needs_attention",
+    "excluded",
+  ]) {
+    const f = fixture();
+    const manifest = content("1");
+    await f.service.discovery.record(
+      f.db,
+      {
+        accountId: "account",
+        platform: "fixture",
+        sourceUserId: "1",
+        adapterKey: "synthetic",
+        actorId: null,
+        discoveredRunId: "run",
+        windowJson: {},
+      },
+      manifest,
+    );
+    const post = f.posts.get("1");
+    if (["needs_attention", "excluded"].includes(variant))
+      Object.assign(post, { state: variant, failureCode: "preserve_reason" });
+    f.db.candidatePost.findUnique = async () => ({
+      id: "historical",
+      status: "imported",
+      revision: 7,
+      workId: "human-work",
+    });
+    f.db.candidateMedia.findMany = async () => [
+      {
+        externalMediaId: manifest.ownMedia[0].externalMediaId,
+        fileObjectId: "historical-file",
+        sourceUrl:
+          variant === "unknown"
+            ? null
+            : variant === "changed"
+              ? "https://fixture.invalid/old.png"
+              : manifest.ownMedia[0].url + "?old=1",
+      },
+    ];
+    const result = await f.service.saveCandidate(
+      f.account,
+      f.snapshot,
+      client,
+      manifest,
+      null,
+      "run",
+      new AbortController().signal,
+    );
+    const stored = [...f.media.values()][0];
+    assert.equal(
+      stored.fileObjectId,
+      variant === "query" ? "historical-file" : null,
+      variant,
+    );
+    assert.equal(
+      post.state,
+      variant === "query"
+        ? "complete"
+        : variant === "excluded"
+          ? "excluded"
+          : "needs_attention",
+      variant,
+    );
+    assert.equal(
+      Boolean(result.pending),
+      !["query", "excluded"].includes(variant),
+      variant,
+    );
+    if (["needs_attention", "excluded"].includes(variant))
+      assert.equal(post.failureCode, "preserve_reason");
+    assert.equal(f.downloads, 0);
+    assert.equal(f.committed.length, 0);
+  }
+});
+
+test("actual credential failures emit one scrubbed platform diagnostic before scan and recovery defer", async () => {
+  for (const [reason, status] of [
+    ["auth_failed", 401],
+    ["challenge_required", 403],
+    ["rate_limited", 429],
+  ] as const)
+    for (const mode of ["scan", "recovery"]) {
+      const failure = new SourceResponseError(
+        reason === "rate_limited" ? "rate_limited" : "authentication",
+        {
+          reason,
+          scope: "credential",
+          diagnostic: {
+            guard: "native_auth",
+            http_status: status,
+            message: "https://source.invalid/graphql?token=HIDDEN",
+            http_response_headers: {
+              "x-request-id": "request-42",
+              "set-cookie": "HIDDEN",
+            },
+          },
+        },
+      );
+      const source = {
+        ...client,
+        fetchPage: async () => {
+          throw failure;
+        },
+        fetchPost: async () => {
+          throw failure;
+        },
+      };
+      const f = fixture(source);
+      f.jobs.diagnosticContext = () => ({ jobId: "job", attempt: 2 });
+      f.scan.leaseOwnerJobId = "job";
+      f.snapshot.scanOwnerJobId = "job";
+      f.service.platforms.outcome = async () => {};
+      f.service.platforms.lock = async () => {};
+      f.service.platforms.beforeNetwork = async () => {};
+      f.db.sourcePlatformState = { count: async () => 1 };
+      const logs: string[] = [];
+      const log = console.info;
+      console.info = (line: string) => {
+        logs.push(line);
+      };
+      try {
+        if (mode === "scan") {
+          await assert.rejects(
+            f.service.accountExecution.run(
+              { platform: "fixture", generation: "generation", job: {} },
+              () =>
+                f.service.fetchWithFallback(
+                  "run",
+                  f.account,
+                  null,
+                  new AbortController().signal,
+                ),
+            ),
+            JobDeferred,
+          );
+        } else {
+          await f.service.discovery.record(
+            f.db,
+            {
+              accountId: "account",
+              platform: "fixture",
+              sourceUserId: "1",
+              adapterKey: "synthetic",
+              actorId: null,
+              discoveredRunId: "run",
+              windowJson: {},
+            },
+            content("1"),
+          );
+          f.service.accounts = async () => [f.account];
+          f.service.claimSource = async () => ({ count: 1 });
+          f.live.fetchLeaseId = "campaign";
+          await assert.rejects(
+            f.service.recoverPost(
+              {
+                id: "job",
+                payload: {
+                  platform: "fixture",
+                  credentialGeneration: "generation",
+                },
+              },
+              {
+                id: "campaign",
+                number: 2,
+                discoveryPostId: "discovery-1",
+                discoveryPost: f.posts.get("1"),
+              },
+              new AbortController().signal,
+            ),
+            JobDeferred,
+          );
+        }
+        const events = logs
+          .map((line) => JSON.parse(line))
+          .filter((e) => e.event === "platform_failed");
+        assert.equal(events.length, 1, mode);
+        assert.equal(events[0].jobId, "job");
+        assert.equal(events[0].accountId, "account");
+        assert.equal(events[0].reason, reason);
+        assert.equal(events[0].failureScope, "credential");
+        assert.equal(events[0].diagnostic.http_status, String(status));
+        assert.equal(events[0].diagnostic.guard, "native_auth");
+        assert.equal(
+          JSON.parse(events[0].diagnostic.http_response_headers)[
+            "x-request-id"
+          ],
+          "request-42",
+        );
+        assert.equal(logs.join("").includes("HIDDEN"), false);
+        assert.equal(
+          logs.some(
+            (s) =>
+              s.includes('"adapter_failed"') || s.includes('"recovery_failed"'),
+          ),
+          false,
+        );
+      } finally {
+        console.info = log;
+      }
+    }
+});
+
+test("technical run history preserves capacity waits without inventing cooldown", async () => {
+  const f = fixture();
+  f.db.backgroundJob = { findMany: async () => [] };
+  f.service.dto = (run: any) => ({ id: run.id });
+  for (const [code, expected] of [
+    ["capacity", "capacity"],
+    ["platform_cooldown", "platform_cooldown"],
+    ["scope_paused", "credential_unavailable"],
+    ["unknown", null],
+  ]) {
+    const [run] = await f.service.withExecution([
+      {
+        id: "run",
+        accountTasks: [
+          {
+            id: "task",
+            status: "waiting",
+            completedAt: null,
+            failureCode: code,
+          },
+        ],
+      },
+    ]);
+    assert.equal(run.waitingReason, expected);
+  }
+});
+
+test("a queued recovery never reopens an established terminal attention ledger", async () => {
+  let requests = 0;
+  const f = fixture({
+    ...client,
+    fetchPost: async () => {
+      requests++;
+      return { kind: "excluded", postId: "1", reason: "foreign" };
+    },
+  });
+  await f.service.discovery.record(
+    f.db,
+    {
+      accountId: "account",
+      platform: "fixture",
+      sourceUserId: "1",
+      adapterKey: "synthetic",
+      actorId: null,
+      discoveredRunId: "run",
+      windowJson: {},
+    },
+    content("1"),
+  );
+  Object.assign(f.posts.get("1"), {
+    state: "needs_attention",
+    failureCode: "preserve_reason",
+    nextRetryAt: null,
+  });
+  f.service.accounts = async () => [f.account];
+  f.service.claimSource = async () => ({ count: 1 });
+  f.service.platforms.lock = async () => {};
+  f.service.platforms.beforeNetwork = async () => {};
+  f.service.platforms.outcome = async () => {};
+  f.service.recovery.finish = async () => {};
+  f.db.sourcePlatformState = { count: async () => 1 };
+  f.scan.leaseOwnerJobId = "job";
+  f.snapshot.scanOwnerJobId = "job";
+  f.live.fetchLeaseId = "campaign";
+  await assert.rejects(
+    f.service.recoverPost(
+      {
+        id: "job",
+        payload: { platform: "fixture", credentialGeneration: "generation" },
+      },
+      {
+        id: "campaign",
+        number: 2,
+        discoveryPostId: "discovery-1",
+        discoveryPost: f.posts.get("1"),
+      },
+      new AbortController().signal,
+    ),
+    /attention/,
+  );
+  assert.equal(requests, 0);
+  assert.equal(f.posts.get("1").state, "needs_attention");
+  assert.equal(f.posts.get("1").failureCode, "preserve_reason");
 });

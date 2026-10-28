@@ -140,7 +140,8 @@ export class JobsService {
     now = new Date(),
     executionScope = "global",
   ): Promise<BackgroundJob | null> {
-    let deferredEvent: ReturnType<typeof jobEvent> | undefined;
+    let deferredEvent:
+      (ReturnType<typeof jobEvent> & { reason: JobDeferredReason }) | undefined;
     const claimed = await this.db.$transaction(async (tx) => {
       await this.lockScope(tx, lane, executionScope);
       await tx.backgroundJob.updateMany({
@@ -251,10 +252,19 @@ export class JobsService {
           where: { id: next.id },
           data: { availableAt: retryAt, lastError: deferred.reason },
         });
-        deferredEvent = jobEvent("deferred", next, retryAt);
+        deferredEvent = {
+          ...jobEvent("deferred", next, retryAt),
+          reason: deferred.reason,
+        };
         return null;
       }
+      const leaseId = randomUUID();
       if (policy) {
+        const refund = {
+          advanceLeaseId: leaseId,
+          priorLastQueue: state?.lastQueue ?? null,
+          priorConsecutive: state?.consecutive ?? null,
+        };
         const consecutive =
           state?.lastQueue === next.queueName
             ? Math.min(policy.primaryWeight, state.consecutive + 1)
@@ -266,15 +276,16 @@ export class JobsService {
             scope: executionScope,
             lastQueue: next.queueName,
             consecutive,
+            ...refund,
           },
-          update: { lastQueue: next.queueName, consecutive },
+          update: { lastQueue: next.queueName, consecutive, ...refund },
         });
       }
       return tx.backgroundJob.update({
         where: { id: next.id },
         data: {
           status: "running",
-          leaseId: randomUUID(),
+          leaseId,
           leaseUntil: new Date(now.getTime() + JOB_LEASE_MS),
           attempts: { increment: 1 },
           startedAt: now,
@@ -323,22 +334,49 @@ export class JobsService {
     } catch (error) {
       if (error instanceof JobDeferred) {
         const retryAt = deferredRetryAt(error);
-        const changed = await this.db.backgroundJob.updateMany({
-          where: {
-            id: job.id,
-            leaseId: job.leaseId,
-            status: "running",
-            leaseUntil: { gt: new Date() },
-          },
-          data: {
-            status: "queued",
-            availableAt: retryAt,
-            leaseId: null,
-            leaseUntil: null,
-            attempts: { decrement: 1 },
-            completedAt: null,
-            lastError: error.reason,
-          },
+        const changed = await this.db.$transaction(async (tx) => {
+          await this.lockScope(tx, job.lane, job.executionScope);
+          await tx.$queryRaw`SELECT id FROM background_jobs WHERE id = ${job.id}::uuid FOR UPDATE`;
+          const changed = await tx.backgroundJob.updateMany({
+            where: {
+              id: job.id,
+              leaseId: job.leaseId,
+              status: "running",
+              leaseUntil: { gt: new Date() },
+            },
+            data: {
+              status: "queued",
+              availableAt: retryAt,
+              leaseId: null,
+              leaseUntil: null,
+              attempts: { decrement: 1 },
+              completedAt: null,
+              lastError: error.reason,
+            },
+          });
+          if (changed.count) {
+            const where = {
+              lane_scope: { lane: job.lane, scope: job.executionScope },
+            };
+            const state = await tx.jobQueueState.findUnique({ where });
+            // A later claim must never lose its budget to a stale executor.
+            if (state?.advanceLeaseId === job.leaseId) {
+              if (state.priorConsecutive === null)
+                await tx.jobQueueState.delete({ where });
+              else
+                await tx.jobQueueState.update({
+                  where,
+                  data: {
+                    lastQueue: state.priorLastQueue!,
+                    consecutive: state.priorConsecutive,
+                    advanceLeaseId: null,
+                    priorLastQueue: null,
+                    priorConsecutive: null,
+                  },
+                });
+            }
+          }
+          return changed;
         });
         if (changed.count)
           console.info(
