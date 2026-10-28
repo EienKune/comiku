@@ -1,4 +1,5 @@
 import { jobEvent } from "./job-events.js";
+import { selectQueue, type QueuePolicy } from "./queue-policy.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { ConflictException, Inject, Injectable } from "@nestjs/common";
@@ -14,6 +15,36 @@ export type JobHandler = (
   signal: AbortSignal,
 ) => Promise<void>;
 export const JOB_LEASE_MS = 60_000;
+export type JobDeferredReason =
+  "capacity" | "credential_unavailable" | "platform_cooldown" | "scope_paused";
+export class JobDeferred extends Error {
+  constructor(
+    readonly retryAt: Date,
+    readonly reason: JobDeferredReason,
+  ) {
+    super("Background job deferred");
+    if (!Number.isFinite(retryAt.getTime()))
+      throw new Error("Invalid retry time");
+    if (
+      ![
+        "capacity",
+        "credential_unavailable",
+        "platform_cooldown",
+        "scope_paused",
+      ].includes(reason)
+    )
+      throw new Error("Invalid deferred reason");
+  }
+}
+function deferredRetryAt(deferred: JobDeferred, now = new Date()): Date {
+  return new Date(Math.max(deferred.retryAt.getTime(), now.getTime() + 5000));
+}
+/** Runs under job row lock: DB validation/pinning only, never network work. */
+export type JobClaimGate = (
+  job: BackgroundJob,
+  tx: Prisma.TransactionClient,
+  now: Date,
+) => Promise<void | JobDeferred>;
 export function retryDelay(attempt: number): number {
   return Math.min(300_000, 5_000 * 2 ** (attempt - 1));
 }
@@ -22,6 +53,25 @@ export function retryDelay(attempt: number): number {
 export class JobsService {
   private readonly leaseContext = new AsyncLocalStorage<BackgroundJob>();
   private handlers = new Map<string, JobHandler>();
+  private gates = new Map<string, JobClaimGate>();
+  private policies = new Map<string, QueuePolicy>();
+
+  registerClaimGate(kind: string, gate: JobClaimGate) {
+    if (this.gates.has(kind)) throw new Error("Duplicate job claim gate");
+    this.gates.set(kind, gate);
+  }
+
+  registerQueuePolicy(lane: JobLane, scope: string, policy: QueuePolicy) {
+    if (
+      !Number.isInteger(policy.primaryWeight) ||
+      policy.primaryWeight < 1 ||
+      policy.primary === policy.secondary
+    )
+      throw new Error("Invalid queue policy");
+    const key = JSON.stringify([lane, scope]);
+    if (this.policies.has(key)) throw new Error("Duplicate queue policy");
+    this.policies.set(key, Object.freeze({ ...policy }));
+  }
   /** Read-only log correlation; never expose job payload or mutable lease state. */
   diagnosticContext(): Readonly<{ jobId?: string; attempt?: number }> {
     const job = this.leaseContext.getStore();
@@ -42,6 +92,8 @@ export class JobsService {
       actorId?: string | null;
       idempotencyKey: string;
       lane?: JobLane;
+      executionScope?: string;
+      queueName?: string;
       priority?: number;
       payload?: Prisma.InputJsonValue;
     },
@@ -51,6 +103,8 @@ export class JobsService {
       data: {
         ...input,
         lane: input.lane ?? "heavy",
+        executionScope: input.executionScope ?? "global",
+        queueName: input.queueName ?? "default",
         payload: input.payload ?? {},
       },
       skipDuplicates: true,
@@ -60,12 +114,22 @@ export class JobsService {
     });
   }
 
-  /** Advisory transaction lock serializes claims across processes; one live job per global lane. */
-  async claim(lane: JobLane, now = new Date()): Promise<BackgroundJob | null> {
-    return this.db.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`comiku:jobs:${lane}`}))`;
+  /** Scope lock serializes claims across processes; gates run before consuming an attempt. */
+  async claim(
+    lane: JobLane,
+    now = new Date(),
+    executionScope = "global",
+  ): Promise<BackgroundJob | null> {
+    let deferredEvent: ReturnType<typeof jobEvent> | undefined;
+    const claimed = await this.db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${JSON.stringify(["comiku:jobs", lane, executionScope])}))`;
       await tx.backgroundJob.updateMany({
-        where: { lane, status: "running", leaseUntil: { lte: now } },
+        where: {
+          lane,
+          executionScope,
+          status: "running",
+          leaseUntil: { lte: now },
+        },
         data: {
           status: "queued",
           leaseId: null,
@@ -76,21 +140,56 @@ export class JobsService {
       });
       if (
         await tx.backgroundJob.count({
-          where: { lane, status: "running", leaseUntil: { gt: now } },
+          where: {
+            lane,
+            executionScope,
+            status: "running",
+            leaseUntil: { gt: now },
+          },
         })
       )
         return null;
       await tx.backgroundJob.updateMany({
-        where: { lane, status: "queued", attempts: { gte: 3 } },
+        where: { lane, executionScope, status: "queued", attempts: { gte: 3 } },
         data: {
           status: "failed",
           completedAt: now,
           lastError: "重试次数已用尽",
         },
       });
+      const eligible = {
+        lane,
+        executionScope,
+        status: "queued" as const,
+        availableAt: { lte: now },
+        kind: { in: [...this.handlers.keys()] },
+      };
+      const policy = this.policies.get(JSON.stringify([lane, executionScope]));
+      const state = policy
+        ? await tx.jobQueueState.findUnique({
+            where: { lane_scope: { lane, scope: executionScope } },
+          })
+        : null;
+      let queueName: string | undefined;
+      if (policy) {
+        const queues = await tx.backgroundJob.groupBy({
+          by: ["queueName"],
+          where: eligible,
+          orderBy: { queueName: "asc" },
+        });
+        queueName =
+          selectQueue(
+            queues.map((q) => q.queueName),
+            state,
+            policy,
+          ) ?? undefined;
+        if (!queueName) return null;
+      }
       let next = await tx.backgroundJob.findFirst({
         where: {
           lane,
+          executionScope,
+          ...(queueName ? { queueName } : {}),
           status: "queued",
           availableAt: { lte: now },
           kind: { in: [...this.handlers.keys()] },
@@ -100,6 +199,8 @@ export class JobsService {
       const aged = await tx.backgroundJob.findFirst({
         where: {
           lane,
+          executionScope,
+          ...(queueName ? { queueName } : {}),
           status: "queued",
           availableAt: { lte: now },
           kind: { in: [...this.handlers.keys()] },
@@ -109,6 +210,48 @@ export class JobsService {
       });
       if (aged) next = aged;
       if (!next) return null;
+      await tx.$queryRaw`SELECT id FROM background_jobs WHERE id = ${next.id}::uuid FOR UPDATE`;
+      // Ordinary management writes do not hold the scope advisory lock. Re-read
+      // after acquiring the row lock so retirement/moves cannot be resurrected,
+      // and gates validate the currently committed payload.
+      next = await tx.backgroundJob.findUnique({ where: { id: next.id } });
+      if (
+        !next ||
+        next.lane !== lane ||
+        next.executionScope !== executionScope ||
+        (queueName !== undefined && next.queueName !== queueName) ||
+        next.status !== "queued" ||
+        next.availableAt > now ||
+        next.attempts >= 3 ||
+        !this.handlers.has(next.kind)
+      )
+        return null;
+      const deferred = await this.gates.get(next.kind)?.(next, tx, now);
+      if (deferred) {
+        const retryAt = deferredRetryAt(deferred, now);
+        await tx.backgroundJob.update({
+          where: { id: next.id },
+          data: { availableAt: retryAt, lastError: deferred.reason },
+        });
+        deferredEvent = jobEvent("deferred", next, retryAt);
+        return null;
+      }
+      if (policy) {
+        const consecutive =
+          state?.lastQueue === next.queueName
+            ? Math.min(policy.primaryWeight, state.consecutive + 1)
+            : 1;
+        await tx.jobQueueState.upsert({
+          where: { lane_scope: { lane, scope: executionScope } },
+          create: {
+            lane,
+            scope: executionScope,
+            lastQueue: next.queueName,
+            consecutive,
+          },
+          update: { lastQueue: next.queueName, consecutive },
+        });
+      }
       return tx.backgroundJob.update({
         where: { id: next.id },
         data: {
@@ -120,6 +263,8 @@ export class JobsService {
         },
       });
     });
+    if (deferredEvent) console.info(JSON.stringify(deferredEvent));
+    return claimed;
   }
 
   async execute(job: BackgroundJob, stopping?: AbortSignal) {
@@ -157,7 +302,35 @@ export class JobsService {
       });
       if (completed.count)
         console.info(JSON.stringify(jobEvent("succeeded", job)));
-    } catch {
+    } catch (error) {
+      if (error instanceof JobDeferred) {
+        const retryAt = deferredRetryAt(error);
+        const changed = await this.db.backgroundJob.updateMany({
+          where: {
+            id: job.id,
+            leaseId: job.leaseId,
+            status: "running",
+            leaseUntil: { gt: new Date() },
+          },
+          data: {
+            status: "queued",
+            availableAt: retryAt,
+            leaseId: null,
+            leaseUntil: null,
+            attempts: { decrement: 1 },
+            completedAt: null,
+            lastError: error.reason,
+          },
+        });
+        if (changed.count)
+          console.info(
+            JSON.stringify({
+              ...jobEvent("deferred", job, retryAt),
+              reason: error.reason,
+            }),
+          );
+        return;
+      }
       const retryAt = new Date(Date.now() + retryDelay(job.attempts));
       const changed = await this.db.backgroundJob.updateMany({
         where: { id: job.id, leaseId: job.leaseId, status: "running" },
@@ -205,8 +378,12 @@ export class JobsService {
       throw new ConflictException("后台任务租约已变化");
   }
 
-  async runNext(lane: JobLane, stopping?: AbortSignal) {
-    const job = await this.claim(lane);
+  async runNext(
+    lane: JobLane,
+    stopping?: AbortSignal,
+    executionScope = "global",
+  ) {
+    const job = await this.claim(lane, new Date(), executionScope);
     if (!job) return false;
     await this.execute(job, stopping);
     return true;

@@ -1410,6 +1410,7 @@ enum JobStatus {
 enum JobLane {
   network
   heavy
+  analysis
 }
 
 model BackgroundJob {
@@ -1419,6 +1420,8 @@ model BackgroundJob {
   actorId        String?   @map("actor_id") @db.Uuid
   idempotencyKey String    @unique @map("idempotency_key") @db.VarChar(255)
   lane           JobLane   @default(heavy)
+  executionScope String    @default("global") @map("execution_scope") @db.VarChar(128)
+  queueName      String    @default("default") @map("queue_name") @db.VarChar(64)
   status         JobStatus @default(queued)
   payload        Json      @default("{}")
   priority       Int       @default(10)
@@ -1430,7 +1433,7 @@ model BackgroundJob {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   startedAt      DateTime? @map("started_at") @db.Timestamptz(3)
   completedAt    DateTime? @map("completed_at") @db.Timestamptz(3)
-  @@index([lane, status, availableAt, priority])
+  @@index([lane, executionScope, status, availableAt, queueName, priority], map: "background_jobs_scope_queue_claim_idx")
   @@map("background_jobs")
 }
 
@@ -1526,4 +1529,13 @@ model DownloadPreparation {
   @@unique([actorId, idempotencyKey])
   @@index([status, expiresAt])
   @@map("download_preparations")
+}
+
+model JobQueueState {
+  lane JobLane
+  scope String @db.VarChar(128)
+  lastQueue String @map("last_queue") @db.VarChar(64)
+  consecutive Int @default(0)
+  @@id([lane, scope])
+  @@map("job_queue_states")
 }
