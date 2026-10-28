@@ -234,6 +234,7 @@ model AuthorExternalAccount {
   updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt           DateTime?            @map("deleted_at") @db.Timestamptz(3)
   fetchRunItems       SourceFetchRunItem[]
+  scanState           SourceAccountScanState?
   adapterStates       SourceAdapterState[]
   sourceObservations  CandidateSourceObservation[]
   candidates          CandidatePost[]
@@ -562,6 +563,20 @@ model SourceFetchRunItem {
   @@index([externalAccountId, startedAt])
   @@index([adapterStateId, startedAt])
   @@map("source_fetch_run_items")
+}
+
+model SourceAccountScanState {
+  accountId String @id @map("account_id") @db.Uuid
+  account AuthorExternalAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  discoveredThroughAt DateTime? @map("discovered_through_at") @db.Timestamptz(3)
+  windowJson Json @default("{}") @map("window_json")
+  leaseOwnerJobId String? @map("lease_owner_job_id") @db.Uuid
+  leaseUntil DateTime? @map("lease_until") @db.Timestamptz(3)
+  epoch Int @default(0)
+  revision Int @default(0)
+
+  @@index([leaseUntil])
+  @@map("source_account_scan_states")
 }
 
 model SourceAdapterState {

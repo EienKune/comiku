@@ -49,23 +49,16 @@ local 与 R2 不是自动迁移关系：更换驱动不会搬运已有对象。�
 
 ## X 与后台调度
 
-提供 X 官方 API 与网页会话两种适配器，真实服务可用性需自行验证；无凭据时其他手动图源和制作流程仍可使用。
+日常采集与账号资料同步只使用 gallery-dl 的 X/Pixiv 实现，配置见下方 gallery-dl 章节。旧网页会话与官方 API 实现仅保留为历史源码和合成测试，不注册到运行时，不作为失败回退；旧凭据环境变量不再读取。
 
-| 配置                                                    | 用途                                      |
-| ------------------------------------------------------- | ----------------------------------------- |
-| `X_BEARER_TOKEN`                                        | 官方 API Bearer Token                     |
-| `X_OFFICIAL_DAILY_BUDGET` / `X_OFFICIAL_MONTHLY_BUDGET` | 官方回退请求计数上限；任一为 0 即关闭回退 |
-| `X_WEB_BEARER_TOKEN`                                    | 网页会话 Bearer                           |
-| `X_WEB_AUTH_TOKEN` / `X_WEB_CSRF_TOKEN`                 | 本人合法会话 auth_token 与 ct0            |
-| `X_WEB_USER_MEDIA_QUERY_ID`                             | 当前 UserMedia 查询 ID                    |
-| `X_WEB_USER_BY_SCREEN_NAME_QUERY_ID`                    | 作者资料同步所需查询 ID                   |
-| `X_WEB_FEATURES_JSON`                                   | 当前网页请求 feature 对象，默认空对象     |
-| `SOURCE_SCHEDULE_ENABLED`                               | 自动抓取总开关，默认 false                |
-| `SOURCE_SCHEDULE_MINUTES`                               | 调度周期，默认 60、最小 5 分钟            |
-| `SOURCE_OVERLAP_MINUTES`                                | 已完成水位重叠窗口，默认 10 分钟          |
-| `SOURCE_FAILURE_THRESHOLD` / `SOURCE_COOLDOWN_MINUTES`  | 连续失败阈值及冷却，默认 3 次 / 360 分钟  |
+| 配置                                                   | 用途                                     |
+| ------------------------------------------------------ | ---------------------------------------- |
+| `SOURCE_SCHEDULE_ENABLED`                              | 自动抓取总开关，默认 false               |
+| `SOURCE_SCHEDULE_MINUTES`                              | 调度周期，默认 60、最小 5 分钟           |
+| `SOURCE_OVERLAP_MINUTES`                               | 已完成水位重叠窗口，默认 10 分钟         |
+| `SOURCE_FAILURE_THRESHOLD` / `SOURCE_COOLDOWN_MINUTES` | 连续失败阈值及冷却，默认 3 次 / 360 分钟 |
 
-网页核心配置需成套提供，Cookie、query ID 和 features 可能过期。官方预算按 UTC 日/月累计请求，不等于账单费用上限，也不替代平台套餐控制。先用少量授权作者手动联调，再决定是否启用周期抓取和付费回退。任何凭据都不粘贴到公开 issue、截图或日志。
+先用少量授权作者手动验证 gallery-dl 的私有配置，再决定是否启用周期抓取。任何凭据都不粘贴到公开 issue、截图或日志。`X_OFFICIAL_DAILY_BUDGET` / `X_OFFICIAL_MONTHLY_BUDGET` 仍是自定义计费 client 的兼容预算输入，日常模块不会因此注册官方 API 或启用回退。
 
 ## 可选图片识别
 

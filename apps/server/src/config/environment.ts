@@ -19,15 +19,6 @@ export interface Environment {
     | { adapter: "example" }
     | { adapter: "ba-pixai"; configFile: string }
     | { adapter: "external"; modulePath: string; configFile: string };
-  xBearerToken?: string;
-  xWebSession?: {
-    bearerToken: string;
-    authToken: string;
-    csrfToken: string;
-    userMediaQueryId: string;
-    userByScreenNameQueryId?: string;
-    features: Record<string, unknown>;
-  };
   xOfficialDailyBudget: number;
   xOfficialMonthlyBudget: number;
   sourceOverlapMinutes: number;
@@ -166,30 +157,6 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
   ] as const;
   const r2Values = r2Names.map((name) => input[name]?.trim() ?? "");
   const configured = r2Values.filter(Boolean).length;
-  const webNames = [
-    "X_WEB_BEARER_TOKEN",
-    "X_WEB_AUTH_TOKEN",
-    "X_WEB_CSRF_TOKEN",
-    "X_WEB_USER_MEDIA_QUERY_ID",
-  ] as const;
-  const webValues = webNames.map((name) => input[name]?.trim() ?? "");
-  const webConfigured = webValues.filter(Boolean).length;
-  if (webConfigured > 0 && webConfigured < webNames.length) {
-    throw new Error(
-      "X web session configuration must provide all X_WEB_* variables.",
-    );
-  }
-  let xWebFeatures: Record<string, unknown> = {};
-  if (input.X_WEB_FEATURES_JSON?.trim()) {
-    try {
-      const parsed = JSON.parse(input.X_WEB_FEATURES_JSON) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-        throw new Error();
-      xWebFeatures = parsed as Record<string, unknown>;
-    } catch {
-      throw new Error("X_WEB_FEATURES_JSON must be a JSON object.");
-    }
-  }
   if (configured > 0 && configured < r2Names.length) {
     throw new Error("R2 configuration must provide all R2_* variables.");
   }
@@ -298,26 +265,6 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
     typesetBatchMaxWorks: integer("TYPESET_BATCH_MAX_WORKS", 20, 1),
     objectStorageDriver,
     ...(objectStorageDriver === "local" ? { localStoragePath } : {}),
-    ...(input.X_BEARER_TOKEN?.trim()
-      ? { xBearerToken: input.X_BEARER_TOKEN.trim() }
-      : {}),
-    ...(webConfigured === webNames.length
-      ? {
-          xWebSession: {
-            bearerToken: webValues[0],
-            authToken: webValues[1],
-            csrfToken: webValues[2],
-            userMediaQueryId: webValues[3],
-            ...(input.X_WEB_USER_BY_SCREEN_NAME_QUERY_ID?.trim()
-              ? {
-                  userByScreenNameQueryId:
-                    input.X_WEB_USER_BY_SCREEN_NAME_QUERY_ID.trim(),
-                }
-              : {}),
-            features: xWebFeatures,
-          },
-        }
-      : {}),
     ...(configured === r2Names.length
       ? {
           r2: {

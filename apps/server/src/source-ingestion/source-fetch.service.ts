@@ -60,7 +60,10 @@ type Account = Prisma.AuthorExternalAccountGetPayload<{
     adapterStates: { omit: { discoveryCheckpointJson: true } };
   };
 }>;
-type FetchState = Omit<SourceAdapterState, "discoveryCheckpointJson">;
+type FetchState = Omit<SourceAdapterState, "discoveryCheckpointJson"> & {
+  scanEpoch?: number;
+  scanOwnerJobId?: string;
+};
 type ProgressRun = Pick<
   SourceFetchRun,
   "id" | "trigger" | "status" | "startedAt" | "completedAt"
@@ -109,6 +112,14 @@ export class SourceFetchService {
         if (error instanceof BadRequestException || job.attempts >= 3) {
           await this.db.$transaction(async (tx) => {
             await this.jobs.assertCurrentLease(tx);
+            await tx.sourceAccountScanState.updateMany({
+              where: { leaseOwnerJobId: job.id },
+              data: {
+                leaseOwnerJobId: null,
+                leaseUntil: null,
+                epoch: { increment: 1 },
+              },
+            });
             await tx.sourceAdapterState.updateMany({
               where: { fetchLeaseId: run.id },
               data: { fetchLeaseId: null, fetchLeaseUntil: null },
@@ -207,6 +218,14 @@ export class SourceFetchService {
         errorCode: "worker_attempts_exhausted",
         errorMessage: "后台重试已耗尽，请检查后重新抓取",
         completedAt: now,
+      },
+    });
+    await tx.sourceAccountScanState.updateMany({
+      where: { leaseOwnerJobId: job.id },
+      data: {
+        leaseOwnerJobId: null,
+        leaseUntil: null,
+        epoch: { increment: 1 },
       },
     });
     await tx.sourceAdapterState.updateMany({
@@ -623,6 +642,11 @@ export class SourceFetchService {
   }
 
   private async ensureAdapterStates(accounts: Account[]) {
+    if (accounts.length)
+      await this.db.sourceAccountScanState.createMany({
+        data: accounts.map((account) => ({ accountId: account.id })),
+        skipDuplicates: true,
+      });
     for (const account of accounts) {
       const known = new Set(
         account.adapterStates.map((state) => state.adapterKey),
@@ -653,7 +677,7 @@ export class SourceFetchService {
   ) {
     let allowMeteredFallback = true;
     for (const client of this.sources.forPlatform(account.platform)) {
-      const state = account.adapterStates.find(
+      const state: FetchState | undefined = account.adapterStates.find(
         (item) => item.adapterKey === client.adapterKey,
       );
       if (!state) continue;
@@ -700,7 +724,17 @@ export class SourceFetchService {
       const leased = await this.db.$transaction(async (tx) => {
         await this.lockSource(tx, account, state, createdById);
         await this.assertEligible(account, state, undefined, tx);
-        return tx.sourceAdapterState.updateMany({
+        const scan = await tx.sourceAccountScanState.findUniqueOrThrow({
+          where: { accountId: account.id },
+        });
+        const owner = this.jobs.diagnosticContext?.().jobId ?? runId;
+        if (
+          scan.leaseUntil &&
+          scan.leaseUntil > now &&
+          scan.leaseOwnerJobId !== owner
+        )
+          return { count: 0 };
+        const leased = await tx.sourceAdapterState.updateMany({
           where: {
             id: state.id,
             revision: state.revision,
@@ -720,6 +754,20 @@ export class SourceFetchService {
               : {}),
           },
         });
+        if (leased.count) {
+          const claimed = await tx.sourceAccountScanState.update({
+            where: { accountId: account.id },
+            data: {
+              leaseOwnerJobId: owner,
+              leaseUntil: new Date(now.getTime() + SOURCE_LEASE_MS),
+              epoch: { increment: 1 },
+              revision: { increment: 1 },
+            },
+          });
+          state.scanEpoch = claimed.epoch;
+          state.scanOwnerJobId = owner;
+        }
+        return leased;
       });
       const item = previous
         ? await this.db.sourceFetchRunItem.update({
@@ -864,7 +912,16 @@ export class SourceFetchService {
         if (!client.metered) allowMeteredFallback = cooling;
       } finally {
         await this.db.$transaction(async (tx) => {
-          await this.jobs.assertCurrentLease(tx);
+          await this.lockSource(tx, account, state, createdById);
+          const released = await tx.sourceAccountScanState.updateMany({
+            where: {
+              accountId: account.id,
+              epoch: state.scanEpoch ?? -1,
+              leaseOwnerJobId: state.scanOwnerJobId ?? runId,
+            },
+            data: { leaseOwnerJobId: null, leaseUntil: null },
+          });
+          if (!released.count) return;
           await tx.sourceAdapterState.updateMany({
             where: {
               id: state.id,
@@ -958,12 +1015,47 @@ export class SourceFetchService {
         ? value
         : null;
     };
-    const previous = jsonObject(state.cursorJson) ?? {};
-    const previousWindow = jsonObject(previous._sourceScanWindow);
+    const scan = await this.db.sourceAccountScanState.findUniqueOrThrow({
+      where: { accountId: account.id },
+    });
+    const coverage = scan.discoveredThroughAt;
+    const sharedWindow = jsonObject(scan.windowJson);
+    const hasSharedWindow =
+      sharedWindow && Object.keys(sharedWindow).length > 0;
+    if (
+      hasSharedWindow &&
+      (sharedWindow.version !== 1 ||
+        sharedWindow.sourceId !== account.externalUserId ||
+        !timestamp(sharedWindow.endTime) ||
+        (sharedWindow.startTime !== null &&
+          !timestamp(sharedWindow.startTime)) ||
+        (typeof sharedWindow.startTime === "string" &&
+          sharedWindow.startTime > (sharedWindow.endTime as string)) ||
+        (sharedWindow.endTime as string) > scanStartedAt.toISOString() ||
+        (coverage && new Date(sharedWindow.endTime as string) < coverage))
+    )
+      throw new Error("Source account scan window binding changed");
+    let previous = jsonObject(state.cursorJson) ?? {};
+    let previousWindow = jsonObject(previous._sourceScanWindow);
+    if (
+      hasSharedWindow &&
+      (!previousWindow ||
+        previousWindow.startTime !== sharedWindow.startTime ||
+        previousWindow.endTime !== sharedWindow.endTime)
+    ) {
+      previous = {};
+      previousWindow = null;
+    }
+    if (!hasSharedWindow && coverage && previousWindow) {
+      previous = {};
+      previousWindow = null;
+    }
     const restartForMode = Boolean(
-      previousWindow &&
-      !state.completedThroughAt &&
-      previousWindow.firstSyncMode !== account.firstSyncMode,
+      !coverage &&
+      (hasSharedWindow
+        ? sharedWindow.firstSyncMode !== account.firstSyncMode
+        : previousWindow &&
+          previousWindow.firstSyncMode !== account.firstSyncMode),
     );
     let cursor: SourceCursor;
     let startTime: string | null;
@@ -984,11 +1076,17 @@ export class SourceFetchService {
           previous.sourceId !== account.externalUserId) ||
         (lower && lower > upper) ||
         upper > scanStartedAt.toISOString() ||
-        (state.completedThroughAt && new Date(upper) < state.completedThroughAt)
+        (coverage && new Date(upper) < coverage)
       )
         throw new Error("Source scan window binding changed");
     }
-    if (previousWindow && !restartForMode) {
+    if (hasSharedWindow && !restartForMode) {
+      startTime = sharedWindow.startTime as string | null;
+      endTime = sharedWindow.endTime as string;
+      cursor = previousWindow
+        ? { ...previous }
+        : { ...client.initialCursor(account.firstSyncMode, new Date(endTime)) };
+    } else if (previousWindow && !restartForMode) {
       startTime = timestamp(previousWindow.startTime);
       endTime = previousWindow.endTime as string;
       cursor = { ...previous };
@@ -999,21 +1097,21 @@ export class SourceFetchService {
       )
         throw new Error("Source scan account binding changed");
       endTime = scanStartedAt.toISOString();
-      if (state.completedThroughAt && state.completedThroughAt > scanStartedAt)
+      if (coverage && coverage > scanStartedAt)
         throw new Error("Source scan clock precedes completed coverage");
       const initial = client.initialCursor(
         account.firstSyncMode,
         scanStartedAt,
       );
-      startTime = state.completedThroughAt
+      startTime = coverage
         ? new Date(
-            state.completedThroughAt.getTime() -
-              this.environment.sourceOverlapMinutes * 60_000,
+            coverage.getTime() - this.environment.sourceOverlapMinutes * 60_000,
           ).toISOString()
         : timestamp(initial.startTime);
       // Legacy cursors have no trustworthy upper bound. Start from the head,
       // retaining their lower bound only when it widens the required window.
-      const legacyLower = restartForMode ? null : timestamp(previous.startTime);
+      const legacyLower =
+        restartForMode || coverage ? null : timestamp(previous.startTime);
       if (startTime && legacyLower && legacyLower < startTime)
         startTime = legacyLower;
       cursor = { ...initial };
@@ -1065,6 +1163,23 @@ export class SourceFetchService {
     await this.db.$transaction(async (tx) => {
       await this.lockSource(tx, account, state, createdById);
       await this.assertEligible(account, state, leaseId, tx);
+      await tx.sourceAccountScanState.updateMany({
+        where: {
+          accountId: account.id,
+          epoch: state.scanEpoch ?? -1,
+          leaseOwnerJobId: state.scanOwnerJobId ?? leaseId,
+        },
+        data: {
+          windowJson: {
+            version: 1,
+            sourceId: account.externalUserId,
+            firstSyncMode: account.firstSyncMode,
+            startTime,
+            endTime,
+          },
+          revision: { increment: 1 },
+        },
+      });
       await tx.sourceAdapterState.updateMany({
         where: {
           id: state.id,
@@ -1228,6 +1343,14 @@ export class SourceFetchService {
       await this.db.$transaction(async (tx) => {
         await this.lockSource(tx, account, state, createdById);
         await this.assertEligible(account, state, leaseId, tx);
+        await tx.sourceAccountScanState.updateMany({
+          where: {
+            accountId: account.id,
+            epoch: state.scanEpoch ?? -1,
+            leaseOwnerJobId: state.scanOwnerJobId ?? leaseId,
+          },
+          data: { leaseUntil: new Date(Date.now() + SOURCE_LEASE_MS) },
+        });
         await tx.sourceAdapterState.updateMany({
           where: {
             id: state.id,
@@ -1298,6 +1421,25 @@ export class SourceFetchService {
       });
       if (!changed.count)
         throw new Error("Adapter lease expired before committing watermarks");
+      const completed = await tx.sourceAccountScanState.updateMany({
+        where: {
+          accountId: account.id,
+          epoch: state.scanEpoch ?? -1,
+          leaseOwnerJobId: state.scanOwnerJobId ?? leaseId,
+          leaseUntil: { gt: new Date() },
+        },
+        data: {
+          discoveredThroughAt: upperBoundary,
+          windowJson: {},
+          leaseOwnerJobId: null,
+          leaseUntil: null,
+          revision: { increment: 1 },
+        },
+      });
+      if (!completed.count)
+        throw new Error(
+          "Account scan epoch changed before committing coverage",
+        );
       await tx.sourceFetchRunItem.update({
         where: { id: itemId },
         data: {
@@ -1632,6 +1774,15 @@ export class SourceFetchService {
         });
         if (!changed.count)
           throw new Error("Source account changed while renewing lease");
+        await tx.sourceAccountScanState.updateMany({
+          where: {
+            accountId: account.id,
+            epoch: state.scanEpoch ?? -1,
+            leaseOwnerJobId: state.scanOwnerJobId ?? leaseId,
+            leaseUntil: { gt: new Date() },
+          },
+          data: { leaseUntil: new Date(Date.now() + SOURCE_LEASE_MS) },
+        });
       });
       renewAt = Date.now() + SOURCE_LEASE_RENEW_MS;
     };
@@ -1654,6 +1805,7 @@ export class SourceFetchService {
     }
     await tx.$queryRaw`SELECT id FROM authors WHERE id = ${account.authorId}::uuid FOR SHARE`;
     await tx.$queryRaw`SELECT id FROM author_external_accounts WHERE id = ${account.id}::uuid FOR SHARE`;
+    await tx.$queryRaw`SELECT account_id FROM source_account_scan_states WHERE account_id = ${account.id}::uuid FOR NO KEY UPDATE`;
     await tx.$queryRaw`SELECT id FROM source_adapter_states WHERE id = ${state.id}::uuid FOR NO KEY UPDATE`;
   }
 
@@ -1672,6 +1824,17 @@ export class SourceFetchService {
         authorizationStatus: "authorized",
         revision: account.author.revision,
       },
+      ...(leaseId
+        ? {
+            scanState: {
+              is: {
+                epoch: state.scanEpoch ?? -1,
+                leaseOwnerJobId: state.scanOwnerJobId ?? leaseId,
+                leaseUntil: { gt: new Date() },
+              },
+            },
+          }
+        : {}),
       adapterStates: {
         some: {
           id: state.id,

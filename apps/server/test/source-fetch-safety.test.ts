@@ -8,6 +8,107 @@ import { ContentSourceRegistry } from "../src/source-ingestion/source-registry.j
 import { Prisma } from "../src/generated/prisma/client.js";
 import { SourceResponseError } from "../src/source-ingestion/source-response.js";
 
+test("account coverage wins over a stale adapter watermark", async () => {
+  const f = fixture();
+  f.scan.discoveredThroughAt = new Date("2026-10-28T00:00:00.000Z");
+  f.snapshot.completedThroughAt = new Date("2026-10-20T00:00:00.000Z");
+  let lower: unknown;
+  const source = {
+    ...client,
+    fetchPage: async (_account: unknown, cursor: any) => {
+      lower = cursor.startTime;
+      return { items: [], nextCursor: {}, complete: true };
+    },
+  };
+  await f.service.fetchAdapter(
+    "item",
+    "run",
+    f.account,
+    f.snapshot,
+    source,
+    null,
+    new AbortController().signal,
+  );
+  assert.equal(lower, "2026-10-27T23:00:00.000Z");
+});
+
+test("switching adapters rebuilds provider state from the unfinished account window", async () => {
+  const f = fixture();
+  f.scan.windowJson = {
+    version: 1,
+    sourceId: "1",
+    firstSyncMode: "none",
+    startTime: "2026-10-19T00:00:00.000Z",
+    endTime: "2026-10-20T00:00:00.000Z",
+  };
+  f.snapshot.cursorJson = { providerToken: "stale" };
+  let received: any;
+  const source = {
+    ...client,
+    fetchPage: async (_account: unknown, cursor: any) => {
+      received = cursor;
+      return { items: [], nextCursor: {}, complete: true };
+    },
+  };
+  await f.service.fetchAdapter(
+    "item",
+    "run",
+    f.account,
+    f.snapshot,
+    source,
+    null,
+    new AbortController().signal,
+  );
+  assert.equal(received.startTime, "2026-10-19T00:00:00.000Z");
+  assert.equal(received.endTime, "2026-10-20T00:00:00.000Z");
+  assert.equal(received.providerToken, undefined);
+});
+
+test("an old account epoch cannot commit a late failure or release its replacement lease", async () => {
+  const f = fixture();
+  const replacement = new Date(Date.now() + 120_000);
+  const source = {
+    ...client,
+    fetchPage: async () => {
+      f.scan.epoch += 1;
+      f.scan.leaseUntil = replacement;
+      throw new Error("synthetic late failure");
+    },
+  };
+  f.service.sources = new ContentSourceRegistry().register(source);
+  await f.service.fetchWithFallback(
+    "run",
+    f.account,
+    null,
+    new AbortController().signal,
+  );
+  assert.equal(f.live.health, "idle");
+  assert.equal(f.live.consecutiveFailures, 2);
+  assert.equal(f.scan.leaseOwnerJobId, "run");
+  assert.equal(f.scan.leaseUntil, replacement);
+  assert.equal(f.live.fetchLeaseId, "run");
+  assert.equal(f.row.errorCode, "source_changed");
+});
+
+test("natural duplicate posts store no media and still complete shared coverage", async () => {
+  const f = fixture();
+  f.db.candidatePost.findUnique = async () => ({ id: "existing" });
+  await f.service.fetchAdapter(
+    "item",
+    "run",
+    f.account,
+    f.snapshot,
+    client,
+    null,
+    new AbortController().signal,
+  );
+  assert.equal(f.row.mediaStored, 0);
+  assert.equal(f.row.candidatesExisting, 2);
+  assert.equal(f.downloads, 0);
+  assert.ok(f.scan.discoveredThroughAt instanceof Date);
+  assert.deepEqual(f.scan.windowJson, {});
+});
+
 test("failure logs keep private reason and page context out of persisted public errors", async () => {
   const f = fixture({
     ...client,
@@ -145,6 +246,16 @@ function fixture(source = client) {
     fetchLeaseUntil: new Date(Date.now() + 60_000),
   };
   const live = { ...snapshot };
+  const scan: any = {
+    accountId: "account",
+    discoveredThroughAt: null,
+    windowJson: {},
+    leaseOwnerJobId: "run",
+    leaseUntil: new Date(Date.now() + 60_000),
+    epoch: 0,
+    revision: 0,
+  };
+  snapshot.scanEpoch = 0;
   const account: any = {
     id: "account",
     authorId: "author",
@@ -192,9 +303,40 @@ function fixture(source = client) {
     authorExternalAccount: {
       count: async ({ where }: any) =>
         eligible &&
+        (!where.scanState ||
+          (where.scanState.is.epoch === scan.epoch &&
+            where.scanState.is.leaseOwnerJobId === scan.leaseOwnerJobId &&
+            scan.leaseUntil > where.scanState.is.leaseUntil.gt)) &&
         (!where.adapterStates || stateMatches(where.adapterStates.some))
           ? 1
           : 0,
+    },
+    sourceAccountScanState: {
+      findUniqueOrThrow: async () => scan,
+      upsert: async () => scan,
+      update: async ({ data }: any) => {
+        for (const [key, value] of Object.entries(data))
+          scan[key] =
+            typeof value === "object" && value !== null && "increment" in value
+              ? scan[key] + (value as any).increment
+              : value;
+        return scan;
+      },
+      updateMany: async ({ where, data }: any) => {
+        if (
+          (where.epoch !== undefined && where.epoch !== scan.epoch) ||
+          (where.leaseOwnerJobId !== undefined &&
+            where.leaseOwnerJobId !== scan.leaseOwnerJobId) ||
+          (where.leaseUntil?.gt && scan.leaseUntil <= where.leaseUntil.gt)
+        )
+          return { count: 0 };
+        for (const [key, value] of Object.entries(data))
+          scan[key] =
+            typeof value === "object" && value !== null && "increment" in value
+              ? scan[key] + (value as any).increment
+              : value;
+        return { count: 1 };
+      },
     },
     sourceAdapterState: {
       findUniqueOrThrow: async () => ({
@@ -281,6 +423,7 @@ function fixture(source = client) {
     jobs,
     account,
     snapshot,
+    scan,
     live,
     row,
     downloader,
@@ -309,6 +452,7 @@ test("empty successful scans advance fixed coverage, independently of the latest
   const f = fixture();
   const now = new Date("2026-10-27T04:00:00.000Z");
   const next = new Date("2026-10-27T06:00:00.000Z");
+  f.scan.discoveredThroughAt = new Date("2026-10-26T04:00:00.000Z");
   f.snapshot.completedThroughAt = new Date("2026-10-26T04:00:00.000Z");
   f.snapshot.highWaterPublishedAt = new Date("2026-10-01T00:00:00.000Z");
   const cursors: any[] = [];
@@ -347,6 +491,8 @@ test("empty successful scans advance fixed coverage, independently of the latest
     clock.setTime(next.getTime());
     f.live.fetchLeaseId = "run";
     f.live.fetchLeaseUntil = new Date(next.getTime() + 60_000);
+    f.scan.leaseOwnerJobId = "run";
+    f.scan.leaseUntil = f.live.fetchLeaseUntil;
     await f.service.fetchAdapter(
       "item",
       "run",
@@ -1247,6 +1393,7 @@ function manualFixture() {
       },
     },
     sourceFetchRunItem: { updateMany: async () => ({ count: 1 }) },
+    sourceAccountScanState: { updateMany: async () => ({ count: 1 }) },
     sourceAdapterState: {
       findMany: async ({ where }: any) =>
         leases.filter((lease) => matches(lease, where)),

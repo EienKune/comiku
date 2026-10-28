@@ -458,6 +458,21 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
         fetchLeaseUntil: new Date(Date.now() + 1800000),
       },
     });
+    await db.sourceAccountScanState.update({
+      where: { accountId },
+      data: {
+        windowJson: {
+          version: 1,
+          sourceId: `account-${prefix}`,
+          firstSyncMode: "none",
+          startTime: null,
+          endTime: recoveryUpper,
+        },
+        leaseOwnerJobId: crashJob!.id,
+        leaseUntil: new Date(Date.now() + 1800000),
+        epoch: { increment: 1 },
+      },
+    });
     const oldItem = await db.sourceFetchRunItem.create({
       data: {
         runId: crashRun.data.id,
@@ -516,6 +531,13 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
         fetchLeaseUntil: new Date(Date.now() + 1800000),
       },
     });
+    await db.sourceAccountScanState.update({
+      where: { accountId },
+      data: {
+        leaseOwnerJobId: exhaustedJob!.id,
+        leaseUntil: new Date(Date.now() + 1800000),
+      },
+    });
     assert.equal(await moduleRef.get(JobsService).claim("network"), null);
     await moduleRef.get(SourceFetchService).reconcileExhausted();
     assert.equal(
@@ -532,6 +554,15 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
           where: { id: stableState.id },
         })
       ).fetchLeaseId,
+      null,
+    );
+
+    assert.equal(
+      (
+        await db.sourceAccountScanState.findUniqueOrThrow({
+          where: { accountId },
+        })
+      ).leaseOwnerJobId,
       null,
     );
 

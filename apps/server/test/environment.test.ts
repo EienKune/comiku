@@ -139,41 +139,23 @@ test("local storage is development-only and explicit drivers are validated", () 
   );
 });
 
-test("source adapters require complete credentials and bounded integer policy", () => {
-  assert.throws(
-    () =>
-      parseEnvironment({
-        DATABASE_URL: databaseUrl,
-        X_WEB_AUTH_TOKEN: "session-only",
-      }),
-    /all X_WEB_/,
-  );
-  assert.throws(
-    () =>
-      parseEnvironment({
-        DATABASE_URL: databaseUrl,
-        X_WEB_BEARER_TOKEN: "bearer",
-        X_WEB_AUTH_TOKEN: "auth",
-        X_WEB_CSRF_TOKEN: "csrf",
-        X_WEB_USER_MEDIA_QUERY_ID: "query",
-        X_WEB_FEATURES_JSON: "[]",
-      }),
-    /X_WEB_FEATURES_JSON/,
-  );
+test("retired credentials are ignored while generic source policy stays bounded", () => {
   const configured = parseEnvironment({
     DATABASE_URL: databaseUrl,
     X_WEB_BEARER_TOKEN: "bearer",
     X_WEB_AUTH_TOKEN: "auth",
     X_WEB_CSRF_TOKEN: "csrf",
     X_WEB_USER_MEDIA_QUERY_ID: "query",
-    X_WEB_FEATURES_JSON: '{"fixture":true}',
+    X_WEB_FEATURES_JSON: "invalid retired input",
+    X_BEARER_TOKEN: "retired synthetic bearer",
     X_OFFICIAL_DAILY_BUDGET: "10",
     X_OFFICIAL_MONTHLY_BUDGET: "100",
     SOURCE_OVERLAP_MINUTES: "15",
     SOURCE_FAILURE_THRESHOLD: "4",
     SOURCE_COOLDOWN_MINUTES: "120",
   });
-  assert.equal(configured.xWebSession?.features.fixture, true);
+  assert.equal("xWebSession" in configured, false);
+  assert.equal("xBearerToken" in configured, false);
   assert.equal(configured.xOfficialDailyBudget, 10);
   assert.equal(configured.sourceFailureThreshold, 4);
   assert.throws(

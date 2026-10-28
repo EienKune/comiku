@@ -159,6 +159,7 @@ async function fixture() {
       externalUserId: "1",
       fetchEnabled: true,
       firstSyncMode: "none",
+      scanState: { create: {} },
       adapterStates: { create: { adapterKey: prefix } },
     },
   });
@@ -199,7 +200,22 @@ async function fixture() {
         fetchLeaseUntil: new Date(Date.now() + 60_000),
       },
     });
+    const job = await db.backgroundJob.findUniqueOrThrow({
+      where: { idempotencyKey: `source:${run.id}` },
+    });
+    const scan = await db.sourceAccountScanState.update({
+      where: { accountId: account.id },
+      data: {
+        leaseOwnerJobId: job.id,
+        leaseUntil: new Date(Date.now() + 60_000),
+        epoch: { increment: 1 },
+      },
+    });
     const current = await snapshot();
+    Object.assign(current.adapterStates[0], {
+      scanEpoch: scan.epoch,
+      scanOwnerJobId: job.id,
+    });
     const save = (item = contents[0]) =>
       (service as any).saveCandidate(
         current,
@@ -261,6 +277,7 @@ async function fixture() {
     author,
     account,
     client,
+    registry,
     contents,
     runIds,
     fileIds,
@@ -286,6 +303,10 @@ test("PostgreSQL successful empty scans persist coverage and keep discovery cach
   try {
     const state = (await f.snapshot()).adapterStates[0];
     const previousCoverage = new Date(Date.now() - 3_600_000);
+    await f.db.sourceAccountScanState.update({
+      where: { accountId: f.account.id },
+      data: { discoveredThroughAt: previousCoverage },
+    });
     const oldPublication = new Date("2020-01-01T00:00:00.000Z");
     const cache = {
       ids: Array.from({ length: 100_000 }, (_, i) => String(i + 1)),
@@ -347,6 +368,10 @@ test("PostgreSQL failed scans preserve coverage and discovery cache while retain
   try {
     const state = (await f.snapshot()).adapterStates[0];
     const previousCoverage = new Date(Date.now() - 3_600_000);
+    await f.db.sourceAccountScanState.update({
+      where: { accountId: f.account.id },
+      data: { discoveredThroughAt: previousCoverage },
+    });
     await f.db.sourceAdapterState.update({
       where: { id: state.id },
       data: {
@@ -1086,6 +1111,217 @@ test("PostgreSQL manual retry never releases a live final-attempt source lease",
       ).leaseId,
       workerLease,
     );
+  } finally {
+    await f.close();
+  }
+});
+
+test("PostgreSQL changing adapters keeps unfinished account bounds and rejects a late old epoch", async () => {
+  const f = await fixture();
+  try {
+    const lower = new Date(Date.now() - 86_400_000).toISOString();
+    const upper = new Date(Date.now() - 3_600_000).toISOString();
+    const state = (await f.snapshot()).adapterStates[0];
+    const replacementKey = `${f.client.adapterKey}_b`;
+    const replacement: ContentSourceClient = {
+      ...f.client,
+      adapterKey: replacementKey,
+      priority: 2,
+      fetchPage: async (_identity, cursor, context) => {
+        assert.equal(cursor.startTime, lower);
+        assert.equal(cursor.endTime, upper);
+        assert.equal(cursor.providerToken, undefined);
+        assert.deepEqual(context?.checkpoint, {});
+        return { items: [], complete: true, nextCursor: {} };
+      },
+    };
+    f.registry.register(replacement);
+    await f.db.sourceAdapterState.update({
+      where: { id: state.id },
+      data: { enabled: false },
+    });
+    await f.db.sourceAdapterState.create({
+      data: {
+        externalAccountId: f.account.id,
+        adapterKey: replacementKey,
+        completedThroughAt: new Date("2020-01-01T00:00:00.000Z"),
+        cursorJson: { providerToken: "foreign" },
+      },
+    });
+    await f.db.sourceAccountScanState.update({
+      where: { accountId: f.account.id },
+      data: {
+        windowJson: {
+          version: 1,
+          sourceId: "1",
+          firstSyncMode: "none",
+          startTime: lower,
+          endTime: upper,
+        },
+        epoch: 7,
+      },
+    });
+    const run = await f.manual();
+    await f.execute(run.id);
+    const scan = await f.db.sourceAccountScanState.findUniqueOrThrow({
+      where: { accountId: f.account.id },
+    });
+    assert.equal(scan.discoveredThroughAt?.toISOString(), upper);
+    assert.deepEqual(scan.windowJson, {});
+    assert.equal(scan.epoch, 8);
+    assert.equal(scan.leaseOwnerJobId, null);
+    assert.equal(
+      (await f.service.get(run.id)).items.find(
+        (item) => item.adapterKey === replacementKey,
+      )?.status,
+      "succeeded",
+    );
+    const late = await f.db.sourceAccountScanState.updateMany({
+      where: { accountId: f.account.id, epoch: 7 },
+      data: { discoveredThroughAt: new Date("2020-01-01T00:00:00.000Z") },
+    });
+    assert.equal(late.count, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("PostgreSQL a late old-epoch failure cannot overwrite or release replacement account ownership", async () => {
+  const f = await fixture();
+  const replacementOwner = randomUUID();
+  let retainedWindow: unknown;
+  let replacementEpoch = 0;
+  try {
+    f.client.fetchPage = async () => {
+      const scan = await f.db.sourceAccountScanState.update({
+        where: { accountId: f.account.id },
+        data: {
+          epoch: { increment: 1 },
+          leaseOwnerJobId: replacementOwner,
+          leaseUntil: new Date(Date.now() + 1_800_000),
+        },
+      });
+      replacementEpoch = scan.epoch;
+      retainedWindow = scan.windowJson;
+      throw new Error("synthetic late failure");
+    };
+    const run = await f.manual();
+    await f.execute(run.id);
+    const scan = await f.db.sourceAccountScanState.findUniqueOrThrow({
+      where: { accountId: f.account.id },
+    });
+    assert.equal(scan.epoch, replacementEpoch);
+    assert.equal(scan.leaseOwnerJobId, replacementOwner);
+    assert.deepEqual(scan.windowJson, retainedWindow);
+    assert.equal(scan.discoveredThroughAt, null);
+    const state = (await f.snapshot()).adapterStates[0];
+    assert.equal(state.health, "idle");
+    assert.equal(state.consecutiveFailures, 0);
+    assert.equal(state.fetchLeaseId, run.id);
+    assert.equal(
+      (await f.service.get(run.id)).items[0].errorCode,
+      "source_changed",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("PostgreSQL account scan migration executes against synthetic history and preserves only trusted gallery state", async () => {
+  const f = await fixture();
+  try {
+    const migration = await readFile(
+      new URL(
+        "../../prisma/migrations/20261028000200_account_scan_state/migration.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    assert.match(migration, /^BEGIN;/);
+    assert.match(migration.trimEnd(), /COMMIT;$/);
+    await f.db.$transaction(async (tx) => {
+      // Shadow only this connection's relations. Execute the actual forward SQL;
+      // TEMP/ON COMMIT DROP and the surrounding Prisma transaction isolate DDL.
+      await tx.$executeRawUnsafe(`CREATE TEMP TABLE author_external_accounts (
+        id uuid PRIMARY KEY, platform text, external_user_id text, first_sync_mode text
+      ) ON COMMIT DROP`);
+      await tx.$executeRawUnsafe(`CREATE TEMP TABLE source_adapter_states (
+        id text PRIMARY KEY, external_account_id uuid, adapter_key text,
+        completed_through_at timestamptz(3), last_success_at timestamptz(3), cursor_json jsonb
+      ) ON COMMIT DROP`);
+      await tx.$executeRawUnsafe(`CREATE TEMP TABLE source_fetch_run_items (
+        adapter_state_id text, external_account_id uuid, adapter_key text,
+        status text, started_at timestamptz(3)
+      ) ON COMMIT DROP`);
+      await tx.$executeRawUnsafe(`INSERT INTO author_external_accounts VALUES
+        ('00000000-0000-0000-0000-000000000001', 'x', '1', 'none'),
+        ('00000000-0000-0000-0000-000000000002', 'x', '2', 'none'),
+        ('00000000-0000-0000-0000-000000000003', 'pixiv', '3', 'none'),
+        ('00000000-0000-0000-0000-000000000004', 'pixiv', '4', 'last_24_hours'),
+        ('00000000-0000-0000-0000-000000000005', 'pixiv', '5', 'none')`);
+      await tx.$executeRawUnsafe(`INSERT INTO source_adapter_states VALUES
+        ('trusted', '00000000-0000-0000-0000-000000000001', 'x_gallery_dl', '2026-10-20T00:00:00Z', '2026-10-21T00:00:00Z', '{}'),
+        ('retired', '00000000-0000-0000-0000-000000000002', 'x_web_session', '2026-10-27T00:00:00Z', '2026-10-28T00:00:00Z', '{}'),
+        ('unproven', '00000000-0000-0000-0000-000000000003', 'pixiv_gallery_dl', '2026-10-20T00:00:00Z', '2026-10-21T00:00:00Z', '{}')`);
+      const unfinished = {
+        sourceId: "4",
+        adapterKey: "pixiv_gallery_dl",
+        firstSyncMode: "last_24_hours",
+        startTime: "2026-10-20T00:00:00.000Z",
+        endTime: "2026-10-21T00:00:00.000Z",
+      };
+      await tx.$executeRaw`INSERT INTO source_adapter_states VALUES
+        ('unfinished', '00000000-0000-0000-0000-000000000004'::uuid, 'pixiv_gallery_dl', NULL, NULL, ${JSON.stringify({ ...unfinished, _sourceScanWindow: unfinished })}::jsonb),
+        ('wrong-source', '00000000-0000-0000-0000-000000000005'::uuid, 'pixiv_gallery_dl', NULL, NULL, ${JSON.stringify({ ...unfinished, _sourceScanWindow: unfinished })}::jsonb)`;
+      await tx.$executeRawUnsafe(`INSERT INTO source_fetch_run_items VALUES
+        ('trusted', '00000000-0000-0000-0000-000000000001', 'x_gallery_dl', 'succeeded', '2026-10-19T00:00:00Z'),
+        ('retired', '00000000-0000-0000-0000-000000000002', 'x_web_session', 'succeeded', '2026-10-26T00:00:00Z'),
+        ('unproven', '00000000-0000-0000-0000-000000000003', 'pixiv_gallery_dl', 'failed', '2026-10-19T00:00:00Z')`);
+      const temporary = migration
+        .replace(
+          'CREATE TABLE "source_account_scan_states"',
+          'CREATE TEMP TABLE "source_account_scan_states"',
+        )
+        .replace(/\n\);/, "\n) ON COMMIT DROP;");
+      for (const statement of temporary
+        .split(";")
+        .filter((sql) => sql.trim() && !/^(BEGIN|COMMIT)$/i.test(sql.trim())))
+        await tx.$executeRawUnsafe(statement);
+      const rows = await tx.$queryRaw<
+        Array<{
+          account_id: string;
+          discovered_through_at: Date | null;
+          window_json: unknown;
+          epoch: number;
+          revision: number;
+          lease_owner_job_id: string | null;
+        }>
+      >`SELECT account_id, discovered_through_at, window_json, epoch, revision, lease_owner_job_id FROM source_account_scan_states ORDER BY account_id`;
+      assert.equal(rows.length, 5);
+      assert.deepEqual(
+        rows.map((row) => row.discovered_through_at?.toISOString() ?? null),
+        ["2026-10-20T00:00:00.000Z", null, null, null, null],
+      );
+      const shared = {
+        sourceId: unfinished.sourceId,
+        firstSyncMode: unfinished.firstSyncMode,
+        startTime: unfinished.startTime,
+        endTime: unfinished.endTime,
+      };
+      assert.deepEqual(
+        rows.map((row) => row.window_json),
+        [{}, {}, {}, { ...shared, version: 1 }, {}],
+      );
+      assert.equal(
+        rows.every(
+          (row) =>
+            row.epoch === 0 &&
+            row.revision === 0 &&
+            row.lease_owner_job_id === null,
+        ),
+        true,
+      );
+    });
   } finally {
     await f.close();
   }
