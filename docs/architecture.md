@@ -75,3 +75,9 @@ X 两通道共用来源契约，游标、水位和健康按账号/适配器独�
 列表优先使用后台生成的长边最多 800px、质量 82 WebP 缩略图，只缩小不放大，原图小或收益不足时复用原件。大图按需读取原图，翻校及导出保留原字节。大图支持缩放平移，普通卡片图片以外区域进入作品详情。
 
 原图、缩略图、头像、凭证和成图继承所属资源权限。预签名 URL 短期有效，知晓对象 key 不等于拥有读取权限。删除和清理按引用与恢复窗口执行，不统一删除历史对象。数据库备份不包含图片正文，恢复需要同时确保对象仍存在。
+
+### Source discovery and compensation
+
+A complete source page registers verified posts and explicitly proven metadata gaps before its durable cursor advances. `SourceDiscoveryPost` keeps original account identity and window; `SourceDiscoveryMedia` retains successfully stored files through formal references. Only complete, verified, nonempty static manifests become candidates. The shared account discovery watermark therefore describes enumeration coverage, while terminal partial batch status reports unresolved ingestion gaps.
+
+`source_post_recover` jobs use the platform's existing `network/source:<platform>` scope and `recovery` queue. Each persistent campaign has an idempotent key, at most three job executions, and one business outcome; eight failed campaigns stop at `needs_attention`, with 15-minute, one-hour and then six-hour spacing. Current permissions, source identity, management revisions, credential generation and job/source epochs fence recovery writes. Recovery preserves original scan history and successful files, refreshes temporary URLs internally, and exposes only a bounded administrator diagnostic projection through the compiled operations command.

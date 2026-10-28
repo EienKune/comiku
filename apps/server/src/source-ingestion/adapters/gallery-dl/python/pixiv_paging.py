@@ -38,6 +38,11 @@ class PixivPager:
         self.phase = "app"
         self.head = None
         self.expected = {}
+        self.enumerated_ids = []
+        self.excluded_ids = set()
+        self.detail_cache = {}
+        original_ajax = ext._request_ajax
+        ext._request_ajax = lambda endpoint: self.detail_cache.get(endpoint) or original_ajax(endpoint)
         self.catalog_hash = None
         self.catalog_count = 0
         self.target_count = 0
@@ -372,10 +377,12 @@ class PixivPager:
         query = urlencode([("ids[]", item) for item in selected] + [("work_category", "illustManga"), ("is_first_page", "0")])
         data = self.ext._request_ajax("/user/" + self.source_id + "/profile/illusts?" + query)
         works = data.get("works") if isinstance(data, dict) else None
-        if not isinstance(works, dict) or set(works) != set(selected):
+        if not isinstance(works, dict) or set(works) - set(selected):
             raise self.error("discovery_incomplete")
         # Validate the whole response before allowing any part of it to advance.
         for item in selected:
+            if item not in works:
+                continue
             work = works[item]
             if (not isinstance(work, dict) or self.identifier(work.get("id")) != item
                     or str(work.get("userId")) != self.source_id
@@ -386,17 +393,46 @@ class PixivPager:
             self.defer_if_future(item, work["createDate"])
         details = 0
         for item in selected:
-            work = works[item]
-            # Pixiv's list timestamp can retain seconds that the detail endpoint
-            # rounds to a minute. Use the minute's upper bound for discovery;
-            # native detail dates remain authoritative at the storage boundary.
-            recent = self.may_be_recent(work["createDate"])
-            if recent and work["illustType"] != 2:
+            work = works.get(item)
+            prefetched = False
+            if work is None:
                 if details >= DETAIL_PAGE_SIZE:
                     break
-                self.expected[item] = work
                 details += 1
+                prefetched = True
+                self.remember(item, self.source_id)
+                try:
+                    body = self.ext._request_ajax("/illust/" + item)
+                except Exception as exc:
+                    # Only a positively confirmed leaf 404 is a metadata gap.
+                    if not (type(exc).__name__ == "NotFoundError" or str(exc) == "post_not_found"):
+                        raise
+                    self.enumerated_ids.append(item)
+                    self.result["failed_ids"].append(item)
+                    self.result.setdefault("discovery_failures", []).append({
+                        "external_post_id": item, "failure_code": "metadata_unavailable",
+                        "evidence": {"kind": "author_catalog", "source_id": self.source_id}})
+                    self.next_offset += 1
+                    continue
+                if (not isinstance(body, dict) or self.identifier(body.get("id")) != item
+                        or str(body.get("userId")) != self.source_id
+                        or type(body.get("illustType")) is not int or body["illustType"] not in (0, 1, 2)):
+                    raise self.error("discovery_incomplete")
+                self.date(body.get("createDate"))
+                work = body
+                self.detail_cache["/illust/" + item] = body
+            recent = self.may_be_recent(work["createDate"])
+            if recent and work["illustType"] != 2:
+                if not prefetched:
+                    if details >= DETAIL_PAGE_SIZE:
+                        break
+                    details += 1
+                self.enumerated_ids.append(item)
+                self.expected[item] = work
                 yield self.ext._make_work(int(item), self.ext.limit_url, {"id": 1})
+            else:
+                self.enumerated_ids.append(item)
+                self.excluded_ids.add(item)
             self.next_offset += 1
 
     def validate_resolved(self, work):

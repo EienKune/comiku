@@ -160,6 +160,7 @@ model FileObject {
   accountAvatars       AuthorExternalAccount[]       @relation("ExternalAccountAvatar")
   userAvatars          User[]                        @relation("UserAvatar")
   authorEvidence       AuthorAuthorizationEvidence[]
+  discoveryMedia       SourceDiscoveryMedia[]
   candidateMedia       CandidateMedia[]
   workImages           WorkImage[]
   labelPlusFiles       LabelPlusFile[]
@@ -236,6 +237,7 @@ model AuthorExternalAccount {
   deletedAt           DateTime?            @map("deleted_at") @db.Timestamptz(3)
   fetchRunItems       SourceFetchRunItem[]
   fetchAccountTasks  SourceFetchAccountTask[]
+  discoveries         SourceDiscoveryPost[]
   scanState           SourceAccountScanState?
   adapterStates       SourceAdapterState[]
   sourceObservations  CandidateSourceObservation[]
@@ -1585,4 +1587,66 @@ model SourcePlatformState {
   errorCode String? @map("error_code") @db.VarChar(64)
   revision Int @default(0)
   @@map("source_platform_states")
+}
+
+
+model SourceDiscoveryPost {
+  id                 String @id @default(uuid()) @db.Uuid
+  accountId          String @map("account_id") @db.Uuid
+  account            AuthorExternalAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  platform           String @db.VarChar(32)
+  externalPostId     String @map("external_post_id") @db.VarChar(200)
+  sourceUserId       String @map("source_user_id") @db.VarChar(200)
+  adapterKey         String @map("adapter_key") @db.VarChar(100)
+  actorId            String? @map("actor_id") @db.Uuid
+  discoveredRunId    String @map("discovered_run_id") @db.Uuid
+  windowJson         Json @map("window_json")
+  evidenceJson       Json @default("{}") @map("evidence_json")
+  metadataJson       Json? @map("metadata_json")
+  expectedMediaCount Int? @map("expected_media_count")
+  state              String @default("metadata_pending") @db.VarChar(32)
+  failureCode        String? @map("failure_code") @db.VarChar(64)
+  attempts           Int @default(0)
+  nextRetryAt        DateTime? @map("next_retry_at") @db.Timestamptz(3)
+  revision           Int @default(0)
+  media              SourceDiscoveryMedia[]
+  campaigns          SourceRecoveryCampaign[]
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@unique([accountId, platform, externalPostId])
+  @@index([state, nextRetryAt, accountId])
+  @@map("source_discovery_posts")
+}
+
+model SourceDiscoveryMedia {
+  id              String @id @default(uuid()) @db.Uuid
+  discoveryPostId String @map("discovery_post_id") @db.Uuid
+  discoveryPost   SourceDiscoveryPost @relation(fields: [discoveryPostId], references: [id], onDelete: Restrict)
+  externalMediaId String @map("external_media_id") @db.VarChar(200)
+  orderIndex      Int @map("order_index")
+  metadataJson    Json @map("metadata_json")
+  fileObjectId    String? @map("file_object_id") @db.Uuid
+  fileObject      FileObject? @relation(fields: [fileObjectId], references: [id], onDelete: Restrict)
+  state           String @default("pending") @db.VarChar(32)
+  failureCode     String? @map("failure_code") @db.VarChar(64)
+  attempts        Int @default(0)
+  @@unique([discoveryPostId, externalMediaId])
+  @@index([fileObjectId])
+  @@map("source_discovery_media")
+}
+
+model SourceRecoveryCampaign {
+  scanEpoch       Int? @map("scan_epoch")
+  id              String @id @default(uuid()) @db.Uuid
+  discoveryPostId String @map("discovery_post_id") @db.Uuid
+  discoveryPost   SourceDiscoveryPost @relation(fields: [discoveryPostId], references: [id], onDelete: Restrict)
+  number          Int
+  jobId           String? @unique @map("job_id") @db.Uuid
+  state           String @default("queued") @db.VarChar(32)
+  failureCode     String? @map("failure_code") @db.VarChar(64)
+  startedAt       DateTime @default(now()) @map("started_at") @db.Timestamptz(3)
+  completedAt     DateTime? @map("completed_at") @db.Timestamptz(3)
+  @@unique([discoveryPostId, number])
+  @@index([state, completedAt])
+  @@map("source_recovery_campaigns")
 }

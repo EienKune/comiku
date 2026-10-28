@@ -5,13 +5,15 @@ import type { JobsService } from "../jobs/jobs.service.js";
 export function accountBatchStatus(statuses: readonly string[]) {
   if (
     !statuses.length ||
-    statuses.some((status) => !["succeeded", "failed"].includes(status))
+    statuses.some(
+      (status) => !["succeeded", "failed", "partial_failed"].includes(status),
+    )
   )
     return null;
   const successes = statuses.filter((status) => status === "succeeded").length;
   return successes === statuses.length
     ? ("succeeded" as const)
-    : successes
+    : successes || statuses.includes("partial_failed")
       ? ("partial_failed" as const)
       : ("failed" as const);
 }
@@ -57,9 +59,13 @@ export class SourceAccountTasks {
     await tx.$queryRaw`SELECT id FROM source_fetch_runs WHERE id = ${runId}::uuid FOR UPDATE`;
     const tasks = await tx.sourceFetchAccountTask.findMany({
       where: { runId },
-      select: { status: true },
+      select: { status: true, failureCode: true },
     });
-    const status = accountBatchStatus(tasks.map((task) => task.status));
+    const status = accountBatchStatus(
+      tasks.map((task) =>
+        task.failureCode === "discovery_gaps" ? "partial_failed" : task.status,
+      ),
+    );
     await tx.sourceFetchRun.updateMany({
       where: { id: runId, completedAt: null },
       data: status

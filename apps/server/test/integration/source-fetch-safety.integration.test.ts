@@ -111,7 +111,10 @@ async function fixture(platform?: string) {
         await db.candidateMedia.count({ where: { fileObjectId: id } }),
         0,
       );
-      await db.fileObject.delete({ where: { id } });
+      if (
+        !(await db.sourceDiscoveryMedia.count({ where: { fileObjectId: id } }))
+      )
+        await db.fileObject.delete({ where: { id } });
     },
   };
   const service = new SourceFetchService(
@@ -237,8 +240,23 @@ async function fixture(platform?: string) {
       scanEpoch: scan.epoch,
       scanOwnerJobId: job.id,
     });
-    const save = (item = contents[0]) =>
-      (service as any).saveCandidate(
+    const save = async (item = contents[0]) => {
+      await db.$transaction((tx) =>
+        service.discovery.record(
+          tx,
+          {
+            accountId: account.id,
+            platform: client.platform,
+            sourceUserId: account.externalUserId,
+            adapterKey: client.adapterKey,
+            actorId: actor.id,
+            discoveredRunId: run.id,
+            windowJson: {},
+          },
+          item,
+        ),
+      );
+      return (service as any).saveCandidate(
         current,
         current.adapterStates[0],
         client,
@@ -247,6 +265,7 @@ async function fixture(platform?: string) {
         run.id,
         new AbortController().signal,
       );
+    };
     return { run, current, save };
   }
   async function close() {
@@ -268,6 +287,15 @@ async function fixture(platform?: string) {
       where: { candidatePost: { authorId: author.id } },
     });
     await db.candidatePost.deleteMany({ where: { authorId: author.id } });
+    await db.sourceRecoveryCampaign.deleteMany({
+      where: { discoveryPost: { account: { authorId: author.id } } },
+    });
+    await db.sourceDiscoveryMedia.deleteMany({
+      where: { discoveryPost: { account: { authorId: author.id } } },
+    });
+    await db.sourceDiscoveryPost.deleteMany({
+      where: { account: { authorId: author.id } },
+    });
     await db.authorExternalAccount.deleteMany({
       where: { authorId: author.id },
     });

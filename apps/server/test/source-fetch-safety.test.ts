@@ -1,3 +1,4 @@
+import { JobDeferred } from "../src/jobs/jobs.service.js";
 /* Synthetic database boundary doubles keep every race deterministic. */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import "reflect-metadata";
@@ -207,6 +208,7 @@ const content = (id: string, mediaCount = 1) => ({
   text: "#synthetic",
   type: "post",
   ownMedia: Array.from({ length: mediaCount }, (_, i) => ({
+    externalMediaId: `${id}-${i}`,
     url: `https://fixture.invalid/${id}/${i}.png`,
     type: "photo",
   })),
@@ -296,7 +298,95 @@ function fixture(source = client) {
     for (const [key, value] of Object.entries(data))
       (live as any)[key] = key === "revision" ? live.revision + 1 : value;
   };
+  const posts = new Map<string, any>();
+  const media = new Map<string, any>();
+  const findPost = (where: any) =>
+    where.id
+      ? [...posts.values()].find((p) => p.id === where.id)
+      : posts.get(where.accountId_platform_externalPostId.externalPostId);
+  const postWithMedia = (where: any) => {
+    const p = findPost(where);
+    if (!p) throw new Error("Missing synthetic discovery");
+    return {
+      ...p,
+      media: [...media.values()]
+        .filter((m) => m.discoveryPostId === p.id)
+        .sort((a, b) => a.orderIndex - b.orderIndex)
+        .map((m) => ({
+          ...m,
+          fileObject: m.fileObjectId
+            ? { id: m.fileObjectId, contentType: "image/png" }
+            : null,
+        })),
+    };
+  };
   const db: any = {
+    sourceDiscoveryPost: {
+      upsert: async ({ where, create }: any) => {
+        const old = findPost(where);
+        if (old) return old;
+        const p = {
+          id: `discovery-${create.externalPostId}`,
+          attempts: 0,
+          revision: 0,
+          ...create,
+        };
+        posts.set(create.externalPostId, p);
+        return p;
+      },
+      findUniqueOrThrow: async ({ where }: any) => postWithMedia(where),
+      findUnique: async ({ where }: any) => findPost(where) ?? null,
+      update: async ({ where, data }: any) =>
+        Object.assign(findPost(where), data),
+      updateMany: async ({ where, data }: any) => {
+        const p = findPost(where);
+        if (p) Object.assign(p, data);
+        return { count: p ? 1 : 0 };
+      },
+      count: async () =>
+        [...posts.values()].filter(
+          (p) => !["complete", "excluded"].includes(p.state),
+        ).length,
+    },
+    sourceDiscoveryMedia: {
+      createMany: async ({ data }: any) => {
+        for (const create of data) {
+          const k = JSON.stringify({
+            discoveryPostId: create.discoveryPostId,
+            externalMediaId: create.externalMediaId,
+          });
+          if (!media.has(k))
+            media.set(k, { id: k, fileObjectId: null, ...create });
+        }
+        return { count: data.length };
+      },
+      update: async ({ where, data }: any) =>
+        Object.assign(media.get(where.id), data),
+      findMany: async ({ where }: any) =>
+        [...media.values()].filter(
+          (m) => m.discoveryPostId === where.discoveryPostId,
+        ),
+      upsert: async ({ where, create, update }: any) => {
+        const k = JSON.stringify(where.discoveryPostId_externalMediaId);
+        const old = media.get(k);
+        if (old) return Object.assign(old, update);
+        const m = { fileObjectId: null, ...create };
+        media.set(k, m);
+        return m;
+      },
+      updateMany: async ({ where, data }: any) => {
+        const m = [...media.values()].find(
+          (m) =>
+            m.discoveryPostId === where.discoveryPostId &&
+            m.externalMediaId === where.externalMediaId &&
+            (!("fileObjectId" in where) ||
+              m.fileObjectId === where.fileObjectId),
+        );
+        if (m) Object.assign(m, data);
+        return { count: m ? 1 : 0 };
+      },
+    },
+    fileObject: { count: async () => 1 },
     $executeRaw: async () => 1,
     $queryRaw: async () => [],
     user: { count: async () => (actorAllowed ? 1 : 0) },
@@ -380,7 +470,14 @@ function fixture(source = client) {
       },
       update: async () => ({}),
     },
-    candidateMedia: { createMany: async () => ({ count: 1 }) },
+    candidateMedia: {
+      createMany: async () => ({ count: 1 }),
+      findMany: async () =>
+        [...media.values()].map((m) => ({
+          ...m,
+          fileObjectId: "existing-file",
+        })),
+    },
     candidateSourceObservation: {
       upsert: async () => {
         observations++;
@@ -419,6 +516,8 @@ function fixture(source = client) {
   );
   return {
     service,
+    posts,
+    media,
     db,
     jobs,
     account,
@@ -1210,6 +1309,19 @@ test("actor revocation on a duplicate insert prevents the P2002 observation path
     );
   };
   f.db.candidatePost.findUniqueOrThrow = async () => ({ id: "existing" });
+  await f.service.discovery.record(
+    f.db,
+    {
+      accountId: "account",
+      platform: "fixture",
+      sourceUserId: "1",
+      adapterKey: "synthetic",
+      actorId: "actor",
+      discoveredRunId: "run",
+      windowJson: {},
+    },
+    content("1"),
+  );
   await assert.rejects(
     f.service.saveCandidate(
       f.account,
@@ -1649,4 +1761,323 @@ test("an account's cooled first adapter does not block a ready fallback", async 
   );
   assert.deepEqual(skipped, ["synthetic"]);
   assert.deepEqual(invoked, ["paid"]);
+});
+
+test("discovery gaps preserve good media and good sibling posts while completing coverage", async () => {
+  const source = {
+    ...client,
+    fetchPage: async () => ({
+      items: [content("1", 2), content("2")],
+      nextCursor: {},
+      complete: true,
+    }),
+  };
+  const f = fixture(source);
+  const urls: string[] = [];
+  f.downloader.download = async (url: string) => {
+    urls.push(url);
+    if (url.endsWith("/1/1.png")) throw new Error("synthetic CDN failure");
+    return { body: Buffer.from("synthetic"), contentType: "image/png" };
+  };
+  await f.service.fetchAdapter(
+    "item",
+    "run",
+    f.account,
+    f.snapshot,
+    source,
+    null,
+    new AbortController().signal,
+  );
+  assert.deepEqual(f.committed, ["2"]);
+  assert.equal(f.row.errorCode, "discovery_gaps");
+  assert.ok(f.scan.discoveredThroughAt);
+  assert.equal(f.row.mediaStored, 2);
+  const gap = f.posts.get("1");
+  assert.equal(gap.state, "media_pending");
+  const media = [...f.media.values()].filter(
+    (m: any) => m.discoveryPostId === gap.id,
+  );
+  assert.ok(media[0].fileObjectId);
+  assert.equal(media[1].fileObjectId, null);
+  assert.equal(urls.length, 3);
+});
+
+test("replay downloads only missing media after a failed sibling and uses refreshed URL", async () => {
+  const f = fixture();
+  const original = content("1", 2);
+  await f.service.discovery.record(
+    f.db,
+    {
+      accountId: "account",
+      platform: "fixture",
+      sourceUserId: "1",
+      adapterKey: "synthetic",
+      actorId: null,
+      discoveredRunId: "run",
+      windowJson: {},
+    },
+    original,
+  );
+  let requests: string[] = [];
+  f.downloader.download = async (url: string) => {
+    requests.push(url);
+    if (url.endsWith("/1.png")) throw new Error("CDN");
+    return { body: Buffer.from("synthetic"), contentType: "image/png" };
+  };
+  const first = await f.service.saveCandidate(
+    f.account,
+    f.snapshot,
+    client,
+    original,
+    null,
+    "run",
+    new AbortController().signal,
+  );
+  assert.equal(first.pending, true);
+  assert.equal(f.committed.length, 0);
+  requests = [];
+  const refreshed = {
+    ...original,
+    ownMedia: original.ownMedia.map((m) => ({ ...m, url: m.url + "?fresh=1" })),
+  };
+  await f.service.discovery.record(
+    f.db,
+    {
+      accountId: "account",
+      platform: "fixture",
+      sourceUserId: "1",
+      adapterKey: "synthetic",
+      actorId: null,
+      discoveredRunId: "run",
+      windowJson: {},
+    },
+    refreshed,
+  );
+  f.downloader.download = async (url: string) => {
+    requests.push(url);
+    return { body: Buffer.from("synthetic"), contentType: "image/png" };
+  };
+  const second = await f.service.saveCandidate(
+    f.account,
+    f.snapshot,
+    client,
+    refreshed,
+    null,
+    "run",
+    new AbortController().signal,
+  );
+  assert.equal(second.created, true);
+  assert.deepEqual(requests, ["https://fixture.invalid/1/1.png?fresh=1"]);
+  assert.equal(f.posts.get("1").state, "complete");
+});
+
+test("a replaced Pixiv asset at the same ordinal never mixes old and new files", async () => {
+  const f = fixture();
+  const context = {
+    accountId: "account",
+    platform: "fixture",
+    sourceUserId: "1",
+    adapterKey: "synthetic",
+    actorId: null,
+    discoveredRunId: "run",
+    windowJson: {},
+  };
+  const old = content("1", 2);
+  await f.service.discovery.record(f.db, context, old);
+  f.downloader.download = async (url: string) => {
+    if (url.endsWith("/1.png")) throw new Error("CDN");
+    return { body: Buffer.from("old-A"), contentType: "image/png" };
+  };
+  await f.service.saveCandidate(
+    f.account,
+    f.snapshot,
+    client,
+    old,
+    null,
+    "run",
+    new AbortController().signal,
+  );
+  const before = [...f.media.values()].find(
+    (m: any) => m.fileObjectId,
+  )!.fileObjectId;
+  f.downloader.download = async () => ({
+    body: Buffer.from("new-B"),
+    contentType: "image/png",
+  });
+  const revised = {
+    ...old,
+    ownMedia: old.ownMedia.map((m) => ({
+      ...m,
+      url: m.url.replace("/1/", "/v2/1/"),
+    })),
+  };
+  await f.service.discovery.record(f.db, context, revised);
+  const next = await f.service.saveCandidate(
+    f.account,
+    f.snapshot,
+    client,
+    revised,
+    null,
+    "run",
+    new AbortController().signal,
+  );
+  assert.equal(next.pending, true);
+  assert.equal(f.committed.length, 0);
+  assert.equal(f.posts.get("1").state, "needs_attention");
+  assert.equal(f.posts.get("1").failureCode, "asset_identity_changed");
+  assert.equal(
+    [...f.media.values()].find((m: any) => m.fileObjectId)!.fileObjectId,
+    before,
+  );
+  assert.deepEqual(f.posts.get("1").metadataJson, old);
+});
+
+test("absorbed media and storage failures retain sanitized diagnostics exactly once while siblings continue", async () => {
+  const source = {
+    ...client,
+    fetchPage: async () => ({
+      items: [content("1"), content("2"), content("3")],
+      nextCursor: {},
+      complete: true,
+    }),
+  };
+  const f = fixture(source);
+  const logs: string[] = [];
+  const log = console.info;
+  console.info = (s: string) => {
+    logs.push(s);
+  };
+  const originalStore = f.files.store;
+  f.downloader.download = async (url: string) => {
+    if (url.includes("/1/"))
+      throw new SourceResponseError("temporary_failure", {
+        reason: "media_http_404",
+        scope: "media",
+        diagnostic: {
+          http_status: 404,
+          message: "https://cdn.invalid/a?signature=HIDDEN",
+          http_response_headers: { "x-request-id": "request-a" },
+        },
+      });
+    return { body: Buffer.from(url), contentType: "image/png" };
+  };
+  f.files.store = async (input: any) => {
+    if (input.sourceName.includes("/2/"))
+      throw new SourceResponseError("temporary_failure", {
+        reason: "storage_failure",
+        scope: "storage",
+        diagnostic: { message: "token=HIDDEN", guard: "write_failed" },
+      });
+    return originalStore();
+  };
+  try {
+    await f.service.fetchAdapter(
+      "item",
+      "run",
+      f.account,
+      f.snapshot,
+      source,
+      null,
+      new AbortController().signal,
+    );
+  } finally {
+    console.info = log;
+  }
+  const failures = logs
+    .map((s) => JSON.parse(s))
+    .filter((e) => e.event === "media_failed");
+  assert.equal(failures.length, 2);
+  assert.deepEqual(
+    failures.map((e) => e.failureScope),
+    ["media", "storage"],
+  );
+  assert.deepEqual(
+    failures.map((e) => e.stage),
+    ["download", "store"],
+  );
+  assert.equal(failures[0].diagnostic.http_status, "404");
+  assert.equal(failures[1].reason, "storage_failure");
+  assert.equal(logs.join("").includes("HIDDEN"), false);
+  assert.deepEqual(f.committed, ["3"]);
+});
+
+test("recovery fetchPost failures log one sanitized event; gate waits log no failure or campaign outcome", async () => {
+  const failure = new SourceResponseError("temporary_failure", {
+    reason: "post_not_found",
+    scope: "post",
+    diagnostic: {
+      http_status: 404,
+      message: "https://source.invalid/post?token=HIDDEN",
+      guard: "leaf_metadata",
+    },
+  });
+  const source = {
+    ...client,
+    fetchPost: async () => {
+      throw failure;
+    },
+  };
+  const f = fixture(source);
+  const context = {
+    accountId: "account",
+    platform: "fixture",
+    sourceUserId: "1",
+    adapterKey: "synthetic",
+    actorId: null,
+    discoveredRunId: "run",
+    windowJson: {},
+  };
+  await f.service.discovery.record(f.db, context, content("1"));
+  f.service.accounts = async () => [f.account];
+  f.service.claimSource = async () => ({ count: 1 });
+  f.db.sourcePlatformState = { count: async () => 1 };
+  f.service.platforms.lock = async () => {};
+  f.service.platforms.beforeNetwork = async () => {};
+  f.jobs.diagnosticContext = () => ({ jobId: "job", attempt: 2 });
+  let finishes = 0;
+  f.service.recovery.finish = async () => {
+    finishes++;
+  };
+  const campaign = {
+    id: "campaign",
+    number: 2,
+    discoveryPostId: "discovery-1",
+    discoveryPost: f.posts.get("1"),
+  };
+  const job = {
+    id: "job",
+    payload: { platform: "fixture", credentialGeneration: "generation" },
+  };
+  const logs: string[] = [];
+  const log = console.info;
+  console.info = (s: string) => {
+    logs.push(s);
+  };
+  try {
+    await assert.rejects(
+      f.service.recoverPost(job, campaign, new AbortController().signal),
+    );
+    const events = logs
+      .map((s) => JSON.parse(s))
+      .filter((e) => e.event === "recovery_failed");
+    assert.equal(events.length, 1);
+    assert.equal(events[0].stage, "fetch_post");
+    assert.equal(events[0].campaign, "2");
+    assert.equal(events[0].jobId, "job");
+    assert.equal(events[0].attempt, "2");
+    assert.equal(events[0].failureScope, "post");
+    assert.equal(events[0].diagnostic.http_status, "404");
+    assert.equal(logs.join("").includes("HIDDEN"), false);
+    logs.length = 0;
+    f.service.platforms.beforeNetwork = async () => {
+      throw new JobDeferred(new Date(Date.now() + 60000), "scope_paused");
+    };
+    await assert.rejects(
+      f.service.recoverPost(job, campaign, new AbortController().signal),
+    );
+    assert.equal(logs.length, 0);
+    assert.equal(finishes, 0);
+  } finally {
+    console.info = log;
+  }
 });

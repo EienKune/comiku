@@ -38,7 +38,7 @@ export function controlledFailureDetails(
   });
 }
 const fields = new Set(
-  "stage guard exception_type runtime_version message traceback field http_status http_method http_endpoint http_response_bytes http_response_headers http_response_excerpt response_excerpt upstream_logs exitCode signal killed timeout duration stderr runId jobId attempt accountId platform adapter page postId mediaId windowStart windowEnd credentialGeneration".split(
+  "stage guard exception_type runtime_version message traceback field http_status http_method http_endpoint http_response_bytes http_response_headers http_response_excerpt response_excerpt upstream_logs exitCode signal killed timeout duration stderr runId jobId attempt campaignId campaign accountId platform adapter page postId mediaId windowStart windowEnd credentialGeneration".split(
     " ",
   ),
 );

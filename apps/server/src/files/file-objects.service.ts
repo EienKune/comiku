@@ -442,12 +442,33 @@ export class FileObjectsService {
   async purgeUnreferenced(id: string): Promise<void> {
     for (const key of this.signedUrls.keys())
       if (key.startsWith(`${id}:`)) this.signedUrls.delete(key);
-    const file = await this.db.fileObject.findUnique({ where: { id } });
-    if (!file) return;
-    await this.db.fileObject.update({
-      where: { id },
-      data: { lifecycleStatus: "pending_deletion" },
+    const file = await this.db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM file_objects WHERE id=${id}::uuid FOR UPDATE`;
+      const unreferenced = await tx.fileObject.findFirst({
+        where: {
+          id,
+          discoveryMedia: { none: {} },
+          candidateMedia: { none: {} },
+          workImages: { none: {} },
+          downloadPreparations: { none: {} },
+          derivativeOutputs: { none: {} },
+          authorAvatars: { none: {} },
+          accountAvatars: { none: {} },
+          userAvatars: { none: {} },
+          authorEvidence: { none: {} },
+          labelPlusFiles: { none: {} },
+          typesetPackages: { none: {} },
+          typesetUploadImages: { none: {} },
+          typesetImages: { none: {} },
+        },
+      });
+      if (!unreferenced) return null;
+      return tx.fileObject.update({
+        where: { id },
+        data: { lifecycleStatus: "pending_deletion" },
+      });
     });
+    if (!file) return;
     await this.storage.delete(file.objectKey);
     const derivatives = await this.db.imageDerivative.findMany({
       where: { sourceFileId: id },

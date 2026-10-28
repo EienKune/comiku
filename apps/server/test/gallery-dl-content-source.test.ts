@@ -771,3 +771,44 @@ test("Pixiv preserves native plain caption, line breaks, link text and entities"
   assert.equal(item.text, description);
   assert.equal(item.rawJson.description, description);
 });
+
+test("internal post refresh retains large decimal identifiers through JSON and checks requested target", async () => {
+  const postId = "798688505224273923";
+  const metadata = {
+    tweet_id: postId,
+    author: { id: account.externalUserId },
+    date: "2026-10-25 10:00:00",
+    count: 1,
+    num: 1,
+    type: "photo",
+    extension: "jpg",
+    quoted_id: "798688505224273925",
+  };
+  const wire = JSON.parse(
+    JSON.stringify(
+      page({
+        post_status: "ready",
+        post_id: postId,
+        records: [
+          [2, metadata],
+          [3, "https://pbs.twimg.com/media/synthetic.jpg", metadata],
+        ],
+        terminal: true,
+        next: null,
+        boundary: false,
+      }),
+    ),
+  );
+  const c = client([wire]);
+  const result = await c.fetchPost(account, postId);
+  assert.equal(result.kind, "ready");
+  if (result.kind === "ready") {
+    assert.equal(result.item.externalContentId, postId);
+    assert.equal(result.item.referencedContentId, "798688505224273925");
+    assert.equal(result.item.ownMedia[0].externalMediaId, postId + ":1");
+  }
+  await assert.rejects(client([wire]).fetchPost(account, "798688505224273924"));
+  const aborted = new AbortController();
+  aborted.abort();
+  await assert.rejects(client([]).fetchPost(account, postId, aborted.signal));
+});

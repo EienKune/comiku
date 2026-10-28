@@ -1064,6 +1064,15 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
     await db.sourceFetchRun.deleteMany({
       where: { requestedById: { in: userIds } },
     });
+    if (accountId) {
+      await db.sourceRecoveryCampaign.deleteMany({
+        where: { discoveryPost: { accountId } },
+      });
+      await db.sourceDiscoveryMedia.deleteMany({
+        where: { discoveryPost: { accountId } },
+      });
+      await db.sourceDiscoveryPost.deleteMany({ where: { accountId } });
+    }
     if (accountId)
       await db.authorExternalAccount.deleteMany({ where: { id: accountId } });
     await db.sourceAdapterBudgetUsage.deleteMany({

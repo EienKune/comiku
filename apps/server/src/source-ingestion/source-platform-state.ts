@@ -157,7 +157,9 @@ export class SourcePlatformStates {
     const live = await tx.backgroundJob.count({
       where: {
         id: excludeJobId ? { not: excludeJobId } : undefined,
-        kind: { in: ["source_fetch", "source_account_fetch"] },
+        kind: {
+          in: ["source_fetch", "source_account_fetch", "source_post_recover"],
+        },
         status: "running",
         leaseUntil: { gt: now },
         OR: [
@@ -178,17 +180,25 @@ export class SourcePlatformStates {
     job: BackgroundJob,
     tx: Prisma.TransactionClient,
     now: Date,
+    binding?: {
+      platform: string;
+      completedAt: Date | null;
+      waiting: (deferred: JobDeferred) => Promise<unknown>;
+      running: (generation: string) => Promise<unknown>;
+    },
   ): Promise<void | JobDeferred> {
-    const task = await tx.sourceFetchAccountTask.findUnique({
-      where: { id: job.resourceId },
-    });
+    const task = binding
+      ? null
+      : await tx.sourceFetchAccountTask.findUnique({
+          where: { id: job.resourceId },
+        });
     if (
-      !task ||
-      task.jobId !== job.id ||
-      job.executionScope !== `source:${task.platform}`
+      (!binding && (!task || task.jobId !== job.id)) ||
+      job.executionScope !== `source:${binding?.platform ?? task?.platform}`
     )
       throw new ConflictException("Invalid source task");
-    if (task.completedAt) return;
+    const platform = binding?.platform ?? task!.platform;
+    if (binding?.completedAt || task?.completedAt) return;
     if (job.actorId)
       await tx.$queryRaw`SELECT id FROM users WHERE id = ${job.actorId}::uuid FOR SHARE`;
     if (
@@ -208,7 +218,7 @@ export class SourcePlatformStates {
         where: { id: job.id },
         data: {
           payload: {
-            platform: task.platform,
+            platform: platform,
             credentialGeneration: "actor_unavailable",
           },
         },
@@ -219,25 +229,25 @@ export class SourcePlatformStates {
     // Claims already hold platform scope. A global barrier prevents old code claiming concurrently.
     await this.jobs.lockScope(tx, "network", "global");
     let state = await tx.sourcePlatformState.findUnique({
-      where: { platform: task.platform },
+      where: { platform: platform },
     });
-    const generation = await this.fingerprint(task.platform);
+    const generation = await this.fingerprint(platform);
     // A local mismatch must roll back the claim, not postpone work for healthy peers.
     if (!generation || (state && state.credentialGeneration !== generation))
       throw new SourceConfigurationMismatch();
     if (
       !state &&
       generation &&
-      (await this.drained(tx, task.platform, now, job.id))
+      (await this.drained(tx, platform, now, job.id))
     ) {
       await tx.sourcePlatformState.createMany({
-        data: { platform: task.platform, credentialGeneration: generation },
+        data: { platform: platform, credentialGeneration: generation },
         skipDuplicates: true,
       });
     }
-    await this.lock(tx, task.platform);
+    await this.lock(tx, platform);
     state = await tx.sourcePlatformState.findUnique({
-      where: { platform: task.platform },
+      where: { platform: platform },
     });
     const legacy = await tx.backgroundJob.count({
       where: {
@@ -251,30 +261,34 @@ export class SourcePlatformStates {
         ? new JobDeferred(new Date(now.getTime() + 60000), "capacity")
         : this.denial(state, generation, now);
     if (deferred) {
-      await tx.sourceFetchAccountTask.update({
-        where: { id: task.id },
-        data: {
-          status: "waiting",
-          deferredUntil: deferred.retryAt,
-          failureCode: deferred.reason,
-        },
-      });
+      if (binding) await binding.waiting(deferred);
+      else
+        await tx.sourceFetchAccountTask.update({
+          where: { id: task!.id },
+          data: {
+            status: "waiting",
+            deferredUntil: deferred.retryAt,
+            failureCode: deferred.reason,
+          },
+        });
       return deferred;
     }
-    await tx.sourceFetchAccountTask.update({
-      where: { id: task.id },
-      data: {
-        status: "running",
-        credentialGeneration: generation,
-        startedAt: task.startedAt ?? now,
-        deferredUntil: null,
-        failureCode: null,
-      },
-    });
+    if (binding) await binding.running(generation!);
+    else
+      await tx.sourceFetchAccountTask.update({
+        where: { id: task!.id },
+        data: {
+          status: "running",
+          credentialGeneration: generation,
+          startedAt: task!.startedAt ?? now,
+          deferredUntil: null,
+          failureCode: null,
+        },
+      });
     await tx.backgroundJob.update({
       where: { id: job.id },
       data: {
-        payload: { credentialGeneration: generation!, platform: task.platform },
+        payload: { credentialGeneration: generation!, platform: platform },
       },
     });
   }
@@ -358,7 +372,7 @@ export class SourcePlatformStates {
         );
       await tx.backgroundJob.updateMany({
         where: {
-          kind: "source_account_fetch",
+          kind: { in: ["source_account_fetch", "source_post_recover"] },
           executionScope: `source:${platform}`,
           status: "queued",
           attempts: { lt: 3 },
@@ -407,7 +421,7 @@ export class SourcePlatformStates {
       }
       await tx.backgroundJob.updateMany({
         where: {
-          kind: "source_account_fetch",
+          kind: { in: ["source_account_fetch", "source_post_recover"] },
           executionScope: `source:${platform}`,
           status: "queued",
           attempts: { lt: 3 },

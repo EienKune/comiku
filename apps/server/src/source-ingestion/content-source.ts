@@ -36,7 +36,21 @@ export interface NormalizedSourceContent {
   rawJson: Record<string, unknown>;
 }
 
+export interface SourceDiscoveryFailure {
+  externalPostId: string;
+  failureCode: "metadata_unavailable";
+  evidence: { kind: "author_catalog" | "author_timeline"; sourceId: string };
+}
+export type SourcePostResult =
+  | { kind: "ready"; item: NormalizedSourceContent }
+  | {
+      kind: "excluded";
+      postId: string;
+      reason: "foreign" | "unsupported";
+      verified: { sourceId: string; publishedAt: string; type: string };
+    };
 export interface SourcePage {
+  discoveryFailures?: SourceDiscoveryFailure[];
   items: NormalizedSourceContent[];
   nextCursor?: SourceCursor;
   complete: boolean;
@@ -66,6 +80,11 @@ export interface ContentSourceClient {
   ): SourceCursor;
   checkAccount(account: SourceAccountIdentity): Promise<SourceAccountProfile>;
   resolveProfileByHandle?(handle: string): Promise<SourceAccountProfile>;
+  fetchPost?(
+    account: SourceAccountIdentity,
+    postId: string,
+    signal?: AbortSignal,
+  ): Promise<SourcePostResult>;
   fetchPage(
     account: SourceAccountIdentity,
     cursor: SourceCursor,

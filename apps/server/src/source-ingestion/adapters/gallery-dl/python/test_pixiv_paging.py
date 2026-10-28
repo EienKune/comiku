@@ -545,11 +545,12 @@ class PixivPagingTests(unittest.TestCase):
         with upstream.installed():
             self.assert_scan_fails(upstream, "cursor_invalid")
 
-    def test_missing_metadata_entry_cannot_complete_union(self):
+    def test_missing_metadata_entry_is_resolved_from_native_detail(self):
         upstream = PixivUpstream(self, [[]], [ajax_work(100), ajax_work(200)])
         del upstream.briefs["100"]
         with upstream.installed():
-            self.assert_scan_fails(upstream, "discovery_incomplete")
+            pages = self.collect_all(upstream)
+        self.assertEqual({"100", "200"}, {item for page in pages for item in directory_ids(page)})
 
     def test_metadata_identity_author_type_and_date_must_be_known(self):
         mutations = (

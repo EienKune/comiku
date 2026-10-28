@@ -1,3 +1,5 @@
+import { SourceDiscoveryService } from "./source-discovery.service.js";
+import { SourceRecoveryService } from "./source-recovery.service.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { SourceAccountTasks } from "./source-account-tasks.js";
 import {
@@ -43,6 +45,8 @@ import type {
   SourceFetchProgressSnapshotDto,
   SourceFetchRunDto,
 } from "./source-fetch.dto.js";
+
+class RecoveryMediaIncompleteError extends Error {}
 
 const SOURCE_LEASE_MS = 30 * 60_000;
 const SOURCE_LEASE_RENEW_MS = 5 * 60_000;
@@ -95,10 +99,14 @@ type ProgressRun = Pick<
 export class SourceFetchService {
   readonly platforms: SourcePlatformStates;
   private readonly tasks: SourceAccountTasks;
+  readonly discovery: SourceDiscoveryService;
+  readonly recovery: SourceRecoveryService;
   private readonly accountExecution = new AsyncLocalStorage<{
     job: BackgroundJob;
     platform: string;
     generation: string;
+    campaignId?: string;
+    campaign?: number;
   }>();
   constructor(
     @Inject(JobsService) private readonly jobs: JobsService,
@@ -113,9 +121,14 @@ export class SourceFetchService {
   ) {
     this.platforms = new SourcePlatformStates(db, jobs, environment);
     this.tasks = new SourceAccountTasks(db, jobs);
+    this.discovery = new SourceDiscoveryService(db);
+    this.recovery = new SourceRecoveryService(db, jobs, this.platforms);
   }
 
   onModuleInit() {
+    this.recovery.register((job, campaign, signal) =>
+      this.recoverPost(job, campaign, signal),
+    );
     for (const platform of ["x", "pixiv"])
       this.jobs.registerQueuePolicy("network", `source:${platform}`, {
         primary: "scan",
@@ -200,15 +213,22 @@ export class SourceFetchService {
             },
           });
           if (!succeeded) throw new Error("No account adapter completed");
+          const gaps = await this.db.sourceFetchRunItem.count({
+            where: {
+              runId: task.runId,
+              externalAccountId: task.accountId,
+              errorCode: "discovery_gaps",
+            },
+          });
           await this.db.$transaction(async (tx) => {
             await this.jobs.assertCurrentLease(tx);
             await this.platforms.actor(tx, task.run.requestedById);
             await tx.sourceFetchAccountTask.update({
               where: { id: task.id },
               data: {
-                status: "succeeded",
+                status: gaps ? "failed" : "succeeded",
                 completedAt: new Date(),
-                failureCode: null,
+                failureCode: gaps ? "discovery_gaps" : null,
                 deferredUntil: null,
               },
             });
@@ -244,7 +264,240 @@ export class SourceFetchService {
     );
   }
 
+  private async recoverPost(
+    job: BackgroundJob,
+    campaign: Prisma.SourceRecoveryCampaignGetPayload<{
+      include: { discoveryPost: true };
+    }>,
+    signal: AbortSignal,
+  ) {
+    const post = campaign.discoveryPost;
+    const payload = jsonObject(job.payload);
+    const generation = payload?.credentialGeneration;
+    if (typeof generation !== "string" || payload?.platform !== post.platform)
+      throw new Error("Unpinned recovery task");
+    await this.accountExecution.run(
+      {
+        job,
+        platform: post.platform,
+        generation,
+        campaignId: campaign.id,
+        campaign: campaign.number,
+      },
+      async () => {
+        await this.assertActor(post.actorId);
+        const account = (await this.accounts([post.accountId]))[0];
+        if (!account || account.externalUserId !== post.sourceUserId)
+          throw new BadRequestException("Recovery source identity changed");
+        const state: FetchState | undefined = account.adapterStates.find(
+          (s) => s.adapterKey === post.adapterKey,
+        );
+        const client = this.sources
+          .forPlatform(post.platform)
+          .find((s) => s.adapterKey === post.adapterKey && s.available);
+        if (!state?.enabled || !client?.fetchPost)
+          throw new BadRequestException("Recovery adapter unavailable");
+        const leased = await this.claimSource(
+          account,
+          state,
+          campaign.id,
+          post.actorId,
+          new Date(),
+          campaign.id,
+        );
+        if (!leased.count)
+          throw new JobDeferred(new Date(Date.now() + 60000), "capacity");
+        let networkVerified = false;
+        const diagnosticContext: Record<string, unknown> = {
+          stage: "recovery_prepare",
+          postId: post.externalPostId,
+        };
+        try {
+          const current = await this.db.sourceDiscoveryPost.findUniqueOrThrow({
+            where: { id: post.id },
+            include: { media: true },
+          });
+          if (!["complete", "excluded"].includes(current.state)) {
+            let content =
+              current.metadataJson as unknown as NormalizedSourceContent | null;
+            if (!content || current.media.some((m) => !m.fileObjectId)) {
+              await this.platforms.beforeNetwork(post.platform, generation);
+              signal.throwIfAborted();
+              diagnosticContext.stage = "fetch_post";
+              const result = await client.fetchPost(
+                {
+                  externalUserId: account.externalUserId,
+                  handle: account.handle ?? undefined,
+                },
+                post.externalPostId,
+                signal,
+              );
+              signal.throwIfAborted();
+              networkVerified = true;
+              if (result.kind === "excluded") {
+                if (result.postId !== post.externalPostId)
+                  throw new Error("Recovery exclusion identity changed");
+                await this.db.$transaction(async (tx) => {
+                  await this.lockSource(tx, account, state, post.actorId);
+                  await this.assertEligible(account, state, campaign.id, tx);
+                  await tx.sourceDiscoveryPost.update({
+                    where: { id: post.id },
+                    data: {
+                      state: "excluded",
+                      failureCode: result.reason,
+                      nextRetryAt: null,
+                      revision: { increment: 1 },
+                    },
+                  });
+                  await this.platforms.outcome(tx, post.platform, generation);
+                  await this.recovery.finish(tx, campaign, true);
+                });
+                return;
+              }
+              content = result.item;
+              diagnosticContext.stage = "validate_post";
+              if (content.externalContentId !== post.externalPostId)
+                throw new Error("Recovery returned a different post");
+              const window = jsonObject(post.windowJson);
+              const at = Date.parse(content.publishedAt);
+              if (!Number.isFinite(at))
+                throw new Error("Recovery publication timestamp missing");
+              const excluded =
+                content.type === "repost" ||
+                !content.ownMedia.length ||
+                (typeof window?.startTime === "string" &&
+                  at < Date.parse(window.startTime)) ||
+                (typeof window?.endTime === "string" &&
+                  at >= Date.parse(window.endTime));
+              await this.db.$transaction(async (tx) => {
+                await this.lockSource(tx, account, state, post.actorId);
+                await this.assertEligible(account, state, campaign.id, tx);
+                if (excluded)
+                  await tx.sourceDiscoveryPost.update({
+                    where: { id: post.id },
+                    data: {
+                      state: "excluded",
+                      failureCode: "outside_window_or_unsupported",
+                      nextRetryAt: null,
+                      revision: { increment: 1 },
+                    },
+                  });
+                else
+                  await this.discovery.record(
+                    tx,
+                    {
+                      accountId: account.id,
+                      platform: post.platform,
+                      sourceUserId: account.externalUserId,
+                      adapterKey: post.adapterKey,
+                      actorId: post.actorId,
+                      discoveredRunId: post.discoveredRunId,
+                      windowJson: post.windowJson as Prisma.InputJsonValue,
+                    },
+                    content!,
+                  );
+              });
+              if (excluded) content = null;
+            }
+            if (content) {
+              const saved = await this.saveCandidate(
+                account,
+                state,
+                client,
+                content,
+                post.actorId,
+                campaign.id,
+                signal,
+                this.sourceLeaseKeeper(
+                  account,
+                  state,
+                  campaign.id,
+                  post.actorId,
+                ),
+                diagnosticContext,
+              );
+              if (saved.pending)
+                throw new RecoveryMediaIncompleteError(
+                  "Recovery media remains incomplete",
+                );
+            }
+          }
+          await this.db.$transaction(async (tx) => {
+            await this.lockSource(tx, account, state, post.actorId);
+            await this.assertEligible(account, state, campaign.id, tx);
+            if (networkVerified)
+              await this.platforms.outcome(tx, post.platform, generation);
+            await this.recovery.finish(tx, campaign, true);
+          });
+        } catch (error) {
+          signal.throwIfAborted();
+          if (error instanceof JobDeferred) throw error;
+          const shared = platformFailure(error, new Date());
+          if (shared) {
+            await this.db.$transaction(async (tx) => {
+              await this.lockSource(tx, account, state, post.actorId);
+              await this.assertEligible(account, state, campaign.id, tx);
+              await this.platforms.outcome(
+                tx,
+                post.platform,
+                generation,
+                error,
+              );
+            });
+            throw new JobDeferred(
+              shared.cooldownUntil ?? new Date(Date.now() + 900000),
+              shared.status === "auth_paused"
+                ? "scope_paused"
+                : "platform_cooldown",
+            );
+          }
+          if (!(error instanceof RecoveryMediaIncompleteError))
+            console.info(
+              JSON.stringify({
+                scope: "source_recovery",
+                event: "recovery_failed",
+                ...sourceDiagnostic(error, {
+                  ...diagnosticContext,
+                  ...this.jobs.diagnosticContext?.(),
+                  campaignId: campaign.id,
+                  campaign: campaign.number,
+                  accountId: account.id,
+                  platform: post.platform,
+                  adapter: post.adapterKey,
+                }),
+              }),
+            );
+          // JobsService retries the same campaign up to three executions. Reconcile
+          // settles exhausted/crashed attempts exactly once, including last-attempt death.
+          throw error;
+        } finally {
+          await this.db.$transaction(async (tx) => {
+            await this.lockSource(tx, account, state, post.actorId, true);
+            const released = await tx.sourceAccountScanState.updateMany({
+              where: {
+                accountId: account.id,
+                epoch: state.scanEpoch ?? -1,
+                leaseOwnerJobId: job.id,
+              },
+              data: { leaseOwnerJobId: null, leaseUntil: null },
+            });
+            if (released.count)
+              await tx.sourceAdapterState.updateMany({
+                where: {
+                  id: state.id,
+                  revision: state.revision,
+                  fetchLeaseId: campaign.id,
+                },
+                data: { fetchLeaseId: null, fetchLeaseUntil: null },
+              });
+          });
+        }
+      },
+    );
+  }
+
   async reconcileExhausted() {
+    await this.recovery.reconcile();
     const now = new Date();
     const terminalTasks = await this.db.$queryRaw<
       { id: string; jobId: string; runId: string; accountId: string }[]
@@ -986,54 +1239,13 @@ export class SourceFetchService {
         await this.createSkippedItem(runId, account, state, client);
         continue;
       }
-      const leased = await this.db.$transaction(async (tx) => {
-        await this.lockSource(tx, account, state, createdById);
-        await this.assertEligible(account, state, undefined, tx);
-        const scan = await tx.sourceAccountScanState.findUniqueOrThrow({
-          where: { accountId: account.id },
-        });
-        const owner = this.jobs.diagnosticContext?.().jobId ?? runId;
-        if (
-          scan.leaseUntil &&
-          scan.leaseUntil > now &&
-          scan.leaseOwnerJobId !== owner
-        )
-          return { count: 0 };
-        const leased = await tx.sourceAdapterState.updateMany({
-          where: {
-            id: state.id,
-            revision: state.revision,
-            enabled: true,
-            OR: [
-              { fetchLeaseUntil: null },
-              { fetchLeaseUntil: { lt: now } },
-              { fetchLeaseId: runId },
-            ],
-          },
-          data: {
-            fetchLeaseId: runId,
-            fetchLeaseUntil: new Date(now.getTime() + SOURCE_LEASE_MS),
-            lastAttemptAt: now,
-            ...(["unavailable", "disabled"].includes(state.health)
-              ? { health: "idle" as const }
-              : {}),
-          },
-        });
-        if (leased.count) {
-          const claimed = await tx.sourceAccountScanState.update({
-            where: { accountId: account.id },
-            data: {
-              leaseOwnerJobId: owner,
-              leaseUntil: new Date(now.getTime() + SOURCE_LEASE_MS),
-              epoch: { increment: 1 },
-              revision: { increment: 1 },
-            },
-          });
-          state.scanEpoch = claimed.epoch;
-          state.scanOwnerJobId = owner;
-        }
-        return leased;
-      });
+      const leased = await this.claimSource(
+        account,
+        state,
+        runId,
+        createdById,
+        now,
+      );
       const item = previous
         ? await this.db.sourceFetchRunItem.update({
             where: { id: previous.id },
@@ -1237,6 +1449,69 @@ export class SourceFetchService {
     }
     if (deferredAdapter) throw deferredAdapter;
     if (lastFailure) throw lastFailure;
+  }
+
+  private async claimSource(
+    account: Account,
+    state: FetchState,
+    runId: string,
+    createdById: string | null,
+    now = new Date(),
+    recoveryCampaignId?: string,
+  ) {
+    return this.db.$transaction(async (tx) => {
+      await this.lockSource(tx, account, state, createdById);
+      await this.assertEligible(account, state, undefined, tx);
+      const scan = await tx.sourceAccountScanState.findUniqueOrThrow({
+        where: { accountId: account.id },
+      });
+      const owner = this.jobs.diagnosticContext?.().jobId ?? runId;
+      if (
+        scan.leaseUntil &&
+        scan.leaseUntil > now &&
+        scan.leaseOwnerJobId !== owner
+      )
+        return { count: 0 };
+      const leased = await tx.sourceAdapterState.updateMany({
+        where: {
+          id: state.id,
+          revision: state.revision,
+          enabled: true,
+          OR: [
+            { fetchLeaseUntil: null },
+            { fetchLeaseUntil: { lt: now } },
+            { fetchLeaseId: runId },
+          ],
+        },
+        data: {
+          fetchLeaseId: runId,
+          fetchLeaseUntil: new Date(now.getTime() + SOURCE_LEASE_MS),
+          lastAttemptAt: now,
+          ...(["unavailable", "disabled"].includes(state.health)
+            ? { health: "idle" as const }
+            : {}),
+        },
+      });
+      if (leased.count) {
+        const claimed = await tx.sourceAccountScanState.update({
+          where: { accountId: account.id },
+          data: {
+            leaseOwnerJobId: owner,
+            leaseUntil: new Date(now.getTime() + SOURCE_LEASE_MS),
+            epoch: { increment: 1 },
+            revision: { increment: 1 },
+          },
+        });
+        state.scanEpoch = claimed.epoch;
+        state.scanOwnerJobId = owner;
+        if (recoveryCampaignId)
+          await tx.sourceRecoveryCampaign.update({
+            where: { id: recoveryCampaignId },
+            data: { scanEpoch: claimed.epoch },
+          });
+      }
+      return leased;
+    });
   }
 
   private async createSkippedItem(
@@ -1585,6 +1860,42 @@ export class SourceFetchService {
       await this.assertEligible(account, state, leaseId);
       counters.pagesFetched += 1;
       counters.itemsSeen += page.items.length;
+      await this.db.$transaction(async (tx) => {
+        await this.lockSource(tx, account, state, createdById);
+        await this.assertEligible(account, state, leaseId, tx);
+        const context = {
+          accountId: account.id,
+          platform: account.platform,
+          sourceUserId: account.externalUserId,
+          adapterKey: client.adapterKey,
+          actorId: createdById,
+          discoveredRunId: leaseId,
+          windowJson: { startTime, endTime },
+        };
+        for (const failure of page.discoveryFailures ?? [])
+          await this.discovery.missingMetadata(
+            tx,
+            context,
+            failure.externalPostId,
+            failure.evidence,
+          );
+        for (const content of page.items) {
+          diagnosticContext.stage = "validate_post";
+          diagnosticContext.postId = content.externalContentId;
+          delete diagnosticContext.mediaId;
+          const at = new Date(content.publishedAt);
+          if (!Number.isFinite(at.getTime()))
+            throw new Error("Invalid discovery publication time");
+          if (
+            (initialBoundary && at < initialBoundary) ||
+            at >= upperBoundary ||
+            content.type === "repost" ||
+            !content.ownMedia.length
+          )
+            continue;
+          await this.discovery.record(tx, context, content);
+        }
+      });
       for (const content of page.items) {
         delete diagnosticContext.mediaId;
         diagnosticContext.stage = "validate_post";
@@ -1631,10 +1942,10 @@ export class SourceFetchService {
           keepLease,
           diagnosticContext,
         );
+        counters.mediaStored += saved.mediaStored;
         if (saved.created) {
           counters.candidatesCreated += 1;
-          counters.mediaStored += saved.mediaStored;
-        } else counters.candidatesExisting += 1;
+        } else if (!saved.pending) counters.candidatesExisting += 1;
       }
       if (!page.nextCursor)
         throw new Error("Source adapter did not return a durable cursor");
@@ -1757,12 +2068,18 @@ export class SourceFetchService {
         throw new Error(
           "Account scan epoch changed before committing coverage",
         );
+      const gaps = await tx.sourceDiscoveryPost.count({
+        where: {
+          accountId: account.id,
+          state: { notIn: ["complete", "excluded"] },
+        },
+      });
       await tx.sourceFetchRunItem.update({
         where: { id: itemId },
         data: {
           status: "succeeded",
-          errorCode: null,
-          errorMessage: null,
+          errorCode: gaps ? "discovery_gaps" : null,
+          errorMessage: gaps ? "发现覆盖已完成，媒体缺口等待独立补偿" : null,
           cursorAfter: {},
           ...counters,
           completedAt: new Date(),
@@ -1824,7 +2141,7 @@ export class SourceFetchService {
     signal: AbortSignal,
     keepLease = this.sourceLeaseKeeper(account, state, leaseId, createdById),
     diagnosticContext: Record<string, unknown> = {},
-  ): Promise<{ created: boolean; mediaStored: number }> {
+  ): Promise<{ created: boolean; mediaStored: number; pending?: boolean }> {
     diagnosticContext.stage = "candidate_lookup";
     const hashtags = collectHashtags(content.hashtags ?? [], content.text);
     const existing = await this.db.candidatePost.findUnique({
@@ -1884,42 +2201,180 @@ export class SourceFetchService {
           skipDuplicates: true,
         });
         await this.refreshTagDisposition(tx, existing.id);
+        const discovery = await tx.sourceDiscoveryPost.findUnique({
+          where: {
+            accountId_platform_externalPostId: {
+              accountId: account.id,
+              platform: account.platform,
+              externalPostId: content.externalContentId,
+            },
+          },
+        });
+        if (discovery && discovery.state !== "complete") {
+          const persisted = await tx.candidateMedia.findMany({
+            where: { candidatePostId: existing.id },
+            orderBy: { orderIndex: "asc" },
+          });
+          const ledgerMedia = await tx.sourceDiscoveryMedia.findMany({
+            where: { discoveryPostId: discovery.id },
+          });
+          for (const media of ledgerMedia) {
+            const prior = persisted.find(
+              (m) => m.externalMediaId === media.externalMediaId,
+            );
+            if (prior && !media.fileObjectId)
+              await this.discovery.attach(
+                tx,
+                discovery.id,
+                media.externalMediaId,
+                prior.fileObjectId,
+              );
+          }
+          const refreshed = await tx.sourceDiscoveryMedia.findMany({
+            where: { discoveryPostId: discovery.id },
+          });
+          if (
+            refreshed.length === content.ownMedia.length &&
+            refreshed.every((m) => m.fileObjectId)
+          )
+            await this.discovery.complete(tx, discovery.id);
+          else
+            await tx.sourceDiscoveryPost.update({
+              where: { id: discovery.id },
+              data: {
+                state: "needs_attention",
+                failureCode: "existing_manifest_mismatch",
+                nextRetryAt: null,
+              },
+            });
+        }
       });
       return { created: false, mediaStored: 0 };
     }
+    const ledger = await this.db.sourceDiscoveryPost.findUniqueOrThrow({
+      where: {
+        accountId_platform_externalPostId: {
+          accountId: account.id,
+          platform: account.platform,
+          externalPostId: content.externalContentId,
+        },
+      },
+      include: {
+        media: {
+          include: { fileObject: true },
+          orderBy: { orderIndex: "asc" },
+        },
+      },
+    });
+    if (["needs_attention", "excluded"].includes(ledger.state))
+      return { created: false, mediaStored: 0, pending: true };
     const stored: Prisma.FileObjectGetPayload<object>[] = [];
+    let downloadedCount = 0;
     try {
       for (const media of content.ownMedia) {
+        const previous = ledger.media.find(
+          (m) => m.externalMediaId === media.externalMediaId,
+        );
+        if (previous?.fileObject) {
+          stored.push(previous.fileObject);
+          continue;
+        }
         diagnosticContext.mediaId = media.externalMediaId;
         signal.throwIfAborted();
         await keepLease();
         await this.assertActor(createdById);
         await this.assertEligible(account, state, leaseId);
-        diagnosticContext.stage = "download";
         const execution = this.accountExecution.getStore();
         if (execution)
           await this.platforms.beforeNetwork(
             execution.platform,
             execution.generation,
           );
-        const downloaded = await this.downloader.download(
-          media.url,
-          client.allowedMediaHosts,
-        );
-        signal.throwIfAborted();
-        await this.assertEligible(account, state, leaseId);
-        diagnosticContext.stage = "store";
-        stored.push(
-          await this.files.store({
+        let file: Prisma.FileObjectGetPayload<object> | undefined;
+        try {
+          diagnosticContext.stage = "download";
+          const downloaded = await this.downloader.download(
+            media.url,
+            client.allowedMediaHosts,
+          );
+          signal.throwIfAborted();
+          await this.assertEligible(account, state, leaseId);
+          diagnosticContext.stage = "store";
+          file = await this.files.store({
             body: downloaded.body,
             contentType: downloaded.contentType,
             bucketScope: "source",
             kind: "candidate-media",
             sourceName: media.url,
             createdById: createdById ?? undefined,
-          }),
-        );
+          });
+          await this.db.$transaction(async (tx) => {
+            await this.lockSource(tx, account, state, createdById);
+            await this.assertEligible(account, state, leaseId, tx);
+            signal.throwIfAborted();
+            await this.discovery.attach(
+              tx,
+              ledger.id,
+              media.externalMediaId,
+              file!.id,
+            );
+          });
+          stored.push(file);
+          downloadedCount++;
+        } catch (error) {
+          if (file)
+            await this.files.purgeUnreferenced(file.id).catch(() => undefined);
+          signal.throwIfAborted();
+          if (
+            error instanceof JobDeferred ||
+            platformFailure(error, new Date())
+          )
+            throw error;
+          const failure =
+            error instanceof SourceResponseError
+              ? error
+              : new SourceResponseError("temporary_failure", {
+                  reason:
+                    diagnosticContext.stage === "store"
+                      ? "storage_failure"
+                      : "media_network_error",
+                  scope:
+                    diagnosticContext.stage === "store" ? "storage" : "media",
+                  diagnostic: {
+                    exception_type:
+                      error instanceof Error ? error.name : "Error",
+                  },
+                });
+          await this.db.$transaction(async (tx) => {
+            await this.lockSource(tx, account, state, createdById);
+            await this.assertEligible(account, state, leaseId, tx);
+            await this.discovery.failedMedia(
+              tx,
+              ledger.id,
+              media.externalMediaId,
+              failure.details?.reason,
+            );
+          });
+          console.info(
+            JSON.stringify({
+              scope: "source_fetch",
+              event: "media_failed",
+              ...sourceDiagnostic(failure, {
+                ...diagnosticContext,
+                ...this.jobs.diagnosticContext?.(),
+                campaignId: execution?.campaignId,
+                campaign: execution?.campaign,
+                accountId: account.id,
+                postId: content.externalContentId,
+                platform: account.platform,
+                adapter: client.adapterKey,
+              }),
+            }),
+          );
+        }
       }
+      if (stored.length !== content.ownMedia.length)
+        return { created: false, mediaStored: downloadedCount, pending: true };
       await keepLease();
       diagnosticContext.stage = "candidate_commit";
       const candidate = await this.db.$transaction(async (tx) => {
@@ -1957,6 +2412,21 @@ export class SourceFetchService {
             },
           },
         });
+        for (const file of [...stored].sort((a, b) =>
+          a.id.localeCompare(b.id),
+        )) {
+          await tx.$queryRaw`SELECT id FROM file_objects WHERE id=${file.id}::uuid FOR UPDATE`;
+          if (
+            !(await tx.fileObject.count({
+              where: {
+                id: file.id,
+                lifecycleStatus: "active",
+                deletedAt: null,
+              },
+            }))
+          )
+            throw new Error("Discovery file inactive");
+        }
         await tx.candidateMedia.createMany({
           data: content.ownMedia.map((media, index) => ({
             candidatePostId: created.id,
@@ -1969,6 +2439,7 @@ export class SourceFetchService {
             mediaType: media.type,
           })),
         });
+        await this.discovery.complete(tx, ledger.id);
         return created;
       });
       if (this.classifier.available) {
@@ -1987,7 +2458,7 @@ export class SourceFetchService {
           });
         }
       }
-      return { created: true, mediaStored: stored.length };
+      return { created: true, mediaStored: downloadedCount };
     } catch (error) {
       for (const file of stored.reverse())
         await this.files.purgeUnreferenced(file.id).catch(() => undefined);

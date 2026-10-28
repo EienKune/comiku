@@ -46,6 +46,7 @@ async function maintenanceLoop() {
     try {
       if (Date.now() >= nextSourceRecoveryScan) {
         await sources.reconcileExhausted();
+        await sources.recovery.schedule();
         await sources.scheduleDue();
         nextSourceRecoveryScan = Date.now() + 60_000;
       }
