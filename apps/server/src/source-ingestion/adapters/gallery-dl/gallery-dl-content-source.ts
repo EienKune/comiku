@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FirstSyncMode } from "../../../generated/prisma/client.js";
 import type {
@@ -13,6 +13,108 @@ import type {
   SourceScanContext,
 } from "../../content-source.js";
 import { jsonObject, SourceResponseError } from "../../source-response.js";
+import {
+  sanitizeSourceDiagnostic,
+  type SourceFailureScope,
+} from "../../source-diagnostics.js";
+
+/** Trusted local configuration is read only to suppress secrets, never returned or logged. */
+async function diagnosticSecrets(configPath: string): Promise<string[]> {
+  const secrets = [configPath];
+  const boundedRead = async (path: string) => {
+    if ((await stat(path)).size > 1024 * 1024)
+      throw new Error("Configuration exceeds diagnostic read limit");
+    return readFile(path, "utf8");
+  };
+  try {
+    const visit = async (value: unknown, depth = 0): Promise<void> => {
+      if (depth > 12 || !value || typeof value !== "object") return;
+      for (const [key, entry] of Object.entries(value)) {
+        if (key === "cookies" && typeof entry === "string") {
+          secrets.push(entry);
+          try {
+            const content = await boundedRead(
+              resolve(dirname(configPath), entry),
+            );
+            for (const line of content.split(/\r?\n/)) {
+              const fields = line.split("\t");
+              if (fields.length >= 7) secrets.push(fields[6]);
+            }
+          } catch {
+            /* Missing cookies are diagnosed by the bridge, without their path. */
+          }
+        } else if (
+          /token|secret|password|authorization|cookie|api.?key/i.test(key)
+        ) {
+          if (typeof entry === "string") secrets.push(entry);
+          else if (entry && typeof entry === "object")
+            for (const secret of Object.values(entry))
+              if (typeof secret === "string") secrets.push(secret);
+        } else await visit(entry, depth + 1);
+      }
+    };
+    await visit(JSON.parse(await boundedRead(configPath)));
+  } catch {
+    /* Diagnostics must never replace the original failure. */
+  }
+  return secrets;
+}
+
+/** Process boundary accepts only primitive native fields; never serializes an exception. */
+export function galleryProcessResult(
+  error: unknown,
+  stdout: string,
+  stderr: string,
+  duration: number,
+  secrets: readonly string[] = [],
+): Record<string, unknown> {
+  const own =
+    error && typeof error === "object"
+      ? Object.getOwnPropertyDescriptors(error)
+      : {};
+  const field = (key: string): unknown => own[key]?.value;
+  const code = field("code");
+  const killed = field("killed") === true;
+  const reason =
+    code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+      ? "process_output_limit"
+      : killed
+        ? "process_timeout"
+        : typeof code === "string"
+          ? "process_start"
+          : "process_exit";
+  const diagnostic = sanitizeSourceDiagnostic(
+    {
+      stage: "runner",
+      stderr,
+      duration,
+      exitCode: typeof code === "number" ? code : undefined,
+      signal: field("signal"),
+      killed,
+      timeout: reason === "process_timeout",
+    },
+    secrets,
+  );
+  if (error)
+    throw new SourceResponseError("temporary_failure", {
+      reason,
+      scope: "transport",
+      diagnostic,
+    });
+  try {
+    const parsed = jsonObject(JSON.parse(stdout));
+    if (!parsed) throw new Error("Invalid shape");
+    if (parsed.diagnostic)
+      parsed.diagnostic = sanitizeSourceDiagnostic(parsed.diagnostic, secrets);
+    return parsed;
+  } catch {
+    throw new SourceResponseError("invalid_response", {
+      reason: "invalid_json",
+      scope: "protocol",
+      diagnostic,
+    });
+  }
+}
 
 export interface GalleryDlConfig {
   python: string;
@@ -59,11 +161,13 @@ export class GalleryDlContentSource implements ContentSourceClient {
   readonly supportedFirstSyncModes = ["none", "last_24_hours"] as const;
   readonly allowedMediaHosts: readonly string[];
   private readonly runner: PageRunner;
+  private readonly configPath: string;
   constructor(
     readonly platform: "x" | "pixiv",
     config: GalleryDlConfig,
     runner?: PageRunner,
   ) {
+    this.configPath = config.configPath;
     this.adapterKey = `${platform}_gallery_dl`;
     this.allowedMediaHosts =
       platform === "x" ? ["pbs.twimg.com"] : ["i.pximg.net"];
@@ -86,6 +190,12 @@ export class GalleryDlContentSource implements ContentSourceClient {
           const bridge = fileURLToPath(
             new URL("./python/adapter.py", import.meta.url),
           );
+          const secrets = [
+            ...(await diagnosticSecrets(config.configPath)),
+            directory,
+            request,
+          ];
+          const started = Date.now();
           return await new Promise<Record<string, unknown>>(
             (resolve, reject) => {
               execFile(
@@ -97,17 +207,19 @@ export class GalleryDlContentSource implements ContentSourceClient {
                   windowsHide: true,
                   encoding: "utf8",
                 },
-                (error, stdout) => {
-                  if (error) {
-                    reject(new SourceResponseError("temporary_failure"));
-                    return;
-                  }
+                (error, stdout, stderr) => {
                   try {
-                    const parsed = jsonObject(JSON.parse(stdout));
-                    if (!parsed) invalid();
-                    resolve(parsed!);
-                  } catch {
-                    reject(new SourceResponseError("invalid_response"));
+                    resolve(
+                      galleryProcessResult(
+                        error,
+                        stdout,
+                        stderr,
+                        Date.now() - started,
+                        secrets,
+                      ),
+                    );
+                  } catch (failure) {
+                    reject(failure);
                   }
                 },
               );
@@ -196,6 +308,26 @@ export class GalleryDlContentSource implements ContentSourceClient {
     )
       page = await this.runner(source, null);
     if (page.error) {
+      const reason =
+        typeof page.error === "string" &&
+        /^[a-z][a-z0-9_]{0,63}$/.test(page.error)
+          ? page.error
+          : "connector_failed";
+      const scope: SourceFailureScope = [
+        "auth_failed",
+        "challenge_required",
+        "rate_limited",
+      ].includes(reason)
+        ? "credential"
+        : ["source_forbidden", "not_found", "source_not_found"].includes(reason)
+          ? "source"
+          : reason === "post_not_found"
+            ? "post"
+            : reason === "network_error"
+              ? "transport"
+              : reason === "runtime_unavailable"
+                ? "configuration"
+                : "protocol";
       throw new SourceResponseError(
         ["auth_failed", "source_forbidden", "challenge_required"].includes(
           String(page.error),
@@ -206,6 +338,14 @@ export class GalleryDlContentSource implements ContentSourceClient {
             : page.error === "network_error"
               ? "temporary_failure"
               : "invalid_response",
+        {
+          reason,
+          scope,
+          diagnostic: sanitizeSourceDiagnostic(
+            page.diagnostic,
+            await diagnosticSecrets(this.configPath),
+          ),
+        },
       );
     }
     if (

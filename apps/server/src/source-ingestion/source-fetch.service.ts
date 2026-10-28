@@ -1,5 +1,6 @@
 import { JobsService } from "../jobs/jobs.service.js";
 import { jsonObject, SourceResponseError } from "./source-response.js";
+import { sourceDiagnostic } from "./source-diagnostics.js";
 import {
   BadRequestException,
   ConflictException,
@@ -766,6 +767,8 @@ export class SourceFetchService {
             mediaStored: previous.mediaStored,
           }),
         );
+      const diagnosticContext: Record<string, unknown> = {};
+      diagnosticContext.stage = "prepare_scan";
       try {
         await this.fetchAdapter(
           item.id,
@@ -775,6 +778,7 @@ export class SourceFetchService {
           client,
           createdById,
           signal,
+          diagnosticContext,
         );
         return;
       } catch (error) {
@@ -788,6 +792,14 @@ export class SourceFetchService {
             accountId: account.id,
             adapter: client.adapterKey,
             errorCode: safe.code,
+            ...sourceDiagnostic(error, {
+              ...diagnosticContext,
+              ...this.jobs.diagnosticContext?.(),
+              runId,
+              accountId: account.id,
+              platform: account.platform,
+              adapter: client.adapterKey,
+            }),
           }),
         );
         const failures = state.consecutiveFailures + 1;
@@ -936,6 +948,7 @@ export class SourceFetchService {
     client: ContentSourceClient,
     createdById: string | null,
     signal: AbortSignal,
+    diagnosticContext: Record<string, unknown> = {},
   ) {
     const scanStartedAt = new Date();
     const timestamp = (value: unknown): string | null => {
@@ -1115,6 +1128,13 @@ export class SourceFetchService {
       }
     }
     for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+      Object.assign(diagnosticContext, {
+        page: pageNumber + 1,
+        windowStart: startTime,
+        windowEnd: endTime,
+      });
+      delete diagnosticContext.postId;
+      delete diagnosticContext.mediaId;
       signal.throwIfAborted();
       await keepLease();
       await this.assertActor(createdById);
@@ -1125,6 +1145,7 @@ export class SourceFetchService {
         where: { id: itemId },
         data: { apiRequests: counters.apiRequests },
       });
+      diagnosticContext.stage = "fetch_page";
       const page = await client.fetchPage(
         {
           externalUserId: account.externalUserId,
@@ -1134,11 +1155,15 @@ export class SourceFetchService {
         context,
       );
       signal.throwIfAborted();
+      diagnosticContext.stage = "validate_page";
       await this.assertActor(createdById);
       await this.assertEligible(account, state, leaseId);
       counters.pagesFetched += 1;
       counters.itemsSeen += page.items.length;
       for (const content of page.items) {
+        delete diagnosticContext.mediaId;
+        diagnosticContext.stage = "validate_post";
+        diagnosticContext.postId = content.externalContentId;
         const at = new Date(content.publishedAt);
         if (!Number.isFinite(at.getTime()))
           throw new Error("Source item has an invalid publication timestamp");
@@ -1179,6 +1204,7 @@ export class SourceFetchService {
           leaseId,
           signal,
           keepLease,
+          diagnosticContext,
         );
         if (saved.created) {
           counters.candidatesCreated += 1;
@@ -1198,6 +1224,7 @@ export class SourceFetchService {
           endTime,
           ...observed,
         };
+      diagnosticContext.stage = "cursor_commit";
       await this.db.$transaction(async (tx) => {
         await this.lockSource(tx, account, state, createdById);
         await this.assertEligible(account, state, leaseId, tx);
@@ -1337,7 +1364,9 @@ export class SourceFetchService {
     leaseId: string,
     signal: AbortSignal,
     keepLease = this.sourceLeaseKeeper(account, state, leaseId, createdById),
+    diagnosticContext: Record<string, unknown> = {},
   ): Promise<{ created: boolean; mediaStored: number }> {
+    diagnosticContext.stage = "candidate_lookup";
     const hashtags = collectHashtags(content.hashtags ?? [], content.text);
     const existing = await this.db.candidatePost.findUnique({
       where: {
@@ -1348,6 +1377,7 @@ export class SourceFetchService {
       },
     });
     if (existing) {
+      diagnosticContext.stage = "candidate_observation";
       await this.db.$transaction(async (tx) => {
         await this.lockSource(tx, account, state, createdById);
         await this.assertEligible(account, state, leaseId, tx);
@@ -1374,16 +1404,19 @@ export class SourceFetchService {
     const stored: Prisma.FileObjectGetPayload<object>[] = [];
     try {
       for (const media of content.ownMedia) {
+        diagnosticContext.mediaId = media.externalMediaId;
         signal.throwIfAborted();
         await keepLease();
         await this.assertActor(createdById);
         await this.assertEligible(account, state, leaseId);
+        diagnosticContext.stage = "download";
         const downloaded = await this.downloader.download(
           media.url,
           client.allowedMediaHosts,
         );
         signal.throwIfAborted();
         await this.assertEligible(account, state, leaseId);
+        diagnosticContext.stage = "store";
         stored.push(
           await this.files.store({
             body: downloaded.body,
@@ -1396,6 +1429,7 @@ export class SourceFetchService {
         );
       }
       await keepLease();
+      diagnosticContext.stage = "candidate_commit";
       const candidate = await this.db.$transaction(async (tx) => {
         await this.lockSource(tx, account, state, createdById);
         await this.assertEligible(account, state, leaseId, tx);

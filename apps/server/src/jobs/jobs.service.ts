@@ -22,6 +22,11 @@ export function retryDelay(attempt: number): number {
 export class JobsService {
   private readonly leaseContext = new AsyncLocalStorage<BackgroundJob>();
   private handlers = new Map<string, JobHandler>();
+  /** Read-only log correlation; never expose job payload or mutable lease state. */
+  diagnosticContext(): Readonly<{ jobId?: string; attempt?: number }> {
+    const job = this.leaseContext.getStore();
+    return Object.freeze(job ? { jobId: job.id, attempt: job.attempts } : {});
+  }
   constructor(@Inject(PrismaService) private readonly db: PrismaService) {}
 
   register(kind: string, handler: JobHandler) {

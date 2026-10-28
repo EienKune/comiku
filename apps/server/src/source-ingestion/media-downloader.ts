@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { SourceResponseError } from "./source-response.js";
 
 export interface DownloadedMedia {
   body: Uint8Array;
@@ -46,7 +47,15 @@ export class HttpMediaDownloader implements MediaDownloader {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
       if (!response.ok)
-        throw new Error(`Media download failed with status ${response.status}`);
+        throw new SourceResponseError("temporary_failure", {
+          reason: `media_http_${response.status}`,
+          scope: "media",
+          diagnostic: {
+            stage: "download",
+            http_status: response.status,
+            http_endpoint: url,
+          },
+        });
       const contentType = response.headers
         .get("content-type")
         ?.split(";", 1)[0]

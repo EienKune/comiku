@@ -9,7 +9,7 @@ import logging
 import re
 import sys
 import traceback
-from urllib.parse import urlsplit, parse_qsl
+from urllib.parse import urlsplit, parse_qsl, unquote
 
 from gallery_dl import config, version
 from gallery_dl.extractor import twitter, pixiv
@@ -70,14 +70,63 @@ diagnostic_secrets = []
 
 def private_text(value, limit, tail=False):
     value = str(value)
+    if len(value) > 262144 or len(diagnostic_secrets) > 128 or any(len(secret) > 1024 for secret in diagnostic_secrets) or sum(map(len, diagnostic_secrets)) > 65536:
+        return "[diagnostic omitted]"
+    def endpoint(match):
+        try:
+            parsed = urlsplit(match[0])
+            return parsed.scheme + "://" + (parsed.hostname or "") + parsed.path
+        except ValueError:
+            return "[url removed]"
+    for _ in range(3):
+        value = re.sub(r'''https?://[^\s"'<>]+''', endpoint, value)
+        previous = value
+        ambiguous = False
+        def part(text):
+            nonlocal ambiguous
+            if re.search(r'''[\s"'<>]''', text):
+                ambiguous = True
+            return text
+        value = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: part(chr(int(m[1], 16))), value)
+        value = re.sub(r'\\([\\"/])', lambda m: part(m[1]), value)
+        value = re.sub(r"(?:%[0-9a-fA-F]{2})+", lambda m: part(unquote(m[0])), value)
+        if ambiguous:
+            return "[diagnostic omitted]"
+        if value == previous:
+            break
+        if _ == 2:
+            return "[diagnostic omitted]"
+    value = re.sub(r'''https?://[^\s"'<>]+''', endpoint, value)
+    # Match sensitive keys before credential-fragment removal can erase those keys.
+    sensitive = r'''(?i)(["']?\b(?:authorization|proxy-authorization|cookie|set-cookie|[\w-]{0,64}(?:token|secret|password|signature|api[_-]?key)[\w-]{0,64})["']?\s*[:=]\s*)[^\r\n]*'''
+    if re.search(r"[\r\n]", value) and re.search(sensitive, value):
+        return "[diagnostic omitted]"
+    value = re.sub(sensitive, r"\1[credential removed]", value)
     for secret in sorted(diagnostic_secrets, key=len, reverse=True):
+        if not secret:
+            continue
+        value = value.replace(secret, "[credential removed]")
         if len(secret) >= 4:
-            value = value.replace(secret, "[credential removed]")
-    value = re.sub(r"(?im)(\b(?:cookie|authorization|set-cookie)\s*[:=]\s*)[^\r\n]+", r"\1[credential removed]", value)
-    value = re.sub(r"(https?://[^\s?\"'<>]+)\?[^\s\"'<>]+", r"\1?[query removed]", value)
+            fragments = {re.escape(secret[i:i + 4]) for i in range(len(secret) - 3)}
+            value = re.sub("(?:" + "|".join(sorted(fragments)) + ")+", "[credential removed]", value)
     if len(value) <= limit:
         return value
     return ("[truncated] " + value[-limit:]) if tail else (value[:limit] + " [truncated]")
+
+
+def previous_diagnostic_text(diagnostic):
+    """Re-sanitize selected scalar context, then serialize without decoding JSON."""
+    safe = {}
+    if not isinstance(diagnostic, dict):
+        return "{}"
+    for key in ("stage", "guard", "exception_type", "runtime_version", "message", "http_status", "http_method", "http_endpoint", "response_excerpt", "traceback"):
+        value = diagnostic.get(key)
+        if not isinstance(value, (str, int, bool)):
+            continue
+        candidate = dict(safe, **{key: private_text(value, 2048)})
+        if len(json.dumps(candidate, ensure_ascii=True).encode("ascii")) <= 8192:
+            safe = candidate
+    return json.dumps(safe, ensure_ascii=True)
 
 
 def configure_diagnostics():
@@ -85,6 +134,8 @@ def configure_diagnostics():
     if token:
         diagnostic_secrets.append(str(token))
     cookies = config.get(("extractor", "twitter"), "cookies")
+    if isinstance(cookies, dict):
+        diagnostic_secrets.extend(str(value) for value in cookies.values())
     if isinstance(cookies, str):
         with open(cookies, encoding="utf-8") as file:
             for line in file:
@@ -108,7 +159,7 @@ diagnostic_handler = DiagnosticHandler()
 
 
 def safe_diagnostic(exc, stage):
-    """Private bounded details. The Go logging boundary removes credentials."""
+    """Private bounded details. The TypeScript boundary applies another allowlist."""
     diagnostic = {"stage": stage, "exception_type": type(exc).__name__, "runtime_version": version.__version__,
                   "message": private_text(exc, 8192),
                   "traceback": private_text("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)), 16384, tail=True)}
@@ -305,7 +356,7 @@ def collect(source, cursor):
         if not preserve_diagnostic or not previous_diagnostic:
             result["diagnostic"] = safe_diagnostic(with_http_diagnostic(exc), "validation")
             if previous_diagnostic:
-                result["diagnostic"]["previous_diagnostic"] = private_text(json.dumps(previous_diagnostic), 8192)
+                result["diagnostic"]["previous_diagnostic"] = previous_diagnostic_text(previous_diagnostic)
         result["diagnostic"].update({
             "cutoff": cutoff.isoformat() if cutoff else "",
             "coverage": json.dumps(coverage, sort_keys=True),

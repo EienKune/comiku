@@ -6,6 +6,91 @@ import test from "node:test";
 import { SourceFetchService } from "../src/source-ingestion/source-fetch.service.js";
 import { ContentSourceRegistry } from "../src/source-ingestion/source-registry.js";
 import { Prisma } from "../src/generated/prisma/client.js";
+import { SourceResponseError } from "../src/source-ingestion/source-response.js";
+
+test("failure logs keep private reason and page context out of persisted public errors", async () => {
+  const f = fixture({
+    ...client,
+    fetchPage: async () => {
+      throw new SourceResponseError("authentication", {
+        reason: "source_forbidden",
+        scope: "source",
+        diagnostic: {
+          stage: "enumeration",
+          message: "private synthetic detail",
+        },
+      });
+    },
+  });
+  const logs: string[] = [];
+  const original = console.info;
+  console.info = (message: string) => {
+    logs.push(message);
+  };
+  try {
+    await f.service.fetchWithFallback(
+      "run",
+      f.account,
+      null,
+      new AbortController().signal,
+    );
+    const event = logs
+      .map((line) => JSON.parse(line))
+      .find((entry) => entry.event === "adapter_failed");
+    assert.equal(event.reason, "source_forbidden");
+    assert.equal(event.failureScope, "source");
+    assert.equal(event.page, "1");
+    assert.equal(event.platform, "fixture");
+    assert.equal(event.stage, "fetch_page");
+    assert.equal(event.diagnostic.stage, "enumeration");
+    assert.equal(
+      f.row.errorMessage.includes("private synthetic detail"),
+      false,
+    );
+  } finally {
+    console.info = original;
+  }
+});
+
+test("a second post validation failure cannot inherit the first post media context", async () => {
+  const f = fixture({
+    ...client,
+    fetchPage: async () => ({
+      items: [
+        {
+          ...content("1"),
+          ownMedia: [
+            { ...content("1").ownMedia[0], externalMediaId: "first-media" },
+          ],
+        },
+        { ...content("2"), publishedAt: "invalid-date" },
+      ],
+      nextCursor: {},
+      complete: true,
+    }),
+  });
+  const logs: string[] = [];
+  const original = console.info;
+  console.info = (message: string) => {
+    logs.push(message);
+  };
+  try {
+    await f.service.fetchWithFallback(
+      "run",
+      f.account,
+      null,
+      new AbortController().signal,
+    );
+    const event = logs
+      .map((line) => JSON.parse(line))
+      .find((entry) => entry.event === "adapter_failed");
+    assert.equal(event.postId, "2");
+    assert.equal(event.mediaId, undefined);
+    assert.equal(event.stage, "validate_post");
+  } finally {
+    console.info = original;
+  }
+});
 
 const environment = {
   sourceFailureThreshold: 3,
