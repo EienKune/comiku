@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
 
-/** Analysis can move a candidate between sections; refresh their shared view. */
+/** Rehydrate visible snapshot entries; only explicit review-session replacement changes membership/rank. */
 export function useCandidateAnalysisRefresh() {
   const client = useQueryClient();
   useEffect(() => {

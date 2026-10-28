@@ -357,7 +357,11 @@ test("pending scope spans groups and pages but excludes analysis that cannot pro
     });
     const deletedAuthor = await candidates.list(query);
     assert.equal(deletedAuthor.analysisPending, false);
-    assert.equal(deletedAuthor.total, 2);
+    assert.equal(
+      deletedAuthor.total,
+      0,
+      "Archived authors are removed from live eligibility",
+    );
     await db.author.update({
       where: { id: author.id },
       data: { deletedAt: null },

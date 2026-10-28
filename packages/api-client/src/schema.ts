@@ -882,6 +882,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/candidates/review-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createCandidateReviewSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/candidates/tag-groups": {
         parameters: {
             query?: never;
@@ -2514,8 +2530,43 @@ export interface components {
             analysisPending?: boolean;
             items: components["schemas"]["CandidateDto"][];
             total: number;
-            /** Format: uuid */
             nextCursor: string | null;
+        };
+        CreateCandidateReviewSessionDto: {
+            status?: components["schemas"]["CandidateStatus"];
+            /** Format: uuid */
+            authorId?: string;
+            search?: string;
+            sourceLanguage?: components["schemas"]["SourceLanguage"];
+            /** @enum {string} */
+            triageGroup?: "valid_manga" | "neutral_manga" | "blocked_manga" | "photo";
+            /** Format: date-time */
+            fetchedAfter?: string;
+            /** Format: date-time */
+            fetchedBefore?: string;
+            /** @description Opaque v1 cursor; legacy UUID cursors are rejected */
+            cursor?: string;
+            /** Format: uuid */
+            reviewSessionId?: string;
+            /** @default 24 */
+            limit: number;
+            /** Format: uuid */
+            idempotencyKey: string;
+            /** Format: uuid */
+            replaceSessionId?: string;
+        };
+        CandidateReviewCountsDto: {
+            valid_manga: number;
+            neutral_manga: number;
+            blocked_manga: number;
+            photo: number;
+        };
+        CandidateReviewSessionDto: {
+            /** Format: uuid */
+            sessionId: string;
+            /** Format: date-time */
+            expiresAt: string;
+            counts: components["schemas"]["CandidateReviewCountsDto"];
         };
         /** @enum {string} */
         CandidateTagGroupKind: "valid" | "gray" | "blocked";
@@ -8987,7 +9038,9 @@ export interface operations {
                 triageGroup?: string;
                 fetchedAfter?: string;
                 fetchedBefore?: string;
+                /** @description Opaque v1 cursor; legacy UUID cursors are rejected */
                 cursor?: string;
+                reviewSessionId?: string;
                 limit?: number;
             };
             header?: never;
@@ -9002,6 +9055,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CandidatePageDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    createCandidateReviewSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCandidateReviewSessionDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateReviewSessionDto"];
                 };
             };
             /** @description 请求字段无效 */

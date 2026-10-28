@@ -11,6 +11,7 @@ datasource db {
 }
 
 model User {
+  candidateReviewSessions CandidateReviewSession[]
   reviewRevisionParticipations        ReviewRevisionParticipant[]
   canSkipProofreading                 Boolean                           @default(false) @map("can_skip_proofreading")
   id                                  String                        @id @default(uuid()) @db.Uuid
@@ -627,6 +628,7 @@ model SourceAdapterBudgetUsage {
 }
 
 model CandidatePost {
+  reviewSessionEntries CandidateReviewSessionEntry[]
   id                      String                 @id @default(uuid()) @db.Uuid
   authorId                String                 @map("author_id") @db.Uuid
   author                  Author                 @relation(fields: [authorId], references: [id], onDelete: Restrict)
@@ -669,6 +671,43 @@ model CandidatePost {
   @@index([authorExternalAccountId, fetchedAt])
   @@index([status, tagDisposition, postedAt, id])
   @@map("candidate_posts")
+}
+
+model CandidateReviewSession {
+  id String @id @default(uuid()) @db.Uuid
+  actorId String @map("actor_id") @db.Uuid
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  idempotencyKey String @map("idempotency_key") @db.Uuid
+  cursorSecret String @map("cursor_secret") @db.Uuid
+  normalizedFilterJson Json @map("normalized_filter_json")
+  filterHash String @map("filter_hash") @db.VarChar(64)
+  modelKey String? @map("model_key") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastUsedAt DateTime @default(now()) @map("last_used_at") @db.Timestamptz(3)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  hardExpiresAt DateTime @map("hard_expires_at") @db.Timestamptz(3)
+  entries CandidateReviewSessionEntry[]
+
+  @@unique([actorId, idempotencyKey])
+  @@index([actorId, expiresAt, lastUsedAt])
+  @@index([expiresAt, id])
+  @@map("candidate_review_sessions")
+}
+
+model CandidateReviewSessionEntry {
+  sessionId String @map("session_id") @db.Uuid
+  session CandidateReviewSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  candidateId String @map("candidate_id") @db.Uuid
+  candidate CandidatePost @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  ordinal Int
+  triageGroup String @map("triage_group") @db.VarChar(32)
+  frozenScore Float? @map("frozen_score")
+
+  @@id([sessionId, candidateId])
+  @@unique([sessionId, ordinal])
+  @@index([sessionId, triageGroup, ordinal], map: "candidate_review_entries_group_order_idx")
+  @@index([candidateId])
+  @@map("candidate_review_session_entries")
 }
 
 model CandidateSourceObservation {

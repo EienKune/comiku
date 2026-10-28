@@ -7148,8 +7148,17 @@
             }
           },
           {
+            "description": "Opaque v1 cursor; legacy UUID cursors are rejected",
             "required": false,
             "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "required": false,
+            "name": "reviewSessionId",
             "in": "query",
             "schema": {
               "format": "uuid",
@@ -7175,6 +7184,113 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CandidatePageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "candidates"
+        ]
+      }
+    },
+    "/api/candidates/review-sessions": {
+      "post": {
+        "operationId": "createCandidateReviewSession",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCandidateReviewSessionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateReviewSessionDto"
                 }
               }
             }
@@ -17808,7 +17924,6 @@
           },
           "nextCursor": {
             "type": "string",
-            "format": "uuid",
             "nullable": true
           }
         },
@@ -17816,6 +17931,119 @@
           "items",
           "total",
           "nextCursor"
+        ]
+      },
+      "CreateCandidateReviewSessionDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CandidateStatus"
+              }
+            ]
+          },
+          "authorId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "search": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "sourceLanguage": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceLanguage"
+              }
+            ]
+          },
+          "triageGroup": {
+            "type": "string",
+            "enum": [
+              "valid_manga",
+              "neutral_manga",
+              "blocked_manga",
+              "photo"
+            ]
+          },
+          "fetchedAfter": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fetchedBefore": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque v1 cursor; legacy UUID cursors are rejected"
+          },
+          "reviewSessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 24
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "replaceSessionId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "idempotencyKey"
+        ]
+      },
+      "CandidateReviewCountsDto": {
+        "type": "object",
+        "properties": {
+          "valid_manga": {
+            "type": "number"
+          },
+          "neutral_manga": {
+            "type": "number"
+          },
+          "blocked_manga": {
+            "type": "number"
+          },
+          "photo": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "valid_manga",
+          "neutral_manga",
+          "blocked_manga",
+          "photo"
+        ]
+      },
+      "CandidateReviewSessionDto": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/CandidateReviewCountsDto"
+          }
+        },
+        "required": [
+          "sessionId",
+          "expiresAt",
+          "counts"
         ]
       },
       "CandidateTagGroupKind": {

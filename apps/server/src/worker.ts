@@ -1,3 +1,4 @@
+import { CandidatesService } from "./candidates/candidates.service.js";
 import { AnalysisConfigurationMismatch } from "./image-analysis/analysis-scheduling.js";
 import { SourceConfigurationMismatch } from "./source-ingestion/source-platform-state.js";
 import { DownloadsService } from "./transfers/downloads.service.js";
@@ -24,6 +25,7 @@ const sources = app.get(SourceFetchService);
 const transfers = app.get(DownloadsService);
 const analysis = app.get(ImageAnalysisService);
 let nextAnalysisScan = 0;
+let nextReviewCleanup = 0;
 let nextSourceRecoveryScan = 0;
 let healthWriting = false;
 const heartbeat = async () => {
@@ -52,6 +54,10 @@ async function maintenanceLoop() {
         nextSourceRecoveryScan = Date.now() + 60_000;
       }
       await transfers.scheduleCleanup();
+      if (Date.now() >= nextReviewCleanup) {
+        await app.get(CandidatesService).cleanupReviewSessions();
+        nextReviewCleanup = Date.now() + 60_000;
+      }
       if (Date.now() >= nextAnalysisScan) {
         await analysis.schedulePending();
         nextAnalysisScan = Date.now() + 60_000;

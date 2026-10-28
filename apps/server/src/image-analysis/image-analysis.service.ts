@@ -35,6 +35,14 @@ export class ImageAnalysisService {
   get activeModelKey(): string | null {
     return this.model?.modelKey ?? null;
   }
+  get candidateQueryPolicy() {
+    return {
+      modelKey: this.activeModelKey,
+      labels: this.model?.identity.labels ?? [],
+      positiveLabels: this.model?.reviewPolicy?.positiveLabels ?? [],
+      minimumConfidence: this.model?.reviewPolicy?.minimumConfidence ?? 0,
+    };
+  }
   /** Evidence validity is independent from sibling completion and retry state. */
   hasEvidence(score: number | null, predictions: unknown): boolean {
     const entries = this.cachedPredictions(predictions);

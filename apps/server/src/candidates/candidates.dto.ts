@@ -84,10 +84,19 @@ export class CandidateQueryDto {
   @IsDateString()
   fetchedBefore?: string;
 
+  @ApiPropertyOptional({
+    type: String,
+    description: "Opaque v1 cursor; legacy UUID cursors are rejected",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  cursor?: string;
+
   @ApiPropertyOptional({ type: String, format: "uuid" })
   @IsOptional()
   @IsUUID()
-  cursor?: string;
+  reviewSessionId?: string;
 
   @ApiPropertyOptional({ type: Number, minimum: 1, maximum: 100, default: 24 })
   @IsOptional()
@@ -105,6 +114,31 @@ export class CandidateMediaDto {
   @ApiProperty({ type: Number, nullable: true }) width!: number | null;
   @ApiProperty({ type: Number, nullable: true }) height!: number | null;
   @ApiProperty({ type: String }) mediaType!: string;
+}
+
+export class CreateCandidateReviewSessionDto extends CandidateQueryDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  @IsUUID()
+  idempotencyKey!: string;
+
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  @IsOptional()
+  @IsUUID()
+  replaceSessionId?: string;
+}
+
+export class CandidateReviewCountsDto {
+  @ApiProperty({ type: Number }) valid_manga!: number;
+  @ApiProperty({ type: Number }) neutral_manga!: number;
+  @ApiProperty({ type: Number }) blocked_manga!: number;
+  @ApiProperty({ type: Number }) photo!: number;
+}
+
+export class CandidateReviewSessionDto {
+  @ApiProperty({ type: String, format: "uuid" }) sessionId!: string;
+  @ApiProperty({ type: String, format: "date-time" }) expiresAt!: string;
+  @ApiProperty({ type: CandidateReviewCountsDto })
+  counts!: CandidateReviewCountsDto;
 }
 
 export class CandidateClassificationTagDto implements ImageAnalysisLabelPresentation {
@@ -173,8 +207,7 @@ export class CandidatePageDto {
   @ApiPropertyOptional({ type: Boolean }) analysisPending?: boolean;
   @ApiProperty({ type: CandidateDto, isArray: true }) items!: CandidateDto[];
   @ApiProperty({ type: Number, minimum: 0 }) total!: number;
-  @ApiProperty({ type: String, format: "uuid", nullable: true }) nextCursor!:
-    string | null;
+  @ApiProperty({ type: String, nullable: true }) nextCursor!: string | null;
 }
 
 export class UpdateManualCandidateDto {
