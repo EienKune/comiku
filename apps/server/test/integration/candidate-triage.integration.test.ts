@@ -1,3 +1,4 @@
+import { analysisActivationFixture } from "./analysis-activation-fixture.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -49,6 +50,7 @@ test("current BA winning classes rebuild into five promoted and two neutral post
   await app.init();
   const db = app.get(PrismaService),
     files = app.get(FileObjectsService);
+  const activation = await analysisActivationFixture(db, model.modelKey);
   const author = await db.author.create({
     data: { displayName: "Synthetic triage author" },
   });
@@ -239,6 +241,7 @@ test("current BA winning classes rebuild into five promoted and two neutral post
     await db.author.delete({ where: { id: author.id } });
     await db.user.delete({ where: { id: actor.id } });
     if (fileId) await files.purgeUnreferenced(fileId);
+    await activation.restore();
     await app.close();
   }
 });

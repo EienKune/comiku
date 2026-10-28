@@ -1,3 +1,4 @@
+import { analysisActivationFixture } from "./analysis-activation-fixture.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -42,6 +43,7 @@ async function pendingMediaFixture() {
   await app.init();
   const db = app.get(PrismaService),
     files = app.get(FileObjectsService);
+  const activation = await analysisActivationFixture(db, model.modelKey);
   const author = await db.author.create({
     data: { displayName: "Pending media fixture" },
   });
@@ -76,6 +78,7 @@ async function pendingMediaFixture() {
       await db.candidatePost.deleteMany({ where: { authorId: author.id } });
       await db.author.delete({ where: { id: author.id } });
       for (const id of fileIds) await files.purgeUnreferenced(id);
+      await activation.restore();
       await app.close();
     },
   };
@@ -243,6 +246,7 @@ test("pending scope spans groups and pages but excludes analysis that cannot pro
   const db = app.get(PrismaService),
     files = app.get(FileObjectsService),
     candidates = app.get(CandidatesService);
+  const activation = await analysisActivationFixture(db, model.modelKey);
   const author = await db.author.create({
     data: { displayName: "Analysis pending fixture" },
   });
@@ -380,6 +384,7 @@ test("pending scope spans groups and pages but excludes analysis that cannot pro
     await db.candidatePost.deleteMany({ where: { id: { in: postIds } } });
     await db.author.delete({ where: { id: author.id } });
     if (fileId) await files.purgeUnreferenced(fileId);
+    await activation.restore();
     await app.close();
   }
 });
@@ -402,6 +407,7 @@ test("model switches hide stale summaries and rebuild existing history in bounde
   await app.init();
   const db = app.get(PrismaService),
     files = app.get(FileObjectsService);
+  const activation = await analysisActivationFixture(db, model.modelKey);
   const author = await db.author.create({
     data: { displayName: "Model switch fixture" },
   });
@@ -522,6 +528,7 @@ test("model switches hide stale summaries and rebuild existing history in bounde
     await db.candidatePost.deleteMany({ where: { id: { in: postIds } } });
     await db.author.delete({ where: { id: author.id } });
     if (fileId) await files.purgeUnreferenced(fileId);
+    await activation.restore();
     await app.close();
   }
 });
@@ -545,6 +552,7 @@ test("current-model SQL-null prediction caches rebuild from winners without infe
   await app.init();
   const db = app.get(PrismaService),
     files = app.get(FileObjectsService);
+  const activation = await analysisActivationFixture(db, model.modelKey);
   const author = await db.author.create({
     data: { displayName: "Prediction cache fixture" },
   });
@@ -691,6 +699,7 @@ test("current-model SQL-null prediction caches rebuild from winners without infe
     if (postId) await db.candidatePost.delete({ where: { id: postId } });
     await db.author.delete({ where: { id: author.id } });
     if (fileId) await files.purgeUnreferenced(fileId);
+    await activation.restore();
     await app.close();
   }
 });

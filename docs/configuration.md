@@ -64,7 +64,7 @@ local 与 R2 不是自动迁移关系：更换驱动不会搬运已有对象。�
 
 继续通过 `.env` 或 `COMIKU_ENV_FILE` 指定 API/worker 配置。`IMAGE_ANALYSIS_ADAPTER` 默认 disabled；example 仅演示，ba-pixai 使用 `IMAGE_ANALYSIS_CONFIG_FILE` 指向仓库外的私有 JSON，external 另需模块绝对路径。详见[模型接口](adapters/image-analysis.md)。
 
-当前模型由上述配置加载的 adapter 身份生成 modelKey，API 与 worker 必须使用一致配置并一起重启切换。逐图历史结果按 `(mediaId, modelKey)` 保留；候选的 `analysisModelKey` 只是汇总缓存的来源标记，不是启用开关。只有与当前模型匹配的成功汇总才参与优先级和排序；其余暂按原分组内时间排序。worker 每轮最多从 20 条已有当前模型结果的候选重建汇总，无需重新推理已成功的图片。未配置模型时保留数据库历史，页面不使用旧分数。
+当前模型由上述配置加载的 adapter 身份生成 modelKey，API 与 worker 必须使用一致配置；已有持久激活记录时，先排空并停止旧 worker，再按[模型接口的受控激活流程](adapters/image-analysis.md#persistent-scheduling-and-activation)切换，最后一起重启。普通 worker 不会覆盖不匹配的激活记录。逐图历史结果按 `(mediaId, modelKey)` 保留；候选的 `analysisModelKey` 只是汇总缓存的来源标记，不是启用开关。只有与当前模型匹配的成功汇总才参与优先级和排序；其余暂按原分组内时间排序。worker 每轮最多从 20 条已有当前模型结果的候选重建汇总，无需重新推理已成功的图片。未配置模型时保留数据库历史，页面不使用旧分数。
 
 BA 常驻推理进程可用独立 EnvironmentFile 注入 `PIXAI_MODEL_DIR`、`PIXAI_CHECKPOINT`、`PIXAI_HEAD_FILE`、`PIXAI_SERVICE_TOKEN` 与线程预算；三个模型路径必须绝对，不搜索默认或隐藏目录。环境文件放在部署者选定的私有位置，不需要在仓库新增 config 或 models 目录。API/worker 的 dotenv 加载不会自动为另一个 Python 进程注入变量；由服务管理器或启动环境提供。
 

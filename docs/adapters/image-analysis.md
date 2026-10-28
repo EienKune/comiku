@@ -2,7 +2,7 @@
 
 Image analysis is optional and disabled by default. With no `IMAGE_ANALYSIS_ADAPTER` setting, or with `IMAGE_ANALYSIS_ADAPTER=disabled`, Comiku collects media and leaves new media unclassified. An unavailable model never supplies a fallback classification or fabricated score.
 
-Only one adapter is active per process. Configure the API and worker with the same adapter and versions; restart both when changing them. Inference runs through the persistent heavy queue, separately from source collection and human review.
+Only one adapter is active per process. Configure the API and worker with the same adapter and versions; use the controlled activation procedure below when changing them. Inference runs through the persistent `analysis/global` slot, independently of the `heavy` export/thumbnail slot, source collection and human review.
 
 ## Contract
 
@@ -122,3 +122,36 @@ Analysis uses `image_analysis` jobs and `image-analysis:<mediaId>:<modelKey>` id
 A bounded recovery scan settles queued analyses whose adapter has been disabled or replaced, and retires their generic jobs. A live lease is left to its owner; expired leases are settled on a later scan. Each call processes at most 100 retired rows and schedules at most 20 new images. Retries preserve identity, use existing lease checks and stop after three attempts. An exhausted worker claim is reconciled even if the process died before recording failure. Manual retry applies only to the active adapter's failed rows. Analysis does not change human review status, revision or review time.
 
 The default Comiku image includes lightweight adapter code and requires no model runtime when analysis is disabled. Measure a separate runtime's memory and latency, reuse resident models, and account for the shared heavy lane when selecting inference concurrency. Identity changes require one fresh inference per media item; include this backfill cost in deployment planning.
+
+## Persistent scheduling and activation
+
+`ImageAnalysisActivation` stores the global active model key (nullable when disabled), generation, activation cutoff and historical pause. An absent row can bootstrap from the worker configuration only after all running image-analysis jobs drain. Existing rows are never replaced by an ordinary worker. A mismatched worker fails its claim transaction without consuming an attempt or fairness budget and backs off locally. Read-only API requests do not activate models.
+
+For each `(mediaId, modelKey)`, an immutable work intent records its purpose and original activation generation. Without an intent, media created at or after the stored cutoff are incremental; earlier media are historical. Intent, analysis row and idempotent job registration commit together. Discovery after a media commit/process crash uses the same stored cutoff. Restarts, retries and switching back to an old key preserve existing intents and successful results. Queue policy is never part of model identity. The key remains `image-analysis:{mediaId}:{modelKey}`.
+
+Every scan discovers at most 20 incremental and 20 historical images independently; a historical backlog cannot consume incremental discovery slots. The existing durable Jobs policy chooses incremental/historical 3:1 when both are eligible, sharing one analysis/global lease across workers. Historical discovery can be paused or restricted through `schedulePending(candidateId)`; persisted pause also gates already queued historical work without consuming attempts. Summary repair, partial-image evidence and exhausted-attempt reconciliation retain their existing bounded behavior.
+
+### Controlled maintenance
+
+The normal build ships `dist/ops/image-analysis.js`. From the server runtime directory:
+
+```sh
+node dist/ops/image-analysis.js status
+node dist/ops/image-analysis.js activate <model-key-or-disabled> <expected-generation> <run-or-pause>
+```
+
+Derive the configured key from the shipped adapter descriptor without starting AppModule, a worker or inference (run from the server runtime directory with the target configuration):
+
+```sh
+node --input-type=module -e "const {loadEnvironment}=await import('./dist/config/environment.js'); const {loadImageAnalysisAdapter}=await import('./dist/image-analysis/adapter-loader.js'); const model=await loadImageAnalysisAdapter(loadEnvironment().imageAnalysis); console.log(model?.modelKey ?? 'disabled');"
+```
+
+This invokes the configured adapter factory only; an external adapter factory must follow the normal trusted-module deployment contract. The built-in adapters do not load weights or call inference during descriptor validation. The `status` and `activate` CLI paths themselves do not load adapter factories.
+
+Use the emitted exact 64-character model key; `disabled` selects no model. Use `0` only for an absent activation row. The CLI loads database/queue helpers only, with no AppModule, adapter initialization, weights, source checkout or TSX. It emits safe activation metadata only. `pnpm --filter @comiku/server images:activation` is the full-checkout alias after compiling the server.
+
+Disable scheduling, drain running inference and stop old workers before changing model configuration. Read the generation, perform the explicit compare-and-swap activation, then start API and workers with the matching configuration. A running job, including one with an expired lease, blocks activation until it is drained/reconciled. `run` enables historical work and `pause` suspends it; changing pause with the same key preserves the cutoff while advancing generation. A key change establishes a new persistent cutoff. A stale generation or stale local worker cannot reverse a switch.
+
+On upgrade from the heavy lane, stop old workers after draining running image analysis. New scheduling migrates at most 20 queued legacy jobs per pass under the analysis/global then heavy/global claim barriers, taking job locks in stable order. Running jobs never move. New heavy claim gates defer legacy analysis jobs; new analysis claims wait while any legacy inference is running. This is a controlled upgrade, not compatibility with concurrently running old software. Other heavy tasks keep their existing lane and run independently.
+
+All model/storage calls remain outside transactions. The healthy-worker concurrency guarantee is one leased job plus one resident model inference/encoding lock. An expired lease cannot physically stop an uncooperative executor or an already accepted remote inference; deployments must retain the resident single-encoding lock and drain before switching. Synthetic two-worker tests measure queue fairness, maximum inference concurrency, busy count, Node RSS/CPU and concurrent heavy-export latency. They do not measure real model memory, GPU throughput or production latency; those require environment-specific acceptance measurements.

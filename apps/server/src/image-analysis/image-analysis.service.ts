@@ -1,4 +1,8 @@
 import {
+  AnalysisScheduling,
+  analysisJobModelKey,
+} from "./analysis-scheduling.js";
+import {
   Inject,
   Injectable,
   NotFoundException,
@@ -25,6 +29,9 @@ export class ImageAnalysisService {
     @Inject(IMAGE_ANALYSIS_ADAPTER)
     private readonly model: ActiveImageAnalysisAdapter | null,
   ) {}
+  get scheduling() {
+    return new AnalysisScheduling(this.db, this.jobs);
+  }
   get activeModelKey(): string | null {
     return this.model?.modelKey ?? null;
   }
@@ -119,9 +126,23 @@ export class ImageAnalysisService {
     return entries;
   }
   onModuleInit() {
+    this.jobs.registerQueuePolicy("analysis", "global", {
+      primary: "incremental",
+      secondary: "historical",
+      primaryWeight: 3,
+    });
+    this.jobs.registerQueueAvailability("analysis", "global", async (tx) => {
+      const activation = await this.scheduling.assert(tx, this.activeModelKey);
+      return activation.historicalPaused
+        ? ["incremental"]
+        : ["incremental", "historical"];
+    });
+    this.jobs.registerClaimGate("image_analysis", (job, tx, now) =>
+      this.scheduling.gate(job, tx, now, this.activeModelKey),
+    );
     this.jobs.register("image_analysis", async (job, signal) => {
       const model = this.model;
-      const queuedModel = (job.payload as { modelKey?: string }).modelKey;
+      const queuedModel = analysisJobModelKey(job.payload);
       if (!model || queuedModel !== model.modelKey) {
         await this.retireJob(
           job,
@@ -152,8 +173,8 @@ export class ImageAnalysisService {
         );
         signal.throwIfAborted();
         await this.db.$transaction(async (tx) => {
-          await this.lockCandidate(tx, row.media.candidatePostId);
           await this.jobs.assertCurrentLease(tx);
+          await this.lockCandidate(tx, row.media.candidatePostId);
           await tx.candidateMediaAnalysis.update({
             where: { id: row.id },
             data: {
@@ -171,8 +192,8 @@ export class ImageAnalysisService {
         });
       } catch (error) {
         await this.db.$transaction(async (tx) => {
-          await this.lockCandidate(tx, row.media.candidatePostId);
           await this.jobs.assertCurrentLease(tx);
+          await this.lockCandidate(tx, row.media.candidatePostId);
           await tx.candidateMediaAnalysis.updateMany({
             where: { id: row.id, status: { not: "succeeded" } },
             data: {
@@ -189,12 +210,12 @@ export class ImageAnalysisService {
   /** Historical jobs are terminal, never re-labelled with the currently configured identity. */
   private async retireJob(job: BackgroundJob, reason: string) {
     await this.db.$transaction(async (tx) => {
+      await this.jobs.assertCurrentLease(tx);
       const media = await tx.candidateMedia.findUnique({
         where: { id: job.resourceId },
         select: { candidatePostId: true },
       });
       if (media) await this.lockCandidate(tx, media.candidatePostId);
-      await this.jobs.assertCurrentLease(tx);
       await tx.backgroundJob.updateMany({
         where: { id: job.id, status: "running", leaseId: job.leaseId },
         data: {
@@ -205,7 +226,7 @@ export class ImageAnalysisService {
           lastError: reason,
         },
       });
-      const key = (job.payload as { modelKey?: string }).modelKey;
+      const key = analysisJobModelKey(job.payload);
       const prefix = `image-analysis:${job.resourceId}:`;
       const storedKey =
         typeof job.idempotencyKey === "string" &&
@@ -255,6 +276,7 @@ export class ImageAnalysisService {
     });
     for (const row of rows) {
       await this.db.$transaction(async (tx) => {
+        await this.maintenanceFence(tx, row.mediaId);
         await this.lockCandidate(tx, row.media.candidatePostId);
         const matching = {
           kind: "image_analysis",
@@ -310,6 +332,15 @@ export class ImageAnalysisService {
           await this.aggregate(tx, row.media.candidatePostId, row.modelKey);
       });
     }
+  }
+  private async maintenanceFence(
+    tx: Prisma.TransactionClient,
+    mediaId: string,
+  ) {
+    await this.jobs.lockScope(tx, "analysis", "global");
+    await this.jobs.lockScope(tx, "heavy", "global");
+    await tx.$queryRaw`SELECT id FROM background_jobs WHERE kind='image_analysis' AND resource_id=${mediaId}::uuid ORDER BY id FOR UPDATE`;
+    await this.scheduling.assert(tx, this.activeModelKey);
   }
   private async lockCandidate(
     tx: Prisma.TransactionClient,
@@ -414,12 +445,16 @@ export class ImageAnalysisService {
     });
     for (const candidate of candidates) {
       await this.db.$transaction(async (tx) => {
+        await this.jobs.lockScope(tx, "analysis", "global");
+        await this.scheduling.assert(tx, this.activeModelKey);
         await this.lockCandidate(tx, candidate.id);
         await this.aggregate(tx, candidate.id, modelKey);
       });
     }
   }
   async schedulePending(candidateId?: string) {
+    const activation = await this.scheduling.ensure(this.activeModelKey);
+    await this.scheduling.migrateQueued(this.activeModelKey);
     await this.reconcileRetired(candidateId);
     if (!this.model) return;
     const model = this.model;
@@ -457,6 +492,7 @@ export class ImageAnalysisService {
           include: { media: { select: { candidatePostId: true } } },
         });
         if (!row) return;
+        await this.maintenanceFence(tx, row.mediaId);
         await this.lockCandidate(tx, row.media.candidatePostId);
         if (
           !(await tx.backgroundJob.count({
@@ -476,53 +512,22 @@ export class ImageAnalysisService {
         await this.aggregate(tx, row.media.candidatePostId, model.modelKey);
       });
     }
-    const media = await this.db.candidateMedia.findMany({
-      where: {
-        ...(candidateId ? { candidatePostId: candidateId } : {}),
-        analyses: { none: { modelKey: model.modelKey } },
-        fileObject: { lifecycleStatus: "active", deletedAt: null },
-        candidatePost: { author: { deletedAt: null } },
-      },
-      include: { fileObject: true },
-      orderBy: { createdAt: "asc" },
-      take: 20,
-    });
-    for (const item of media) {
-      await this.db.$transaction(async (tx) => {
-        await this.lockCandidate(tx, item.candidatePostId);
-        await tx.candidateMediaAnalysis.createMany({
-          data: {
-            mediaId: item.id,
-            modelKey: model.modelKey,
-            modelRevision: model.identity.modelRevision,
-            decisionVersion: model.identity.decisionVersion,
-            sourceSha256: item.fileObject.checksum,
-          },
-          skipDuplicates: true,
-        });
-        await this.jobs.enqueue(
-          {
-            kind: "image_analysis",
-            resourceId: item.id,
-            idempotencyKey: `image-analysis:${item.id}:${model.modelKey}`,
-            lane: "heavy",
-            priority: 0,
-            payload: {
-              modelKey: model.modelKey,
-              identity: { ...model.identity },
-            },
-          },
-          tx,
-        );
-        await this.aggregate(tx, item.candidatePostId, model.modelKey);
-      });
-    }
+    await this.scheduling.discover(
+      model,
+      activation,
+      (tx, id, key) => this.aggregate(tx, id, key),
+      candidateId,
+    );
   }
   async retryFailed(candidateId: string) {
     if (!this.model) throw new BadRequestException("识别服务尚未配置");
     const model = this.model;
     await this.schedulePending(candidateId);
     return this.db.$transaction(async (tx) => {
+      await this.jobs.lockScope(tx, "analysis", "global");
+      await this.jobs.lockScope(tx, "heavy", "global");
+      await tx.$queryRaw`SELECT j.id FROM background_jobs j JOIN candidate_media m ON m.id=j.resource_id WHERE j.kind='image_analysis' AND m.candidate_post_id=${candidateId}::uuid ORDER BY j.id FOR UPDATE OF j`;
+      const activation = await this.scheduling.assert(tx, this.activeModelKey);
       await this.lockCandidate(tx, candidateId);
       if (
         !(await tx.candidatePost.count({
@@ -539,6 +544,15 @@ export class ImageAnalysisService {
       });
       let queued = 0;
       for (const row of rows) {
+        const media = await tx.candidateMedia.findUniqueOrThrow({
+          where: { id: row.mediaId },
+        });
+        const intent = await this.scheduling.intent(
+          tx,
+          media,
+          model.modelKey,
+          activation,
+        );
         const changed = await tx.backgroundJob.updateMany({
           where: {
             idempotencyKey: `image-analysis:${row.mediaId}:${model.modelKey}`,
@@ -546,6 +560,9 @@ export class ImageAnalysisService {
           },
           data: {
             status: "queued",
+            lane: "analysis",
+            executionScope: "global",
+            queueName: intent.purpose,
             attempts: 0,
             availableAt: new Date(),
             completedAt: null,

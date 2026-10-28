@@ -245,3 +245,94 @@ test("claim revalidates locked row and feeds the gate fresh payload after select
     assert.equal(writes, valid ? 1 : 0);
   }
 });
+
+test("paused history cannot block new work after the three-primary fairness budget is spent", async () => {
+  const { ImageAnalysisService } =
+    await import("../src/image-analysis/image-analysis.service.js");
+  const { activateImageAnalysisAdapter } =
+    await import("../src/image-analysis/image-analysis-adapter.js");
+  const { createExampleImageAnalysisAdapter } =
+    await import("../src/image-analysis/example-adapter.js");
+  const model = activateImageAnalysisAdapter(
+    createExampleImageAnalysisAdapter(),
+  );
+  const rows = Array.from({ length: 101 }, (_, i) => ({
+    id: `job-${i}`,
+    resourceId: `media-${i}`,
+    kind: "image_analysis",
+    lane: "analysis",
+    executionScope: "global",
+    queueName: i === 100 ? "incremental" : "historical",
+    status: "queued",
+    availableAt: new Date(0),
+    attempts: 0,
+    payload: { modelKey: model.modelKey },
+  }));
+  const tx = {
+    $executeRaw: async () => 0,
+    $queryRaw: async () => [],
+    imageAnalysisActivation: {
+      findUnique: async () => ({
+        activeModelKey: model.modelKey,
+        historicalPaused: true,
+      }),
+    },
+    backgroundJob: {
+      updateMany: async () => ({ count: 0 }),
+      count: async () => 0,
+      groupBy: async ({ where }: { where: { queueName?: { in: string[] } } }) =>
+        [
+          ...new Set(
+            rows
+              .filter(
+                (r) =>
+                  !where.queueName || where.queueName.in.includes(r.queueName),
+              )
+              .map((r) => r.queueName),
+          ),
+        ].map((queueName) => ({ queueName })),
+      findFirst: async ({
+        where,
+      }: {
+        where: { queueName?: string; createdAt?: unknown };
+      }) =>
+        where.createdAt
+          ? null
+          : rows.find((r) => r.queueName === where.queueName),
+      findUnique: async ({ where }: { where: { id: string } }) =>
+        rows.find((r) => r.id === where.id),
+      update: async ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: Record<string, unknown>;
+      }) =>
+        Object.assign(
+          rows.find((r) => r.id === where.id)!,
+          data,
+        ),
+    },
+    jobQueueState: {
+      findUnique: async () => ({ lastQueue: "incremental", consecutive: 3 }),
+      upsert: async () => {},
+    },
+  };
+  const db = {
+    $transaction: async (body: (value: typeof tx) => unknown) => body(tx),
+  } as unknown as PrismaService;
+  const jobs = new JobsService(db);
+  new ImageAnalysisService(
+    db,
+    jobs,
+    {} as ConstructorParameters<typeof ImageAnalysisService>[2],
+    model,
+  ).onModuleInit();
+  const claimed = await jobs.claim("analysis");
+  assert.equal(claimed?.queueName, "incremental");
+  assert.ok(
+    rows
+      .slice(0, 100)
+      .every((r) => r.attempts === 0 && r.availableAt.getTime() === 0),
+  );
+});

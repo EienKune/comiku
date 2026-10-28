@@ -1,3 +1,4 @@
+import { analysisActivationFixture } from "./analysis-activation-fixture.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -66,6 +67,10 @@ test("binary analysis persists independent priority, retries failures and preser
   const jobs = new JobsService(db);
   const service = new ImageAnalysisService(db, jobs, files, model);
   service.onModuleInit();
+  const activation = await analysisActivationFixture(
+    db,
+    app.get(ImageAnalysisService).activeModelKey,
+  );
   const author = await db.author.create({
     data: { displayName: "Analysis fixture" },
   });
@@ -112,7 +117,7 @@ test("binary analysis persists independent priority, retries failures and preser
       where: { kind: "image_analysis", resourceId: media.id },
     });
     // Run the real handler via the leased worker; no model or network is called.
-    const claimed = await jobs.claim("heavy");
+    const claimed = await jobs.claim("analysis");
     assert.equal(claimed?.id, queued.id);
     await jobs.execute(claimed!);
     assert.equal(
@@ -127,7 +132,7 @@ test("binary analysis persists independent priority, retries failures and preser
       where: { id: queued.id },
       data: { availableAt: new Date(0) },
     });
-    await jobs.runNext("heavy");
+    await jobs.runNext("analysis");
     const done = await db.candidatePost.findUniqueOrThrow({
       where: { id: post.id },
     });
@@ -176,7 +181,7 @@ test("binary analysis persists independent priority, retries failures and preser
         where: { id: queued.id },
         data: { availableAt: new Date(0) },
       });
-      await jobs.runNext("heavy");
+      await jobs.runNext("analysis");
     }
     const failed = await db.candidatePost.findUniqueOrThrow({
       where: { id: post.id },
@@ -189,7 +194,7 @@ test("binary analysis persists independent priority, retries failures and preser
       where: { id: queued.id },
       data: { payload: { modelKey: "different-frozen-model" } },
     });
-    await jobs.runNext("heavy");
+    await jobs.runNext("analysis");
     assert.equal(
       (
         await db.candidateMediaAnalysis.findFirstOrThrow({
@@ -237,6 +242,7 @@ test("binary analysis persists independent priority, retries failures and preser
       await db.candidatePost.delete({ where: { id: candidateId } });
     await db.author.delete({ where: { id: author.id } });
     if (fileId) await files.purgeUnreferenced(fileId);
+    await activation.restore();
     await app.close();
   }
 });
@@ -253,6 +259,10 @@ test("retired adapters settle safely with analysis disabled and replacement iden
   await app.init();
   const db = app.get(PrismaService),
     files = app.get(FileObjectsService);
+  const activation = await analysisActivationFixture(
+    db,
+    app.get(ImageAnalysisService).activeModelKey,
+  );
   const author = await db.author.create({
     data: { displayName: "Retired adapter fixture" },
   });
@@ -362,6 +372,7 @@ test("retired adapters settle safely with analysis disabled and replacement iden
     const jobs = new JobsService(db);
     const active = new ImageAnalysisService(db, jobs, files, model);
     active.onModuleInit();
+    await activation.activate(model.modelKey);
     await active.schedulePending(post.id);
     assert.equal(
       await db.candidateMediaAnalysis.count({
@@ -369,8 +380,8 @@ test("retired adapters settle safely with analysis disabled and replacement iden
       }),
       4,
     );
-    await jobs.runNext("heavy");
-    await jobs.runNext("heavy");
+    await jobs.runNext("analysis");
+    await jobs.runNext("analysis");
     const done = await db.candidatePost.findUniqueOrThrow({
       where: { id: post.id },
     });
@@ -401,6 +412,7 @@ test("retired adapters settle safely with analysis disabled and replacement iden
       identity: { ...example.identity, adapterId: "another-provider" },
     };
     const replacement = activateImageAnalysisAdapter(other);
+    await activation.activate(replacement.modelKey);
     await new ImageAnalysisService(
       db,
       jobs,
@@ -436,6 +448,7 @@ test("retired adapters settle safely with analysis disabled and replacement iden
       await db.candidatePost.delete({ where: { id: candidateId } });
     await db.author.delete({ where: { id: author.id } });
     if (fileId) await files.purgeUnreferenced(fileId);
+    await activation.restore();
     await app.close();
   }
 });
@@ -469,6 +482,10 @@ test("partial BA evidence survives failures and malformed siblings, with indepen
     files = app.get(FileObjectsService);
   const analysis = app.get(ImageAnalysisService),
     candidates = app.get(CandidatesService);
+  const activation = await analysisActivationFixture(
+    db,
+    app.get(ImageAnalysisService).activeModelKey,
+  );
   const author = await db.author.create({
     data: { displayName: "Partial BA fixture" },
   });
@@ -626,6 +643,7 @@ test("partial BA evidence survives failures and malformed siblings, with indepen
       files,
       null,
     );
+    await activation.activate(null);
     await disabled.schedulePending(post.id);
     const retired = await db.candidatePost.findUniqueOrThrow({
       where: { id: post.id },
@@ -653,6 +671,7 @@ test("partial BA evidence survives failures and malformed siblings, with indepen
       "failed",
     );
     // Same-key re-enable must restore the successful evidence without inference.
+    await activation.activate(model.modelKey);
     await analysis.schedulePending(post.id);
     const restored = await db.candidatePost.findUniqueOrThrow({
       where: { id: post.id },
@@ -706,6 +725,7 @@ test("partial BA evidence survives failures and malformed siblings, with indepen
     }
     await db.author.delete({ where: { id: author.id } });
     if (fileId) await files.purgeUnreferenced(fileId);
+    await activation.restore();
     await app.close();
   }
 });

@@ -9,6 +9,40 @@ import { type BackgroundJob } from "../src/generated/prisma/client.js";
 import { activateImageAnalysisAdapter } from "../src/image-analysis/image-analysis-adapter.js";
 import { createExampleImageAnalysisAdapter } from "../src/image-analysis/example-adapter.js";
 
+// These fixtures isolate evidence/retirement behavior. Activation/queue behavior is
+// exercised independently in analysis-scheduling and PostgreSQL integration tests.
+class EvidenceService extends ImageAnalysisService {
+  constructor(
+    db: PrismaService,
+    jobs: JobsService,
+    files: FileObjectsService,
+    model: ConstructorParameters<typeof ImageAnalysisService>[3],
+  ) {
+    super(
+      db,
+      Object.assign(
+        {
+          lockScope: async () => {},
+          registerQueuePolicy: () => {},
+          registerQueueAvailability: () => {},
+          registerClaimGate: () => {},
+        },
+        jobs,
+      ),
+      files,
+      model,
+    );
+  }
+  override get scheduling(): ImageAnalysisService["scheduling"] {
+    return {
+      ensure: async () => ({}),
+      assert: async () => ({}),
+      migrateQueued: async () => {},
+      discover: async () => {},
+    } as unknown as ImageAnalysisService["scheduling"];
+  }
+}
+
 test("existing current-model results rebuild bounded summaries without new inference", async () => {
   const model = activateImageAnalysisAdapter(
     createExampleImageAnalysisAdapter(),
@@ -97,7 +131,7 @@ test("existing current-model results rebuild bounded summaries without new infer
     backgroundJob: { findMany: async () => [] },
     candidateMedia: { findMany: async () => [] },
   } as unknown as PrismaService;
-  const service = new ImageAnalysisService(
+  const service = new EvidenceService(
     db,
     {} as JobsService,
     {} as FileObjectsService,
@@ -155,7 +189,7 @@ test("review promotion uses declared labels and inclusive confidence, rejecting 
   const service = (
     model: ReturnType<typeof activateImageAnalysisAdapter> | null,
   ) =>
-    new ImageAnalysisService(
+    new EvidenceService(
       {} as PrismaService,
       {} as JobsService,
       {} as FileObjectsService,
@@ -263,22 +297,24 @@ test("disabled analysis still settles queued jobs without invoking inference", a
       assert.fail("Disabled adapters must not read image bytes");
     },
   } as unknown as FileObjectsService;
-  new ImageAnalysisService(db, jobs, files, null).onModuleInit();
+  new EvidenceService(db, jobs, files, null).onModuleInit();
   assert.ok(handlers.has("image_analysis"));
-  for (const kind of ["image_analysis"]) {
-    await handlers.get(kind)!(
+  const payloads = [{ modelKey: "old-key" }, null, false, ["invalid"]];
+  for (const payload of payloads) {
+    await handlers.get("image_analysis")!(
       {
-        id: kind,
+        id: "image_analysis",
         resourceId: "missing-media",
-        payload: { modelKey: "old-key" },
+        idempotencyKey: "image-analysis:missing-media:old-key",
+        payload,
         status: "running",
         leaseId: "lease",
       } as unknown as BackgroundJob,
       new AbortController().signal,
     );
   }
-  assert.equal(jobUpdates.length, 1);
-  assert.equal(analysisUpdates.length, 1);
+  assert.equal(jobUpdates.length, payloads.length);
+  assert.equal(analysisUpdates.length, payloads.length);
   for (const update of jobUpdates)
     assert.equal(
       (update as { data: { status: string } }).data.status,
@@ -328,7 +364,7 @@ test("retirement rechecks a concurrently claimed lease before failing media", as
       updateMany: async () => ({ count: 0 }),
     },
   } as unknown as PrismaService;
-  const service = new ImageAnalysisService(
+  const service = new EvidenceService(
     db,
     {} as JobsService,
     {} as FileObjectsService,
@@ -430,7 +466,7 @@ test("disabling partial analysis leaves same-key re-enable repairable without re
           : [],
     },
   } as unknown as PrismaService;
-  const disabled = new ImageAnalysisService(
+  const disabled = new EvidenceService(
     db,
     {} as JobsService,
     {} as FileObjectsService,
@@ -443,7 +479,7 @@ test("disabling partial analysis leaves same-key re-enable repairable without re
     0,
     "Unavailable taxonomy must not certify a completed repair",
   );
-  const enabled = new ImageAnalysisService(
+  const enabled = new EvidenceService(
     db,
     {} as JobsService,
     {} as FileObjectsService,

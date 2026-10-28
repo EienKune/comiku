@@ -1,3 +1,4 @@
+import { AnalysisConfigurationMismatch } from "./image-analysis/analysis-scheduling.js";
 import { SourceConfigurationMismatch } from "./source-ingestion/source-platform-state.js";
 import { DownloadsService } from "./transfers/downloads.service.js";
 import { ImageAnalysisService } from "./image-analysis/image-analysis.service.js";
@@ -61,12 +62,15 @@ async function maintenanceLoop() {
     await delay(5_000, undefined, { signal: stopping.signal }).catch(() => {});
   }
 }
-async function loop(lane: "heavy" | "network", scope = "global") {
+async function loop(lane: "heavy" | "network" | "analysis", scope = "global") {
   while (!stopping.signal.aborted) {
     try {
       if (await jobs.runNext(lane, stopping.signal, scope)) continue;
     } catch (error) {
-      if (error instanceof SourceConfigurationMismatch) {
+      if (
+        error instanceof SourceConfigurationMismatch ||
+        error instanceof AnalysisConfigurationMismatch
+      ) {
         console.error("当前工作进程的图源配置尚未激活，该平台暂停领取");
         await delay(30_000, undefined, { signal: stopping.signal }).catch(
           () => {},
@@ -80,6 +84,7 @@ try {
   await Promise.all([
     maintenanceLoop(),
     loop("heavy"),
+    loop("analysis"),
     loop("network"),
     loop("network", "source:x"),
     loop("network", "source:pixiv"),

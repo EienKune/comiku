@@ -55,6 +55,22 @@ export class JobsService {
   private handlers = new Map<string, JobHandler>();
   private gates = new Map<string, JobClaimGate>();
   private policies = new Map<string, QueuePolicy>();
+  private availability = new Map<
+    string,
+    (tx: Prisma.TransactionClient) => Promise<readonly string[]>
+  >();
+
+  /** Eligibility runs under the scope barrier, before fairness selection. DB reads only. */
+  registerQueueAvailability(
+    lane: JobLane,
+    scope: string,
+    available: (tx: Prisma.TransactionClient) => Promise<readonly string[]>,
+  ) {
+    const key = JSON.stringify([lane, scope]);
+    if (this.availability.has(key))
+      throw new Error("Duplicate queue availability");
+    this.availability.set(key, available);
+  }
 
   registerClaimGate(kind: string, gate: JobClaimGate) {
     if (this.gates.has(kind)) throw new Error("Duplicate job claim gate");
@@ -161,7 +177,11 @@ export class JobsService {
           lastError: "重试次数已用尽",
         },
       });
+      const availableQueues = await this.availability.get(
+        JSON.stringify([lane, executionScope]),
+      )?.(tx);
       const eligible = {
+        ...(availableQueues ? { queueName: { in: [...availableQueues] } } : {}),
         lane,
         executionScope,
         status: "queued" as const,
@@ -191,23 +211,15 @@ export class JobsService {
       }
       let next = await tx.backgroundJob.findFirst({
         where: {
-          lane,
-          executionScope,
+          ...eligible,
           ...(queueName ? { queueName } : {}),
-          status: "queued",
-          availableAt: { lte: now },
-          kind: { in: [...this.handlers.keys()] },
         },
         orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
       });
       const aged = await tx.backgroundJob.findFirst({
         where: {
-          lane,
-          executionScope,
+          ...eligible,
           ...(queueName ? { queueName } : {}),
-          status: "queued",
-          availableAt: { lte: now },
-          kind: { in: [...this.handlers.keys()] },
           createdAt: { lte: new Date(now.getTime() - 10 * 60_000) },
         },
         orderBy: { createdAt: "asc" },
@@ -223,6 +235,8 @@ export class JobsService {
         !next ||
         next.lane !== lane ||
         next.executionScope !== executionScope ||
+        (availableQueues !== undefined &&
+          !availableQueues.includes(next.queueName)) ||
         (queueName !== undefined && next.queueName !== queueName) ||
         next.status !== "queued" ||
         next.availableAt > now ||

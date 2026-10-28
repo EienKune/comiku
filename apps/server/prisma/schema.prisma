@@ -770,11 +770,13 @@ model CandidateMedia {
   height          Int?
   mediaType       String        @map("media_type") @db.VarChar(32)
   analyses        CandidateMediaAnalysis[]
+  analysisWorkIntents ImageAnalysisWorkIntent[]
   createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@unique([candidatePostId, externalMediaId])
   @@unique([candidatePostId, orderIndex])
   @@index([fileObjectId])
+  @@index([createdAt, id])
   @@map("candidate_media")
 }
 
@@ -1649,4 +1651,24 @@ model SourceRecoveryCampaign {
   @@unique([discoveryPostId, number])
   @@index([state, completedAt])
   @@map("source_recovery_campaigns")
+}
+model ImageAnalysisActivation {
+  id String @id @default("global") @db.VarChar(20)
+  activeModelKey String? @map("active_model_key") @db.VarChar(64)
+  generation Int @default(1)
+  activatedAt DateTime @default(now()) @map("activated_at") @db.Timestamptz(3)
+  historicalPaused Boolean @default(false) @map("historical_paused")
+  @@map("image_analysis_activations")
+}
+
+model ImageAnalysisWorkIntent {
+  mediaId String @map("media_id") @db.Uuid
+  media CandidateMedia @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  modelKey String @map("model_key") @db.VarChar(64)
+  purpose String @db.VarChar(20)
+  activationGeneration Int @map("activation_generation")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@id([mediaId, modelKey])
+  @@index([modelKey, purpose, createdAt])
+  @@map("image_analysis_work_intents")
 }
