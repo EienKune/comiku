@@ -187,7 +187,6 @@ function fixture(source = client) {
     registry,
     downloader,
     files,
-    { available: false } as any,
     environment as any,
   );
   return {
@@ -1200,7 +1199,6 @@ function manualFixture() {
       },
     } as any,
     db,
-    null as any,
     null as any,
     null as any,
     null as any,

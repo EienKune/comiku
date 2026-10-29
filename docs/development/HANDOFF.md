@@ -28,6 +28,8 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## Image analysis
 
+- Use `ImageAnalysisAdapter` for model integrations. Source ingestion no longer invokes the unused legacy classifier hook. Retain manual manga/photo decisions and historical suggestion reads; retiring that hook does not authorize deleting historical data or automatically mapping model labels to visual classes.
+
 - Candidate refresh cannot rely on queued rows in the loaded page: newly created rows may not be scheduled yet, and pending rows can be outside that page or group. Return an optional scope-level `analysisPending` hint and retain the old-response fallback. Count only active, undeleted media for undeleted authors that still need current-model analysis or summary provenance repair; a successful active image must not keep polling forever for an unavailable sibling. Disabled models and terminal failures stop polling. Use the existing list query's filtered relation count, not a new queue-scanning endpoint.
 
 - Adapters declare their ordered taxonomy; generic validation supports binary and multiclass outputs. Taxonomy is part of the immutable model identity. Review priority is independent of the class probabilities.

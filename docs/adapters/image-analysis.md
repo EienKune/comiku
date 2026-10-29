@@ -4,6 +4,8 @@ Image analysis is optional and disabled by default. With no `IMAGE_ANALYSIS_ADAP
 
 Only one adapter is active per process. Configure the API and worker with the same adapter and versions; restart both when changing them. Inference runs through the persistent heavy queue, separately from source collection and human review.
 
+`ImageAnalysisAdapter` is the model integration entry point. The unused legacy `CandidateMediaClassifier` hook in source ingestion has been removed. Manual manga/photo classification and reads of historical classification suggestions remain supported; no historical rows are deleted. Custom model labels do not automatically change the manga/photo classification.
+
 ## Contract
 
 The public port is `apps/server/src/image-analysis/image-analysis-adapter.ts`. Each adapter declares an immutable identity and implements `analyze(itemId, originalBytes, abortSignal)`. Comiku verifies the original file's SHA-256 before inference.

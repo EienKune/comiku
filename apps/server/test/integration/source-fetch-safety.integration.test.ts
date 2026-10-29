@@ -120,7 +120,6 @@ async function fixture() {
     registry,
     downloader,
     files as any,
-    { available: false } as any,
     environment,
   );
   service.onModuleInit();

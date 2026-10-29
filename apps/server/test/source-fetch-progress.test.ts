@@ -46,7 +46,6 @@ function fixture(rows: unknown[]) {
     null,
     null,
     null,
-    null,
   ] as unknown as ConstructorParameters<typeof SourceFetchService>;
   const service = new SourceFetchService(...args);
   return { service, queries };

@@ -17,10 +17,6 @@ import {
 import { ENVIRONMENT, type Environment } from "../config/environment.js";
 import { PrismaService } from "../database/prisma.service.js";
 import { FileObjectsService } from "../files/file-objects.service.js";
-import {
-  CANDIDATE_MEDIA_CLASSIFIER,
-  type CandidateMediaClassifier,
-} from "./candidate-classifier.js";
 import type {
   ContentSourceClient,
   NormalizedSourceContent,
@@ -84,8 +80,6 @@ export class SourceFetchService {
     private readonly sources: ContentSourceRegistry,
     @Inject(MEDIA_DOWNLOADER) private readonly downloader: MediaDownloader,
     @Inject(FileObjectsService) private readonly files: FileObjectsService,
-    @Inject(CANDIDATE_MEDIA_CLASSIFIER)
-    private readonly classifier: CandidateMediaClassifier,
     @Inject(ENVIRONMENT) private readonly environment: Environment,
   ) {}
 
@@ -1396,7 +1390,7 @@ export class SourceFetchService {
         );
       }
       await keepLease();
-      const candidate = await this.db.$transaction(async (tx) => {
+      await this.db.$transaction(async (tx) => {
         await this.lockSource(tx, account, state, createdById);
         await this.assertEligible(account, state, leaseId, tx);
         await this.assertActor(createdById, tx);
@@ -1443,24 +1437,7 @@ export class SourceFetchService {
             mediaType: media.type,
           })),
         });
-        return created;
       });
-      if (this.classifier.available) {
-        const result = await this.classifier
-          .classify({
-            candidateId: candidate.id,
-            media: stored.map((file) => ({
-              fileObjectId: file.id,
-              contentType: file.contentType,
-            })),
-          })
-          .catch(() => null);
-        if (result) {
-          await this.db.candidateClassificationSuggestion.create({
-            data: { candidatePostId: candidate.id, ...result },
-          });
-        }
-      }
       return { created: true, mediaStored: stored.length };
     } catch (error) {
       for (const file of stored.reverse())
