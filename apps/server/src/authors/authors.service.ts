@@ -132,6 +132,9 @@ export class AuthorsService {
   ) {}
 
   private account(account: ExternalAccount): ExternalAccountDto {
+    const activeStates = account.adapterStates.filter(
+      (state) => !["x_web_session", "x_official_v2"].includes(state.adapterKey),
+    );
     return {
       id: account.id,
       authorId: account.authorId,
@@ -148,12 +151,12 @@ export class AuthorsService {
         .some((client) => client.available),
       revision: account.revision,
       lastCheckedAt:
-        account.adapterStates
+        activeStates
           .map((state) => state.lastAttemptAt)
           .filter((value): value is Date => Boolean(value))
           .sort((left, right) => right.getTime() - left.getTime())[0]
           ?.toISOString() ?? null,
-      adapterStates: account.adapterStates.map((state) => {
+      adapterStates: activeStates.map((state) => {
         const available =
           this.sources.get(state.adapterKey)?.available ?? false;
         return {

@@ -1,5 +1,7 @@
+import { CandidateClassificationScoresDto } from "./classification-scores.dto.js";
 import {
   Controller,
+  Get,
   Inject,
   Param,
   ParseUUIDPipe,
@@ -27,6 +29,14 @@ export class ImageAnalysisController {
     @Inject(ImageAnalysisService)
     private readonly analysis: ImageAnalysisService,
   ) {}
+  @Get(":id/classification-scores")
+  @Access({ permission: "candidates:read" })
+  @ApiParam({ name: "id", format: "uuid" })
+  @ApiOperation({ operationId: "getCandidateClassificationScores" })
+  @ApiOkResponse({ type: CandidateClassificationScoresDto })
+  scores(@Param("id", ParseUUIDPipe) id: string) {
+    return this.analysis.classificationScores(id);
+  }
   @Post(":id/analysis-retry")
   @HttpCode(200)
   @Access({ permission: "candidates:manage" })

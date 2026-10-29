@@ -11,6 +11,7 @@ datasource db {
 }
 
 model User {
+  candidateReviewSessions CandidateReviewSession[]
   reviewRevisionParticipations        ReviewRevisionParticipant[]
   canSkipProofreading                 Boolean                           @default(false) @map("can_skip_proofreading")
   id                                  String                        @id @default(uuid()) @db.Uuid
@@ -133,6 +134,7 @@ enum AuthorizationStatus {
 enum FirstSyncMode {
   none
   last_24_hours
+  last_7_days
 }
 
 enum FileLifecycleStatus {
@@ -159,6 +161,7 @@ model FileObject {
   accountAvatars       AuthorExternalAccount[]       @relation("ExternalAccountAvatar")
   userAvatars          User[]                        @relation("UserAvatar")
   authorEvidence       AuthorAuthorizationEvidence[]
+  discoveryMedia       SourceDiscoveryMedia[]
   candidateMedia       CandidateMedia[]
   workImages           WorkImage[]
   labelPlusFiles       LabelPlusFile[]
@@ -234,6 +237,9 @@ model AuthorExternalAccount {
   updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt           DateTime?            @map("deleted_at") @db.Timestamptz(3)
   fetchRunItems       SourceFetchRunItem[]
+  fetchAccountTasks  SourceFetchAccountTask[]
+  discoveries         SourceDiscoveryPost[]
+  scanState           SourceAccountScanState?
   adapterStates       SourceAdapterState[]
   sourceObservations  CandidateSourceObservation[]
   candidates          CandidatePost[]
@@ -526,6 +532,7 @@ model SourceFetchRun {
   requestedById String?              @map("requested_by") @db.Uuid
   requestedBy   User?                @relation("FetchRunRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
   items         SourceFetchRunItem[]
+  accountTasks  SourceFetchAccountTask[]
   startedAt     DateTime             @default(now()) @map("started_at") @db.Timestamptz(3)
   completedAt   DateTime?            @map("completed_at") @db.Timestamptz(3)
 
@@ -562,6 +569,20 @@ model SourceFetchRunItem {
   @@index([externalAccountId, startedAt])
   @@index([adapterStateId, startedAt])
   @@map("source_fetch_run_items")
+}
+
+model SourceAccountScanState {
+  accountId String @id @map("account_id") @db.Uuid
+  account AuthorExternalAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  discoveredThroughAt DateTime? @map("discovered_through_at") @db.Timestamptz(3)
+  windowJson Json @default("{}") @map("window_json")
+  leaseOwnerJobId String? @map("lease_owner_job_id") @db.Uuid
+  leaseUntil DateTime? @map("lease_until") @db.Timestamptz(3)
+  epoch Int @default(0)
+  revision Int @default(0)
+
+  @@index([leaseUntil])
+  @@map("source_account_scan_states")
 }
 
 model SourceAdapterState {
@@ -607,6 +628,7 @@ model SourceAdapterBudgetUsage {
 }
 
 model CandidatePost {
+  reviewSessionEntries CandidateReviewSessionEntry[]
   id                      String                 @id @default(uuid()) @db.Uuid
   authorId                String                 @map("author_id") @db.Uuid
   author                  Author                 @relation(fields: [authorId], references: [id], onDelete: Restrict)
@@ -623,6 +645,7 @@ model CandidatePost {
   tagDisposition          CandidateTagDisposition @default(neutral) @map("tag_disposition")
   analysisScore           Float?                 @map("analysis_score")
   analysisState           String                 @default("unprocessed") @map("analysis_state") @db.VarChar(20)
+  analysisSummaryVersion  Int                    @default(0) @map("analysis_summary_version")
   analysisModelKey        String?                @map("analysis_model_key") @db.VarChar(64)
   analysisPredictions     Json?                  @map("analysis_predictions")
   status                  CandidateStatus        @default(pending)
@@ -648,6 +671,43 @@ model CandidatePost {
   @@index([authorExternalAccountId, fetchedAt])
   @@index([status, tagDisposition, postedAt, id])
   @@map("candidate_posts")
+}
+
+model CandidateReviewSession {
+  id String @id @default(uuid()) @db.Uuid
+  actorId String @map("actor_id") @db.Uuid
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  idempotencyKey String @map("idempotency_key") @db.Uuid
+  cursorSecret String @map("cursor_secret") @db.Uuid
+  normalizedFilterJson Json @map("normalized_filter_json")
+  filterHash String @map("filter_hash") @db.VarChar(64)
+  modelKey String? @map("model_key") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastUsedAt DateTime @default(now()) @map("last_used_at") @db.Timestamptz(3)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  hardExpiresAt DateTime @map("hard_expires_at") @db.Timestamptz(3)
+  entries CandidateReviewSessionEntry[]
+
+  @@unique([actorId, idempotencyKey])
+  @@index([actorId, expiresAt, lastUsedAt])
+  @@index([expiresAt, id])
+  @@map("candidate_review_sessions")
+}
+
+model CandidateReviewSessionEntry {
+  sessionId String @map("session_id") @db.Uuid
+  session CandidateReviewSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  candidateId String @map("candidate_id") @db.Uuid
+  candidate CandidatePost @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  ordinal Int
+  triageGroup String @map("triage_group") @db.VarChar(32)
+  frozenScore Float? @map("frozen_score")
+
+  @@id([sessionId, candidateId])
+  @@unique([sessionId, ordinal])
+  @@index([sessionId, triageGroup, ordinal], map: "candidate_review_entries_group_order_idx")
+  @@index([candidateId])
+  @@map("candidate_review_session_entries")
 }
 
 model CandidateSourceObservation {
@@ -749,11 +809,13 @@ model CandidateMedia {
   height          Int?
   mediaType       String        @map("media_type") @db.VarChar(32)
   analyses        CandidateMediaAnalysis[]
+  analysisWorkIntents ImageAnalysisWorkIntent[]
   createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@unique([candidatePostId, externalMediaId])
   @@unique([candidatePostId, orderIndex])
   @@index([fileObjectId])
+  @@index([createdAt, id])
   @@map("candidate_media")
 }
 
@@ -1393,6 +1455,7 @@ enum JobStatus {
 enum JobLane {
   network
   heavy
+  analysis
 }
 
 model BackgroundJob {
@@ -1402,6 +1465,8 @@ model BackgroundJob {
   actorId        String?   @map("actor_id") @db.Uuid
   idempotencyKey String    @unique @map("idempotency_key") @db.VarChar(255)
   lane           JobLane   @default(heavy)
+  executionScope String    @default("global") @map("execution_scope") @db.VarChar(128)
+  queueName      String    @default("default") @map("queue_name") @db.VarChar(64)
   status         JobStatus @default(queued)
   payload        Json      @default("{}")
   priority       Int       @default(10)
@@ -1413,7 +1478,7 @@ model BackgroundJob {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   startedAt      DateTime? @map("started_at") @db.Timestamptz(3)
   completedAt    DateTime? @map("completed_at") @db.Timestamptz(3)
-  @@index([lane, status, availableAt, priority])
+  @@index([lane, executionScope, status, availableAt, queueName, priority], map: "background_jobs_scope_queue_claim_idx")
   @@map("background_jobs")
 }
 
@@ -1509,4 +1574,143 @@ model DownloadPreparation {
   @@unique([actorId, idempotencyKey])
   @@index([status, expiresAt])
   @@map("download_preparations")
+}
+
+model JobQueueState {
+  lane JobLane
+  scope String @db.VarChar(128)
+  lastQueue String @map("last_queue") @db.VarChar(64)
+  consecutive Int @default(0)
+  advanceLeaseId String? @map("advance_lease_id") @db.Uuid
+  priorLastQueue String? @map("prior_last_queue") @db.VarChar(64)
+  priorConsecutive Int? @map("prior_consecutive")
+  @@id([lane, scope])
+  @@map("job_queue_states")
+}
+
+enum SourceAccountTaskStatus {
+  queued
+  running
+  waiting
+  succeeded
+  failed
+}
+
+enum SourcePlatformStatus {
+  unverified
+  healthy
+  auth_paused
+  cooling_down
+}
+
+model SourceFetchAccountTask {
+  id String @id @default(uuid()) @db.Uuid
+  runId String @map("run_id") @db.Uuid
+  run SourceFetchRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  accountId String @map("account_id") @db.Uuid
+  account AuthorExternalAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  platform String @db.VarChar(32)
+  jobId String? @unique @map("job_id") @db.Uuid
+  status SourceAccountTaskStatus @default(queued)
+  credentialGeneration String? @map("credential_generation") @db.VarChar(64)
+  startedAt DateTime? @map("started_at") @db.Timestamptz(3)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  deferredUntil DateTime? @map("deferred_until") @db.Timestamptz(3)
+  failureCode String? @map("failure_code") @db.VarChar(64)
+  @@unique([runId, accountId])
+  @@index([status, deferredUntil])
+  @@index([accountId, status])
+  @@map("source_fetch_account_tasks")
+}
+
+model SourcePlatformState {
+  platform String @id @db.VarChar(32)
+  credentialGeneration String @map("credential_generation") @db.VarChar(64)
+  status SourcePlatformStatus @default(unverified)
+  cooldownUntil DateTime? @map("cooldown_until") @db.Timestamptz(3)
+  errorCode String? @map("error_code") @db.VarChar(64)
+  revision Int @default(0)
+  @@map("source_platform_states")
+}
+
+
+model SourceDiscoveryPost {
+  id                 String @id @default(uuid()) @db.Uuid
+  accountId          String @map("account_id") @db.Uuid
+  account            AuthorExternalAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  platform           String @db.VarChar(32)
+  externalPostId     String @map("external_post_id") @db.VarChar(200)
+  sourceUserId       String @map("source_user_id") @db.VarChar(200)
+  adapterKey         String @map("adapter_key") @db.VarChar(100)
+  actorId            String? @map("actor_id") @db.Uuid
+  discoveredRunId    String @map("discovered_run_id") @db.Uuid
+  windowJson         Json @map("window_json")
+  evidenceJson       Json @default("{}") @map("evidence_json")
+  metadataJson       Json? @map("metadata_json")
+  expectedMediaCount Int? @map("expected_media_count")
+  state              String @default("metadata_pending") @db.VarChar(32)
+  failureCode        String? @map("failure_code") @db.VarChar(64)
+  attempts           Int @default(0)
+  nextRetryAt        DateTime? @map("next_retry_at") @db.Timestamptz(3)
+  revision           Int @default(0)
+  media              SourceDiscoveryMedia[]
+  campaigns          SourceRecoveryCampaign[]
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@unique([accountId, platform, externalPostId])
+  @@index([state, nextRetryAt, accountId])
+  @@map("source_discovery_posts")
+}
+
+model SourceDiscoveryMedia {
+  id              String @id @default(uuid()) @db.Uuid
+  discoveryPostId String @map("discovery_post_id") @db.Uuid
+  discoveryPost   SourceDiscoveryPost @relation(fields: [discoveryPostId], references: [id], onDelete: Restrict)
+  externalMediaId String @map("external_media_id") @db.VarChar(200)
+  orderIndex      Int @map("order_index")
+  metadataJson    Json @map("metadata_json")
+  fileObjectId    String? @map("file_object_id") @db.Uuid
+  fileObject      FileObject? @relation(fields: [fileObjectId], references: [id], onDelete: Restrict)
+  state           String @default("pending") @db.VarChar(32)
+  failureCode     String? @map("failure_code") @db.VarChar(64)
+  attempts        Int @default(0)
+  @@unique([discoveryPostId, externalMediaId])
+  @@index([fileObjectId])
+  @@map("source_discovery_media")
+}
+
+model SourceRecoveryCampaign {
+  scanEpoch       Int? @map("scan_epoch")
+  id              String @id @default(uuid()) @db.Uuid
+  discoveryPostId String @map("discovery_post_id") @db.Uuid
+  discoveryPost   SourceDiscoveryPost @relation(fields: [discoveryPostId], references: [id], onDelete: Restrict)
+  number          Int
+  jobId           String? @unique @map("job_id") @db.Uuid
+  state           String @default("queued") @db.VarChar(32)
+  failureCode     String? @map("failure_code") @db.VarChar(64)
+  startedAt       DateTime @default(now()) @map("started_at") @db.Timestamptz(3)
+  completedAt     DateTime? @map("completed_at") @db.Timestamptz(3)
+  @@unique([discoveryPostId, number])
+  @@index([state, completedAt])
+  @@map("source_recovery_campaigns")
+}
+model ImageAnalysisActivation {
+  id String @id @default("global") @db.VarChar(20)
+  activeModelKey String? @map("active_model_key") @db.VarChar(64)
+  generation Int @default(1)
+  activatedAt DateTime @default(now()) @map("activated_at") @db.Timestamptz(3)
+  historicalPaused Boolean @default(false) @map("historical_paused")
+  @@map("image_analysis_activations")
+}
+
+model ImageAnalysisWorkIntent {
+  mediaId String @map("media_id") @db.Uuid
+  media CandidateMedia @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  modelKey String @map("model_key") @db.VarChar(64)
+  purpose String @db.VarChar(20)
+  activationGeneration Int @map("activation_generation")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@id([mediaId, modelKey])
+  @@index([modelKey, purpose, createdAt])
+  @@map("image_analysis_work_intents")
 }

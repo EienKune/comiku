@@ -1,3 +1,8 @@
+import type { CandidateClassificationScoresDto } from "./classification-scores.dto.js";
+import {
+  AnalysisScheduling,
+  analysisJobModelKey,
+} from "./analysis-scheduling.js";
 import {
   Inject,
   Injectable,
@@ -25,8 +30,120 @@ export class ImageAnalysisService {
     @Inject(IMAGE_ANALYSIS_ADAPTER)
     private readonly model: ActiveImageAnalysisAdapter | null,
   ) {}
+  get scheduling() {
+    return new AnalysisScheduling(this.db, this.jobs);
+  }
   get activeModelKey(): string | null {
     return this.model?.modelKey ?? null;
+  }
+  /** Read-only narrow projection: no evidence, storage URLs, or inference side effects. */
+  async classificationScores(
+    id: string,
+  ): Promise<CandidateClassificationScoresDto> {
+    const candidate = await this.db.candidatePost.findFirst({
+      where: { id, author: { deletedAt: null } },
+      select: { id: true },
+    });
+    if (!candidate) throw new NotFoundException("候选不存在");
+    const model = this.model;
+    const columns = (model?.identity.labels ?? []).map((label) => {
+      const display = model?.labelPresentation?.find(
+        (item) => item.label === label,
+      );
+      return {
+        label,
+        text: display?.text ?? label,
+        tone: display?.tone ?? ("neutral" as const),
+      };
+    });
+    // Rebuild bounded score objects in PostgreSQL, so even a corrupt stored
+    // vector cannot hydrate arbitrary evidence or oversized label strings.
+    const rows = await this.db.$queryRaw<
+      {
+        mediaId: string;
+        status: string | null;
+        result: unknown;
+      }[]
+    >`
+      SELECT m.id AS "mediaId", a.status,
+        CASE WHEN a.status = 'succeeded' THEN jsonb_build_object(
+          'score', CASE WHEN jsonb_typeof(a.result_json->'score') = 'number' THEN a.result_json->'score' END,
+          'predictedClass', CASE WHEN jsonb_typeof(a.result_json->'predictedClass') = 'string'
+            AND length(a.result_json->>'predictedClass') <= 256 THEN a.result_json->'predictedClass' END,
+          'classScores', CASE WHEN jsonb_typeof(a.result_json->'classScores') = 'array' THEN
+            CASE WHEN jsonb_array_length(a.result_json->'classScores') = ${columns.length} THEN
+              (SELECT jsonb_agg(jsonb_build_object(
+                'label', CASE WHEN jsonb_typeof(v->'label') = 'string' AND length(v->>'label') <= 256 THEN v->'label' END,
+                'value', CASE WHEN jsonb_typeof(v->'value') = 'number' THEN v->'value' END
+              ) ORDER BY ordinal) FROM jsonb_array_elements(a.result_json->'classScores') WITH ORDINALITY AS scores(v, ordinal))
+            END END,
+          'evidence', '[]'::jsonb
+        ) END AS result
+      FROM candidate_media m
+      JOIN candidate_posts c ON c.id = m.candidate_post_id
+      JOIN authors author ON author.id = c.author_id AND author.deleted_at IS NULL
+      JOIN file_objects f ON f.id = m.file_object_id
+      LEFT JOIN candidate_media_analyses a ON a.media_id = m.id
+        AND a.model_key = ${model?.modelKey ?? ""}
+        AND a.source_sha256 = f.checksum
+        AND f.lifecycle_status = 'active' AND f.deleted_at IS NULL
+      WHERE m.candidate_post_id = ${id}::uuid
+      ORDER BY m.order_index, m.id
+    `;
+    return {
+      modelKey: model?.modelKey ?? null,
+      columns,
+      images: rows.map((row, index) => {
+        const base = {
+          mediaId: row.mediaId,
+          index: index + 1,
+          scores: null,
+          winner: null,
+        };
+        if (!model) return { ...base, state: "unavailable" };
+        if (row.status === "queued" || row.status === "running")
+          return { ...base, state: "pending" };
+        if (row.status === "failed") return { ...base, state: "failed" };
+        if (row.status === "succeeded") {
+          try {
+            const result = validateImageAnalysisResult(
+              row.result,
+              model.identity.labels,
+            );
+            return {
+              mediaId: row.mediaId,
+              index: index + 1,
+              state: "succeeded",
+              scores: result.classScores.map((item) => item.value),
+              winner: model.identity.labels.indexOf(result.predictedClass),
+            };
+          } catch {
+            /* Malformed or obsolete data is unavailable, never zero. */
+          }
+        }
+        return { ...base, state: "unavailable" };
+      }),
+    };
+  }
+  get candidateQueryPolicy() {
+    return {
+      modelKey: this.activeModelKey,
+      labels: this.model?.identity.labels ?? [],
+      positiveLabels: this.model?.reviewPolicy?.positiveLabels ?? [],
+      minimumConfidence: this.model?.reviewPolicy?.minimumConfidence ?? 0,
+    };
+  }
+  /** Evidence validity is independent from sibling completion and retry state. */
+  hasEvidence(score: number | null, predictions: unknown): boolean {
+    const entries = this.cachedPredictions(predictions);
+    return (
+      score !== null &&
+      Number.isFinite(score) &&
+      score >= 0 &&
+      score <= 1 &&
+      entries.length > 0 &&
+      entries.every((entry) => entry.score !== undefined)
+    );
   }
   /** Cache entries contain only per-image winning classes, merged by maximum confidence. */
   promotesReview(predictions: unknown): boolean {
@@ -107,9 +224,23 @@ export class ImageAnalysisService {
     return entries;
   }
   onModuleInit() {
+    this.jobs.registerQueuePolicy("analysis", "global", {
+      primary: "incremental",
+      secondary: "historical",
+      primaryWeight: 3,
+    });
+    this.jobs.registerQueueAvailability("analysis", "global", async (tx) => {
+      const activation = await this.scheduling.assert(tx, this.activeModelKey);
+      return activation.historicalPaused
+        ? ["incremental"]
+        : ["incremental", "historical"];
+    });
+    this.jobs.registerClaimGate("image_analysis", (job, tx, now) =>
+      this.scheduling.gate(job, tx, now, this.activeModelKey),
+    );
     this.jobs.register("image_analysis", async (job, signal) => {
       const model = this.model;
-      const queuedModel = (job.payload as { modelKey?: string }).modelKey;
+      const queuedModel = analysisJobModelKey(job.payload);
       if (!model || queuedModel !== model.modelKey) {
         await this.retireJob(
           job,
@@ -140,8 +271,8 @@ export class ImageAnalysisService {
         );
         signal.throwIfAborted();
         await this.db.$transaction(async (tx) => {
-          await this.lockCandidate(tx, row.media.candidatePostId);
           await this.jobs.assertCurrentLease(tx);
+          await this.lockCandidate(tx, row.media.candidatePostId);
           await tx.candidateMediaAnalysis.update({
             where: { id: row.id },
             data: {
@@ -159,8 +290,8 @@ export class ImageAnalysisService {
         });
       } catch (error) {
         await this.db.$transaction(async (tx) => {
-          await this.lockCandidate(tx, row.media.candidatePostId);
           await this.jobs.assertCurrentLease(tx);
+          await this.lockCandidate(tx, row.media.candidatePostId);
           await tx.candidateMediaAnalysis.updateMany({
             where: { id: row.id, status: { not: "succeeded" } },
             data: {
@@ -177,12 +308,12 @@ export class ImageAnalysisService {
   /** Historical jobs are terminal, never re-labelled with the currently configured identity. */
   private async retireJob(job: BackgroundJob, reason: string) {
     await this.db.$transaction(async (tx) => {
+      await this.jobs.assertCurrentLease(tx);
       const media = await tx.candidateMedia.findUnique({
         where: { id: job.resourceId },
         select: { candidatePostId: true },
       });
       if (media) await this.lockCandidate(tx, media.candidatePostId);
-      await this.jobs.assertCurrentLease(tx);
       await tx.backgroundJob.updateMany({
         where: { id: job.id, status: "running", leaseId: job.leaseId },
         data: {
@@ -193,7 +324,7 @@ export class ImageAnalysisService {
           lastError: reason,
         },
       });
-      const key = (job.payload as { modelKey?: string }).modelKey;
+      const key = analysisJobModelKey(job.payload);
       const prefix = `image-analysis:${job.resourceId}:`;
       const storedKey =
         typeof job.idempotencyKey === "string" &&
@@ -243,6 +374,7 @@ export class ImageAnalysisService {
     });
     for (const row of rows) {
       await this.db.$transaction(async (tx) => {
+        await this.maintenanceFence(tx, row.mediaId);
         await this.lockCandidate(tx, row.media.candidatePostId);
         const matching = {
           kind: "image_analysis",
@@ -299,6 +431,15 @@ export class ImageAnalysisService {
       });
     }
   }
+  private async maintenanceFence(
+    tx: Prisma.TransactionClient,
+    mediaId: string,
+  ) {
+    await this.jobs.lockScope(tx, "analysis", "global");
+    await this.jobs.lockScope(tx, "heavy", "global");
+    await tx.$queryRaw`SELECT id FROM background_jobs WHERE kind='image_analysis' AND resource_id=${mediaId}::uuid ORDER BY id FOR UPDATE`;
+    await this.scheduling.assert(tx, this.activeModelKey);
+  }
   private async lockCandidate(
     tx: Prisma.TransactionClient,
     candidateId: string,
@@ -320,59 +461,64 @@ export class ImageAnalysisService {
       },
     });
     const results = media.map((m) => m.analyses[0]);
-    const complete =
-      results.length > 0 &&
-      results.every((r) => r?.status === "succeeded" && r.score !== null);
-    let predictions: { label: string; confidence: number; score: number }[] =
-      [];
-    if (complete && this.model?.modelKey === modelKey) {
-      try {
-        const confidenceByLabel = new Map<string, number>();
-        const scoreByLabel = new Map<string, number>();
-        for (const row of results) {
+    const valid: {
+      score: number;
+      predictedClass: string;
+      confidence: number;
+    }[] = [];
+    if (this.model?.modelKey === modelKey) {
+      for (const row of results) {
+        if (row?.status !== "succeeded" || row.score === null) continue;
+        try {
           const result = validateImageAnalysisResult(
-            row!.resultJson,
+            row.resultJson,
             this.model.identity.labels,
           );
-          const confidence = result.classScores.find(
-            (score) => score.label === result.predictedClass,
-          )!.value;
-          const score = row!.score!;
-          if (!Number.isFinite(score) || score < 0 || score > 1)
-            throw Error("Invalid cached ranking score");
-          scoreByLabel.set(
-            result.predictedClass,
-            Math.max(scoreByLabel.get(result.predictedClass) ?? 0, score),
-          );
-          confidenceByLabel.set(
-            result.predictedClass,
-            Math.max(
-              confidenceByLabel.get(result.predictedClass) ?? 0,
-              confidence,
-            ),
-          );
+          if (!Number.isFinite(row.score) || row.score < 0 || row.score > 1)
+            continue;
+          valid.push({
+            score: row.score,
+            predictedClass: result.predictedClass,
+            confidence: result.classScores.find(
+              (entry) => entry.label === result.predictedClass,
+            )!.value,
+          });
+        } catch {
+          // A malformed sibling provides no evidence and cannot erase valid images.
         }
-        predictions = this.model.identity.labels.flatMap((label) => {
-          const confidence = confidenceByLabel.get(label);
-          return confidence === undefined
-            ? []
-            : [{ label, confidence, score: scoreByLabel.get(label)! }];
-        });
-      } catch {
-        // Historical malformed results must never promote a candidate for review.
       }
     }
+    const complete = results.length > 0 && valid.length === results.length;
+    const predictions = (
+      this.model?.modelKey === modelKey ? this.model.identity.labels : []
+    ).flatMap((label) => {
+      const matches = valid.filter((entry) => entry.predictedClass === label);
+      return matches.length
+        ? [
+            {
+              label,
+              confidence: Math.max(...matches.map((entry) => entry.confidence)),
+              score: Math.max(...matches.map((entry) => entry.score)),
+            },
+          ]
+        : [];
+    });
     await tx.candidatePost.update({
       where: { id: candidateId },
       data: {
         analysisModelKey: modelKey,
+        // Without the configured taxonomy this is not a completed reconstruction.
+        // Re-enabling the same key must rebuild its persisted successful evidence.
+        analysisSummaryVersion: this.model?.modelKey === modelKey ? 1 : 0,
         analysisState: complete
           ? "succeeded"
-          : results.some((r) => r?.status === "failed")
+          : results.some((r) => r?.status === "failed") ||
+              results.filter((r) => r?.status === "succeeded").length >
+                valid.length
             ? "failed"
             : "queued",
-        analysisScore: complete
-          ? Math.max(...results.map((r) => r!.score!))
+        analysisScore: valid.length
+          ? Math.max(...valid.map((entry) => entry.score))
           : null,
         analysisPredictions: predictions,
       },
@@ -387,19 +533,7 @@ export class ImageAnalysisService {
         OR: [
           { analysisModelKey: null },
           { analysisModelKey: { not: modelKey } },
-          { analysisPredictions: { equals: Prisma.DbNull } },
-          {
-            analysisState: "succeeded",
-            AND: [
-              { analysisPredictions: { not: [] } },
-              {
-                analysisPredictions: {
-                  path: ["0", "score"],
-                  equals: Prisma.DbNull,
-                },
-              },
-            ],
-          },
+          { analysisSummaryVersion: { lt: 1 } },
         ],
         media: { some: { analyses: { some: { modelKey } } } },
       },
@@ -409,12 +543,16 @@ export class ImageAnalysisService {
     });
     for (const candidate of candidates) {
       await this.db.$transaction(async (tx) => {
+        await this.jobs.lockScope(tx, "analysis", "global");
+        await this.scheduling.assert(tx, this.activeModelKey);
         await this.lockCandidate(tx, candidate.id);
         await this.aggregate(tx, candidate.id, modelKey);
       });
     }
   }
   async schedulePending(candidateId?: string) {
+    const activation = await this.scheduling.ensure(this.activeModelKey);
+    await this.scheduling.migrateQueued(this.activeModelKey);
     await this.reconcileRetired(candidateId);
     if (!this.model) return;
     const model = this.model;
@@ -452,6 +590,7 @@ export class ImageAnalysisService {
           include: { media: { select: { candidatePostId: true } } },
         });
         if (!row) return;
+        await this.maintenanceFence(tx, row.mediaId);
         await this.lockCandidate(tx, row.media.candidatePostId);
         if (
           !(await tx.backgroundJob.count({
@@ -471,53 +610,22 @@ export class ImageAnalysisService {
         await this.aggregate(tx, row.media.candidatePostId, model.modelKey);
       });
     }
-    const media = await this.db.candidateMedia.findMany({
-      where: {
-        ...(candidateId ? { candidatePostId: candidateId } : {}),
-        analyses: { none: { modelKey: model.modelKey } },
-        fileObject: { lifecycleStatus: "active", deletedAt: null },
-        candidatePost: { author: { deletedAt: null } },
-      },
-      include: { fileObject: true },
-      orderBy: { createdAt: "asc" },
-      take: 20,
-    });
-    for (const item of media) {
-      await this.db.$transaction(async (tx) => {
-        await this.lockCandidate(tx, item.candidatePostId);
-        await tx.candidateMediaAnalysis.createMany({
-          data: {
-            mediaId: item.id,
-            modelKey: model.modelKey,
-            modelRevision: model.identity.modelRevision,
-            decisionVersion: model.identity.decisionVersion,
-            sourceSha256: item.fileObject.checksum,
-          },
-          skipDuplicates: true,
-        });
-        await this.jobs.enqueue(
-          {
-            kind: "image_analysis",
-            resourceId: item.id,
-            idempotencyKey: `image-analysis:${item.id}:${model.modelKey}`,
-            lane: "heavy",
-            priority: 0,
-            payload: {
-              modelKey: model.modelKey,
-              identity: { ...model.identity },
-            },
-          },
-          tx,
-        );
-        await this.aggregate(tx, item.candidatePostId, model.modelKey);
-      });
-    }
+    await this.scheduling.discover(
+      model,
+      activation,
+      (tx, id, key) => this.aggregate(tx, id, key),
+      candidateId,
+    );
   }
   async retryFailed(candidateId: string) {
     if (!this.model) throw new BadRequestException("识别服务尚未配置");
     const model = this.model;
     await this.schedulePending(candidateId);
     return this.db.$transaction(async (tx) => {
+      await this.jobs.lockScope(tx, "analysis", "global");
+      await this.jobs.lockScope(tx, "heavy", "global");
+      await tx.$queryRaw`SELECT j.id FROM background_jobs j JOIN candidate_media m ON m.id=j.resource_id WHERE j.kind='image_analysis' AND m.candidate_post_id=${candidateId}::uuid ORDER BY j.id FOR UPDATE OF j`;
+      const activation = await this.scheduling.assert(tx, this.activeModelKey);
       await this.lockCandidate(tx, candidateId);
       if (
         !(await tx.candidatePost.count({
@@ -534,6 +642,15 @@ export class ImageAnalysisService {
       });
       let queued = 0;
       for (const row of rows) {
+        const media = await tx.candidateMedia.findUniqueOrThrow({
+          where: { id: row.mediaId },
+        });
+        const intent = await this.scheduling.intent(
+          tx,
+          media,
+          model.modelKey,
+          activation,
+        );
         const changed = await tx.backgroundJob.updateMany({
           where: {
             idempotencyKey: `image-analysis:${row.mediaId}:${model.modelKey}`,
@@ -541,6 +658,9 @@ export class ImageAnalysisService {
           },
           data: {
             status: "queued",
+            lane: "analysis",
+            executionScope: "global",
+            queueName: intent.purpose,
             attempts: 0,
             availableAt: new Date(),
             completedAt: null,

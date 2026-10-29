@@ -1,3 +1,12 @@
+import { CandidateClassificationScores } from "./CandidateClassificationScores";
+import {
+  useCandidateReviewSession,
+  type CandidateBaseFilter,
+} from "./use-candidate-review-session";
+import {
+  selectCandidates,
+  settleCandidateSelection,
+} from "./candidate-selection";
 import { downloadPrepared, uploadDirect, pollTransfer } from "./transfers-api";
 import { useImageUrl } from "../../components/use-image-url";
 import { refreshReviewViews } from "./review-cache";
@@ -17,6 +26,7 @@ import {
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
 import {
+  RefreshCw,
   ArrowLeft,
   ArrowDown,
   ArrowUp,
@@ -2660,9 +2670,9 @@ function CandidateAuthorIdentity({ candidate }: { candidate: Candidate }) {
 function CandidateGridSection({
   status,
   group,
-  language,
-  fetchedRange,
-  search,
+  baseFilter,
+  sessionId,
+  onExpired,
   selected,
   onToggle,
   onSelectLoaded,
@@ -2673,10 +2683,10 @@ function CandidateGridSection({
 }: {
   status: components["schemas"]["CandidateStatus"];
   group?: CandidateTriageGroup;
-  language: SourceLanguage | "all";
-  fetchedRange: string;
-  search: string;
-  selected: Record<string, number>;
+  baseFilter: CandidateBaseFilter;
+  sessionId?: string;
+  onExpired: (id: string) => Promise<void>;
+  selected: ReadonlyMap<string, number>;
   onToggle: (candidate: Candidate) => void;
   onSelectLoaded: (candidates: Candidate[]) => void;
   onClassify: (
@@ -2693,33 +2703,33 @@ function CandidateGridSection({
       "candidates",
       status,
       group ?? "timeline",
-      language,
-      fetchedRange,
-      search,
+      sessionId,
+      baseFilter,
     ],
+    enabled: Boolean(sessionId),
     initialPageParam: null as string | null,
-    queryFn: async ({ pageParam }) =>
-      unwrap(
-        await client.GET("/api/candidates", {
-          params: {
-            query: {
-              status,
-              ...(group ? { triageGroup: group } : {}),
-              ...(language === "all" ? {} : { sourceLanguage: language }),
-              ...(search.trim() ? { search: search.trim() } : {}),
-              ...(fetchedRange === "all"
-                ? {}
-                : {
-                    fetchedAfter: new Date(
-                      Date.now() - Number(fetchedRange) * 24 * 60 * 60 * 1000,
-                    ).toISOString(),
-                  }),
-              cursor: pageParam ?? undefined,
-              limit: 24,
-            },
+    queryFn: async ({ pageParam, signal }) => {
+      const response = await client.GET("/api/candidates", {
+        signal,
+        params: {
+          query: {
+            ...baseFilter,
+            status,
+            reviewSessionId: sessionId,
+            ...(group ? { triageGroup: group } : {}),
+            cursor: pageParam ?? undefined,
+            limit: 24,
           },
-        }),
-      ),
+        },
+      });
+      if (
+        (response.response.status === 410 ||
+          response.response.status === 409) &&
+        sessionId
+      )
+        await onExpired(sessionId);
+      return unwrap(response);
+    },
     getNextPageParam: (page) => page.nextCursor,
   });
   const items = query.data?.pages.flatMap((page) => page.items) ?? [];
@@ -2750,9 +2760,11 @@ function CandidateGridSection({
                 <p>{candidate.text || "此原帖没有文字说明。"}</p>
                 <div className="workspace-tags">
                   {candidate.classificationTags?.map((category) => (
-                    <Badge key={category.label} tone={category.tone}>
-                      {category.text}
-                    </Badge>
+                    <CandidateClassificationScores
+                      key={`${candidate.id}:${category.label}`}
+                      candidateId={candidate.id}
+                      category={category}
+                    />
                   ))}
                   <Badge
                     tone={
@@ -2781,7 +2793,7 @@ function CandidateGridSection({
                     <label className="account-checkbox">
                       <input
                         type="checkbox"
-                        checked={candidate.id in selected}
+                        checked={selected.has(candidate.id)}
                         onChange={() => onToggle(candidate)}
                       />
                       选择
@@ -2826,7 +2838,8 @@ function CandidateGridSection({
                         : "标记为照片"}
                     </Button>
                   )}
-                  {candidate.reviewPriority === "failed" &&
+                  {(candidate.canRetryAnalysis ??
+                    candidate.reviewPriority === "failed") &&
                     user.permissions.includes("candidates:manage") && (
                       <Button
                         size="sm"
@@ -2905,11 +2918,29 @@ export function CandidatesPage() {
   const [language, setLanguage] = useState<SourceLanguage | "all">("all");
   const [fetchedRange, setFetchedRange] = useState("all");
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<Record<string, number>>({});
+  const [selected, setSelected] = useState<Map<string, number>>(
+    () => new Map(),
+  );
   const [showUpload, setShowUpload] = useState(false);
   const [orderingCandidateId, setOrderingCandidateId] = useState<string | null>(
     null,
   );
+  const baseFilter = useMemo<CandidateBaseFilter>(
+    () => ({
+      status: status as components["schemas"]["CandidateStatus"],
+      ...(language === "all" ? {} : { sourceLanguage: language }),
+      ...(search.trim() ? { search: search.trim() } : {}),
+      ...(fetchedRange === "all"
+        ? {}
+        : {
+            fetchedAfter: new Date(
+              Date.now() - Number(fetchedRange) * 86400000,
+            ).toISOString(),
+          }),
+    }),
+    [status, language, search, fetchedRange],
+  );
+  const review = useCandidateReviewSession(baseFilter);
   const runCandidateAction = action.run;
   const setCandidateSuccess = action.setSuccess;
   async function retryAnalysis(candidate: Candidate) {
@@ -2943,7 +2974,7 @@ export function CandidatesPage() {
   }
   const batch = useCallback(
     async (kind: components["schemas"]["CandidateAction"]) => {
-      const items = Object.entries(selected).map(([id, expectedRevision]) => ({
+      const items = [...selected].map(([id, expectedRevision]) => ({
         id,
         expectedRevision,
       }));
@@ -2960,7 +2991,9 @@ export function CandidatesPage() {
           queryClient.invalidateQueries({ queryKey: ["candidates"] }),
           invalidateWorkViews(),
         ]);
-        setSelected({});
+        setSelected((current) =>
+          settleCandidateSelection(current, result.results),
+        );
         setCandidateSuccess(
           failures.length
             ? `${result.results.length - failures.length} 项成功，${failures.length} 项需重新检查`
@@ -2970,7 +3003,7 @@ export function CandidatesPage() {
     },
     [runCandidateAction, selected, setCandidateSuccess],
   );
-  const selectedCount = Object.keys(selected).length;
+  const selectedCount = selected.size;
   const topbarRegistration = useMemo(
     () =>
       selectedCount
@@ -3008,7 +3041,7 @@ export function CandidatesPage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => setSelected({})}
+                  onClick={() => setSelected(new Map())}
                 >
                   清除选择
                 </Button>
@@ -3031,7 +3064,7 @@ export function CandidatesPage() {
           value={search}
           onChange={(event) => {
             setSearch(event.target.value);
-            setSelected({});
+            setSelected(new Map());
           }}
         />
         <SelectField
@@ -3039,7 +3072,7 @@ export function CandidatesPage() {
           value={status}
           onValueChange={(value) => {
             setStatus(value);
-            setSelected({});
+            setSelected(new Map());
           }}
         >
           <option value="pending">待处理</option>
@@ -3051,7 +3084,7 @@ export function CandidatesPage() {
           value={language}
           onValueChange={(value) => {
             setLanguage(value as SourceLanguage | "all");
-            setSelected({});
+            setSelected(new Map());
           }}
         >
           <option value="all">全部语言</option>
@@ -3064,7 +3097,7 @@ export function CandidatesPage() {
           value={fetchedRange}
           onValueChange={(value) => {
             setFetchedRange(value);
-            setSelected({});
+            setSelected(new Map());
           }}
         >
           <option value="all">全部时间</option>
@@ -3072,6 +3105,16 @@ export function CandidatesPage() {
           <option value="7">最近 7 天</option>
           <option value="30">最近 30 天</option>
         </SelectField>
+        <Button
+          variant="secondary"
+          leadingIcon={<RefreshCw size={16} />}
+          title="纳入新候选与最新排序，保留当前选择"
+          loading={review.refreshing}
+          disabled={review.isPending}
+          onClick={() => void review.refresh()}
+        >
+          刷新列表
+        </Button>
         {user.permissions.includes("candidates:manage") && (
           <>
             <Button
@@ -3097,7 +3140,7 @@ export function CandidatesPage() {
         />
       )}
       {user.permissions.includes("authors:admin") && <CandidateTagGroupPanel />}
-      <Feedback error={action.error} success={action.success} />
+      <Feedback error={review.error ?? action.error} success={action.success} />
       {status === "pending" ? (
         <div className="workspace-candidate-sections">
           {candidateTriageSections.map((section) => (
@@ -3105,28 +3148,20 @@ export function CandidatesPage() {
               key={section.value}
               status="pending"
               group={section.value}
-              language={language}
-              fetchedRange={fetchedRange}
-              search={search}
+              baseFilter={baseFilter}
+              sessionId={review.session?.sessionId}
+              onExpired={review.refresh}
               selected={selected}
               onToggle={(candidate) =>
                 setSelected((current) => {
-                  const next = { ...current };
-                  if (candidate.id in next) delete next[candidate.id];
-                  else next[candidate.id] = candidate.revision;
+                  const next = new Map(current);
+                  if (next.has(candidate.id)) next.delete(candidate.id);
+                  else next.set(candidate.id, candidate.revision);
                   return next;
                 })
               }
               onSelectLoaded={(candidates) =>
-                setSelected((current) => ({
-                  ...current,
-                  ...Object.fromEntries(
-                    candidates.map((candidate) => [
-                      candidate.id,
-                      candidate.revision,
-                    ]),
-                  ),
-                }))
+                setSelected((current) => selectCandidates(current, candidates))
               }
               onClassify={(candidate, label) => void classify(candidate, label)}
               onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
@@ -3142,15 +3177,15 @@ export function CandidatesPage() {
       ) : (
         <CandidateGridSection
           status={status as components["schemas"]["CandidateStatus"]}
-          language={language}
-          fetchedRange={fetchedRange}
-          search={search}
+          baseFilter={baseFilter}
+          sessionId={review.session?.sessionId}
+          onExpired={review.refresh}
           selected={selected}
           onToggle={(candidate) =>
             setSelected((current) => {
-              const next = { ...current };
-              if (candidate.id in next) delete next[candidate.id];
-              else next[candidate.id] = candidate.revision;
+              const next = new Map(current);
+              if (next.has(candidate.id)) next.delete(candidate.id);
+              else next.set(candidate.id, candidate.revision);
               return next;
             })
           }

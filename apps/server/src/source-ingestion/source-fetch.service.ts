@@ -1,5 +1,18 @@
-import { JobsService } from "../jobs/jobs.service.js";
+import {
+  SourceDiscoveryService,
+  stableSourceAssetIdentity,
+} from "./source-discovery.service.js";
+import { SourceRecoveryService } from "./source-recovery.service.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { SourceAccountTasks } from "./source-account-tasks.js";
+import {
+  SourcePlatformStates,
+  platformFailure,
+} from "./source-platform-state.js";
+import type { BackgroundJob } from "../generated/prisma/client.js";
+import { JobDeferred, JobsService } from "../jobs/jobs.service.js";
 import { jsonObject, SourceResponseError } from "./source-response.js";
+import { sourceDiagnostic } from "./source-diagnostics.js";
 import {
   BadRequestException,
   ConflictException,
@@ -32,10 +45,13 @@ import type {
   SourceFetchRunDto,
 } from "./source-fetch.dto.js";
 
+class RecoveryMediaIncompleteError extends Error {}
+
 const SOURCE_LEASE_MS = 30 * 60_000;
 const SOURCE_LEASE_RENEW_MS = 5 * 60_000;
 
 const runDetails = {
+  accountTasks: true,
   items: {
     include: {
       externalAccount: {
@@ -55,7 +71,10 @@ type Account = Prisma.AuthorExternalAccountGetPayload<{
     adapterStates: { omit: { discoveryCheckpointJson: true } };
   };
 }>;
-type FetchState = Omit<SourceAdapterState, "discoveryCheckpointJson">;
+type FetchState = Omit<SourceAdapterState, "discoveryCheckpointJson"> & {
+  scanEpoch?: number;
+  scanOwnerJobId?: string;
+};
 type ProgressRun = Pick<
   SourceFetchRun,
   "id" | "trigger" | "status" | "startedAt" | "completedAt"
@@ -69,10 +88,25 @@ type ProgressRun = Pick<
   leaseUntil: Date | null;
   isActive: boolean;
   isLastManual: boolean;
+  targetCount?: bigint;
+  completedTargets?: bigint;
+  waitingTargets?: bigint;
+  waitingReason?: string | null;
 };
 
 @Injectable()
 export class SourceFetchService {
+  readonly platforms: SourcePlatformStates;
+  private readonly tasks: SourceAccountTasks;
+  readonly discovery: SourceDiscoveryService;
+  readonly recovery: SourceRecoveryService;
+  private readonly accountExecution = new AsyncLocalStorage<{
+    job: BackgroundJob;
+    platform: string;
+    generation: string;
+    campaignId?: string;
+    campaign?: number;
+  }>();
   constructor(
     @Inject(JobsService) private readonly jobs: JobsService,
     @Inject(PrismaService) private readonly db: PrismaService,
@@ -81,57 +115,418 @@ export class SourceFetchService {
     @Inject(MEDIA_DOWNLOADER) private readonly downloader: MediaDownloader,
     @Inject(FileObjectsService) private readonly files: FileObjectsService,
     @Inject(ENVIRONMENT) private readonly environment: Environment,
-  ) {}
+  ) {
+    this.platforms = new SourcePlatformStates(db, jobs, environment);
+    this.tasks = new SourceAccountTasks(db, jobs);
+    this.discovery = new SourceDiscoveryService(db);
+    this.recovery = new SourceRecoveryService(db, jobs, this.platforms);
+  }
 
   onModuleInit() {
-    this.jobs.register("source_fetch", async (job, signal) => {
-      const payload = job.payload as { accountIds: string[] };
-      const run = await this.db.sourceFetchRun.findUnique({
-        where: { id: job.resourceId },
+    this.recovery.register((job, campaign, signal) =>
+      this.recoverPost(job, campaign, signal),
+    );
+    for (const platform of ["x", "pixiv"])
+      this.jobs.registerQueuePolicy("network", `source:${platform}`, {
+        primary: "scan",
+        secondary: "recovery",
+        primaryWeight: 3,
       });
-      if (!run || run.completedAt) return;
-      try {
-        await this.run(
-          run.trigger,
-          run.requestedById,
-          payload.accountIds,
-          run.id,
-          signal,
-        );
-      } catch (error) {
-        if (error instanceof BadRequestException || job.attempts >= 3) {
+    // Pre-upgrade queued whole-run jobs must be drained on the old runtime or
+    // explicitly retired by maintenance; never run that handler alongside scopes.
+    this.jobs.register("source_fetch", async () => {
+      throw new Error("Legacy source batch requires drain");
+    });
+    this.jobs.registerClaimGate(
+      "source_fetch",
+      async () =>
+        new JobDeferred(new Date(Date.now() + 900000), "scope_paused"),
+    );
+    this.jobs.register("source_account_fetch", (job, signal) =>
+      this.runAccountTask(job, signal),
+    );
+    this.jobs.registerClaimGate("source_account_fetch", (job, tx, now) =>
+      this.platforms.claim(job, tx, now),
+    );
+  }
+
+  private async runAccountTask(job: BackgroundJob, signal: AbortSignal) {
+    const task = await this.db.sourceFetchAccountTask.findUnique({
+      where: { id: job.resourceId },
+      include: { run: true },
+    });
+    if (!task || task.jobId !== job.id || task.completedAt) return;
+    const payload = jsonObject(job.payload);
+    const generation = payload?.credentialGeneration;
+    if (typeof generation !== "string" || payload?.platform !== task.platform)
+      throw new Error("Unpinned source task");
+    await this.accountExecution.run(
+      { job, platform: task.platform, generation },
+      async () => {
+        try {
+          await this.assertActor(task.run.requestedById);
+          await this.platforms.beforeNetwork(task.platform, generation);
+          let accounts = await this.accounts([task.accountId]);
+          if (accounts.length !== 1)
+            throw new BadRequestException("来源账号或授权已失效");
+          await this.ensureAdapterStates(accounts);
+          accounts = await this.accounts([task.accountId]);
+          if (accounts.length !== 1)
+            throw new BadRequestException("来源账号或授权已失效");
           await this.db.$transaction(async (tx) => {
             await this.jobs.assertCurrentLease(tx);
-            await tx.sourceAdapterState.updateMany({
-              where: { fetchLeaseId: run.id },
-              data: { fetchLeaseId: null, fetchLeaseUntil: null },
-            });
+            await this.platforms.actor(tx, task.run.requestedById);
             await tx.sourceFetchRunItem.updateMany({
-              where: { runId: run.id, status: "running" },
+              where: {
+                runId: task.runId,
+                externalAccountId: task.accountId,
+                status: { not: "succeeded" },
+              },
               data: {
                 status: "failed",
+                errorCode: "interrupted",
+                errorMessage: "账号任务恢复",
                 completedAt: new Date(),
-                errorCode:
-                  error instanceof BadRequestException
-                    ? "actor_unavailable"
-                    : "worker_attempts_exhausted",
-                errorMessage: "任务未完成，请检查权限或后台运行情况后重试",
               },
             });
-            await tx.sourceFetchRun.update({
-              where: { id: run.id },
-              data: { status: "failed", completedAt: new Date() },
+            await tx.sourceFetchRun.updateMany({
+              where: { id: task.runId, completedAt: null },
+              data: { status: "running" },
             });
           });
-          return;
+          signal.throwIfAborted();
+          await this.fetchWithFallback(
+            task.runId,
+            accounts[0],
+            task.run.requestedById,
+            signal,
+          );
+          signal.throwIfAborted();
+          const succeeded = await this.db.sourceFetchRunItem.count({
+            where: {
+              runId: task.runId,
+              externalAccountId: task.accountId,
+              status: "succeeded",
+            },
+          });
+          if (!succeeded) throw new Error("No account adapter completed");
+          const gaps = await this.db.sourceFetchRunItem.count({
+            where: {
+              runId: task.runId,
+              externalAccountId: task.accountId,
+              errorCode: "discovery_gaps",
+            },
+          });
+          await this.db.$transaction(async (tx) => {
+            await this.jobs.assertCurrentLease(tx);
+            await this.platforms.actor(tx, task.run.requestedById);
+            await tx.sourceFetchAccountTask.update({
+              where: { id: task.id },
+              data: {
+                status: gaps ? "failed" : "succeeded",
+                completedAt: new Date(),
+                failureCode: gaps ? "discovery_gaps" : null,
+                deferredUntil: null,
+              },
+            });
+            await this.tasks.aggregate(tx, task.runId);
+          });
+        } catch (error) {
+          if (signal.aborted) throw error;
+          await this.db.$transaction(async (tx) => {
+            await this.jobs.assertCurrentLease(tx);
+            const deferred = error instanceof JobDeferred;
+            const terminal =
+              !deferred &&
+              (job.attempts >= 3 || error instanceof BadRequestException);
+            await tx.sourceFetchAccountTask.update({
+              where: { id: task.id },
+              data: {
+                status: deferred ? "waiting" : terminal ? "failed" : "queued",
+                completedAt: terminal ? new Date() : null,
+                deferredUntil: deferred ? error.retryAt : null,
+                failureCode: deferred
+                  ? error.reason
+                  : terminal
+                    ? "account_failed"
+                    : "retry_pending",
+              },
+            });
+            await this.tasks.aggregate(tx, task.runId);
+          });
+          if (error instanceof BadRequestException) return;
+          throw error;
         }
-        throw error;
-      }
-    });
+      },
+    );
+  }
+
+  private async recoverPost(
+    job: BackgroundJob,
+    campaign: Prisma.SourceRecoveryCampaignGetPayload<{
+      include: { discoveryPost: true };
+    }>,
+    signal: AbortSignal,
+  ) {
+    const post = campaign.discoveryPost;
+    const payload = jsonObject(job.payload);
+    const generation = payload?.credentialGeneration;
+    if (typeof generation !== "string" || payload?.platform !== post.platform)
+      throw new Error("Unpinned recovery task");
+    await this.accountExecution.run(
+      {
+        job,
+        platform: post.platform,
+        generation,
+        campaignId: campaign.id,
+        campaign: campaign.number,
+      },
+      async () => {
+        await this.assertActor(post.actorId);
+        const account = (await this.accounts([post.accountId]))[0];
+        if (!account || account.externalUserId !== post.sourceUserId)
+          throw new BadRequestException("Recovery source identity changed");
+        const state: FetchState | undefined = account.adapterStates.find(
+          (s) => s.adapterKey === post.adapterKey,
+        );
+        const client = this.sources
+          .forPlatform(post.platform)
+          .find((s) => s.adapterKey === post.adapterKey && s.available);
+        if (!state?.enabled || !client?.fetchPost)
+          throw new BadRequestException("Recovery adapter unavailable");
+        const leased = await this.claimSource(
+          account,
+          state,
+          campaign.id,
+          post.actorId,
+          new Date(),
+          campaign.id,
+        );
+        if (!leased.count)
+          throw new JobDeferred(new Date(Date.now() + 60000), "capacity");
+        let networkVerified = false;
+        const diagnosticContext: Record<string, unknown> = {
+          stage: "recovery_prepare",
+          postId: post.externalPostId,
+        };
+        try {
+          const current = await this.db.sourceDiscoveryPost.findUniqueOrThrow({
+            where: { id: post.id },
+            include: { media: true },
+          });
+          if (current.state === "needs_attention")
+            throw new RecoveryMediaIncompleteError("Discovery needs attention");
+          if (!["complete", "excluded"].includes(current.state)) {
+            let content =
+              current.metadataJson as unknown as NormalizedSourceContent | null;
+            if (!content || current.media.some((m) => !m.fileObjectId)) {
+              await this.platforms.beforeNetwork(post.platform, generation);
+              signal.throwIfAborted();
+              diagnosticContext.stage = "fetch_post";
+              const result = await client.fetchPost(
+                {
+                  externalUserId: account.externalUserId,
+                  handle: account.handle ?? undefined,
+                },
+                post.externalPostId,
+                signal,
+              );
+              signal.throwIfAborted();
+              networkVerified = true;
+              if (result.kind === "excluded") {
+                if (result.postId !== post.externalPostId)
+                  throw new Error("Recovery exclusion identity changed");
+                await this.db.$transaction(async (tx) => {
+                  await this.lockSource(tx, account, state, post.actorId);
+                  await this.assertEligible(account, state, campaign.id, tx);
+                  await tx.sourceDiscoveryPost.update({
+                    where: { id: post.id },
+                    data: {
+                      state: "excluded",
+                      failureCode: result.reason,
+                      nextRetryAt: null,
+                      revision: { increment: 1 },
+                    },
+                  });
+                  await this.platforms.outcome(tx, post.platform, generation);
+                  await this.recovery.finish(tx, campaign, true);
+                });
+                return;
+              }
+              content = result.item;
+              diagnosticContext.stage = "validate_post";
+              if (content.externalContentId !== post.externalPostId)
+                throw new Error("Recovery returned a different post");
+              const window = jsonObject(post.windowJson);
+              const at = Date.parse(content.publishedAt);
+              if (!Number.isFinite(at))
+                throw new Error("Recovery publication timestamp missing");
+              const excluded =
+                content.type === "repost" ||
+                !content.ownMedia.length ||
+                (typeof window?.startTime === "string" &&
+                  at < Date.parse(window.startTime)) ||
+                (typeof window?.endTime === "string" &&
+                  at >= Date.parse(window.endTime));
+              await this.db.$transaction(async (tx) => {
+                await this.lockSource(tx, account, state, post.actorId);
+                await this.assertEligible(account, state, campaign.id, tx);
+                if (excluded)
+                  await tx.sourceDiscoveryPost.update({
+                    where: { id: post.id },
+                    data: {
+                      state: "excluded",
+                      failureCode: "outside_window_or_unsupported",
+                      nextRetryAt: null,
+                      revision: { increment: 1 },
+                    },
+                  });
+                else
+                  await this.discovery.record(
+                    tx,
+                    {
+                      accountId: account.id,
+                      platform: post.platform,
+                      sourceUserId: account.externalUserId,
+                      adapterKey: post.adapterKey,
+                      actorId: post.actorId,
+                      discoveredRunId: post.discoveredRunId,
+                      windowJson: post.windowJson as Prisma.InputJsonValue,
+                    },
+                    content!,
+                  );
+              });
+              if (excluded) content = null;
+            }
+            if (content) {
+              const saved = await this.saveCandidate(
+                account,
+                state,
+                client,
+                content,
+                post.actorId,
+                campaign.id,
+                signal,
+                this.sourceLeaseKeeper(
+                  account,
+                  state,
+                  campaign.id,
+                  post.actorId,
+                ),
+                diagnosticContext,
+              );
+              if (saved.pending)
+                throw new RecoveryMediaIncompleteError(
+                  "Recovery media remains incomplete",
+                );
+            }
+          }
+          await this.db.$transaction(async (tx) => {
+            await this.lockSource(tx, account, state, post.actorId);
+            await this.assertEligible(account, state, campaign.id, tx);
+            if (networkVerified)
+              await this.platforms.outcome(tx, post.platform, generation);
+            await this.recovery.finish(tx, campaign, true);
+          });
+        } catch (error) {
+          signal.throwIfAborted();
+          if (error instanceof JobDeferred) throw error;
+          const shared = platformFailure(error, new Date());
+          if (shared) {
+            await this.db.$transaction(async (tx) => {
+              await this.lockSource(tx, account, state, post.actorId);
+              await this.assertEligible(account, state, campaign.id, tx);
+              await this.platforms.outcome(
+                tx,
+                post.platform,
+                generation,
+                error,
+              );
+            });
+            console.info(
+              JSON.stringify({
+                scope: "source_recovery",
+                event: "platform_failed",
+                ...sourceDiagnostic(error, {
+                  ...diagnosticContext,
+                  ...this.jobs.diagnosticContext?.(),
+                  campaignId: campaign.id,
+                  campaign: campaign.number,
+                  accountId: account.id,
+                  platform: post.platform,
+                  adapter: post.adapterKey,
+                }),
+              }),
+            );
+            throw new JobDeferred(
+              shared.cooldownUntil ?? new Date(Date.now() + 900000),
+              shared.status === "auth_paused"
+                ? "scope_paused"
+                : "platform_cooldown",
+            );
+          }
+          if (!(error instanceof RecoveryMediaIncompleteError))
+            console.info(
+              JSON.stringify({
+                scope: "source_recovery",
+                event: "recovery_failed",
+                ...sourceDiagnostic(error, {
+                  ...diagnosticContext,
+                  ...this.jobs.diagnosticContext?.(),
+                  campaignId: campaign.id,
+                  campaign: campaign.number,
+                  accountId: account.id,
+                  platform: post.platform,
+                  adapter: post.adapterKey,
+                }),
+              }),
+            );
+          // JobsService retries the same campaign up to three executions. Reconcile
+          // settles exhausted/crashed attempts exactly once, including last-attempt death.
+          throw error;
+        } finally {
+          await this.db.$transaction(async (tx) => {
+            await this.lockSource(tx, account, state, post.actorId, true);
+            const released = await tx.sourceAccountScanState.updateMany({
+              where: {
+                accountId: account.id,
+                epoch: state.scanEpoch ?? -1,
+                leaseOwnerJobId: job.id,
+              },
+              data: { leaseOwnerJobId: null, leaseUntil: null },
+            });
+            if (released.count)
+              await tx.sourceAdapterState.updateMany({
+                where: {
+                  id: state.id,
+                  revision: state.revision,
+                  fetchLeaseId: campaign.id,
+                },
+                data: { fetchLeaseId: null, fetchLeaseUntil: null },
+              });
+          });
+        }
+      },
+    );
   }
 
   async reconcileExhausted() {
+    await this.recovery.reconcile();
     const now = new Date();
+    const terminalTasks = await this.db.$queryRaw<
+      { id: string; jobId: string; runId: string; accountId: string }[]
+    >`
+      SELECT t.id,t.job_id AS "jobId",t.run_id AS "runId",t.account_id AS "accountId"
+      FROM source_fetch_account_tasks t JOIN background_jobs j ON j.id=t.job_id
+      WHERE t.completed_at IS NULL AND (j.status='failed' OR
+        (j.status='queued' AND j.attempts>=3) OR
+        (j.status='running' AND j.attempts>=3 AND (j.lease_until IS NULL OR j.lease_until<=${now})))
+      ORDER BY t.id LIMIT 100
+    `;
+    for (const task of terminalTasks)
+      await this.db.$transaction((tx) =>
+        this.settleAccountTerminal(tx, task, now),
+      );
     const runs = await this.db.sourceFetchRun.findMany({
       where: { completedAt: null },
       select: { id: true },
@@ -150,6 +545,69 @@ export class SourceFetchService {
       await this.db.$transaction((tx) =>
         this.settleTerminalJob(tx, job.id, now),
       );
+  }
+
+  private async settleAccountTerminal(
+    tx: Prisma.TransactionClient,
+    task: {
+      id: string;
+      jobId: string | null;
+      runId: string;
+      accountId: string;
+    },
+    now: Date,
+  ) {
+    if (!task.jobId) return;
+    await tx.$queryRaw`SELECT id FROM background_jobs WHERE id = ${task.jobId}::uuid FOR UPDATE`;
+    const failed = await tx.backgroundJob.findFirst({
+      where: { id: task.jobId, ...this.terminalJobs(now) },
+    });
+    if (!failed) return;
+    await tx.backgroundJob.update({
+      where: { id: failed.id },
+      data: {
+        status: "failed",
+        leaseId: null,
+        leaseUntil: null,
+        completedAt: failed.completedAt ?? now,
+      },
+    });
+    await tx.sourceFetchAccountTask.updateMany({
+      where: { id: task.id, completedAt: null },
+      data: {
+        status: "failed",
+        completedAt: now,
+        failureCode: "worker_attempts_exhausted",
+        deferredUntil: null,
+      },
+    });
+    await tx.sourceFetchRunItem.updateMany({
+      where: {
+        runId: task.runId,
+        externalAccountId: task.accountId,
+        status: "running",
+      },
+      data: {
+        status: "failed",
+        completedAt: now,
+        errorCode: "worker_attempts_exhausted",
+        errorMessage: "后台重试已耗尽",
+      },
+    });
+    const cleared = await tx.sourceAccountScanState.updateMany({
+      where: { accountId: task.accountId, leaseOwnerJobId: failed.id },
+      data: {
+        leaseOwnerJobId: null,
+        leaseUntil: null,
+        epoch: { increment: 1 },
+      },
+    });
+    if (cleared.count)
+      await tx.sourceAdapterState.updateMany({
+        where: { externalAccountId: task.accountId, fetchLeaseId: task.runId },
+        data: { fetchLeaseId: null, fetchLeaseUntil: null },
+      });
+    await this.tasks.aggregate(tx, task.runId);
   }
 
   private terminalJobs(now: Date): Prisma.BackgroundJobWhereInput {
@@ -200,6 +658,14 @@ export class SourceFetchService {
         errorCode: "worker_attempts_exhausted",
         errorMessage: "后台重试已耗尽，请检查后重新抓取",
         completedAt: now,
+      },
+    });
+    await tx.sourceAccountScanState.updateMany({
+      where: { leaseOwnerJobId: job.id },
+      data: {
+        leaseOwnerJobId: null,
+        leaseUntil: null,
+        epoch: { increment: 1 },
       },
     });
     await tx.sourceAdapterState.updateMany({
@@ -258,7 +724,47 @@ export class SourceFetchService {
 
   private async activeRun(tx: Prisma.TransactionClient, accountIds: string[]) {
     const now = new Date();
+    const pendingTasks = await tx.sourceFetchAccountTask.findMany({
+      where: { accountId: { in: accountIds }, completedAt: null },
+      select: { id: true, jobId: true, runId: true, accountId: true },
+    });
+    const jobIds = [
+      ...new Set(
+        pendingTasks.flatMap((task) => (task.jobId ? [task.jobId] : [])),
+      ),
+    ].sort();
+    // Lock every sibling before the first aggregate acquires its run. A live
+    // sibling finalizes job -> run, so this transaction must never hold run -> new job.
+    if (jobIds.length)
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM background_jobs WHERE id IN (${Prisma.join(jobIds.map((id) => Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`,
+      );
     await this.settleTerminalLeases(tx, accountIds, now);
+    for (const task of pendingTasks)
+      await this.settleAccountTerminal(tx, task, now);
+
+    const batches = await tx.sourceFetchRun.findMany({
+      where: { completedAt: null, accountTasks: { some: {} } },
+      select: {
+        id: true,
+        accountTasks: { select: { accountId: true, completedAt: true } },
+      },
+    });
+    for (const batch of batches) {
+      const ids = batch.accountTasks.map((task) => task.accountId);
+      if (
+        ids.length === accountIds.length &&
+        ids.every((id) => accountIds.includes(id))
+      )
+        return { id: batch.id };
+      const activeIds = batch.accountTasks
+        .filter((task) => !task.completedAt)
+        .map((task) => task.accountId);
+      if (activeIds.some((id) => accountIds.includes(id)))
+        throw new ConflictException(
+          "所选账号已有重叠的同步批次，请等待完成后重试",
+        );
+    }
     // Expired executions with retries left still own a recoverable batch. Exhausted
     // queued/expired jobs do not prevent a fresh request while reconciliation runs.
     const jobs = await tx.backgroundJob.findMany({
@@ -322,17 +828,7 @@ export class SourceFetchService {
     const run = await tx.sourceFetchRun.create({
       data: { trigger, requestedById: actorId, status: "queued" },
     });
-    await this.jobs.enqueue(
-      {
-        kind: "source_fetch",
-        resourceId: run.id,
-        actorId,
-        idempotencyKey: `source:${run.id}`,
-        lane: "network",
-        payload: { accountIds },
-      },
-      tx,
-    );
+    await this.tasks.create(tx, run.id, actorId, accountIds);
     return run;
   }
 
@@ -363,7 +859,34 @@ export class SourceFetchService {
         select: { id: true },
       });
       if (!accounts.length) return false;
-      const accountIds = accounts.map((item) => item.id).sort();
+      const busy = await tx.sourceFetchAccountTask.findMany({
+        where: { completedAt: null, run: { completedAt: null } },
+        select: { accountId: true },
+      });
+      const reserved = new Set(busy.map((task) => task.accountId));
+      const legacy = await tx.backgroundJob.findMany({
+        where: {
+          kind: "source_fetch",
+          OR: [
+            { status: "queued", attempts: { lt: 3 } },
+            {
+              status: "running",
+              OR: [{ attempts: { lt: 3 } }, { leaseUntil: { gt: now } }],
+            },
+          ],
+        },
+        select: { payload: true },
+      });
+      for (const job of legacy) {
+        const ids = jsonObject(job.payload)?.accountIds;
+        if (Array.isArray(ids))
+          for (const id of ids) if (typeof id === "string") reserved.add(id);
+      }
+      const accountIds = accounts
+        .map((item) => item.id)
+        .filter((id) => !reserved.has(id))
+        .sort();
+      if (!accountIds.length) return false;
       try {
         if (await this.activeRun(tx, accountIds)) return false;
       } catch (error) {
@@ -390,17 +913,25 @@ export class SourceFetchService {
       WITH active AS (
         SELECT r.id
         FROM source_fetch_runs r
-        JOIN background_jobs j
-          ON j.idempotency_key = 'source:' || r.id::text
-          AND j.resource_id = r.id AND j.kind = 'source_fetch'
         WHERE r.status IN ('queued', 'running') AND r.completed_at IS NULL
-          AND (
-            (j.status = 'queued' AND j.attempts < 3)
-            OR (j.status = 'running' AND j.lease_until IS NOT NULL
-              AND (j.attempts < 3 OR j.lease_until > ${now}))
-          )
-        ORDER BY CASE WHEN j.status = 'running' AND j.lease_until > ${now}
-          THEN 0 ELSE 1 END, r.started_at DESC, r.id DESC
+          AND (EXISTS (
+            SELECT 1 FROM source_fetch_account_tasks t JOIN background_jobs j ON j.id=t.job_id
+            WHERE t.run_id=r.id AND t.completed_at IS NULL AND
+              ((j.status='queued' AND j.attempts<3) OR
+               (j.status='running' AND j.lease_until IS NOT NULL AND (j.attempts<3 OR j.lease_until>${now})))
+          ) OR EXISTS (
+            SELECT 1 FROM background_jobs j WHERE j.idempotency_key='source:'||r.id::text
+              AND j.kind='source_fetch' AND j.resource_id=r.id AND
+              ((j.status='queued' AND j.attempts<3) OR
+               (j.status='running' AND j.lease_until IS NOT NULL AND (j.attempts<3 OR j.lease_until>${now})))
+          ))
+        ORDER BY CASE WHEN EXISTS (
+          SELECT 1 FROM source_fetch_account_tasks t JOIN background_jobs j ON j.id=t.job_id
+          WHERE t.run_id=r.id AND t.completed_at IS NULL AND j.status='running' AND j.lease_until>${now}
+        ) OR EXISTS (
+          SELECT 1 FROM background_jobs j WHERE j.idempotency_key='source:'||r.id::text
+            AND j.resource_id=r.id AND j.kind='source_fetch' AND j.status='running' AND j.lease_until>${now}
+        ) THEN 0 ELSE 1 END,r.started_at DESC,r.id DESC
         LIMIT 1
       ), last_manual AS (
         SELECT id FROM source_fetch_runs WHERE trigger = 'manual'
@@ -414,8 +945,9 @@ export class SourceFetchService {
         totals.pages_fetched AS "pagesFetched",
         totals.candidates_created AS "candidatesCreated",
         totals.media_stored AS "mediaStored",
-        j.status AS "jobStatus", j.attempts,
-        j.available_at AS "availableAt", j.lease_until AS "leaseUntil",
+        COALESCE(child.status,j.status) AS "jobStatus", COALESCE(child.attempts,j.attempts) AS attempts,
+        COALESCE(child.available_at,j.available_at) AS "availableAt", COALESCE(child.lease_until,j.lease_until) AS "leaseUntil",
+        targets.total AS "targetCount", targets.completed AS "completedTargets", targets.waiting AS "waitingTargets", targets.reason AS "waitingReason",
         EXISTS (SELECT 1 FROM active WHERE active.id = r.id) AS "isActive",
         EXISTS (SELECT 1 FROM last_manual WHERE last_manual.id = r.id) AS "isLastManual"
       FROM selected
@@ -423,6 +955,21 @@ export class SourceFetchService {
       LEFT JOIN background_jobs j
         ON j.idempotency_key = 'source:' || r.id::text
         AND j.resource_id = r.id AND j.kind = 'source_fetch'
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS total,COUNT(*) FILTER (WHERE t.completed_at IS NOT NULL) AS completed,
+          COUNT(*) FILTER (WHERE t.status='waiting') AS waiting,
+          CASE WHEN BOOL_OR(t.status='waiting' AND t.failure_code IN ('credential_unavailable','scope_paused')) THEN 'credential_unavailable'
+            WHEN BOOL_OR(t.status='waiting' AND t.failure_code='platform_cooldown') THEN 'platform_cooldown'
+            WHEN BOOL_OR(t.status='waiting') THEN 'capacity' ELSE NULL END AS reason
+        FROM source_fetch_account_tasks t WHERE t.run_id=r.id
+      ) targets ON true
+      LEFT JOIN LATERAL (
+        SELECT j.status,j.attempts,j.available_at,j.lease_until
+        FROM source_fetch_account_tasks t JOIN background_jobs j ON j.id=t.job_id
+        WHERE t.run_id=r.id AND t.completed_at IS NULL
+        ORDER BY CASE WHEN j.status='running' AND j.lease_until>${now} THEN 0 WHEN j.status='queued' AND j.attempts<3 THEN 1 ELSE 2 END,j.available_at
+        FETCH FIRST 1 ROW ONLY
+      ) child ON true
       LEFT JOIN LATERAL (
         SELECT COALESCE(SUM(i.pages_fetched), 0) AS pages_fetched,
           COALESCE(SUM(i.candidates_created), 0) AS candidates_created,
@@ -459,8 +1006,18 @@ export class SourceFetchService {
         pagesFetched: Number(run.pagesFetched),
         candidatesCreated: Number(run.candidatesCreated),
         mediaStored: Number(run.mediaStored),
+        ...(Number(run.targetCount ?? 0) > 0
+          ? {
+              targetCount: Number(run.targetCount),
+              completedTargets: Number(run.completedTargets ?? 0),
+              waitingTargets: Number(run.waitingTargets ?? 0),
+              waitingReason: run.waitingReason ?? null,
+            }
+          : {}),
         nextRetryAt:
-          recoverable && run.jobStatus === "queued" && (run.attempts ?? 0) > 0
+          recoverable &&
+          run.jobStatus === "queued" &&
+          ((run.attempts ?? 0) > 0 || Number(run.waitingTargets ?? 0) > 0)
             ? (run.availableAt?.toISOString() ?? null)
             : null,
       };
@@ -475,8 +1032,20 @@ export class SourceFetchService {
   ): Promise<SourceFetchRunDto[]> {
     const jobs = await this.db.backgroundJob.findMany({
       where: {
-        kind: "source_fetch",
-        idempotencyKey: { in: runs.map((run) => `source:${run.id}`) },
+        OR: [
+          {
+            kind: "source_fetch",
+            idempotencyKey: { in: runs.map((run) => `source:${run.id}`) },
+          },
+          {
+            kind: "source_account_fetch",
+            resourceId: {
+              in: runs.flatMap((run) =>
+                (run.accountTasks ?? []).map((task) => task.id),
+              ),
+            },
+          },
+        ],
       },
       select: {
         resourceId: true,
@@ -487,13 +1056,43 @@ export class SourceFetchService {
     });
     const byRun = new Map(jobs.map((job) => [job.resourceId, job]));
     return runs.map((run) => {
-      const job = byRun.get(run.id);
+      const tasks = run.accountTasks ?? [];
+      const children = tasks.flatMap((task) =>
+        byRun.has(task.id) ? [byRun.get(task.id)!] : [],
+      );
+      const job =
+        children.find((job) => job.status === "running") ??
+        children.find((job) => job.status === "queued") ??
+        byRun.get(run.id);
+      const waiting = tasks.filter((task) => task.status === "waiting");
       return {
         ...this.dto(run),
-        attempts: job?.attempts ?? 0,
+        ...(tasks.length
+          ? {
+              targetCount: tasks.length,
+              completedTargets: tasks.filter((task) => task.completedAt).length,
+              waitingTargets: waiting.length,
+              waitingReason: waiting.some((task) =>
+                ["credential_unavailable", "scope_paused"].includes(
+                  task.failureCode ?? "",
+                ),
+              )
+                ? "credential_unavailable"
+                : waiting.some(
+                      (task) => task.failureCode === "platform_cooldown",
+                    )
+                  ? "platform_cooldown"
+                  : waiting.some((task) => task.failureCode === "capacity")
+                    ? "capacity"
+                    : null,
+            }
+          : {}),
+        attempts: children.length
+          ? children.reduce((sum, child) => sum + child.attempts, 0)
+          : (job?.attempts ?? 0),
         jobStatus: job?.status ?? null,
         nextRetryAt:
-          job?.status === "queued" && job.attempts > 0
+          job?.status === "queued" && (job.attempts > 0 || waiting.length > 0)
             ? job.availableAt.toISOString()
             : null,
       };
@@ -515,6 +1114,25 @@ export class SourceFetchService {
     });
     if (!allowed) throw new BadRequestException("抓取发起人的当前权限已失效");
   }
+  async recheckPlatform(platform: string, actorId: string) {
+    const result = await this.platforms.recheck(platform, actorId);
+    if (result.status !== "unverified") return result;
+    if (
+      !(await this.db.sourceFetchAccountTask.count({
+        where: { platform, completedAt: null },
+      }))
+    ) {
+      const accounts = (await this.accounts()).filter(
+        (account) => account.platform === platform,
+      );
+      if (accounts.length)
+        await this.runManual(actorId, {
+          accountIds: accounts.map((account) => account.id),
+        });
+    }
+    return result;
+  }
+
   async list(): Promise<SourceFetchRunDto[]> {
     const runs = await this.db.sourceFetchRun.findMany({
       include: runDetails,
@@ -522,78 +1140,6 @@ export class SourceFetchService {
       take: 20,
     });
     return this.withExecution(runs);
-  }
-
-  private async run(
-    trigger: SourceFetchTrigger,
-    requestedById: string | null,
-    accountIds: string[],
-    runId: string,
-    signal: AbortSignal,
-  ): Promise<SourceFetchRunDto> {
-    await this.assertActor(requestedById);
-    signal.throwIfAborted();
-    let accounts = await this.accounts(accountIds);
-
-    await this.ensureAdapterStates(accounts);
-    accounts = await this.accounts(accountIds);
-    const run = await this.db.sourceFetchRun.update({
-      where: { id: runId },
-      data: { status: "running" },
-    });
-    console.info(
-      JSON.stringify({
-        scope: "source_fetch",
-        event: "run_started",
-        runId,
-        trigger,
-        accounts: accounts.length,
-      }),
-    );
-    await this.db.sourceFetchRunItem.updateMany({
-      where: { runId, status: "running" },
-      data: {
-        status: "failed",
-        completedAt: new Date(),
-        errorCode: "interrupted",
-        errorMessage: "进程中断，已从持久游标恢复",
-      },
-    });
-    for (const account of accounts) {
-      signal.throwIfAborted();
-      await this.assertActor(requestedById);
-      await this.fetchWithFallback(run.id, account, requestedById, signal);
-    }
-    signal.throwIfAborted();
-    const statuses = await this.db.sourceFetchRunItem.findMany({
-      where: { runId: run.id },
-      select: { status: true },
-    });
-    const failures = statuses.filter((item) => item.status === "failed").length;
-    const successes = statuses.filter(
-      (item) => item.status === "succeeded",
-    ).length;
-    const status =
-      successes && !failures
-        ? "succeeded"
-        : successes
-          ? "partial_failed"
-          : "failed";
-    console.info(
-      JSON.stringify({
-        scope: "source_fetch",
-        event: "run_finished",
-        runId,
-        status,
-      }),
-    );
-    return this.dto(
-      await this.db.sourceFetchRun.update({
-        where: { id: run.id },
-        data: { status, completedAt: new Date() },
-        include: runDetails,
-      }),
-    );
   }
 
   private accounts(
@@ -616,6 +1162,11 @@ export class SourceFetchService {
   }
 
   private async ensureAdapterStates(accounts: Account[]) {
+    if (accounts.length)
+      await this.db.sourceAccountScanState.createMany({
+        data: accounts.map((account) => ({ accountId: account.id })),
+        skipDuplicates: true,
+      });
     for (const account of accounts) {
       const known = new Set(
         account.adapterStates.map((state) => state.adapterKey),
@@ -645,8 +1196,10 @@ export class SourceFetchService {
     signal: AbortSignal,
   ) {
     let allowMeteredFallback = true;
+    let lastFailure: unknown;
+    let deferredAdapter: JobDeferred | undefined;
     for (const client of this.sources.forPlatform(account.platform)) {
-      const state = account.adapterStates.find(
+      const state: FetchState | undefined = account.adapterStates.find(
         (item) => item.adapterKey === client.adapterKey,
       );
       if (!state) continue;
@@ -669,6 +1222,20 @@ export class SourceFetchService {
         continue;
       }
       const now = new Date();
+      if (
+        this.accountExecution.getStore() &&
+        state.nextAttemptAt &&
+        state.nextAttemptAt > now
+      ) {
+        if (!deferredAdapter || state.nextAttemptAt < deferredAdapter.retryAt)
+          deferredAdapter = new JobDeferred(
+            state.nextAttemptAt,
+            "platform_cooldown",
+          );
+        await this.createSkippedItem(runId, account, state, client);
+        if (!client.metered) allowMeteredFallback = true;
+        continue;
+      }
       if (client.metered && !allowMeteredFallback) {
         await this.createSkippedItem(
           runId,
@@ -690,30 +1257,13 @@ export class SourceFetchService {
         await this.createSkippedItem(runId, account, state, client);
         continue;
       }
-      const leased = await this.db.$transaction(async (tx) => {
-        await this.lockSource(tx, account, state, createdById);
-        await this.assertEligible(account, state, undefined, tx);
-        return tx.sourceAdapterState.updateMany({
-          where: {
-            id: state.id,
-            revision: state.revision,
-            enabled: true,
-            OR: [
-              { fetchLeaseUntil: null },
-              { fetchLeaseUntil: { lt: now } },
-              { fetchLeaseId: runId },
-            ],
-          },
-          data: {
-            fetchLeaseId: runId,
-            fetchLeaseUntil: new Date(now.getTime() + SOURCE_LEASE_MS),
-            lastAttemptAt: now,
-            ...(["unavailable", "disabled"].includes(state.health)
-              ? { health: "idle" as const }
-              : {}),
-          },
-        });
-      });
+      const leased = await this.claimSource(
+        account,
+        state,
+        runId,
+        createdById,
+        now,
+      );
       const item = previous
         ? await this.db.sourceFetchRunItem.update({
             where: { id: previous.id },
@@ -760,6 +1310,8 @@ export class SourceFetchService {
             mediaStored: previous.mediaStored,
           }),
         );
+      const diagnosticContext: Record<string, unknown> = {};
+      diagnosticContext.stage = "prepare_scan";
       try {
         await this.fetchAdapter(
           item.id,
@@ -769,10 +1321,55 @@ export class SourceFetchService {
           client,
           createdById,
           signal,
+          diagnosticContext,
         );
         return;
       } catch (error) {
         if (signal.aborted) throw error;
+        if (error instanceof JobDeferred) throw error;
+        const execution = this.accountExecution.getStore();
+        const shared = platformFailure(error, new Date());
+        if (execution && shared) {
+          await this.db.$transaction(async (tx) => {
+            await this.lockSource(tx, account, state, createdById);
+            await this.assertEligible(account, state, runId, tx);
+            await this.platforms.outcome(
+              tx,
+              execution.platform,
+              execution.generation,
+              error,
+            );
+            await tx.sourceFetchRunItem.update({
+              where: { id: item.id },
+              data: {
+                status: "failed",
+                errorCode: "interrupted",
+                errorMessage: "等待平台凭据或冷却恢复",
+                completedAt: new Date(),
+              },
+            });
+          });
+          console.info(
+            JSON.stringify({
+              scope: "source_fetch",
+              event: "platform_failed",
+              ...sourceDiagnostic(error, {
+                ...diagnosticContext,
+                ...this.jobs.diagnosticContext?.(),
+                runId,
+                accountId: account.id,
+                platform: account.platform,
+                adapter: client.adapterKey,
+              }),
+            }),
+          );
+          throw new JobDeferred(
+            shared.cooldownUntil ?? new Date(Date.now() + 900000),
+            shared.status === "auth_paused"
+              ? "scope_paused"
+              : "platform_cooldown",
+          );
+        }
         const safe = this.safeError(error);
         console.info(
           JSON.stringify({
@@ -782,6 +1379,14 @@ export class SourceFetchService {
             accountId: account.id,
             adapter: client.adapterKey,
             errorCode: safe.code,
+            ...sourceDiagnostic(error, {
+              ...diagnosticContext,
+              ...this.jobs.diagnosticContext?.(),
+              runId,
+              accountId: account.id,
+              platform: account.platform,
+              adapter: client.adapterKey,
+            }),
           }),
         );
         const failures = state.consecutiveFailures + 1;
@@ -842,11 +1447,27 @@ export class SourceFetchService {
           });
           return true;
         });
-        if (!current) return;
+        if (!current) {
+          if (execution)
+            throw new Error("Source management fence changed", {
+              cause: error,
+            });
+          return;
+        }
+        if (execution) lastFailure = error;
         if (!client.metered) allowMeteredFallback = cooling;
       } finally {
         await this.db.$transaction(async (tx) => {
-          await this.jobs.assertCurrentLease(tx);
+          await this.lockSource(tx, account, state, createdById, true);
+          const released = await tx.sourceAccountScanState.updateMany({
+            where: {
+              accountId: account.id,
+              epoch: state.scanEpoch ?? -1,
+              leaseOwnerJobId: state.scanOwnerJobId ?? runId,
+            },
+            data: { leaseOwnerJobId: null, leaseUntil: null },
+          });
+          if (!released.count) return;
           await tx.sourceAdapterState.updateMany({
             where: {
               id: state.id,
@@ -858,6 +1479,71 @@ export class SourceFetchService {
         });
       }
     }
+    if (deferredAdapter) throw deferredAdapter;
+    if (lastFailure) throw lastFailure;
+  }
+
+  private async claimSource(
+    account: Account,
+    state: FetchState,
+    runId: string,
+    createdById: string | null,
+    now = new Date(),
+    recoveryCampaignId?: string,
+  ) {
+    return this.db.$transaction(async (tx) => {
+      await this.lockSource(tx, account, state, createdById);
+      await this.assertEligible(account, state, undefined, tx);
+      const scan = await tx.sourceAccountScanState.findUniqueOrThrow({
+        where: { accountId: account.id },
+      });
+      const owner = this.jobs.diagnosticContext?.().jobId ?? runId;
+      if (
+        scan.leaseUntil &&
+        scan.leaseUntil > now &&
+        scan.leaseOwnerJobId !== owner
+      )
+        return { count: 0 };
+      const leased = await tx.sourceAdapterState.updateMany({
+        where: {
+          id: state.id,
+          revision: state.revision,
+          enabled: true,
+          OR: [
+            { fetchLeaseUntil: null },
+            { fetchLeaseUntil: { lt: now } },
+            { fetchLeaseId: runId },
+          ],
+        },
+        data: {
+          fetchLeaseId: runId,
+          fetchLeaseUntil: new Date(now.getTime() + SOURCE_LEASE_MS),
+          lastAttemptAt: now,
+          ...(["unavailable", "disabled"].includes(state.health)
+            ? { health: "idle" as const }
+            : {}),
+        },
+      });
+      if (leased.count) {
+        const claimed = await tx.sourceAccountScanState.update({
+          where: { accountId: account.id },
+          data: {
+            leaseOwnerJobId: owner,
+            leaseUntil: new Date(now.getTime() + SOURCE_LEASE_MS),
+            epoch: { increment: 1 },
+            revision: { increment: 1 },
+          },
+        });
+        state.scanEpoch = claimed.epoch;
+        state.scanOwnerJobId = owner;
+        if (recoveryCampaignId)
+          await tx.sourceRecoveryCampaign.update({
+            where: { id: recoveryCampaignId },
+            data: { scanEpoch: claimed.epoch },
+          });
+      }
+      return leased;
+    });
   }
 
   private async createSkippedItem(
@@ -930,6 +1616,7 @@ export class SourceFetchService {
     client: ContentSourceClient,
     createdById: string | null,
     signal: AbortSignal,
+    diagnosticContext: Record<string, unknown> = {},
   ) {
     const scanStartedAt = new Date();
     const timestamp = (value: unknown): string | null => {
@@ -939,12 +1626,47 @@ export class SourceFetchService {
         ? value
         : null;
     };
-    const previous = jsonObject(state.cursorJson) ?? {};
-    const previousWindow = jsonObject(previous._sourceScanWindow);
+    const scan = await this.db.sourceAccountScanState.findUniqueOrThrow({
+      where: { accountId: account.id },
+    });
+    const coverage = scan.discoveredThroughAt;
+    const sharedWindow = jsonObject(scan.windowJson);
+    const hasSharedWindow =
+      sharedWindow && Object.keys(sharedWindow).length > 0;
+    if (
+      hasSharedWindow &&
+      (sharedWindow.version !== 1 ||
+        sharedWindow.sourceId !== account.externalUserId ||
+        !timestamp(sharedWindow.endTime) ||
+        (sharedWindow.startTime !== null &&
+          !timestamp(sharedWindow.startTime)) ||
+        (typeof sharedWindow.startTime === "string" &&
+          sharedWindow.startTime > (sharedWindow.endTime as string)) ||
+        (sharedWindow.endTime as string) > scanStartedAt.toISOString() ||
+        (coverage && new Date(sharedWindow.endTime as string) < coverage))
+    )
+      throw new Error("Source account scan window binding changed");
+    let previous = jsonObject(state.cursorJson) ?? {};
+    let previousWindow = jsonObject(previous._sourceScanWindow);
+    if (
+      hasSharedWindow &&
+      (!previousWindow ||
+        previousWindow.startTime !== sharedWindow.startTime ||
+        previousWindow.endTime !== sharedWindow.endTime)
+    ) {
+      previous = {};
+      previousWindow = null;
+    }
+    if (!hasSharedWindow && coverage && previousWindow) {
+      previous = {};
+      previousWindow = null;
+    }
     const restartForMode = Boolean(
-      previousWindow &&
-      !state.completedThroughAt &&
-      previousWindow.firstSyncMode !== account.firstSyncMode,
+      !coverage &&
+      (hasSharedWindow
+        ? sharedWindow.firstSyncMode !== account.firstSyncMode
+        : previousWindow &&
+          previousWindow.firstSyncMode !== account.firstSyncMode),
     );
     let cursor: SourceCursor;
     let startTime: string | null;
@@ -965,11 +1687,17 @@ export class SourceFetchService {
           previous.sourceId !== account.externalUserId) ||
         (lower && lower > upper) ||
         upper > scanStartedAt.toISOString() ||
-        (state.completedThroughAt && new Date(upper) < state.completedThroughAt)
+        (coverage && new Date(upper) < coverage)
       )
         throw new Error("Source scan window binding changed");
     }
-    if (previousWindow && !restartForMode) {
+    if (hasSharedWindow && !restartForMode) {
+      startTime = sharedWindow.startTime as string | null;
+      endTime = sharedWindow.endTime as string;
+      cursor = previousWindow
+        ? { ...previous }
+        : { ...client.initialCursor(account.firstSyncMode, new Date(endTime)) };
+    } else if (previousWindow && !restartForMode) {
       startTime = timestamp(previousWindow.startTime);
       endTime = previousWindow.endTime as string;
       cursor = { ...previous };
@@ -980,21 +1708,21 @@ export class SourceFetchService {
       )
         throw new Error("Source scan account binding changed");
       endTime = scanStartedAt.toISOString();
-      if (state.completedThroughAt && state.completedThroughAt > scanStartedAt)
+      if (coverage && coverage > scanStartedAt)
         throw new Error("Source scan clock precedes completed coverage");
       const initial = client.initialCursor(
         account.firstSyncMode,
         scanStartedAt,
       );
-      startTime = state.completedThroughAt
+      startTime = coverage
         ? new Date(
-            state.completedThroughAt.getTime() -
-              this.environment.sourceOverlapMinutes * 60_000,
+            coverage.getTime() - this.environment.sourceOverlapMinutes * 60_000,
           ).toISOString()
         : timestamp(initial.startTime);
       // Legacy cursors have no trustworthy upper bound. Start from the head,
       // retaining their lower bound only when it widens the required window.
-      const legacyLower = restartForMode ? null : timestamp(previous.startTime);
+      const legacyLower =
+        restartForMode || coverage ? null : timestamp(previous.startTime);
       if (startTime && legacyLower && legacyLower < startTime)
         startTime = legacyLower;
       cursor = { ...initial };
@@ -1046,6 +1774,23 @@ export class SourceFetchService {
     await this.db.$transaction(async (tx) => {
       await this.lockSource(tx, account, state, createdById);
       await this.assertEligible(account, state, leaseId, tx);
+      await tx.sourceAccountScanState.updateMany({
+        where: {
+          accountId: account.id,
+          epoch: state.scanEpoch ?? -1,
+          leaseOwnerJobId: state.scanOwnerJobId ?? leaseId,
+        },
+        data: {
+          windowJson: {
+            version: 1,
+            sourceId: account.externalUserId,
+            firstSyncMode: account.firstSyncMode,
+            startTime,
+            endTime,
+          },
+          revision: { increment: 1 },
+        },
+      });
       await tx.sourceAdapterState.updateMany({
         where: {
           id: state.id,
@@ -1109,6 +1854,13 @@ export class SourceFetchService {
       }
     }
     for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+      Object.assign(diagnosticContext, {
+        page: pageNumber + 1,
+        windowStart: startTime,
+        windowEnd: endTime,
+      });
+      delete diagnosticContext.postId;
+      delete diagnosticContext.mediaId;
       signal.throwIfAborted();
       await keepLease();
       await this.assertActor(createdById);
@@ -1119,6 +1871,13 @@ export class SourceFetchService {
         where: { id: itemId },
         data: { apiRequests: counters.apiRequests },
       });
+      diagnosticContext.stage = "fetch_page";
+      const execution = this.accountExecution.getStore();
+      if (execution)
+        await this.platforms.beforeNetwork(
+          execution.platform,
+          execution.generation,
+        );
       const page = await client.fetchPage(
         {
           externalUserId: account.externalUserId,
@@ -1128,11 +1887,51 @@ export class SourceFetchService {
         context,
       );
       signal.throwIfAborted();
+      diagnosticContext.stage = "validate_page";
       await this.assertActor(createdById);
       await this.assertEligible(account, state, leaseId);
       counters.pagesFetched += 1;
       counters.itemsSeen += page.items.length;
+      await this.db.$transaction(async (tx) => {
+        await this.lockSource(tx, account, state, createdById);
+        await this.assertEligible(account, state, leaseId, tx);
+        const context = {
+          accountId: account.id,
+          platform: account.platform,
+          sourceUserId: account.externalUserId,
+          adapterKey: client.adapterKey,
+          actorId: createdById,
+          discoveredRunId: leaseId,
+          windowJson: { startTime, endTime },
+        };
+        for (const failure of page.discoveryFailures ?? [])
+          await this.discovery.missingMetadata(
+            tx,
+            context,
+            failure.externalPostId,
+            failure.evidence,
+          );
+        for (const content of page.items) {
+          diagnosticContext.stage = "validate_post";
+          diagnosticContext.postId = content.externalContentId;
+          delete diagnosticContext.mediaId;
+          const at = new Date(content.publishedAt);
+          if (!Number.isFinite(at.getTime()))
+            throw new Error("Invalid discovery publication time");
+          if (
+            (initialBoundary && at < initialBoundary) ||
+            at >= upperBoundary ||
+            content.type === "repost" ||
+            !content.ownMedia.length
+          )
+            continue;
+          await this.discovery.record(tx, context, content);
+        }
+      });
       for (const content of page.items) {
+        delete diagnosticContext.mediaId;
+        diagnosticContext.stage = "validate_post";
+        diagnosticContext.postId = content.externalContentId;
         const at = new Date(content.publishedAt);
         if (!Number.isFinite(at.getTime()))
           throw new Error("Source item has an invalid publication timestamp");
@@ -1173,11 +1972,12 @@ export class SourceFetchService {
           leaseId,
           signal,
           keepLease,
+          diagnosticContext,
         );
+        counters.mediaStored += saved.mediaStored;
         if (saved.created) {
           counters.candidatesCreated += 1;
-          counters.mediaStored += saved.mediaStored;
-        } else counters.candidatesExisting += 1;
+        } else if (!saved.pending) counters.candidatesExisting += 1;
       }
       if (!page.nextCursor)
         throw new Error("Source adapter did not return a durable cursor");
@@ -1192,9 +1992,18 @@ export class SourceFetchService {
           endTime,
           ...observed,
         };
+      diagnosticContext.stage = "cursor_commit";
       await this.db.$transaction(async (tx) => {
         await this.lockSource(tx, account, state, createdById);
         await this.assertEligible(account, state, leaseId, tx);
+        await tx.sourceAccountScanState.updateMany({
+          where: {
+            accountId: account.id,
+            epoch: state.scanEpoch ?? -1,
+            leaseOwnerJobId: state.scanOwnerJobId ?? leaseId,
+          },
+          data: { leaseUntil: new Date(Date.now() + SOURCE_LEASE_MS) },
+        });
         await tx.sourceAdapterState.updateMany({
           where: {
             id: state.id,
@@ -1238,6 +2047,13 @@ export class SourceFetchService {
     await this.db.$transaction(async (tx) => {
       await this.lockSource(tx, account, state, createdById);
       await this.assertEligible(account, state, leaseId, tx);
+      const execution = this.accountExecution.getStore();
+      if (execution)
+        await this.platforms.outcome(
+          tx,
+          execution.platform,
+          execution.generation,
+        );
       const changed = await tx.sourceAdapterState.updateMany({
         where: {
           id: state.id,
@@ -1265,12 +2081,37 @@ export class SourceFetchService {
       });
       if (!changed.count)
         throw new Error("Adapter lease expired before committing watermarks");
+      const completed = await tx.sourceAccountScanState.updateMany({
+        where: {
+          accountId: account.id,
+          epoch: state.scanEpoch ?? -1,
+          leaseOwnerJobId: state.scanOwnerJobId ?? leaseId,
+          leaseUntil: { gt: new Date() },
+        },
+        data: {
+          discoveredThroughAt: upperBoundary,
+          windowJson: {},
+          leaseOwnerJobId: null,
+          leaseUntil: null,
+          revision: { increment: 1 },
+        },
+      });
+      if (!completed.count)
+        throw new Error(
+          "Account scan epoch changed before committing coverage",
+        );
+      const gaps = await tx.sourceDiscoveryPost.count({
+        where: {
+          accountId: account.id,
+          state: { notIn: ["complete", "excluded"] },
+        },
+      });
       await tx.sourceFetchRunItem.update({
         where: { id: itemId },
         data: {
           status: "succeeded",
-          errorCode: null,
-          errorMessage: null,
+          errorCode: gaps ? "discovery_gaps" : null,
+          errorMessage: gaps ? "发现覆盖已完成，媒体缺口等待独立补偿" : null,
           cursorAfter: {},
           ...counters,
           completedAt: new Date(),
@@ -1331,7 +2172,9 @@ export class SourceFetchService {
     leaseId: string,
     signal: AbortSignal,
     keepLease = this.sourceLeaseKeeper(account, state, leaseId, createdById),
-  ): Promise<{ created: boolean; mediaStored: number }> {
+    diagnosticContext: Record<string, unknown> = {},
+  ): Promise<{ created: boolean; mediaStored: number; pending?: boolean }> {
+    diagnosticContext.stage = "candidate_lookup";
     const hashtags = collectHashtags(content.hashtags ?? [], content.text);
     const existing = await this.db.candidatePost.findUnique({
       where: {
@@ -1342,10 +2185,38 @@ export class SourceFetchService {
       },
     });
     if (existing) {
-      await this.db.$transaction(async (tx) => {
+      diagnosticContext.stage = "candidate_observation";
+      const pending = await this.db.$transaction(async (tx) => {
         await this.lockSource(tx, account, state, createdById);
         await this.assertEligible(account, state, leaseId, tx);
         signal.throwIfAborted();
+        // Natural overlap can fill source metadata without downloading again or
+        // changing a promoted Work, review status or human revision.
+        if (account.platform === "pixiv" && content.description?.trim()) {
+          await tx.$queryRaw`SELECT id FROM candidate_posts WHERE id = ${existing.id}::uuid FOR UPDATE`;
+          const current = await tx.candidatePost.findUniqueOrThrow({
+            where: { id: existing.id },
+          });
+          const raw =
+            current.rawJson &&
+            typeof current.rawJson === "object" &&
+            !Array.isArray(current.rawJson)
+              ? current.rawJson
+              : {};
+          const rawJson = {
+            ...raw,
+            ...(content.title?.trim() ? { title: content.title } : {}),
+            description: content.description,
+          };
+          if (
+            current.text !== content.description ||
+            JSON.stringify(current.rawJson) !== JSON.stringify(rawJson)
+          )
+            await tx.candidatePost.update({
+              where: { id: existing.id },
+              data: { text: content.description, rawJson },
+            });
+        }
         await this.observe(
           tx,
           existing.id,
@@ -1362,34 +2233,206 @@ export class SourceFetchService {
           skipDuplicates: true,
         });
         await this.refreshTagDisposition(tx, existing.id);
+        const discovery = await tx.sourceDiscoveryPost.findUnique({
+          where: {
+            accountId_platform_externalPostId: {
+              accountId: account.id,
+              platform: account.platform,
+              externalPostId: content.externalContentId,
+            },
+          },
+        });
+        let unresolved = discovery?.state === "needs_attention";
+        if (
+          discovery &&
+          !["complete", "needs_attention", "excluded"].includes(discovery.state)
+        ) {
+          const persisted = await tx.candidateMedia.findMany({
+            where: { candidatePostId: existing.id },
+            orderBy: { orderIndex: "asc" },
+          });
+          const ledgerMedia = await tx.sourceDiscoveryMedia.findMany({
+            where: { discoveryPostId: discovery.id },
+          });
+          for (const media of ledgerMedia) {
+            const prior = persisted.find(
+              (m) => m.externalMediaId === media.externalMediaId,
+            );
+            const manifest = content.ownMedia.find(
+              (m) => m.externalMediaId === media.externalMediaId,
+            );
+            const identity = stableSourceAssetIdentity(manifest?.url);
+            const ledgerIdentity = stableSourceAssetIdentity(
+              (media.metadataJson as { url?: unknown })?.url,
+            );
+            if (
+              prior &&
+              identity &&
+              identity === ledgerIdentity &&
+              stableSourceAssetIdentity(prior.sourceUrl) === identity &&
+              !media.fileObjectId
+            )
+              await this.discovery.attach(
+                tx,
+                discovery.id,
+                media.externalMediaId,
+                prior.fileObjectId,
+              );
+          }
+          const refreshed = await tx.sourceDiscoveryMedia.findMany({
+            where: { discoveryPostId: discovery.id },
+          });
+          if (
+            refreshed.length === content.ownMedia.length &&
+            refreshed.every((m) => m.fileObjectId)
+          )
+            await this.discovery.complete(tx, discovery.id);
+          else {
+            unresolved = true;
+            await tx.sourceDiscoveryPost.update({
+              where: { id: discovery.id },
+              data: {
+                state: "needs_attention",
+                failureCode: "existing_manifest_mismatch",
+                nextRetryAt: null,
+              },
+            });
+          }
+        }
+        return unresolved;
       });
-      return { created: false, mediaStored: 0 };
+      return {
+        created: false,
+        mediaStored: 0,
+        ...(pending ? { pending: true } : {}),
+      };
     }
+    const ledger = await this.db.sourceDiscoveryPost.findUniqueOrThrow({
+      where: {
+        accountId_platform_externalPostId: {
+          accountId: account.id,
+          platform: account.platform,
+          externalPostId: content.externalContentId,
+        },
+      },
+      include: {
+        media: {
+          include: { fileObject: true },
+          orderBy: { orderIndex: "asc" },
+        },
+      },
+    });
+    if (["needs_attention", "excluded"].includes(ledger.state))
+      return { created: false, mediaStored: 0, pending: true };
     const stored: Prisma.FileObjectGetPayload<object>[] = [];
+    let downloadedCount = 0;
     try {
       for (const media of content.ownMedia) {
+        const previous = ledger.media.find(
+          (m) => m.externalMediaId === media.externalMediaId,
+        );
+        if (previous?.fileObject) {
+          stored.push(previous.fileObject);
+          continue;
+        }
+        diagnosticContext.mediaId = media.externalMediaId;
         signal.throwIfAborted();
         await keepLease();
         await this.assertActor(createdById);
         await this.assertEligible(account, state, leaseId);
-        const downloaded = await this.downloader.download(
-          media.url,
-          client.allowedMediaHosts,
-        );
-        signal.throwIfAborted();
-        await this.assertEligible(account, state, leaseId);
-        stored.push(
-          await this.files.store({
+        const execution = this.accountExecution.getStore();
+        if (execution)
+          await this.platforms.beforeNetwork(
+            execution.platform,
+            execution.generation,
+          );
+        let file: Prisma.FileObjectGetPayload<object> | undefined;
+        try {
+          diagnosticContext.stage = "download";
+          const downloaded = await this.downloader.download(
+            media.url,
+            client.allowedMediaHosts,
+          );
+          signal.throwIfAborted();
+          await this.assertEligible(account, state, leaseId);
+          diagnosticContext.stage = "store";
+          file = await this.files.store({
             body: downloaded.body,
             contentType: downloaded.contentType,
             bucketScope: "source",
             kind: "candidate-media",
             sourceName: media.url,
             createdById: createdById ?? undefined,
-          }),
-        );
+          });
+          await this.db.$transaction(async (tx) => {
+            await this.lockSource(tx, account, state, createdById);
+            await this.assertEligible(account, state, leaseId, tx);
+            signal.throwIfAborted();
+            await this.discovery.attach(
+              tx,
+              ledger.id,
+              media.externalMediaId,
+              file!.id,
+            );
+          });
+          stored.push(file);
+          downloadedCount++;
+        } catch (error) {
+          if (file)
+            await this.files.purgeUnreferenced(file.id).catch(() => undefined);
+          signal.throwIfAborted();
+          if (
+            error instanceof JobDeferred ||
+            platformFailure(error, new Date())
+          )
+            throw error;
+          const failure =
+            error instanceof SourceResponseError
+              ? error
+              : new SourceResponseError("temporary_failure", {
+                  reason:
+                    diagnosticContext.stage === "store"
+                      ? "storage_failure"
+                      : "media_network_error",
+                  scope:
+                    diagnosticContext.stage === "store" ? "storage" : "media",
+                  diagnostic: {
+                    exception_type:
+                      error instanceof Error ? error.name : "Error",
+                  },
+                });
+          await this.db.$transaction(async (tx) => {
+            await this.lockSource(tx, account, state, createdById);
+            await this.assertEligible(account, state, leaseId, tx);
+            await this.discovery.failedMedia(
+              tx,
+              ledger.id,
+              media.externalMediaId,
+              failure.details?.reason,
+            );
+          });
+          console.info(
+            JSON.stringify({
+              scope: "source_fetch",
+              event: "media_failed",
+              ...sourceDiagnostic(failure, {
+                ...diagnosticContext,
+                ...this.jobs.diagnosticContext?.(),
+                campaignId: execution?.campaignId,
+                campaign: execution?.campaign,
+                accountId: account.id,
+                postId: content.externalContentId,
+                platform: account.platform,
+                adapter: client.adapterKey,
+              }),
+            }),
+          );
+        }
       }
+      if (stored.length !== content.ownMedia.length)
+        return { created: false, mediaStored: downloadedCount, pending: true };
       await keepLease();
+      diagnosticContext.stage = "candidate_commit";
       await this.db.$transaction(async (tx) => {
         await this.lockSource(tx, account, state, createdById);
         await this.assertEligible(account, state, leaseId, tx);
@@ -1425,6 +2468,21 @@ export class SourceFetchService {
             },
           },
         });
+        for (const file of [...stored].sort((a, b) =>
+          a.id.localeCompare(b.id),
+        )) {
+          await tx.$queryRaw`SELECT id FROM file_objects WHERE id=${file.id}::uuid FOR UPDATE`;
+          if (
+            !(await tx.fileObject.count({
+              where: {
+                id: file.id,
+                lifecycleStatus: "active",
+                deletedAt: null,
+              },
+            }))
+          )
+            throw new Error("Discovery file inactive");
+        }
         await tx.candidateMedia.createMany({
           data: content.ownMedia.map((media, index) => ({
             candidatePostId: created.id,
@@ -1437,8 +2495,9 @@ export class SourceFetchService {
             mediaType: media.type,
           })),
         });
+        await this.discovery.complete(tx, ledger.id);
       });
-      return { created: true, mediaStored: stored.length };
+      return { created: true, mediaStored: downloadedCount };
     } catch (error) {
       for (const file of stored.reverse())
         await this.files.purgeUnreferenced(file.id).catch(() => undefined);
@@ -1575,6 +2634,15 @@ export class SourceFetchService {
         });
         if (!changed.count)
           throw new Error("Source account changed while renewing lease");
+        await tx.sourceAccountScanState.updateMany({
+          where: {
+            accountId: account.id,
+            epoch: state.scanEpoch ?? -1,
+            leaseOwnerJobId: state.scanOwnerJobId ?? leaseId,
+            leaseUntil: { gt: new Date() },
+          },
+          data: { leaseUntil: new Date(Date.now() + SOURCE_LEASE_MS) },
+        });
       });
       renewAt = Date.now() + SOURCE_LEASE_RENEW_MS;
     };
@@ -1585,6 +2653,7 @@ export class SourceFetchService {
     account: Account,
     state: FetchState,
     actorId: string | null,
+    cleanup = false,
   ) {
     // Match management writes: archive locks author before accounts; account
     // replacement/unbind locks account before states. Network I/O stays outside.
@@ -1593,10 +2662,24 @@ export class SourceFetchService {
     // Hold that same row while checking actor eligibility and committing writes.
     if (actorId) {
       await tx.$queryRaw`SELECT id FROM users WHERE id = ${actorId}::uuid FOR SHARE`;
-      await this.assertActor(actorId, tx);
+      if (!cleanup) await this.assertActor(actorId, tx);
+    }
+    const execution = this.accountExecution.getStore();
+    if (execution) {
+      await this.platforms.lock(tx, execution.platform);
+      if (
+        !(await tx.sourcePlatformState.count({
+          where: {
+            platform: execution.platform,
+            credentialGeneration: execution.generation,
+          },
+        }))
+      )
+        throw new ConflictException("Credential generation changed");
     }
     await tx.$queryRaw`SELECT id FROM authors WHERE id = ${account.authorId}::uuid FOR SHARE`;
     await tx.$queryRaw`SELECT id FROM author_external_accounts WHERE id = ${account.id}::uuid FOR SHARE`;
+    await tx.$queryRaw`SELECT account_id FROM source_account_scan_states WHERE account_id = ${account.id}::uuid FOR NO KEY UPDATE`;
     await tx.$queryRaw`SELECT id FROM source_adapter_states WHERE id = ${state.id}::uuid FOR NO KEY UPDATE`;
   }
 
@@ -1615,6 +2698,17 @@ export class SourceFetchService {
         authorizationStatus: "authorized",
         revision: account.author.revision,
       },
+      ...(leaseId
+        ? {
+            scanState: {
+              is: {
+                epoch: state.scanEpoch ?? -1,
+                leaseOwnerJobId: state.scanOwnerJobId ?? leaseId,
+                leaseUntil: { gt: new Date() },
+              },
+            },
+          }
+        : {}),
       adapterStates: {
         some: {
           id: state.id,

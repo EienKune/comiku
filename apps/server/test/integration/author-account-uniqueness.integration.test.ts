@@ -208,6 +208,22 @@ test("same-author X synchronization is allowed while identity replacement preser
         fetchLeaseId: randomUUID(),
       },
     });
+    const coverage = new Date("2026-10-20T00:00:00.000Z");
+    const unfinished = {
+      version: 1,
+      sourceId: oldIdentity,
+      firstSyncMode: "none",
+      startTime: null,
+      endTime: "2026-10-21T00:00:00.000Z",
+    };
+    await db.sourceAccountScanState.create({
+      data: {
+        accountId: original.id,
+        discoveredThroughAt: coverage,
+        windowJson: unfinished,
+        epoch: 9,
+      },
+    });
     const otherAccount = await service.createAccount(other.id, {
       platform: "x",
       externalUserId: newIdentity,
@@ -278,6 +294,21 @@ test("same-author X synchronization is allowed while identity replacement preser
     });
     assert.deepEqual(fresh.cursorJson, {});
     assert.equal(fresh.highWaterExternalId, null);
+    assert.equal(
+      await db.sourceAccountScanState.findUnique({
+        where: { accountId: replaced.id },
+      }),
+      null,
+    );
+    const oldScan = await db.sourceAccountScanState.findUniqueOrThrow({
+      where: { accountId: original.id },
+    });
+    assert.equal(
+      oldScan.discoveredThroughAt?.toISOString(),
+      coverage.toISOString(),
+    );
+    assert.deepEqual(oldScan.windowJson, unfinished);
+    assert.equal(oldScan.epoch, 9);
   } finally {
     if (candidateId)
       await db.candidatePost.delete({ where: { id: candidateId } });

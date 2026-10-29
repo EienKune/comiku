@@ -35,6 +35,8 @@ import {
   CandidateDto,
   CandidatePageDto,
   CandidateQueryDto,
+  CreateCandidateReviewSessionDto,
+  CandidateReviewSessionDto,
   CandidateUploadSessionDto,
   CandidateTagGroupDto,
   CreateCandidateTagGroupDto,
@@ -73,8 +75,24 @@ export class CandidatesController {
   @ApiOperation({ operationId: "listCandidates" })
   @ApiQuery({ type: CandidateQueryDto })
   @ApiOkResponse({ type: CandidatePageDto })
-  list(@Query(bodyValidation(CandidateQueryDto)) query: CandidateQueryDto) {
-    return this.candidates.list(query);
+  list(
+    @Req() request: AuthRequest,
+    @Query(bodyValidation(CandidateQueryDto)) query: CandidateQueryDto,
+  ) {
+    return this.candidates.list(query, request.actor.userId);
+  }
+
+  @Post("review-sessions")
+  @Access({ permission: "candidates:read" })
+  @ApiOperation({ operationId: "createCandidateReviewSession" })
+  @ApiBody({ type: CreateCandidateReviewSessionDto })
+  @ApiCreatedResponse({ type: CandidateReviewSessionDto })
+  createReviewSession(
+    @Req() request: AuthRequest,
+    @Body(bodyValidation(CreateCandidateReviewSessionDto))
+    input: CreateCandidateReviewSessionDto,
+  ) {
+    return this.candidates.createReviewSession(request.actor.userId, input);
   }
 
   @Get("tag-groups")

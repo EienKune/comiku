@@ -24,6 +24,8 @@ import {
   SourceFetchAcceptedDto,
   SourceFetchProgressDto,
   SourceFetchRunDto,
+  SourcePlatformStateDto,
+  SourcePlatformRecheckDto,
 } from "./source-fetch.dto.js";
 import { SourceFetchService } from "./source-fetch.service.js";
 
@@ -34,6 +36,27 @@ export class SourceFetchController {
   constructor(
     @Inject(SourceFetchService) private readonly fetches: SourceFetchService,
   ) {}
+
+  @Get("platforms")
+  @Access({ permission: "system:manage" })
+  @ApiOperation({ operationId: "listSourcePlatforms" })
+  @ApiOkResponse({ type: SourcePlatformStateDto, isArray: true })
+  async platforms(): Promise<SourcePlatformStateDto[]> {
+    return (await this.fetches.platforms.list()).map((state) => ({
+      ...state,
+      cooldownUntil: state.cooldownUntil?.toISOString() ?? null,
+    }));
+  }
+
+  @Post("platforms/:platform/recheck")
+  @HttpCode(200)
+  @Access({ permission: "system:manage" })
+  @ApiOperation({ operationId: "recheckSourcePlatform" })
+  @ApiParam({ name: "platform", type: String })
+  @ApiOkResponse({ type: SourcePlatformRecheckDto })
+  recheck(@Param("platform") platform: string, @Req() request: AuthRequest) {
+    return this.fetches.recheckPlatform(platform, request.actor.userId);
+  }
 
   @Get("progress")
   @Access({ permission: "candidates:manage" })

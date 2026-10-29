@@ -1,5 +1,10 @@
+import {
+  controlledFailureDetails,
+  type SourceFailureDetails,
+} from "./source-diagnostics.js";
 /** Only controlled messages cross the adapter boundary; upstream bodies may contain secrets. */
 export class SourceResponseError extends Error {
+  declare readonly details: SourceFailureDetails | undefined;
   constructor(
     readonly code:
       | "authentication"
@@ -7,6 +12,7 @@ export class SourceResponseError extends Error {
       | "temporary_failure"
       | "configuration"
       | "invalid_response",
+    details?: SourceFailureDetails,
   ) {
     const messages = {
       authentication: "图源 身份验证或访问权限失效，请检查凭据及账号授权",
@@ -17,6 +23,10 @@ export class SourceResponseError extends Error {
     };
     super(messages[code]);
     this.name = "SourceResponseError";
+    Object.defineProperty(this, "details", {
+      value: details ? controlledFailureDetails(details) : undefined,
+      enumerable: false,
+    });
   }
 }
 
@@ -33,7 +43,11 @@ export async function requestSourceJson(
   try {
     response = await request();
   } catch {
-    throw new SourceResponseError("temporary_failure");
+    throw new SourceResponseError("temporary_failure", {
+      reason: "network_error",
+      scope: "transport",
+      diagnostic: { stage: "request" },
+    });
   }
   if (!response.ok) {
     throw new SourceResponseError(
@@ -44,6 +58,18 @@ export async function requestSourceJson(
           : response.status >= 500 || response.status === 408
             ? "temporary_failure"
             : "configuration",
+      {
+        reason: `request_http_${response.status}`,
+        scope:
+          response.status === 401 || response.status === 429
+            ? "credential"
+            : response.status === 403 || response.status === 404
+              ? "source"
+              : response.status >= 500 || response.status === 408
+                ? "transport"
+                : "configuration",
+        diagnostic: { stage: "request", http_status: response.status },
+      },
     );
   }
   let raw: Record<string, unknown> | null;

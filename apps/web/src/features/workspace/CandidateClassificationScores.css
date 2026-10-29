@@ -1,0 +1,85 @@
+.candidate-scores-trigger {
+  display: inline-flex;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: help;
+}
+.candidate-scores {
+  position: fixed;
+  z-index: 100;
+  width: max-content;
+  min-width: min(27rem, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+.candidate-scores__scroll {
+  max-height: min(280px, calc(100dvh - 24px));
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.candidate-scores p {
+  margin: 0;
+  padding: 12px;
+}
+.candidate-scores table {
+  width: 100%;
+  border-spacing: 0;
+  font-size: var(--text-xs);
+}
+.candidate-scores th,
+.candidate-scores td {
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--color-border);
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.candidate-scores thead th {
+  position: sticky;
+  top: 0;
+  background: var(--color-surface-muted);
+  font-weight: 500;
+}
+.candidate-scores th:first-child {
+  min-width: 46px;
+  font-weight: 500;
+}
+.candidate-scores tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.candidate-scores tbody tr:hover {
+  background: var(--color-surface-muted);
+}
+.candidate-scores__winner {
+  font-weight: var(--font-weight-control);
+}
+.candidate-scores__winner--neutral {
+  color: var(--color-text-soft);
+}
+.candidate-scores__winner--info {
+  color: var(--color-status-info-text);
+}
+.candidate-scores__winner--success {
+  color: var(--color-status-success-text);
+}
+.candidate-scores__winner--warning {
+  color: var(--color-status-warning-text);
+}
+.candidate-scores__winner--danger {
+  color: var(--color-status-danger-text);
+}
+.candidate-scores td.candidate-scores__state {
+  text-align: left;
+  padding-left: 20px;
+}

@@ -5,9 +5,43 @@ import { ImageAnalysisService } from "../src/image-analysis/image-analysis.servi
 import type { PrismaService } from "../src/database/prisma.service.js";
 import type { FileObjectsService } from "../src/files/file-objects.service.js";
 import type { JobHandler, JobsService } from "../src/jobs/jobs.service.js";
-import { Prisma, type BackgroundJob } from "../src/generated/prisma/client.js";
+import { type BackgroundJob } from "../src/generated/prisma/client.js";
 import { activateImageAnalysisAdapter } from "../src/image-analysis/image-analysis-adapter.js";
 import { createExampleImageAnalysisAdapter } from "../src/image-analysis/example-adapter.js";
+
+// These fixtures isolate evidence/retirement behavior. Activation/queue behavior is
+// exercised independently in analysis-scheduling and PostgreSQL integration tests.
+class EvidenceService extends ImageAnalysisService {
+  constructor(
+    db: PrismaService,
+    jobs: JobsService,
+    files: FileObjectsService,
+    model: ConstructorParameters<typeof ImageAnalysisService>[3],
+  ) {
+    super(
+      db,
+      Object.assign(
+        {
+          lockScope: async () => {},
+          registerQueuePolicy: () => {},
+          registerQueueAvailability: () => {},
+          registerClaimGate: () => {},
+        },
+        jobs,
+      ),
+      files,
+      model,
+    );
+  }
+  override get scheduling(): ImageAnalysisService["scheduling"] {
+    return {
+      ensure: async () => ({}),
+      assert: async () => ({}),
+      migrateQueued: async () => {},
+      discover: async () => {},
+    } as unknown as ImageAnalysisService["scheduling"];
+  }
+}
 
 test("existing current-model results rebuild bounded summaries without new inference", async () => {
   const model = activateImageAnalysisAdapter(
@@ -37,15 +71,29 @@ test("existing current-model results rebuild bounded summaries without new infer
         const results =
           where.candidatePostId === "legacy"
             ? [result(0.2, 0.6, 0.3), result(0.3, 0.7, 0.2)]
-            : where.candidatePostId === "malformed"
-              ? [result(0.9, 0.7, 0.2), { score: 0.8, fixture: true }]
-              : where.candidatePostId === "nonwinner"
-                ? [result(0.99, 0.45, 0.55)]
-                : [result(0.9, 0.7, 0.2), null];
+            : where.candidatePostId === "all-malformed"
+              ? [{ score: 0.8, fixture: true }]
+              : where.candidatePostId === "malformed"
+                ? [result(0.9, 0.7, 0.2), { score: 0.8, fixture: true }]
+                : where.candidatePostId === "nonwinner"
+                  ? [result(0.99, 0.45, 0.55)]
+                  : [result(0.9, 0.7, 0.2), null];
         return results.map((resultJson) => ({
           analyses:
             resultJson === null
-              ? []
+              ? where.candidatePostId === "failed" ||
+                where.candidatePostId === "pending"
+                ? [
+                    {
+                      status:
+                        where.candidatePostId === "failed"
+                          ? "failed"
+                          : "queued",
+                      score: null,
+                      resultJson: null,
+                    },
+                  ]
+                : []
               : [{ status: "succeeded", score: resultJson.score, resultJson }],
         }));
       },
@@ -66,7 +114,15 @@ test("existing current-model results rebuild bounded summaries without new infer
     candidatePost: {
       findMany: async (query: { take?: number }) => {
         recoveryQuery = query;
-        return ["legacy", "partial", "malformed", "nonwinner"].map((id) => ({
+        return [
+          "legacy",
+          "partial",
+          "malformed",
+          "all-malformed",
+          "nonwinner",
+          "failed",
+          "pending",
+        ].map((id) => ({
           id,
         }));
       },
@@ -75,7 +131,7 @@ test("existing current-model results rebuild bounded summaries without new infer
     backgroundJob: { findMany: async () => [] },
     candidateMedia: { findMany: async () => [] },
   } as unknown as PrismaService;
-  const service = new ImageAnalysisService(
+  const service = new EvidenceService(
     db,
     {} as JobsService,
     {} as FileObjectsService,
@@ -86,23 +142,43 @@ test("existing current-model results rebuild bounded summaries without new infer
   assert.ok(
     recoveryQuery?.where?.OR?.some(
       (condition) =>
-        (condition as { analysisPredictions?: { equals?: unknown } })
-          .analysisPredictions?.equals === Prisma.DbNull,
+        (condition as { analysisSummaryVersion?: { lt?: number } })
+          .analysisSummaryVersion?.lt === 1,
     ),
   );
+  for (const [id, state] of [
+    ["partial", "queued"],
+    ["failed", "failed"],
+    ["pending", "queued"],
+  ]) {
+    assert.equal(updates.get(id)?.analysisScore, 0.9);
+    assert.equal(updates.get(id)?.analysisState, state);
+    assert.deepEqual(updates.get(id)?.analysisPredictions, [
+      { label: "comic", confidence: 0.7, score: 0.9 },
+    ]);
+  }
+  assert.equal(updates.get("partial")?.analysisScore, 0.9);
+  assert.equal(updates.get("malformed")?.analysisScore, 0.9);
   assert.deepEqual(updates.get("legacy"), {
     analysisModelKey: model.modelKey,
+    analysisSummaryVersion: 1,
     analysisState: "succeeded",
     analysisScore: 0.3,
     analysisPredictions: [{ label: "comic", confidence: 0.7, score: 0.3 }],
   });
   assert.deepEqual(updates.get("partial"), {
     analysisModelKey: model.modelKey,
+    analysisSummaryVersion: 1,
     analysisState: "queued",
-    analysisScore: null,
-    analysisPredictions: [],
+    analysisScore: 0.9,
+    analysisPredictions: [{ label: "comic", confidence: 0.7, score: 0.9 }],
   });
-  assert.deepEqual(updates.get("malformed")?.analysisPredictions, []);
+  assert.deepEqual(updates.get("malformed")?.analysisPredictions, [
+    { label: "comic", confidence: 0.7, score: 0.9 },
+  ]);
+  assert.equal(updates.get("malformed")?.analysisSummaryVersion, 1);
+  assert.equal(updates.get("all-malformed")?.analysisState, "failed");
+  assert.equal(updates.get("all-malformed")?.analysisScore, null);
   assert.deepEqual(updates.get("nonwinner")?.analysisPredictions, [
     { label: "comic_related", confidence: 0.55, score: 0.99 },
   ]);
@@ -113,7 +189,7 @@ test("review promotion uses declared labels and inclusive confidence, rejecting 
   const service = (
     model: ReturnType<typeof activateImageAnalysisAdapter> | null,
   ) =>
-    new ImageAnalysisService(
+    new EvidenceService(
       {} as PrismaService,
       {} as JobsService,
       {} as FileObjectsService,
@@ -221,22 +297,24 @@ test("disabled analysis still settles queued jobs without invoking inference", a
       assert.fail("Disabled adapters must not read image bytes");
     },
   } as unknown as FileObjectsService;
-  new ImageAnalysisService(db, jobs, files, null).onModuleInit();
+  new EvidenceService(db, jobs, files, null).onModuleInit();
   assert.ok(handlers.has("image_analysis"));
-  for (const kind of ["image_analysis"]) {
-    await handlers.get(kind)!(
+  const payloads = [{ modelKey: "old-key" }, null, false, ["invalid"]];
+  for (const payload of payloads) {
+    await handlers.get("image_analysis")!(
       {
-        id: kind,
+        id: "image_analysis",
         resourceId: "missing-media",
-        payload: { modelKey: "old-key" },
+        idempotencyKey: "image-analysis:missing-media:old-key",
+        payload,
         status: "running",
         leaseId: "lease",
       } as unknown as BackgroundJob,
       new AbortController().signal,
     );
   }
-  assert.equal(jobUpdates.length, 1);
-  assert.equal(analysisUpdates.length, 1);
+  assert.equal(jobUpdates.length, payloads.length);
+  assert.equal(analysisUpdates.length, payloads.length);
   for (const update of jobUpdates)
     assert.equal(
       (update as { data: { status: string } }).data.status,
@@ -286,7 +364,7 @@ test("retirement rechecks a concurrently claimed lease before failing media", as
       updateMany: async () => ({ count: 0 }),
     },
   } as unknown as PrismaService;
-  const service = new ImageAnalysisService(
+  const service = new EvidenceService(
     db,
     {} as JobsService,
     {} as FileObjectsService,
@@ -294,4 +372,139 @@ test("retirement rechecks a concurrently claimed lease before failing media", as
   );
   await service.schedulePending();
   assert.equal(analysisWrites, 0);
+});
+
+test("disabling partial analysis leaves same-key re-enable repairable without repeating successful inference", async () => {
+  const model = activateImageAnalysisAdapter({
+    ...createExampleImageAnalysisAdapter(),
+    async analyze() {
+      assert.fail("Re-enable must reuse persisted successes");
+    },
+  });
+  const result = {
+    score: 0.75,
+    predictedClass: "comic",
+    classScores: [
+      { label: "comic", value: 0.75 },
+      { label: "comic_related", value: 0.2 },
+      { label: "other", value: 0.05 },
+    ],
+    evidence: [],
+    identity: model.identity,
+    modelKey: model.modelKey,
+  };
+  const successful = {
+    id: "success",
+    mediaId: "success-media",
+    modelKey: model.modelKey,
+    status: "succeeded",
+    score: 0.75,
+    resultJson: result,
+  };
+  const queued = {
+    id: "queued",
+    mediaId: "queued-media",
+    modelKey: model.modelKey,
+    status: "queued",
+    score: null,
+    resultJson: null,
+    media: { candidatePostId: "post" },
+  };
+  const before = structuredClone(successful);
+  const summary = {
+    analysisModelKey: model.modelKey,
+    analysisSummaryVersion: 1,
+    analysisState: "queued",
+    analysisScore: 0.75 as number | null,
+    analysisPredictions: [{ label: "comic", confidence: 0.75, score: 0.75 }],
+    status: "discarded",
+    revision: 9,
+  };
+  let writes = 0;
+  const tx = {
+    $queryRaw: async () => [],
+    backgroundJob: {
+      count: async () => 0,
+      updateMany: async () => ({ count: 1 }),
+    },
+    candidateMediaAnalysis: {
+      updateMany: async () => {
+        queued.status = "failed";
+        return { count: 1 };
+      },
+    },
+    candidateMedia: {
+      findMany: async () => [
+        { analyses: [successful] },
+        { analyses: [queued] },
+      ],
+    },
+    candidatePost: {
+      update: async ({ data }: { data: Record<string, unknown> }) => {
+        writes++;
+        Object.assign(summary, data);
+      },
+    },
+  };
+  const db = {
+    $transaction: async (callback: (value: typeof tx) => Promise<void>) =>
+      callback(tx),
+    candidateMediaAnalysis: {
+      findMany: async ({ where }: { where: { modelKey?: unknown } }) =>
+        queued.status === "queued" &&
+        (!where.modelKey || typeof where.modelKey !== "object")
+          ? [queued]
+          : [],
+    },
+    backgroundJob: { findMany: async () => [] },
+    candidateMedia: { findMany: async () => [] },
+    candidatePost: {
+      findMany: async () =>
+        summary.analysisSummaryVersion < 1 ||
+        summary.analysisModelKey !== model.modelKey
+          ? [{ id: "post" }]
+          : [],
+    },
+  } as unknown as PrismaService;
+  const disabled = new EvidenceService(
+    db,
+    {} as JobsService,
+    {} as FileObjectsService,
+    null,
+  );
+  await disabled.schedulePending("post");
+  assert.equal(queued.status, "failed");
+  assert.equal(
+    summary.analysisSummaryVersion,
+    0,
+    "Unavailable taxonomy must not certify a completed repair",
+  );
+  const enabled = new EvidenceService(
+    db,
+    {} as JobsService,
+    {} as FileObjectsService,
+    model,
+  );
+  await enabled.schedulePending("post");
+  assert.equal(summary.analysisSummaryVersion, 1);
+  assert.equal(summary.analysisState, "failed");
+  assert.equal(summary.analysisScore, 0.75);
+  assert.deepEqual(summary.analysisPredictions, [
+    { label: "comic", confidence: 0.75, score: 0.75 },
+  ]);
+  assert.equal(
+    enabled.hasEvidence(summary.analysisScore, summary.analysisPredictions),
+    true,
+  );
+  assert.equal(enabled.promotesReview(summary.analysisPredictions), true);
+  assert.equal(summary.status, "discarded");
+  assert.equal(summary.revision, 9);
+  assert.deepEqual(successful, before);
+  const afterRepair = writes;
+  await enabled.schedulePending("post");
+  assert.equal(
+    writes,
+    afterRepair,
+    "Repaired terminal summaries must not loop",
+  );
 });

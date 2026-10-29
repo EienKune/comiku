@@ -1,6 +1,203 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GalleryDlContentSource } from "../src/source-ingestion/adapters/gallery-dl/gallery-dl-content-source.js";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  GalleryDlContentSource,
+  galleryProcessResult,
+} from "../src/source-ingestion/adapters/gallery-dl/gallery-dl-content-source.js";
+import { sourceDiagnostic } from "../src/source-ingestion/source-diagnostics.js";
+
+test("gallery consumption omits malformed percent UTF8 without losing stage", async () => {
+  for (const bytes of [
+    "%FF",
+    "%C3",
+    "%E0%A4",
+    "%F0%9F",
+    "%E2%28%A1",
+    "%ED%A0%80",
+    "%25FF",
+  ]) {
+    const message = `https%3A%2F%2Fexample.invalid%2Fpath%3Fq%3Dfirst${bytes}privatesuffix`;
+    const source = new GalleryDlContentSource(
+      "x",
+      { python: "/none", configPath: "/absent/qa.json" },
+      async () =>
+        page({
+          error: "auth_failed",
+          diagnostic: { stage: "enumeration", message },
+        }),
+    );
+    await assert.rejects(
+      source.fetchPage(account, initial),
+      (error: unknown) => {
+        assert.deepEqual(sourceDiagnostic(error).diagnostic, {
+          stage: "enumeration",
+          message: "[diagnostic omitted]",
+        });
+        return true;
+      },
+    );
+  }
+});
+
+test("gallery consumption suppresses suffixes after encoded URL and sensitive JSON delimiters", async () => {
+  for (const message of [
+    "https%3A%2F%2Fexample.invalid%2Fpath%3Fq%3Dfirst%0Aprivatesuffix",
+    "https:\\u002f\\u002fexample.invalid/path?q=first\\u000aprivatesuffix",
+    '{"access_token":"first\\u000aprivatesuffix"}',
+    '{"access_token":"first\\u000dprivatesuffix"}',
+    '{"access_token":"first\\u0022privatesuffix"}',
+  ]) {
+    const source = new GalleryDlContentSource(
+      "x",
+      { python: "/none", configPath: "/absent/qa.json" },
+      async () =>
+        page({
+          error: "auth_failed",
+          diagnostic: { stage: "enumeration", message },
+        }),
+    );
+    await assert.rejects(
+      source.fetchPage(account, initial),
+      (error: unknown) => {
+        const result = sourceDiagnostic(error);
+        assert.equal(JSON.stringify(result).includes("privatesuffix"), false);
+        assert.equal(
+          (result.diagnostic as Record<string, string>).stage,
+          "enumeration",
+        );
+        assert.equal(
+          (result.diagnostic as Record<string, string>).message,
+          "[diagnostic omitted]",
+        );
+        return true;
+      },
+    );
+  }
+});
+
+test("trusted synthetic config and cookie values are suppressed at the bridge consumption boundary", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "comiku-diagnostic-test-"));
+  try {
+    const configPath = join(directory, "synthetic-config.json");
+    const cookiePath = join(directory, "synthetic-cookies.txt");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        extractor: {
+          pixiv: { "refresh-token": "synthetic-pixiv-credential" },
+          twitter: { cookies: cookiePath },
+        },
+      }),
+    );
+    await writeFile(
+      cookiePath,
+      ".example.invalid\tTRUE\t/\tTRUE\t0\tauth_token\tsynthetic-cookie-credential\n",
+    );
+    const bridge = new GalleryDlContentSource(
+      "x",
+      { python: "/synthetic/python", configPath },
+      async () =>
+        page({
+          error: "auth_failed",
+          diagnostic: {
+            stage: "enumeration",
+            message: [
+              configPath,
+              cookiePath,
+              "synthetic-pixiv-credential",
+              "synthetic-cookie-credential",
+            ].join("\n"),
+          },
+        }),
+    );
+    await assert.rejects(
+      bridge.fetchPage(account, initial),
+      (error: unknown) => {
+        const text = JSON.stringify(sourceDiagnostic(error));
+        for (const secret of [
+          configPath,
+          cookiePath,
+          "synthetic-pixiv-credential",
+          "synthetic-cookie-credential",
+        ])
+          assert.equal(text.includes(secret), false);
+        assert.equal(sourceDiagnostic(error).reason, "auth_failed");
+        assert.equal(
+          (sourceDiagnostic(error).diagnostic as Record<string, string>).stage,
+          "enumeration",
+        );
+        return true;
+      },
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("runner diagnostics distinguish exit, timeout, spawn, output cap and malformed JSON", () => {
+  for (const [error, reason] of [
+    [{ code: 2 }, "process_exit"],
+    [{ killed: true, signal: "SIGTERM" }, "process_timeout"],
+    [{ code: "ENOENT" }, "process_start"],
+    [{ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }, "process_output_limit"],
+    [null, "invalid_json"],
+  ] as const) {
+    assert.throws(
+      () =>
+        galleryProcessResult(
+          error,
+          "bad JSON secret-fixture",
+          "Authorization: secret-fixture\nfailed",
+          10,
+          ["secret-fixture"],
+        ),
+      (failure: unknown) => {
+        const detail = sourceDiagnostic(failure);
+        assert.equal(detail.reason, reason);
+        assert.equal(JSON.stringify(detail).includes("secret-fixture"), false);
+        assert.equal(
+          (detail.diagnostic as Record<string, string>).duration,
+          "10",
+        );
+        return true;
+      },
+    );
+  }
+});
+
+test("native failures preserve credential versus source scope without publishing diagnostics", async () => {
+  for (const [reason, scope] of [
+    ["auth_failed", "credential"],
+    ["challenge_required", "credential"],
+    ["source_forbidden", "source"],
+    ["not_found", "source"],
+    ["source_not_found", "source"],
+    ["post_not_found", "post"],
+    ["network_error", "transport"],
+  ]) {
+    await assert.rejects(
+      client([
+        page({
+          error: reason,
+          diagnostic: {
+            stage: "enumeration",
+            message: "private fixture",
+            payload: "never",
+          },
+        }),
+      ]).fetchPage(account, initial),
+      (error: unknown) => {
+        assert.equal(sourceDiagnostic(error).reason, reason);
+        assert.equal(sourceDiagnostic(error).failureScope, scope);
+        assert.equal(JSON.stringify(error).includes("private fixture"), false);
+        return true;
+      },
+    );
+  }
+});
 
 const account = { externalUserId: "798688505224273920", handle: "example" };
 const initial = { startTime: "2026-10-24T00:00:00.000Z" };
@@ -513,4 +710,105 @@ test("Pixiv structured tags survive normalization when the title has no hashtags
     "ブルーアーカイブ",
     "漫画",
   ]);
+});
+
+test("gallery initial windows preserve defaults and include exactly seven days", () => {
+  const now = new Date("2026-10-28T12:34:56.789Z");
+  for (const platform of ["x", "pixiv"] as const) {
+    const source = new GalleryDlContentSource(platform, {
+      python: "/none",
+      configPath: "/none",
+    });
+    assert.deepEqual(source.supportedFirstSyncModes, [
+      "none",
+      "last_24_hours",
+      "last_7_days",
+    ]);
+    for (const [mode, milliseconds] of [
+      ["none", 0],
+      ["last_24_hours", 86_400_000],
+      ["last_7_days", 604_800_000],
+    ] as const) {
+      assert.equal(
+        Date.parse(source.initialCursor(mode, now).startTime as string),
+        now.getTime() - milliseconds,
+      );
+    }
+  }
+});
+
+test("Pixiv preserves native plain caption, line breaks, link text and entities", async () => {
+  const description = "First & second\nLink label <literal>\n日本語";
+  const metadata = {
+    id: "123",
+    user: { id: account.externalUserId },
+    type: "illust",
+    count: 1,
+    page_count: 1,
+    date: "2026-10-25 13:16:53",
+    title: "Fixture title",
+    description,
+    num: 0,
+    extension: "jpg",
+  };
+  const source = new GalleryDlContentSource(
+    "pixiv",
+    { python: "/none", configPath: "/none" },
+    async () =>
+      page({
+        platform: "pixiv",
+        terminal: true,
+        next: null,
+        records: [
+          [2, metadata],
+          [3, "https://i.pximg.net/img-original/fixture.jpg", metadata],
+        ],
+      }),
+  );
+  const item = (await source.fetchPage(account, initial)).items[0];
+  assert.equal(item.title, "Fixture title");
+  assert.equal(item.description, description);
+  assert.equal(item.text, description);
+  assert.equal(item.rawJson.description, description);
+});
+
+test("internal post refresh retains large decimal identifiers through JSON and checks requested target", async () => {
+  const postId = "798688505224273923";
+  const metadata = {
+    tweet_id: postId,
+    author: { id: account.externalUserId },
+    date: "2026-10-25 10:00:00",
+    count: 1,
+    num: 1,
+    type: "photo",
+    extension: "jpg",
+    quoted_id: "798688505224273925",
+  };
+  const wire = JSON.parse(
+    JSON.stringify(
+      page({
+        post_status: "ready",
+        post_id: postId,
+        records: [
+          [2, metadata],
+          [3, "https://pbs.twimg.com/media/synthetic.jpg", metadata],
+        ],
+        terminal: true,
+        next: null,
+        boundary: false,
+      }),
+    ),
+  );
+  const c = client([wire]);
+  const result = await c.fetchPost(account, postId);
+  assert.equal(result.kind, "ready");
+  if (result.kind === "ready") {
+    assert.equal(result.item.externalContentId, postId);
+    assert.equal(result.item.referencedContentId, "798688505224273925");
+    assert.equal(result.item.ownMedia[0].externalMediaId, postId + ":1");
+  }
+  await assert.rejects(client([wire]).fetchPost(account, "798688505224273924"));
+  const aborted = new AbortController();
+  aborted.abort();
+  await assert.rejects(client([]).fetchPost(account, postId, aborted.signal));
 });

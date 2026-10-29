@@ -1,3 +1,17 @@
+import {
+  CandidateReviewSessions,
+  assertCandidateReader,
+} from "./candidate-review-sessions.js";
+import {
+  candidateBaseWhere,
+  candidateFilterHash,
+  candidateRankingCte,
+  candidatePendingSql,
+  decodeCandidateCursor,
+  encodeCandidateCursor,
+  normalizeCandidateFilter,
+} from "./candidate-query.js";
+import type { CreateCandidateReviewSessionDto } from "./candidates.dto.js";
 import { JobsService } from "../jobs/jobs.service.js";
 import {
   BadRequestException,
@@ -168,20 +182,50 @@ export class CandidatesService {
     analysisModelKey: string | null;
     analysisState: string;
     analysisScore: number | null;
+    analysisPredictions: unknown;
   }) {
     const key = this.analysis?.activeModelKey;
     if (!key || candidate.analysisModelKey !== key)
       return { state: "unprocessed", score: null };
     return {
       state: candidate.analysisState,
-      score:
-        candidate.analysisState === "succeeded"
-          ? candidate.analysisScore
-          : null,
+      score: this.analysis?.hasEvidence(
+        candidate.analysisScore,
+        candidate.analysisPredictions,
+      )
+        ? candidate.analysisScore
+        : null,
     };
   }
 
-  private dto(candidate: CandidateDetails): CandidateDto {
+  private detailsWithAnalysis() {
+    return {
+      ...details,
+      _count: {
+        select: {
+          media: {
+            where: {
+              fileObject: {
+                lifecycleStatus: "active" as const,
+                deletedAt: null,
+              },
+              candidatePost: { author: { deletedAt: null } },
+              analyses: {
+                some: {
+                  modelKey: this.analysis?.activeModelKey ?? "",
+                  status: "failed" as const,
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+  }
+
+  private dto(
+    candidate: CandidateDetails & { _count?: { media: number } },
+  ): CandidateDto {
     const analysis = this.analysisSummary(candidate);
     const account =
       candidate.authorExternalAccount ??
@@ -189,8 +233,11 @@ export class CandidatesService {
       candidate.author.externalAccounts[0];
     return {
       id: candidate.id,
+      canRetryAnalysis: Boolean(
+        this.analysis?.activeModelKey && candidate._count?.media,
+      ),
       classificationTags:
-        analysis.state === "succeeded"
+        analysis.score !== null
           ? (this.analysis?.classificationTags(candidate.analysisPredictions) ??
             [])
           : [],
@@ -252,174 +299,140 @@ export class CandidatesService {
     };
   }
 
-  async list(query: CandidateQueryDto): Promise<CandidatePageDto> {
-    const limit = query.limit ?? 24;
-    const search = query.search?.replace(/^@/, "").trim();
-    const activeModelKey = this.analysis?.activeModelKey;
-    const rows = await this.db.candidatePost.findMany({
-      where: {
-        status: query.status ?? "pending",
-        authorId: query.authorId,
-        author: {
-          sourceLanguage: query.sourceLanguage,
-          ...(search
-            ? {
-                OR: [
-                  { displayName: { contains: search, mode: "insensitive" } },
-                  {
-                    externalAccounts: {
-                      some: {
-                        deletedAt: null,
-                        handle: { contains: search, mode: "insensitive" },
-                      },
-                    },
-                  },
-                ],
-              }
-            : {}),
-        },
-        fetchedAt:
-          query.fetchedAfter || query.fetchedBefore
-            ? {
-                gte: query.fetchedAfter
-                  ? new Date(query.fetchedAfter)
-                  : undefined,
-                lte: query.fetchedBefore
-                  ? new Date(query.fetchedBefore)
-                  : undefined,
-              }
-            : undefined,
-      },
-      select: {
-        id: true,
-        tagDisposition: true,
-        analysisScore: true,
-        analysisState: true,
-        analysisModelKey: true,
-        analysisPredictions: true,
-        postedAt: true,
-        classificationDecision: { select: { label: true } },
-        classificationSuggestions: {
-          orderBy: { createdAt: "desc" },
-          take: 1,
-          select: { label: true },
-        },
-        ...(activeModelKey
-          ? {
-              _count: {
-                select: {
-                  media: {
-                    where: {
-                      fileObject: {
-                        lifecycleStatus: "active" as const,
-                        deletedAt: null,
-                      },
-                      candidatePost: { author: { deletedAt: null } },
-                      OR: [
-                        { analyses: { none: { modelKey: activeModelKey } } },
-                        {
-                          analyses: {
-                            some: {
-                              modelKey: activeModelKey,
-                              status: "queued",
-                            },
-                          },
-                        },
-                        {
-                          candidatePost: {
-                            OR: [
-                              { analysisModelKey: null },
-                              { analysisModelKey: { not: activeModelKey } },
-                            ],
-                          },
-                        },
-                      ],
-                    },
-                  },
-                },
+  private get reviewSessions() {
+    return new CandidateReviewSessions(this.db);
+  }
+  private get queryPolicy() {
+    return (
+      this.analysis?.candidateQueryPolicy ?? {
+        modelKey: null,
+        labels: [],
+        positiveLabels: [],
+        minimumConfidence: 0,
+      }
+    );
+  }
+  createReviewSession(actorId: string, input: CreateCandidateReviewSessionDto) {
+    return this.reviewSessions.create(actorId, input, this.queryPolicy);
+  }
+  cleanupReviewSessions() {
+    return this.reviewSessions.cleanup();
+  }
+
+  async list(
+    query: CandidateQueryDto,
+    actorId?: string,
+  ): Promise<CandidatePageDto> {
+    const filter = normalizeCandidateFilter(query);
+    const policy = this.queryPolicy;
+    const binding = {
+      sessionId: query.reviewSessionId ?? null,
+      filterHash: candidateFilterHash(filter),
+      modelKey: policy.modelKey,
+      group: query.triageGroup ?? null,
+    };
+    const limit = Math.min(100, Math.max(1, query.limit ?? 24));
+    return this.db.$transaction(
+      async (tx) => {
+        const session = query.reviewSessionId
+          ? await this.reviewSessions.read(
+              tx,
+              query.reviewSessionId,
+              actorId ?? "",
+              filter,
+              policy.modelKey,
+            )
+          : null;
+        if (actorId && !session) await assertCandidateReader(tx, actorId);
+        const cursor = query.cursor
+          ? decodeCandidateCursor(query.cursor, binding, session?.cursorSecret)
+          : null;
+        type PageRow = {
+          id: string;
+          ordinal: number;
+          rank: number;
+          sort_score: number;
+          posted_at: Date;
+        };
+        let page: PageRow[];
+        let total: number;
+        if (session) {
+          const where = Prisma.sql`e.session_id = ${session.id}::uuid AND ${candidateBaseWhere(filter)} ${query.triageGroup ? Prisma.sql`AND e.triage_group = ${query.triageGroup}` : Prisma.empty}`;
+          const count = await tx.$queryRaw<
+            { count: number }[]
+          >`SELECT count(*)::int AS count FROM candidate_review_session_entries e JOIN candidate_posts c ON c.id = e.candidate_id JOIN authors a ON a.id = c.author_id WHERE ${where}`;
+          total = count[0].count;
+          page = await tx.$queryRaw<
+            PageRow[]
+          >`SELECT c.id, e.ordinal FROM candidate_review_session_entries e JOIN candidate_posts c ON c.id = e.candidate_id JOIN authors a ON a.id = c.author_id WHERE ${where} AND e.ordinal > ${cursor?.ordinal ?? 0} ORDER BY e.ordinal LIMIT ${limit + 1}`;
+        } else {
+          const cte = candidateRankingCte(filter, policy);
+          const group = query.triageGroup
+            ? Prisma.sql`triage_group = ${query.triageGroup}`
+            : Prisma.sql`true`;
+          const count = await tx.$queryRaw<
+            { count: number }[]
+          >`${cte} SELECT count(*)::int AS count FROM ranked WHERE ${group}`;
+          total = count[0].count;
+          // id sorts descending too; spell out the final tie instead of negating UUIDs.
+          const keyset = cursor
+            ? Prisma.sql`AND (rank > ${cursor.rank} OR (rank = ${cursor.rank} AND (sort_score < ${cursor.score} OR (sort_score = ${cursor.score} AND (posted_at < ${new Date(cursor.postedAt!)} OR (posted_at = ${new Date(cursor.postedAt!)} AND id < ${cursor.id}::uuid))))))`
+            : Prisma.empty;
+          page = await tx.$queryRaw<
+            PageRow[]
+          >`${cte} SELECT id, rank, sort_score, posted_at FROM ranked WHERE ${group} ${keyset} ORDER BY rank, sort_score DESC, posted_at DESC, id DESC LIMIT ${limit + 1}`;
+        }
+        const hasNext = page.length > limit;
+        page = page.slice(0, limit);
+        const loaded = page.length
+          ? await tx.candidatePost.findMany({
+              where: {
+                id: { in: page.map((row) => row.id) },
+                status: filter.status,
+                author: { deletedAt: null },
               },
-            }
-          : {}),
+              include: this.detailsWithAnalysis(),
+            })
+          : [];
+        const byId = new Map(loaded.map((row) => [row.id, row]));
+        const pending = await tx.$queryRaw<{ pending: boolean }[]>(
+          candidatePendingSql(filter, policy.modelKey, session?.id),
+        );
+        const last = page.at(-1);
+        return {
+          analysisPending: pending[0].pending,
+          items: page.flatMap((row) => {
+            const current = byId.get(row.id);
+            return current ? [this.dto(current)] : [];
+          }),
+          total,
+          nextCursor:
+            hasNext && last
+              ? encodeCandidateCursor(
+                  {
+                    ...binding,
+                    ...(session
+                      ? { ordinal: last.ordinal }
+                      : {
+                          rank: last.rank,
+                          score: last.sort_score,
+                          postedAt: last.posted_at.toISOString(),
+                          id: last.id,
+                        }),
+                  },
+                  session?.cursorSecret,
+                )
+              : null,
+        };
       },
-    });
-    // Pending work can be outside the selected group or loaded page and still
-    // move into this view after analysis. Reuse the existing filtered summary.
-    const analysisPending = Boolean(
-      activeModelKey &&
-      rows.some(
-        (row) =>
-          row._count?.media > 0 &&
-          ["unprocessed", "queued"].includes(this.analysisSummary(row).state),
-      ),
+      { timeout: 30_000 },
     );
-    const classifyGroup = (row: (typeof rows)[number]) => {
-      const visual =
-        row.classificationDecision?.label ??
-        row.classificationSuggestions[0]?.label ??
-        "manga";
-      if (visual === "photo") return "photo" as const;
-      if (row.tagDisposition === "blocked") return "blocked_manga" as const;
-      if (
-        row.tagDisposition === "valid" ||
-        (this.analysisSummary(row).state === "succeeded" &&
-          this.analysis?.promotesReview(row.analysisPredictions))
-      )
-        return "valid_manga" as const;
-      return "neutral_manga" as const;
-    };
-    // Resolve model policy once per candidate, rather than on every sort comparison.
-    const groups = new Map(rows.map((row) => [row.id, classifyGroup(row)]));
-    const group = (row: (typeof rows)[number]) => groups.get(row.id)!;
-    const rank = {
-      valid_manga: 0,
-      neutral_manga: 1,
-      blocked_manga: 2,
-      photo: 3,
-    } as const;
-    const filtered = rows
-      .filter((row) => !query.triageGroup || group(row) === query.triageGroup)
-      .sort(
-        (left, right) =>
-          ((query.status ?? "pending") === "pending"
-            ? rank[group(left)] - rank[group(right)]
-            : 0) ||
-          ((query.status ?? "pending") === "pending"
-            ? (this.analysisSummary(right).score ?? -1) -
-              (this.analysisSummary(left).score ?? -1)
-            : 0) ||
-          right.postedAt.getTime() - left.postedAt.getTime() ||
-          right.id.localeCompare(left.id),
-      );
-    let start = 0;
-    if (query.cursor) {
-      start = filtered.findIndex((row) => row.id === query.cursor) + 1;
-      if (!start) throw new BadRequestException("候选分页游标无效或已过期");
-    }
-    const page = filtered.slice(start, start + limit);
-    const loaded = page.length
-      ? await this.db.candidatePost.findMany({
-          where: { id: { in: page.map((row) => row.id) } },
-          include: details,
-        })
-      : [];
-    const loadedById = new Map(
-      loaded.map((candidate) => [candidate.id, candidate]),
-    );
-    return {
-      analysisPending,
-      items: page.map((row) => this.dto(loadedById.get(row.id)!)),
-      total: filtered.length,
-      nextCursor:
-        start + page.length < filtered.length
-          ? (page.at(-1)?.id ?? null)
-          : null,
-    };
   }
 
   async get(id: string): Promise<CandidateDto> {
     const candidate = await this.db.candidatePost.findUnique({
       where: { id },
-      include: details,
+      include: this.detailsWithAnalysis(),
     });
     if (!candidate) throw new NotFoundException("候选不存在");
     return this.dto(candidate);

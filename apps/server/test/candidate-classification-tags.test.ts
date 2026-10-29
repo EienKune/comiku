@@ -142,7 +142,7 @@ test("malformed prediction caches never create classification tags", () => {
   }
 });
 
-test("candidate tags require current complete results and do not depend on review group or manual classification", async () => {
+test("candidate tags require valid current results even when sibling work is incomplete and do not depend on review group or manual classification", async () => {
   const model = activateImageAnalysisAdapter(adapter());
   const row = {
     id: "synthetic-candidate",
@@ -151,6 +151,7 @@ test("candidate tags require current complete results and do not depend on revie
     authorExternalAccount: null,
     analysisModelKey: model.modelKey,
     analysisState: "succeeded",
+    analysisSummaryVersion: 1,
     analysisScore: 0.8,
     analysisPredictions: [{ label: "ba_related", confidence: 0.8, score: 0.2 }],
     classificationDecision: { label: "photo", revision: 2 },
@@ -178,9 +179,11 @@ test("candidate tags require current complete results and do not depend on revie
   assert.equal(dto.visualClass, "photo");
   assert.equal(dto.classificationRevision, 2);
   assert.equal(dto.tagDisposition, "blocked");
-  for (const state of ["queued", "failed", "unprocessed"]) {
+  for (const state of ["queued", "failed"]) {
     row.analysisState = state;
-    assert.deepEqual((await service.get(row.id)).classificationTags, []);
+    assert.deepEqual((await service.get(row.id)).classificationTags, [
+      expected[1],
+    ]);
   }
   row.analysisState = "succeeded";
   row.analysisModelKey = "old-model";

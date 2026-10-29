@@ -1,3 +1,6 @@
+import { CandidatesService } from "./candidates/candidates.service.js";
+import { AnalysisConfigurationMismatch } from "./image-analysis/analysis-scheduling.js";
+import { SourceConfigurationMismatch } from "./source-ingestion/source-platform-state.js";
 import { DownloadsService } from "./transfers/downloads.service.js";
 import { ImageAnalysisService } from "./image-analysis/image-analysis.service.js";
 import "reflect-metadata";
@@ -22,6 +25,7 @@ const sources = app.get(SourceFetchService);
 const transfers = app.get(DownloadsService);
 const analysis = app.get(ImageAnalysisService);
 let nextAnalysisScan = 0;
+let nextReviewCleanup = 0;
 let nextSourceRecoveryScan = 0;
 let healthWriting = false;
 const heartbeat = async () => {
@@ -40,34 +44,57 @@ await heartbeat();
 const healthTimer = setInterval(() => {
   void heartbeat();
 }, 10_000);
-async function loop(lane: "heavy" | "network") {
+async function maintenanceLoop() {
   while (!stopping.signal.aborted) {
     try {
-      if (lane === "network") {
-        if (Date.now() >= nextSourceRecoveryScan) {
-          await sources.reconcileExhausted();
-          nextSourceRecoveryScan = Date.now() + 60_000;
-        }
+      if (Date.now() >= nextSourceRecoveryScan) {
+        await sources.reconcileExhausted();
+        await sources.recovery.schedule();
         await sources.scheduleDue();
-      } else {
-        await transfers.scheduleCleanup();
-        if (Date.now() >= nextAnalysisScan) {
-          await analysis.schedulePending();
-          nextAnalysisScan = Date.now() + 60_000;
-        }
+        nextSourceRecoveryScan = Date.now() + 60_000;
       }
-      if (await jobs.runNext(lane, stopping.signal)) {
-        if (lane === "network") await analysis.schedulePending();
-        continue;
+      await transfers.scheduleCleanup();
+      if (Date.now() >= nextReviewCleanup) {
+        await app.get(CandidatesService).cleanupReviewSessions();
+        nextReviewCleanup = Date.now() + 60_000;
+      }
+      if (Date.now() >= nextAnalysisScan) {
+        await analysis.schedulePending();
+        nextAnalysisScan = Date.now() + 60_000;
       }
     } catch {
-      console.error("后台任务轮询失败，稍后重试");
+      console.error("后台调度未完成，稍后重试");
+    }
+    await delay(5_000, undefined, { signal: stopping.signal }).catch(() => {});
+  }
+}
+async function loop(lane: "heavy" | "network" | "analysis", scope = "global") {
+  while (!stopping.signal.aborted) {
+    try {
+      if (await jobs.runNext(lane, stopping.signal, scope)) continue;
+    } catch (error) {
+      if (
+        error instanceof SourceConfigurationMismatch ||
+        error instanceof AnalysisConfigurationMismatch
+      ) {
+        console.error("当前工作进程的图源配置尚未激活，该平台暂停领取");
+        await delay(30_000, undefined, { signal: stopping.signal }).catch(
+          () => {},
+        );
+      } else console.error("后台任务轮询失败，稍后重试");
     }
     await delay(1_000, undefined, { signal: stopping.signal }).catch(() => {});
   }
 }
 try {
-  await Promise.all([loop("heavy"), loop("network")]);
+  await Promise.all([
+    maintenanceLoop(),
+    loop("heavy"),
+    loop("analysis"),
+    loop("network"),
+    loop("network", "source:x"),
+    loop("network", "source:pixiv"),
+  ]);
 } finally {
   clearInterval(healthTimer);
   await app.close();

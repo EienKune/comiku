@@ -1,6 +1,6 @@
 /** Explicit allow-list: job payloads and exception messages must never reach logs. */
 export function jobEvent(
-  event: "started" | "succeeded" | "retry_scheduled" | "failed",
+  event: "started" | "succeeded" | "retry_scheduled" | "failed" | "deferred",
   job: {
     id: string;
     resourceId: string;

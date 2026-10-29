@@ -1234,6 +1234,7 @@ test.each([
       tagDisposition,
       classificationTags: [{ label, text, tone }],
       reviewPriority: "low",
+      canRetryAnalysis: true,
       visualClass: "manga",
       visualClassSource: "default",
       classificationRevision: null,
@@ -1273,6 +1274,19 @@ test.each([
         response: new Response(null, { status: 200 }),
       };
     }) as never);
+    vi.spyOn(client, "POST").mockResolvedValue({
+      data: {
+        sessionId: crypto.randomUUID(),
+        expiresAt: new Date(Date.now() + 1800000).toISOString(),
+        counts: {
+          valid_manga: 1,
+          neutral_manga: 0,
+          blocked_manga: 0,
+          photo: 0,
+        },
+      },
+      response: new Response(null, { status: 201 }),
+    } as never);
     const patch = vi.spyOn(client, "PATCH").mockResolvedValue({
       data: {
         ...candidate,
@@ -1300,6 +1314,7 @@ test.each([
     );
 
     expect(await screen.findByText("测试候选")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重试识别" })).toBeTruthy();
     expect(screen.queryByText("同步记录")).toBeNull();
     expect(screen.queryByText(/来源抓取已排队|正在抓取：/)).toBeNull();
     expect(screen.getByRole("button", { name: "同步图源" })).toBeTruthy();
@@ -1345,7 +1360,7 @@ test.each([
   },
 );
 
-test("queued analysis refreshes all candidate groups and settles a cross-group completion race", async () => {
+test("queued analysis rehydrates cards without replacing snapshot membership", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const cache = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
@@ -1405,9 +1420,7 @@ test("queued analysis refreshes all candidate groups and settles a cross-group c
     // The first destination refresh observes the old state; the source refresh
     // then sees completion. A final coordinated refresh must fill the destination.
     if (phase === "finishing" && group === "neutral_manga") phase = "done";
-    const show =
-      (phase === "queued" && group === "neutral_manga") ||
-      (phase === "done" && group === "valid_manga");
+    const show = group === "neutral_manga";
     const items = show
       ? [
           {
@@ -1425,6 +1438,19 @@ test("queued analysis refreshes all candidate groups and settles a cross-group c
       response: new Response(null, { status: 200 }),
     };
   }) as never);
+  const sessions = vi.spyOn(client, "POST").mockResolvedValue({
+    data: {
+      sessionId: crypto.randomUUID(),
+      expiresAt: new Date(Date.now() + 1800000).toISOString(),
+      counts: {
+        valid_manga: 0,
+        neutral_manga: 1,
+        blocked_manga: 0,
+        photo: 0,
+      },
+    },
+    response: new Response(null, { status: 201 }),
+  } as never);
   try {
     const mounted = render(
       <QueryClientProvider client={cache}>
@@ -1455,6 +1481,7 @@ test("queued analysis refreshes all candidate groups and settles a cross-group c
     });
     await waitFor(() => expect(screen.getByText("BA 漫画／插画")).toBeTruthy());
     expect(screen.getAllByText("分组刷新候选")).toHaveLength(1);
+    expect(sessions).toHaveBeenCalledTimes(1);
     const settled = calls;
     mounted.unmount();
     await act(async () => {
@@ -1545,58 +1572,69 @@ test("manual source upload uses a signed session before finalizing candidates", 
   });
   const post = vi.spyOn(client, "POST").mockImplementation(async (path) => {
     const data =
-      path === "/api/candidates/upload-sessions"
+      path === "/api/candidates/review-sessions"
         ? {
-            id: "00000000-0000-4000-8000-000000000030",
-            status: "pending",
-            expiresAt: "2026-09-12T00:00:00.000Z",
-            items: [
-              {
-                id: "00000000-0000-4000-8000-000000000031",
-                sourceName: "page.png",
-                status: "pending",
-                upload: {
-                  url: "https://upload.example.test/item",
-                  method: "PUT",
-                  headers: {
-                    "Content-Type": "image/png",
-                    "x-amz-meta-sha256": "fixture",
-                  },
-                  expiresAt: "2026-09-11T00:15:00.000Z",
-                },
-                message: null,
-                warnings: [],
-                candidate: null,
-              },
-            ],
+            sessionId: crypto.randomUUID(),
+            expiresAt: new Date(Date.now() + 1800000).toISOString(),
+            counts: {
+              valid_manga: 0,
+              neutral_manga: 0,
+              blocked_manga: 0,
+              photo: 0,
+            },
           }
-        : path === "/api/candidates/upload-sessions/{id}/finalize"
+        : path === "/api/candidates/upload-sessions"
           ? {
               id: "00000000-0000-4000-8000-000000000030",
-              status: "completed",
+              status: "pending",
               expiresAt: "2026-09-12T00:00:00.000Z",
               items: [
                 {
                   id: "00000000-0000-4000-8000-000000000031",
                   sourceName: "page.png",
-                  status: "created",
-                  upload: null,
+                  status: "pending",
+                  upload: {
+                    url: "https://upload.example.test/item",
+                    method: "PUT",
+                    headers: {
+                      "Content-Type": "image/png",
+                      "x-amz-meta-sha256": "fixture",
+                    },
+                    expiresAt: "2026-09-11T00:15:00.000Z",
+                  },
                   message: null,
                   warnings: [],
-                  candidate: manualCandidate,
+                  candidate: null,
                 },
               ],
             }
-          : {
-              results: [
-                {
-                  id: manualCandidate.id,
-                  outcome: "succeeded",
-                  message: null,
-                  workId: "00000000-0000-4000-8000-000000000050",
-                },
-              ],
-            };
+          : path === "/api/candidates/upload-sessions/{id}/finalize"
+            ? {
+                id: "00000000-0000-4000-8000-000000000030",
+                status: "completed",
+                expiresAt: "2026-09-12T00:00:00.000Z",
+                items: [
+                  {
+                    id: "00000000-0000-4000-8000-000000000031",
+                    sourceName: "page.png",
+                    status: "created",
+                    upload: null,
+                    message: null,
+                    warnings: [],
+                    candidate: manualCandidate,
+                  },
+                ],
+              }
+            : {
+                results: [
+                  {
+                    id: manualCandidate.id,
+                    outcome: "succeeded",
+                    message: null,
+                    workId: "00000000-0000-4000-8000-000000000050",
+                  },
+                ],
+              };
     return {
       data,
       response: new Response(null, {

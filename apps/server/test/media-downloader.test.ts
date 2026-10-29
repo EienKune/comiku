@@ -2,6 +2,24 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HttpMediaDownloader } from "../src/source-ingestion/media-downloader.js";
 import { createHash } from "node:crypto";
+import { sourceDiagnostic } from "../src/source-ingestion/source-diagnostics.js";
+
+test("CDN 403 retains media scope and a query-free endpoint", async () => {
+  await assert.rejects(
+    new HttpMediaDownloader(
+      async () => new Response(null, { status: 403 }),
+    ).download("https://fixture.invalid/image?signature=secret#private", [
+      "fixture.invalid",
+    ]),
+    (error: unknown) => {
+      const detail = sourceDiagnostic(error);
+      assert.equal(detail.failureScope, "media");
+      assert.equal(detail.reason, "media_http_403");
+      assert.equal(JSON.stringify(detail).includes("signature"), false);
+      return true;
+    },
+  );
+});
 
 test("unknown-length responses stop and cancel as soon as the actual size limit is crossed", async () => {
   let produced = 0;

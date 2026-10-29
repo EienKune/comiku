@@ -1,3 +1,4 @@
+import { analysisActivationFixture } from "./analysis-activation-fixture.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -42,6 +43,7 @@ async function pendingMediaFixture() {
   await app.init();
   const db = app.get(PrismaService),
     files = app.get(FileObjectsService);
+  const activation = await analysisActivationFixture(db, model.modelKey);
   const author = await db.author.create({
     data: { displayName: "Pending media fixture" },
   });
@@ -76,6 +78,7 @@ async function pendingMediaFixture() {
       await db.candidatePost.deleteMany({ where: { authorId: author.id } });
       await db.author.delete({ where: { id: author.id } });
       for (const id of fileIds) await files.purgeUnreferenced(id);
+      await activation.restore();
       await app.close();
     },
   };
@@ -99,6 +102,7 @@ test("mixed media stops polling when only unavailable images lack current result
         postedAt: new Date(),
         rawJson: {},
         analysisModelKey: model.modelKey,
+        analysisSummaryVersion: 1,
         analysisState: "queued",
         media: {
           create: [active, unavailable].map((file, orderIndex) => ({
@@ -242,6 +246,7 @@ test("pending scope spans groups and pages but excludes analysis that cannot pro
   const db = app.get(PrismaService),
     files = app.get(FileObjectsService),
     candidates = app.get(CandidatesService);
+  const activation = await analysisActivationFixture(db, model.modelKey);
   const author = await db.author.create({
     data: { displayName: "Analysis pending fixture" },
   });
@@ -278,6 +283,27 @@ test("pending scope spans groups and pages but excludes analysis that cannot pro
         },
       });
       postIds.push(post.id);
+      if (completed) {
+        const media = await db.candidateMedia.findFirstOrThrow({
+          where: { candidatePostId: post.id },
+        });
+        await db.candidateMediaAnalysis.create({
+          data: {
+            mediaId: media.id,
+            modelKey: model.modelKey,
+            modelRevision: model.identity.modelRevision,
+            decisionVersion: model.identity.decisionVersion,
+            sourceSha256: file.checksum,
+            status: "succeeded",
+            score: 0.9,
+            resultJson: {},
+          },
+        });
+        await db.candidatePost.update({
+          where: { id: post.id },
+          data: { analysisSummaryVersion: 1 },
+        });
+      }
     }
     const query = { authorId: author.id, limit: 1 };
     const page = await candidates.list(query);
@@ -298,7 +324,20 @@ test("pending scope spans groups and pages but excludes analysis that cannot pro
     assert.equal((await candidates.list(query)).analysisPending, true);
     await db.candidatePost.update({
       where: { id: pendingId },
-      data: { analysisState: "failed" },
+      data: { analysisState: "failed", analysisSummaryVersion: 1 },
+    });
+    const failedMedia = await db.candidateMedia.findFirstOrThrow({
+      where: { candidatePostId: pendingId },
+    });
+    await db.candidateMediaAnalysis.create({
+      data: {
+        mediaId: failedMedia.id,
+        modelKey: model.modelKey,
+        modelRevision: model.identity.modelRevision,
+        decisionVersion: model.identity.decisionVersion,
+        sourceSha256: file.checksum,
+        status: "failed",
+      },
     });
     assert.equal((await candidates.list(query)).analysisPending, false);
     await db.candidatePost.update({
@@ -318,7 +357,11 @@ test("pending scope spans groups and pages but excludes analysis that cannot pro
     });
     const deletedAuthor = await candidates.list(query);
     assert.equal(deletedAuthor.analysisPending, false);
-    assert.equal(deletedAuthor.total, 2);
+    assert.equal(
+      deletedAuthor.total,
+      0,
+      "Archived authors are removed from live eligibility",
+    );
     await db.author.update({
       where: { id: author.id },
       data: { deletedAt: null },
@@ -345,6 +388,7 @@ test("pending scope spans groups and pages but excludes analysis that cannot pro
     await db.candidatePost.deleteMany({ where: { id: { in: postIds } } });
     await db.author.delete({ where: { id: author.id } });
     if (fileId) await files.purgeUnreferenced(fileId);
+    await activation.restore();
     await app.close();
   }
 });
@@ -367,6 +411,7 @@ test("model switches hide stale summaries and rebuild existing history in bounde
   await app.init();
   const db = app.get(PrismaService),
     files = app.get(FileObjectsService);
+  const activation = await analysisActivationFixture(db, model.modelKey);
   const author = await db.author.create({
     data: { displayName: "Model switch fixture" },
   });
@@ -436,7 +481,28 @@ test("model switches hide stale summaries and rebuild existing history in bounde
     await analysis.schedulePending();
     const after = await candidates.list({ authorId: author.id, limit: 24 });
     assert.equal(after.items.length, 21);
-    assert.ok(after.items.every((post) => post.reviewPriority === "low"));
+    assert.ok(after.items.every((post) => post.reviewPriority === "failed"));
+    assert.equal(after.analysisPending, false);
+    assert.equal(
+      await db.candidatePost.count({
+        where: { authorId: author.id, analysisSummaryVersion: 1 },
+      }),
+      21,
+    );
+    const timestamps = await db.candidatePost.findMany({
+      where: { authorId: author.id },
+      select: { id: true, updatedAt: true },
+      orderBy: { id: "asc" },
+    });
+    await analysis.schedulePending();
+    assert.deepEqual(
+      await db.candidatePost.findMany({
+        where: { authorId: author.id },
+        select: { id: true, updatedAt: true },
+        orderBy: { id: "asc" },
+      }),
+      timestamps,
+    );
     assert.ok(
       after.items.every(
         (post) => post.revision === 0 && post.status === "pending",
@@ -466,6 +532,7 @@ test("model switches hide stale summaries and rebuild existing history in bounde
     await db.candidatePost.deleteMany({ where: { id: { in: postIds } } });
     await db.author.delete({ where: { id: author.id } });
     if (fileId) await files.purgeUnreferenced(fileId);
+    await activation.restore();
     await app.close();
   }
 });
@@ -489,6 +556,7 @@ test("current-model SQL-null prediction caches rebuild from winners without infe
   await app.init();
   const db = app.get(PrismaService),
     files = app.get(FileObjectsService);
+  const activation = await analysisActivationFixture(db, model.modelKey);
   const author = await db.author.create({
     data: { displayName: "Prediction cache fixture" },
   });
@@ -635,6 +703,7 @@ test("current-model SQL-null prediction caches rebuild from winners without infe
     if (postId) await db.candidatePost.delete({ where: { id: postId } });
     await db.author.delete({ where: { id: author.id } });
     if (fileId) await files.purgeUnreferenced(fileId);
+    await activation.restore();
     await app.close();
   }
 });

@@ -27,6 +27,8 @@
     "build:ops": "tsc -p tsconfig.ops.json",
     "ops:status": "pnpm db:generate && tsx src/ops/status.ts",
     "backup": "tsx scripts/backup.ts",
+    "images:activation": "node dist/ops/image-analysis.js",
+    "source:credentials": "node dist/ops/source-credentials.js",
     "deploy:check": "tsx scripts/check-production.ts"
   },
   "dependencies": {
