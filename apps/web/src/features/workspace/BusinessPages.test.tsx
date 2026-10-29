@@ -2,12 +2,17 @@ import { afterEach, expect, test, vi } from "vitest";
 import { useState } from "react";
 import {
   cleanup,
+  act,
   fireEvent,
   render,
   screen,
   waitFor,
 } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  focusManager,
+} from "@tanstack/react-query";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
 import type { CurrentUser } from "@comiku/api-client";
 import { client, queryClient } from "../account/api";
@@ -1182,118 +1187,285 @@ test("renders the scoped business audit feed with readable event context", async
   expect(screen.getByText(/流程变为 已发布/)).toBeTruthy();
 });
 
-test("candidate filters and human classification use the source metadata contract", async () => {
+test.each([
+  {
+    tagDisposition: "valid",
+    label: "ba_art",
+    text: "BA 漫画／插画",
+    tone: "success",
+  },
+  {
+    tagDisposition: "neutral",
+    label: "ba_related",
+    text: "BA 相关",
+    tone: "info",
+  },
+  {
+    tagDisposition: "neutral",
+    label: "other",
+    text: "非 BA 内容",
+    tone: "neutral",
+  },
+] as const)(
+  "candidate filters preserve tag evidence and display classifier category $label",
+  async ({ tagDisposition, label, text, tone }) => {
+    const user: CurrentUser = {
+      canSkipProofreading: false,
+      id: "00000000-0000-4000-8000-000000000001",
+      username: "source",
+      displayName: "图源",
+      roles: ["source"],
+      languageCapabilities: [],
+      isActive: true,
+      mustChangePassword: false,
+      revision: 1,
+      permissions: ["candidates:read", "candidates:manage"],
+    };
+    const candidate = {
+      id: "00000000-0000-4000-8000-000000000010",
+      authorId: "00000000-0000-4000-8000-000000000020",
+      authorName: "测试作者",
+      authorHandle: "test_artist",
+      authorAvatarAvailable: false,
+      platform: "x",
+      sourceLanguage: "ja",
+      sourceAdapters: ["x_web_session"],
+      hashtags: ["BlueArchive"],
+      tagDisposition,
+      classificationTags: [{ label, text, tone }],
+      reviewPriority: "low",
+      visualClass: "manga",
+      visualClassSource: "default",
+      classificationRevision: null,
+      externalPostId: "123",
+      externalPostUrl: "https://x.com/artist/status/123",
+      text: "测试候选",
+      referencedPostType: null,
+      referencedPostId: null,
+      status: "pending",
+      revision: 0,
+      media: [],
+      postedAt: "2026-09-12T00:00:00.000Z",
+      fetchedAt: "2026-09-12T00:01:00.000Z",
+      reviewedAt: null,
+      workId: null,
+    };
+    const get = vi.spyOn(client, "GET").mockImplementation((async (
+      ...args: unknown[]
+    ) => {
+      if (args[0] === "/api/source-fetch/progress")
+        return {
+          data: { active: null, lastManual: null },
+          response: new Response(null, { status: 200 }),
+        };
+      const options = args[1] as {
+        params?: { query?: { triageGroup?: string } };
+      };
+      return {
+        data: {
+          items:
+            options?.params?.query?.triageGroup === "valid_manga"
+              ? [candidate]
+              : [],
+          total: options?.params?.query?.triageGroup === "valid_manga" ? 1 : 0,
+          nextCursor: null,
+        },
+        response: new Response(null, { status: 200 }),
+      };
+    }) as never);
+    const patch = vi.spyOn(client, "PATCH").mockResolvedValue({
+      data: {
+        ...candidate,
+        visualClass: "photo",
+        visualClassSource: "human",
+        classificationRevision: 0,
+      },
+      response: new Response(null, { status: 200 }),
+    } as never);
+
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <MemoryRouter initialEntries={["/candidates"]}>
+          <Routes>
+            <Route element={<Outlet context={user} />}>
+              <Route path="/candidates" element={<CandidatesPage />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("测试候选")).toBeTruthy();
+    expect(screen.queryByText("同步记录")).toBeNull();
+    expect(screen.queryByText(/来源抓取已排队|正在抓取：/)).toBeNull();
+    expect(screen.getByRole("button", { name: "同步图源" })).toBeTruthy();
+    expect(screen.getByText("#BlueArchive")).toBeTruthy();
+    expect(
+      screen.getByText(tagDisposition === "valid" ? "有效标签" : "普通标签"),
+    ).toBeTruthy();
+    expect(screen.getByText(text).className).toContain(`ui-badge--${tone}`);
+    for (const removed of [
+      "模型命中",
+      "未识别",
+      "待识别",
+      "识别失败",
+      "优先查看",
+      "正常优先级",
+    ])
+      expect(screen.queryByText(removed)).toBeNull();
+    expect(screen.getByText("@test_artist")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "来源语言" }));
+    fireEvent.click(screen.getByRole("option", { name: "韩语" }));
+    await waitFor(() =>
+      expect(get).toHaveBeenCalledWith(
+        "/api/candidates",
+        expect.objectContaining({
+          params: {
+            query: expect.objectContaining({ sourceLanguage: "ko" }),
+          },
+        }),
+      ),
+    );
+
+    expect(await screen.findByText("测试候选")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "标记为照片" }));
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith(
+        "/api/candidates/{id}/classification",
+        expect.objectContaining({
+          body: { label: "photo", expectedRevision: null },
+        }),
+      ),
+    );
+  },
+);
+
+test("queued analysis refreshes all candidate groups and settles a cross-group completion race", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const cache = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  });
   const user: CurrentUser = {
-    canSkipProofreading: false,
     id: "00000000-0000-4000-8000-000000000001",
     username: "source",
     displayName: "图源",
     roles: ["source"],
     languageCapabilities: [],
+    canSkipProofreading: false,
     isActive: true,
     mustChangePassword: false,
     revision: 1,
     permissions: ["candidates:read", "candidates:manage"],
   };
+  let phase: "queued" | "finishing" | "done" = "queued";
+  let calls = 0;
   const candidate = {
     id: "00000000-0000-4000-8000-000000000010",
     authorId: "00000000-0000-4000-8000-000000000020",
     authorName: "测试作者",
-    authorHandle: "test_artist",
+    authorHandle: "fixture",
     authorAvatarAvailable: false,
     platform: "x",
     sourceLanguage: "ja",
-    sourceAdapters: ["x_web_session"],
-    hashtags: ["BlueArchive"],
-    tagDisposition: "valid",
+    sourceAdapters: [],
+    hashtags: [],
+    tagDisposition: "neutral",
     visualClass: "manga",
     visualClassSource: "default",
     classificationRevision: null,
-    externalPostId: "123",
-    externalPostUrl: "https://x.com/artist/status/123",
-    text: "测试候选",
+    externalPostId: "fixture",
+    externalPostUrl: "https://example.invalid/fixture",
+    text: "分组刷新候选",
     referencedPostType: null,
     referencedPostId: null,
     status: "pending",
     revision: 0,
     media: [],
-    postedAt: "2026-09-12T00:00:00.000Z",
-    fetchedAt: "2026-09-12T00:01:00.000Z",
+    postedAt: "2026-01-01T00:00:00Z",
+    fetchedAt: "2026-01-01T00:00:00Z",
     reviewedAt: null,
     workId: null,
   };
-  const get = vi.spyOn(client, "GET").mockImplementation((async (
-    ...args: unknown[]
+  vi.spyOn(client, "GET").mockImplementation((async (
+    _path: unknown,
+    options: { params?: { query?: { triageGroup?: string } } },
   ) => {
-    const options = args[1] as {
-      params?: { query?: { triageGroup?: string } };
-    };
+    if (_path === "/api/source-fetch/progress")
+      return {
+        data: { active: null, lastManual: null },
+        response: new Response(null, { status: 200 }),
+      };
+    calls++;
+    const group = options?.params?.query?.triageGroup;
+    // The first destination refresh observes the old state; the source refresh
+    // then sees completion. A final coordinated refresh must fill the destination.
+    if (phase === "finishing" && group === "neutral_manga") phase = "done";
+    const show =
+      (phase === "queued" && group === "neutral_manga") ||
+      (phase === "done" && group === "valid_manga");
+    const items = show
+      ? [
+          {
+            ...candidate,
+            reviewPriority: phase === "queued" ? "queued" : "high",
+            classificationTags:
+              phase === "queued"
+                ? []
+                : [{ label: "ba_art", text: "BA 漫画／插画", tone: "success" }],
+          },
+        ]
+      : [];
     return {
-      data: {
-        items:
-          options?.params?.query?.triageGroup === "valid_manga"
-            ? [candidate]
-            : [],
-        total: options?.params?.query?.triageGroup === "valid_manga" ? 1 : 0,
-        nextCursor: null,
-      },
+      data: { items, total: items.length, nextCursor: null },
       response: new Response(null, { status: 200 }),
     };
   }) as never);
-  const patch = vi.spyOn(client, "PATCH").mockResolvedValue({
-    data: {
-      ...candidate,
-      visualClass: "photo",
-      visualClassSource: "human",
-      classificationRevision: 0,
-    },
-    response: new Response(null, { status: 200 }),
-  } as never);
-
-  render(
-    <QueryClientProvider
-      client={
-        new QueryClient({ defaultOptions: { queries: { retry: false } } })
-      }
-    >
-      <MemoryRouter initialEntries={["/candidates"]}>
-        <Routes>
-          <Route element={<Outlet context={user} />}>
-            <Route path="/candidates" element={<CandidatesPage />} />
-          </Route>
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
-
-  expect(await screen.findByText("测试候选")).toBeTruthy();
-  expect(screen.getByText("#BlueArchive")).toBeTruthy();
-  expect(screen.getByText("有效标签")).toBeTruthy();
-  expect(screen.getByText("@test_artist")).toBeTruthy();
-
-  fireEvent.click(screen.getByRole("combobox", { name: "来源语言" }));
-  fireEvent.click(screen.getByRole("option", { name: "韩语" }));
-  await waitFor(() =>
-    expect(get).toHaveBeenCalledWith(
-      "/api/candidates",
-      expect.objectContaining({
-        params: {
-          query: expect.objectContaining({ sourceLanguage: "ko" }),
-        },
-      }),
-    ),
-  );
-
-  expect(await screen.findByText("测试候选")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "标记为照片" }));
-  await waitFor(() =>
-    expect(patch).toHaveBeenCalledWith(
-      "/api/candidates/{id}/classification",
-      expect.objectContaining({
-        body: { label: "photo", expectedRevision: null },
-      }),
-    ),
-  );
+  try {
+    const mounted = render(
+      <QueryClientProvider client={cache}>
+        <MemoryRouter initialEntries={["/candidates"]}>
+          <Routes>
+            <Route element={<Outlet context={user} />}>
+              <Route path="/candidates" element={<CandidatesPage />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("分组刷新候选")).toBeTruthy();
+    expect(screen.queryByText("待识别")).toBeNull();
+    const beforeBackground = calls;
+    focusManager.setFocused(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(calls).toBe(beforeBackground);
+    await act(async () => {
+      focusManager.setFocused(true);
+    });
+    await waitFor(() => expect(calls).toBeGreaterThan(beforeBackground));
+    phase = "finishing";
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    await waitFor(() => expect(screen.getByText("BA 漫画／插画")).toBeTruthy());
+    expect(screen.getAllByText("分组刷新候选")).toHaveLength(1);
+    const settled = calls;
+    mounted.unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(calls).toBe(settled);
+  } finally {
+    cache.clear();
+    focusManager.setFocused(undefined);
+    vi.useRealTimers();
+  }
 });
 
 test("manual source upload uses a signed session before finalizing candidates", async () => {

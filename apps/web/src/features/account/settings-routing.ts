@@ -8,7 +8,8 @@ const validBackgroundPath = (path: string) =>
   /^\/(?:works|authors|candidates|members|reviews|audit)(?:\/[^/?#]+)?(?:\/editor)?$/.test(
     path,
   ) ||
-  path === "/settings/users";
+  path === "/settings/users" ||
+  path === "/settings/system";
 
 export function settingsLinkState(location: Location) {
   return {

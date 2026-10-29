@@ -1,5 +1,8 @@
-import { requestSourceJson, SourceResponseError } from "./source-response.js";
-import type { FirstSyncMode } from "../generated/prisma/client.js";
+import {
+  requestSourceJson,
+  SourceResponseError,
+} from "../../source-response.js";
+import type { FirstSyncMode } from "../../../generated/prisma/client.js";
 import type {
   ContentSourceClient,
   NormalizedSourceContent,
@@ -7,7 +10,7 @@ import type {
   SourceAccountProfile,
   SourceCursor,
   SourcePage,
-} from "./content-source.js";
+} from "../../content-source.js";
 
 interface XMedia {
   media_key: string;
@@ -141,6 +144,19 @@ export class XContentSourceClient implements ContentSourceClient {
     account: SourceAccountIdentity,
     cursor: SourceCursor,
   ): Promise<SourcePage> {
+    const startTime = cursorString(cursor, "startTime");
+    const endTime = cursorString(cursor, "endTime");
+    const lower = startTime ? Date.parse(startTime) : null;
+    const upper = endTime ? Date.parse(endTime) : null;
+    if (
+      endTime &&
+      (!Number.isFinite(upper) ||
+        (startTime && !Number.isFinite(lower)) ||
+        (lower !== null && lower > upper!))
+    )
+      throw new SourceResponseError("configuration");
+    if (endTime && lower === upper)
+      return { items: [], complete: true, nextCursor: { startTime, endTime } };
     const query = new URLSearchParams({
       max_results: "100",
       "tweet.fields": "created_at,referenced_tweets,attachments,entities",
@@ -148,9 +164,11 @@ export class XContentSourceClient implements ContentSourceClient {
       "media.fields": "media_key,type,url,width,height",
     });
     const sinceId = cursorString(cursor, "sinceId");
-    const startTime = cursorString(cursor, "startTime");
     const paginationToken = cursorString(cursor, "paginationToken");
-    if (sinceId) query.set("since_id", sinceId);
+    if (endTime) {
+      if (startTime) query.set("start_time", startTime);
+      query.set("end_time", endTime);
+    } else if (sinceId) query.set("since_id", sinceId);
     else if (startTime) query.set("start_time", startTime);
     if (paginationToken) query.set("pagination_token", paginationToken);
 
@@ -175,12 +193,7 @@ export class XContentSourceClient implements ContentSourceClient {
     const media = new Map(
       (result.includes?.media ?? []).map((item) => [item.media_key, item]),
     );
-    const previousHighest = cursorString(cursor, "highestSeenId") ?? sinceId;
-    const highestSeenId = greatestId([
-      ...(previousHighest ? [previousHighest] : []),
-      ...tweets.map((tweet) => tweet.id),
-    ]);
-    const items: NormalizedSourceContent[] = tweets.map((tweet) => {
+    const normalized: NormalizedSourceContent[] = tweets.map((tweet) => {
       if (
         !tweet ||
         typeof tweet.id !== "string" ||
@@ -245,21 +258,40 @@ export class XContentSourceClient implements ContentSourceClient {
         rawJson: tweet,
       };
     });
+    const items = endTime
+      ? normalized.filter((item) => {
+          const at = Date.parse(item.publishedAt);
+          return (lower === null || at >= lower) && at < upper!;
+        })
+      : normalized;
+    const previousHighest =
+      cursorString(cursor, "highestSeenId") ?? (endTime ? undefined : sinceId);
+    const highestSeenId = greatestId([
+      ...(previousHighest ? [previousHighest] : []),
+      ...items.map((item) => item.externalContentId),
+    ]);
     const nextToken = result.meta?.next_token;
     return {
       items,
       complete: !nextToken,
-      nextCursor: nextToken
+      nextCursor: endTime
         ? {
-            ...(sinceId ? { sinceId } : { startTime }),
-            paginationToken: nextToken,
+            ...(startTime ? { startTime } : {}),
+            endTime,
+            ...(nextToken ? { paginationToken: nextToken } : {}),
             ...(highestSeenId ? { highestSeenId } : {}),
           }
-        : highestSeenId
-          ? { sinceId: highestSeenId }
-          : sinceId
-            ? { sinceId }
-            : { startTime },
+        : nextToken
+          ? {
+              ...(sinceId ? { sinceId } : { startTime }),
+              paginationToken: nextToken,
+              ...(highestSeenId ? { highestSeenId } : {}),
+            }
+          : highestSeenId
+            ? { sinceId: highestSeenId }
+            : sinceId
+              ? { sinceId }
+              : { startTime },
     };
   }
 }

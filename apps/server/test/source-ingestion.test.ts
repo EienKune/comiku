@@ -12,7 +12,7 @@ import {
   normalizeHashtag,
 } from "../src/source-ingestion/hashtags.js";
 import { ContentSourceRegistry } from "../src/source-ingestion/source-registry.js";
-import { XWebSessionContentSourceClient } from "../src/source-ingestion/x-web-session-content-source.js";
+import { XWebSessionContentSourceClient } from "../src/source-ingestion/adapters/x-web-session/x-web-session-content-source.js";
 
 class FixtureSource implements ContentSourceClient {
   readonly platform = "fixture";

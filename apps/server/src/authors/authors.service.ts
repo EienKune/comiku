@@ -60,14 +60,22 @@ const authorDetails = {
   externalAccounts: {
     where: { deletedAt: null },
     orderBy: { createdAt: "asc" },
-    include: { adapterStates: { orderBy: { adapterKey: "asc" } } },
+    include: {
+      adapterStates: {
+        omit: { discoveryCheckpointJson: true },
+        orderBy: { adapterKey: "asc" },
+      },
+    },
   },
 } as const;
 type AuthorWithDetails = Prisma.AuthorGetPayload<{
   include: typeof authorDetails;
 }>;
 const accountDetails = {
-  adapterStates: { orderBy: { adapterKey: "asc" } },
+  adapterStates: {
+    omit: { discoveryCheckpointJson: true },
+    orderBy: { adapterKey: "asc" },
+  },
 } as const;
 type ExternalAccount = Prisma.AuthorExternalAccountGetPayload<{
   include: typeof accountDetails;
@@ -238,10 +246,7 @@ export class AuthorsService {
     fetchEnabled = true,
   ) {
     const normalized = normalizePlatform(platform);
-    if (normalized === "pixiv") {
-      if (fetchEnabled || firstSyncMode !== "none") {
-        throw new BadRequestException("Pixiv 当前仅保存作者信息，不能启用抓取");
-      }
+    if (normalized === "pixiv" && !fetchEnabled && firstSyncMode === "none") {
       return normalized;
     }
     let clients;
@@ -249,6 +254,11 @@ export class AuthorsService {
       clients = this.sources.forPlatform(normalized);
     } catch {
       throw new BadRequestException("暂不支持该内容平台");
+    }
+    if (normalized === "pixiv") {
+      clients = clients.filter((client) => client.available);
+      if (!clients.length)
+        throw new BadRequestException("Pixiv 尚未配置可用的抓取通道");
     }
     if (
       !clients.some((item) =>
@@ -764,11 +774,17 @@ export class AuthorsService {
         if (!current) throw new NotFoundException("平台账号不存在");
         if (current.revision !== input.expectedRevision)
           throw new ConflictException("平台账号已更新，请刷新后重试");
-        this.validateAccount(
-          current.platform,
-          input.firstSyncMode,
-          input.fetchEnabled,
-        );
+        if (
+          current.platform !== "pixiv" ||
+          input.firstSyncMode !== current.firstSyncMode ||
+          (input.fetchEnabled && !current.fetchEnabled)
+        ) {
+          this.validateAccount(
+            current.platform,
+            input.firstSyncMode,
+            input.fetchEnabled,
+          );
+        }
         const identity = this.identity(
           current.platform,
           input.externalUserId ?? current.externalUserId,
@@ -861,8 +877,12 @@ export class AuthorsService {
       },
     });
     if (!account) throw new NotFoundException("平台账号不存在");
-    if (!this.sources.get(normalizedKey)) {
-      throw new BadRequestException("来源适配器不存在");
+    if (input.enabled) {
+      const adapter = this.sources.get(normalizedKey);
+      if (!adapter || adapter.platform !== account.platform)
+        throw new BadRequestException("来源适配器不存在或不属于该平台");
+      if (!adapter.available)
+        throw new BadRequestException("来源适配器尚未配置");
     }
     const changed = await this.db.sourceAdapterState.updateMany({
       where: {
@@ -884,6 +904,7 @@ export class AuthorsService {
     });
     if (!changed.count) {
       const existing = await this.db.sourceAdapterState.findUnique({
+        select: { id: true },
         where: {
           externalAccountId_adapterKey: {
             externalAccountId: accountId,

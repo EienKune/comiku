@@ -19,7 +19,12 @@ import {
 } from "@nestjs/swagger";
 import { Access, type AuthRequest } from "../common/access.js";
 import { bodyValidation } from "../common/http.js";
-import { RunSourceFetchDto, SourceFetchRunDto } from "./source-fetch.dto.js";
+import {
+  RunSourceFetchDto,
+  SourceFetchAcceptedDto,
+  SourceFetchProgressDto,
+  SourceFetchRunDto,
+} from "./source-fetch.dto.js";
 import { SourceFetchService } from "./source-fetch.service.js";
 
 @ApiTags("source-fetch")
@@ -30,8 +35,16 @@ export class SourceFetchController {
     @Inject(SourceFetchService) private readonly fetches: SourceFetchService,
   ) {}
 
+  @Get("progress")
+  @Access({ permission: "candidates:manage" })
+  @ApiOperation({ operationId: "getSourceFetchProgress" })
+  @ApiOkResponse({ type: SourceFetchProgressDto })
+  progress() {
+    return this.fetches.progress();
+  }
+
   @Get("runs")
-  @Access({ permission: "candidates:read" })
+  @Access({ permission: "system:manage" })
   @ApiOperation({ operationId: "listSourceFetchRuns" })
   @ApiOkResponse({ type: SourceFetchRunDto, isArray: true })
   list() {
@@ -39,7 +52,7 @@ export class SourceFetchController {
   }
 
   @Get("runs/:id")
-  @Access({ permission: "candidates:read" })
+  @Access({ permission: "system:manage" })
   @ApiOperation({ operationId: "getSourceFetchRun" })
   @ApiParam({ name: "id", type: String, format: "uuid" })
   @ApiOkResponse({ type: SourceFetchRunDto })
@@ -52,11 +65,12 @@ export class SourceFetchController {
   @Access({ permission: "candidates:manage" })
   @ApiOperation({ operationId: "runSourceFetch" })
   @ApiBody({ type: RunSourceFetchDto })
-  @ApiOkResponse({ type: SourceFetchRunDto })
-  run(
+  @ApiOkResponse({ type: SourceFetchAcceptedDto })
+  async run(
     @Req() request: AuthRequest,
     @Body(bodyValidation(RunSourceFetchDto)) input: RunSourceFetchDto,
-  ) {
-    return this.fetches.runManual(request.actor.userId, input);
+  ): Promise<SourceFetchAcceptedDto> {
+    const run = await this.fetches.runManual(request.actor.userId, input);
+    return { id: run.id, status: run.status };
   }
 }

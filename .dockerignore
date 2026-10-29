@@ -4,6 +4,16 @@
 **/dist-ops
 **/coverage
 .qa
+.local-adapters
+.local-docs
+.superpowers
+HANDOFF.md
+HANDOFF.MD
+handoff.md
+docs/superpowers
+docs/guides/source-trial.md
+**/__pycache__
+**/*.pyc
 .comiku-data
 external-references
 labelplus-example

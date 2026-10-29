@@ -33,7 +33,7 @@ pnpm --filter @comiku/server build:ops
 pnpm api:check
 ```
 
-普通测试不访问真实 X/R2 或业务数据库。业务变更增加行为测试；UI 交互检查桌面和窄屏，保留键盘、焦点及滚动恢复。提交信息（Commit Message）与 PR 描述请清晰写明解决的问题、修改结果、验证方式及未覆盖边界。
+普通测试不访问真实 X/R2 或业务数据库。业务变更增加行为测试；UI 交互检查桌面和窄屏，保留键盘、焦点及滚动恢复。提交信息（Commit Message）只写解决的问题与具体改动；验证记录、部署说明和未覆盖边界放在相应交接文档或 PR 描述中。
 
 ### 数据库测试
 
@@ -58,6 +58,8 @@ pnpm test:integration
 ### API 与适配器
 
 DTO/控制器变更后执行 `pnpm api:generate`，同时提交 OpenAPI 和共享类型；不手改生成文件，详见 [API 流程](docs/api/README.md)。X、文件存储、LabelPlus 和后台任务通过适配器或模块公开服务协作。外部平台错误不应被误判成空结果或推进抓取水位。真实服务测试必须另行配置独立凭据与可接受预算。
+
+可选识别遵循 [模型 adapter 接口](docs/adapters/image-analysis.md)，默认不加载模型；example 和 BA 实现是公开源码，模型权重、私有配置和真实样本不提交。[采集 adapter 说明](docs/adapters/source-ingestion.md) 记录来源契约与目录；gallery-dl 的 TS、Python 与固定依赖集中在 `apps/server/src/source-ingestion/adapters/gallery-dl/`，默认 Node 镜像保持轻量，可选择 `gallery-runtime` 镜像目标。开发计划、试用记录与私有实验遵循 `AGENTS.md` 的开源边界，不放进公开文档。
 
 ### Linux 验证
 

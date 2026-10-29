@@ -1,6 +1,8 @@
 import { downloadPrepared, uploadDirect, pollTransfer } from "./transfers-api";
 import { useImageUrl } from "../../components/use-image-url";
 import { refreshReviewViews } from "./review-cache";
+import { useCandidateAnalysisRefresh } from "./use-candidate-analysis-refresh";
+import { SourceSyncControl } from "./SourceSyncControl";
 import { MemberAvatar } from "../account/MemberAvatar";
 import {
   useCallback,
@@ -29,7 +31,6 @@ import {
   Grid2X2,
   List,
   Plus,
-  RefreshCw,
   ScanText,
   Search,
   Upload,
@@ -2605,12 +2606,12 @@ const candidateTriageSections: {
   {
     value: "valid_manga",
     title: "有效标签漫画 / 插画",
-    description: "已命中配置的作品标签，适合优先快速审核。",
+    description: "命中配置的作品标签或模型确认，优先审核。",
   },
   {
     value: "neutral_manga",
     title: "普通漫画 / 插画",
-    description: "没有命中有效或黑名单标签，按时间正常审核。",
+    description: "未命中有效标签或模型确认，保留人工判断。",
   },
   {
     value: "blocked_manga",
@@ -2666,6 +2667,7 @@ function CandidateGridSection({
   onToggle,
   onSelectLoaded,
   onClassify,
+  onRetryAnalysis,
   orderingCandidateId,
   onToggleOrdering,
 }: {
@@ -2681,6 +2683,7 @@ function CandidateGridSection({
     candidate: Candidate,
     label: components["schemas"]["CandidateVisualClass"],
   ) => void;
+  onRetryAnalysis: (candidate: Candidate) => void;
   orderingCandidateId: string | null;
   onToggleOrdering: (id: string) => void;
 }) {
@@ -2746,6 +2749,11 @@ function CandidateGridSection({
                 </div>
                 <p>{candidate.text || "此原帖没有文字说明。"}</p>
                 <div className="workspace-tags">
+                  {candidate.classificationTags?.map((category) => (
+                    <Badge key={category.label} tone={category.tone}>
+                      {category.text}
+                    </Badge>
+                  ))}
                   <Badge
                     tone={
                       candidate.tagDisposition === "valid"
@@ -2818,6 +2826,16 @@ function CandidateGridSection({
                         : "标记为照片"}
                     </Button>
                   )}
+                  {candidate.reviewPriority === "failed" &&
+                    user.permissions.includes("candidates:manage") && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => onRetryAnalysis(candidate)}
+                      >
+                        重试识别
+                      </Button>
+                    )}
                 </footer>
                 {orderingCandidateId === candidate.id && (
                   <CandidateOrderPanel
@@ -2882,34 +2900,7 @@ function CandidateGridSection({
 export function CandidatesPage() {
   const user = useAccount();
   const action = useAction();
-  const [sourceRunId, setSourceRunId] = useState<string | null>(null);
-  const sourceRun = useQuery({
-    queryKey: ["source-fetch", sourceRunId],
-    enabled: Boolean(sourceRunId),
-    queryFn: async () =>
-      unwrap(
-        await client.GET("/api/source-fetch/runs/{id}", {
-          params: { path: { id: sourceRunId! } },
-        }),
-      ),
-    refetchInterval: (query) =>
-      query.state.data &&
-      ["queued", "running"].includes(query.state.data.status)
-        ? 2_000
-        : false,
-  });
-  const sourceActive = Boolean(
-    sourceRunId &&
-    (!sourceRun.data || ["queued", "running"].includes(sourceRun.data.status)),
-  );
-  useEffect(() => {
-    if (
-      !sourceRun.data ||
-      ["queued", "running"].includes(sourceRun.data.status)
-    )
-      return;
-    void queryClient.invalidateQueries({ queryKey: ["candidates"] });
-  }, [sourceRun.data]);
+  useCandidateAnalysisRefresh();
   const [status, setStatus] = useState("pending");
   const [language, setLanguage] = useState<SourceLanguage | "all">("all");
   const [fetchedRange, setFetchedRange] = useState("all");
@@ -2921,6 +2912,17 @@ export function CandidatesPage() {
   );
   const runCandidateAction = action.run;
   const setCandidateSuccess = action.setSuccess;
+  async function retryAnalysis(candidate: Candidate) {
+    await action.run(async () => {
+      await unwrap(
+        await client.POST("/api/candidates/{id}/analysis-retry", {
+          params: { path: { id: candidate.id } },
+        }),
+      );
+      await queryClient.invalidateQueries({ queryKey: ["candidates"] });
+      action.setSuccess("识别已重新排队");
+    });
+  }
   async function classify(
     candidate: Candidate,
     label: components["schemas"]["CandidateVisualClass"],
@@ -2968,19 +2970,6 @@ export function CandidatesPage() {
     },
     [runCandidateAction, selected, setCandidateSuccess],
   );
-  async function fetchSources() {
-    await action.run(async () => {
-      const run = await unwrap(
-        await client.POST("/api/source-fetch/runs", { body: {} }),
-      );
-      setSourceRunId(run.id);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["candidates"] }),
-        invalidateWorkViews(),
-      ]);
-      action.setSuccess("来源抓取已排队，后台完成后自动刷新候选");
-    });
-  }
   const selectedCount = Object.keys(selected).length;
   const topbarRegistration = useMemo(
     () =>
@@ -3036,15 +3025,6 @@ export function CandidatesPage() {
       <SectionHeading title="候选池">
         筛选已抓取的图片组，批量入库为作品。
       </SectionHeading>
-      {sourceRun.data && (
-        <p className="account-notice" role="status">
-          {sourceRun.data.status === "queued"
-            ? "抓取已排队，等待后台处理"
-            : sourceRun.data.status === "running"
-              ? `正在抓取：已读取 ${sourceRun.data.items.reduce((sum, item) => sum + item.pagesFetched, 0)} 页`
-              : `抓取结束：${sourceRun.data.status === "succeeded" ? "完成" : "部分通道未完成，请查看作者通道状态"}`}
-        </p>
-      )}
       <Toolbar>
         <SearchField
           placeholder="搜索作者昵称或 @账号"
@@ -3101,15 +3081,7 @@ export function CandidatesPage() {
             >
               手动上传
             </Button>
-            <Button
-              variant="secondary"
-              leadingIcon={<RefreshCw size={16} />}
-              loading={action.busy}
-              disabled={sourceActive}
-              onClick={() => void fetchSources()}
-            >
-              抓取来源
-            </Button>
+            <SourceSyncControl onCompleted={invalidateWorkViews} />
           </>
         )}
       </Toolbar>
@@ -3157,6 +3129,7 @@ export function CandidatesPage() {
                 }))
               }
               onClassify={(candidate, label) => void classify(candidate, label)}
+              onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
               orderingCandidateId={orderingCandidateId}
               onToggleOrdering={(id) =>
                 setOrderingCandidateId((current) =>
@@ -3183,6 +3156,7 @@ export function CandidatesPage() {
           }
           onSelectLoaded={() => undefined}
           onClassify={(candidate, label) => void classify(candidate, label)}
+          onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
           orderingCandidateId={orderingCandidateId}
           onToggleOrdering={(id) =>
             setOrderingCandidateId((current) => (current === id ? null : id))

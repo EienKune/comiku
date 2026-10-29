@@ -9,11 +9,11 @@ export class SourceResponseError extends Error {
       | "invalid_response",
   ) {
     const messages = {
-      authentication: "X 身份验证或访问权限失效，请检查凭据及账号授权",
-      rate_limited: "X 请求达到频率限制，请稍后重试",
-      temporary_failure: "X 服务或网络暂时不可用，请稍后重试",
-      configuration: "X 请求配置无效，请检查查询配置及账号信息",
-      invalid_response: "X 响应不完整或格式已变化，本页未推进同步进度",
+      authentication: "图源 身份验证或访问权限失效，请检查凭据及账号授权",
+      rate_limited: "图源 请求达到频率限制，请稍后重试",
+      temporary_failure: "图源 服务或网络暂时不可用，请稍后重试",
+      configuration: "图源 请求配置无效，请检查查询配置及账号信息",
+      invalid_response: "图源 响应不完整或格式已变化，本页未推进同步进度",
     };
     super(messages[code]);
     this.name = "SourceResponseError";

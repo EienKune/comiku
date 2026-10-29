@@ -1,5 +1,9 @@
 import { Transform, Type } from "class-transformer";
 import {
+  IMAGE_ANALYSIS_LABEL_TONES,
+  type ImageAnalysisLabelPresentation,
+} from "../image-analysis/image-analysis-adapter.js";
+import {
   ArrayMaxSize,
   ArrayMinSize,
   ArrayUnique,
@@ -103,7 +107,21 @@ export class CandidateMediaDto {
   @ApiProperty({ type: String }) mediaType!: string;
 }
 
+export class CandidateClassificationTagDto implements ImageAnalysisLabelPresentation {
+  @ApiProperty({ type: String }) label!: string;
+  @ApiProperty({ type: String }) text!: string;
+  @ApiProperty({ enum: IMAGE_ANALYSIS_LABEL_TONES })
+  tone!: ImageAnalysisLabelPresentation["tone"];
+}
+
 export class CandidateDto {
+  @ApiPropertyOptional({ type: CandidateClassificationTagDto, isArray: true })
+  classificationTags?: CandidateClassificationTagDto[];
+  @ApiPropertyOptional({
+    enum: ["high", "medium", "low", "unprocessed", "queued", "failed"],
+  })
+  reviewPriority?:
+    "high" | "medium" | "low" | "unprocessed" | "queued" | "failed";
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: String, format: "uuid" }) authorId!: string;
   @ApiProperty({ type: String }) authorName!: string;
@@ -151,6 +169,7 @@ export class CandidateDto {
 }
 
 export class CandidatePageDto {
+  @ApiPropertyOptional({ type: Boolean }) analysisPending?: boolean;
   @ApiProperty({ type: CandidateDto, isArray: true }) items!: CandidateDto[];
   @ApiProperty({ type: Number, minimum: 0 }) total!: number;
   @ApiProperty({ type: String, format: "uuid", nullable: true }) nextCursor!:

@@ -34,13 +34,16 @@ R2_ACCOUNT_ID=
 R2_ACCESS_KEY_ID=
 R2_SECRET_ACCESS_KEY=
 R2_BUCKET=
+R2_KEY_PREFIX=
 ```
 
 Account ID 为 32 位十六进制。实现根据 Account ID 生成 S3 endpoint，不读取 `R2_ENDPOINT`、`R2_BUCKET_NAME` 或管理 API Token。请使用 R2 S3 Access Key/Secret，并填 `R2_BUCKET`。密钥不放入前端变量。
 
+`R2_KEY_PREFIX` 是可选的对象路径前缀，通过相同的 `.env` 或 `COMIKU_ENV_FILE` 读取。例如 `R2_KEY_PREFIX=source-test/` 将逻辑 key `source/example.jpg` 存为 `source-test/source/example.jpg`；数据库仍保存逻辑 key。普通上传、签名上传/读取、流读取、HEAD 和删除均通过同一前缀包装器。留空保持原路径；只接受以 `/` 结束的安全目录段。前缀用于共桶命名隔离，不代替独立权限；已有数据切换前缀前须迁移对象并同步生命周期规则，配置更改不会自动搬运。
+
 Bucket 保持私有，CORS 精确允许当前浏览器 origin，方法为 GET/PUT/HEAD，允许 content-type、x-amz-meta-sha256，按需暴露 ETag。浏览器直接向签名 URL 上传/下载，API 和 worker 负责权限、HEAD/魔数/摘要、解包及采用校验。业务对象与备份对象使用独立 Bucket 和凭据。
 
-只能给 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/`、`staging/direct-upload/` 设置一日过期规则；不要给所有业务对象统一短期过期。原图、缩略图、可恢复版本、交接和发布历史各有引用与清理规则。
+只能给 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/`、`staging/direct-upload/` 设置一日过期规则；使用 `R2_KEY_PREFIX` 时规则也须包含该前缀。不要给所有业务对象统一短期过期。原图、缩略图、可恢复版本、交接和发布历史各有引用与清理规则。
 
 local 与 R2 不是自动迁移关系：更换驱动不会搬运已有对象。使用独立测试库/桶验证 R2，不要把原 local 数据库直接切到空 R2 Bucket。
 
@@ -63,6 +66,16 @@ local 与 R2 不是自动迁移关系：更换驱动不会搬运已有对象。�
 | `SOURCE_FAILURE_THRESHOLD` / `SOURCE_COOLDOWN_MINUTES`  | 连续失败阈值及冷却，默认 3 次 / 360 分钟  |
 
 网页核心配置需成套提供，Cookie、query ID 和 features 可能过期。官方预算按 UTC 日/月累计请求，不等于账单费用上限，也不替代平台套餐控制。先用少量授权作者手动联调，再决定是否启用周期抓取和付费回退。任何凭据都不粘贴到公开 issue、截图或日志。
+
+## 可选图片识别
+
+继续通过 `.env` 或 `COMIKU_ENV_FILE` 指定 API/worker 配置。`IMAGE_ANALYSIS_ADAPTER` 默认 disabled；example 仅演示，ba-pixai 使用 `IMAGE_ANALYSIS_CONFIG_FILE` 指向仓库外的私有 JSON，external 另需模块绝对路径。详见[模型接口](adapters/image-analysis.md)。
+
+当前模型由上述配置加载的 adapter 身份生成 modelKey，API 与 worker 必须使用一致配置并一起重启切换。逐图历史结果按 `(mediaId, modelKey)` 保留；候选的 `analysisModelKey` 只是汇总缓存的来源标记，不是启用开关。只有与当前模型匹配的成功汇总才参与优先级和排序；其余暂按原分组内时间排序。worker 每轮最多从 20 条已有当前模型结果的候选重建汇总，无需重新推理已成功的图片。未配置模型时保留数据库历史，页面不使用旧分数。
+
+BA 常驻推理进程可用独立 EnvironmentFile 注入 `PIXAI_MODEL_DIR`、`PIXAI_CHECKPOINT`、`PIXAI_HEAD_FILE`、`PIXAI_SERVICE_TOKEN` 与线程预算；三个模型路径必须绝对，不搜索默认或隐藏目录。环境文件放在部署者选定的私有位置，不需要在仓库新增 config 或 models 目录。API/worker 的 dotenv 加载不会自动为另一个 Python 进程注入变量；由服务管理器或启动环境提供。
+
+采集历史在“管理 → 系统管理”中查询，只有管理员可访问完整批次列表。候选池的“同步图源”由图源/管理员手动触发全部已授权且启用采集的账号，不依赖候选筛选条件。
 
 ## 常见问题
 

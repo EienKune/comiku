@@ -22,6 +22,7 @@ import {
 type Account = components["schemas"]["ExternalAccountDto"];
 type Summary = components["schemas"]["ExternalAccountSummaryDto"];
 type Profile = components["schemas"]["ResolvedXProfileDto"];
+type Capability = components["schemas"]["SourceCapabilityDto"];
 
 export function AuthorAccountsPanel({
   authorId,
@@ -33,6 +34,11 @@ export function AuthorAccountsPanel({
   const user = useAccount();
   const manage = user.permissions.includes("authors:manage");
   const action = useAction();
+  const capabilities = useQuery({
+    queryKey: ["source-capabilities"],
+    enabled: manage,
+    queryFn: async () => unwrap(await client.GET("/api/authors/sources")),
+  });
   const accounts = useQuery({
     queryKey: ["author-accounts", authorId],
     enabled: manage,
@@ -96,6 +102,14 @@ export function AuthorAccountsPanel({
           {visible.map((account) => {
             const managed =
               manage && "revision" in account ? (account as Account) : null;
+            const hasCollection =
+              managed &&
+              (managed.fetchEnabled ||
+                managed.adapterStates.length > 0 ||
+                capabilities.data?.some(
+                  (item) =>
+                    item.platform === account.platform && item.available,
+                ));
             return (
               <li key={account.id}>
                 <div>
@@ -107,14 +121,14 @@ export function AuthorAccountsPanel({
                   <small>
                     {account.displayNameSnapshot || "未设置显示昵称"}
                   </small>
-                  {managed && account.platform === "x" && (
+                  {hasCollection && managed && (
                     <small>
                       {managed.fetchEnabled
                         ? "自动抓取已启用"
                         : "自动抓取已暂停"}
                     </small>
                   )}
-                  {managed && account.platform === "x" && (
+                  {managed && managed.adapterStates.length > 0 && (
                     <div className="workspace-adapter-list">
                       {managed.adapterStates.map((state) => (
                         <span key={state.adapterKey}>
@@ -135,7 +149,17 @@ export function AuthorAccountsPanel({
                           <Button
                             size="sm"
                             variant="ghost"
-                            disabled={action.busy}
+                            disabled={
+                              action.busy ||
+                              (!state.enabled &&
+                                (Boolean(capabilities.error) ||
+                                  !capabilities.data?.some(
+                                    (item) =>
+                                      item.platform === account.platform &&
+                                      item.adapterKey === state.adapterKey &&
+                                      item.available,
+                                  )))
+                            }
                             onClick={() =>
                               void action.run(async () => {
                                 await unwrap(
@@ -288,6 +312,8 @@ export function AuthorAccountsPanel({
           authorId={authorId}
           account={editor.account}
           platform={editor.platform}
+          capabilities={capabilities.error ? undefined : capabilities.data}
+          capabilityError={capabilities.error}
           onClose={() => setEditor(null)}
           onSaved={async () => {
             await refresh();
@@ -316,12 +342,16 @@ function AccountEditor({
   authorId,
   platform,
   account,
+  capabilities,
+  capabilityError,
   onClose,
   onSaved,
 }: {
   authorId: string;
   platform: "x" | "pixiv";
   account?: Account;
+  capabilities?: Capability[];
+  capabilityError: Error | null;
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -331,11 +361,21 @@ function AccountEditor({
   const [externalUserId, setId] = useState(account?.externalUserId ?? "");
   const [nickname, setNickname] = useState(account?.displayNameSnapshot ?? "");
   const [profile, setProfile] = useState<Profile | null>(null);
+  const collectionModes = [
+    ...new Set(
+      (capabilities ?? [])
+        .filter((item) => item.platform === platform && item.available)
+        .flatMap((item) => item.supportedFirstSyncModes),
+    ),
+  ];
   const [fetchEnabled, setFetch] = useState(
-    account?.fetchEnabled ?? platform === "x",
+    account?.fetchEnabled ?? (platform === "x" && collectionModes.length > 0),
   );
   const [firstSyncMode, setMode] = useState<Account["firstSyncMode"]>(
-    account?.firstSyncMode ?? (platform === "x" ? "last_24_hours" : "none"),
+    account?.firstSyncMode ??
+      (platform === "x" && collectionModes.includes("last_24_hours")
+        ? "last_24_hours"
+        : "none"),
   );
   const [replaceConfirmed, setReplaceConfirmed] = useState(false);
   const replacing = Boolean(
@@ -355,12 +395,21 @@ function AccountEditor({
         );
       if (replacing && !replaceConfirmed)
         throw new Error("请确认更换账号，原有来源记录将保留。");
+      const collectionChanged =
+        (fetchEnabled && !account?.fetchEnabled) ||
+        firstSyncMode !== (account?.firstSyncMode ?? "none");
+      if (
+        collectionChanged &&
+        (fetchEnabled || firstSyncMode !== "none") &&
+        !collectionModes.includes(firstSyncMode)
+      )
+        throw new Error("当前没有支持所选首次同步范围的可用抓取通道");
       const fields = {
         externalUserId: externalUserId.trim(),
         handle: platform === "x" ? handle : null,
         displayNameSnapshot: nickname.trim() || null,
-        fetchEnabled: platform === "x" && fetchEnabled,
-        firstSyncMode: platform === "x" ? firstSyncMode : ("none" as const),
+        fetchEnabled,
+        firstSyncMode,
         ...(profile
           ? {
               avatarFileObjectId: profile.avatarFileObjectId,
@@ -495,12 +544,15 @@ function AccountEditor({
           maxLength={255}
           onChange={(event) => setNickname(event.target.value)}
         />
-        {platform === "x" && (
+        {(collectionModes.length > 0 || account?.fetchEnabled) && (
           <>
             <label className="account-checkbox">
               <input
                 type="checkbox"
                 checked={fetchEnabled}
+                disabled={
+                  !fetchEnabled && !collectionModes.includes(firstSyncMode)
+                }
                 onChange={(event) => setFetch(event.target.checked)}
               />
               启用自动抓取
@@ -508,12 +560,23 @@ function AccountEditor({
             <SelectField
               label="首次同步范围"
               value={firstSyncMode}
+              disabled={collectionModes.length === 0}
               onValueChange={(value) =>
                 setMode(value as Account["firstSyncMode"])
               }
             >
-              <option value="none">仅后续内容</option>
-              <option value="last_24_hours">最近 24 小时</option>
+              {!collectionModes.includes(firstSyncMode) && (
+                <option value={firstSyncMode} disabled>
+                  {firstSyncMode === "none" ? "仅后续内容" : "最近 24 小时"}
+                  （当前不可用）
+                </option>
+              )}
+              {collectionModes.includes("none") && (
+                <option value="none">仅后续内容</option>
+              )}
+              {collectionModes.includes("last_24_hours") && (
+                <option value="last_24_hours">最近 24 小时</option>
+              )}
             </SelectField>
           </>
         )}
@@ -528,7 +591,10 @@ function AccountEditor({
             确认更换平台身份：旧关联及来源保留，新账号从新的抓取范围开始。
           </label>
         )}
-        <Feedback error={action.error} success={action.success} />
+        <Feedback
+          error={action.error || capabilityError?.message}
+          success={action.success}
+        />
         <Button type="submit" loading={action.busy}>
           保存账号
         </Button>

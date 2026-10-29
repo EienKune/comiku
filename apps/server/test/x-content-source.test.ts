@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SourceResponseError } from "../src/source-ingestion/source-response.js";
-import { XContentSourceClient } from "../src/source-ingestion/x-content-source.js";
-import { XWebSessionContentSourceClient } from "../src/source-ingestion/x-web-session-content-source.js";
+import { XContentSourceClient } from "../src/source-ingestion/adapters/x-official/x-content-source.js";
+import { XWebSessionContentSourceClient } from "../src/source-ingestion/adapters/x-web-session/x-web-session-content-source.js";
 
 test("X adapter maps own photo media, references and durable pagination cursor", async () => {
   const requested: string[] = [];
@@ -81,6 +81,303 @@ const webConfig = {
   userByScreenNameQueryId: "profile",
   features: {},
 };
+
+test("official bounds each incremental page by the frozen time window instead of the latest post ID", async () => {
+  let requested = "";
+  const client = new XContentSourceClient("fixture", (async (input) => {
+    requested = String(input);
+    return Response.json({
+      data: [
+        { id: "11", created_at: "2026-10-27T10:00:00Z" },
+        { id: "10", created_at: "2026-10-27T09:55:00Z" },
+        { id: "9", created_at: "2026-10-27T09:49:59Z" },
+      ],
+      meta: { next_token: "next" },
+    });
+  }) as typeof fetch);
+  const page = await client.fetchPage(
+    { externalUserId: "42" },
+    {
+      startTime: "2026-10-27T09:50:00Z",
+      endTime: "2026-10-27T10:00:00Z",
+      sinceId: "10",
+    },
+  );
+  const query = new URL(requested).searchParams;
+  assert.equal(query.get("start_time"), "2026-10-27T09:50:00Z");
+  assert.equal(query.get("end_time"), "2026-10-27T10:00:00Z");
+  assert.equal(query.has("since_id"), false);
+  assert.deepEqual(
+    page.items.map((item) => item.externalContentId),
+    ["10"],
+  );
+  assert.equal(page.nextCursor?.endTime, "2026-10-27T10:00:00Z");
+});
+
+test("official keeps both time bounds across pagination and terminal cursors", async () => {
+  let requests = 0;
+  const client = new XContentSourceClient("fixture", (async (input) => {
+    requests++;
+    const query = new URL(String(input)).searchParams;
+    assert.equal(query.get("start_time"), "2026-10-27T09:50:00Z");
+    assert.equal(query.get("end_time"), "2026-10-27T10:00:00Z");
+    assert.equal(query.has("since_id"), false);
+    assert.equal(query.get("pagination_token"), requests === 1 ? null : "next");
+    return Response.json({
+      data: [],
+      meta: requests === 1 ? { next_token: "next" } : {},
+    });
+  }) as typeof fetch);
+  const first = await client.fetchPage(
+    { externalUserId: "42" },
+    {
+      startTime: "2026-10-27T09:50:00Z",
+      endTime: "2026-10-27T10:00:00Z",
+      sinceId: "10",
+    },
+  );
+  const terminal = await client.fetchPage(
+    { externalUserId: "42" },
+    first.nextCursor!,
+  );
+  assert.equal(terminal.complete, true);
+  assert.deepEqual(terminal.nextCursor, {
+    startTime: "2026-10-27T09:50:00Z",
+    endTime: "2026-10-27T10:00:00Z",
+  });
+});
+
+for (const kind of ["official", "web"] as const) {
+  test(`${kind} completes the initial none window without a timeline request`, async () => {
+    let requests = 0;
+    const fake = (async () => {
+      requests++;
+      throw new Error("unexpected request");
+    }) as typeof fetch;
+    const client =
+      kind === "official"
+        ? new XContentSourceClient("fixture", fake)
+        : new XWebSessionContentSourceClient(webConfig, fake);
+    const page = await client.fetchPage(
+      { externalUserId: "42" },
+      { startTime: "2026-10-27T10:00:00Z", endTime: "2026-10-27T10:00:00Z" },
+    );
+    assert.equal(page.complete, true);
+    assert.equal(requests, 0);
+  });
+}
+
+test("web stops after two complete old pages and retains the frozen upper bound", async () => {
+  let requests = 0;
+  const fake = (async () => {
+    requests++;
+    return Response.json({
+      data: {
+        user: {
+          result: {
+            timeline_v2: {
+              timeline: {
+                instructions: [
+                  {
+                    rest_id: String(20 - requests),
+                    legacy: {
+                      user_id_str: "42",
+                      created_at: `2026-10-${20 - requests}T00:00:00Z`,
+                      extended_entities: { media: [] },
+                    },
+                  },
+                  { cursorType: "Bottom", value: `page-${requests}` },
+                ],
+              },
+            },
+          },
+        },
+      },
+    });
+  }) as typeof fetch;
+  const client = new XWebSessionContentSourceClient(webConfig, fake);
+  const first = await client.fetchPage(
+    { externalUserId: "42" },
+    { startTime: "2026-10-27T09:50:00Z", endTime: "2026-10-27T10:00:00Z" },
+  );
+  assert.equal(first.complete, false);
+  assert.deepEqual(first.items, []);
+  const second = await client.fetchPage(
+    { externalUserId: "42" },
+    first.nextCursor!,
+  );
+  assert.equal(second.complete, true);
+  assert.equal(second.boundaryReached, true);
+  assert.equal(second.nextCursor?.endTime, "2026-10-27T10:00:00Z");
+});
+
+function webPage(
+  tweets: Array<{ id: string; at: string; repost?: boolean }>,
+  cursor: string,
+) {
+  return {
+    data: {
+      user: {
+        result: {
+          timeline_v2: {
+            timeline: {
+              instructions: [
+                ...tweets.map((tweet) => ({
+                  rest_id: tweet.id,
+                  legacy: {
+                    user_id_str: "42",
+                    created_at: tweet.at,
+                    extended_entities: { media: [] },
+                    ...(tweet.repost
+                      ? { retweeted_status_result: { result: {} } }
+                      : {}),
+                  },
+                })),
+                { cursorType: "Bottom", value: cursor },
+              ],
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+test("web filters the exclusive upper bound while raw future posts prevent an old-page proof", async () => {
+  const pages = [
+    webPage(
+      [
+        { id: "14", at: "2099-01-01T00:00:00Z" },
+        { id: "13", at: "2026-10-27T10:00:00Z" },
+        { id: "12", at: "2026-10-27T09:55:00Z" },
+        { id: "11", at: "2026-10-27T09:49:59Z" },
+      ],
+      "first",
+    ),
+    webPage([{ id: "10", at: "2026-10-27T09:40:00Z" }], "second"),
+  ];
+  const client = new XWebSessionContentSourceClient(webConfig, (async () =>
+    Response.json(pages.shift())) as typeof fetch);
+  const first = await client.fetchPage(
+    { externalUserId: "42" },
+    { startTime: "2026-10-27T09:50:00Z", endTime: "2026-10-27T10:00:00Z" },
+  );
+  assert.deepEqual(
+    first.items.map((item) => item.externalContentId),
+    ["12"],
+  );
+  assert.equal(first.boundaryReached, false);
+  const second = await client.fetchPage(
+    { externalUserId: "42" },
+    first.nextCursor!,
+  );
+  assert.equal(second.complete, false);
+  assert.equal(second.boundaryReached, false);
+});
+
+for (const anomaly of ["within-page", "cross-page"] as const) {
+  test(`web keeps order anomalies sticky across subsequent old pages: ${anomaly}`, async () => {
+    const pages = [
+      webPage(
+        [
+          { id: "10", at: "2026-10-27T08:00:00Z" },
+          ...(anomaly === "within-page"
+            ? [{ id: "11", at: "2026-10-27T08:05:00Z" }]
+            : []),
+        ],
+        "first",
+      ),
+      webPage(
+        [
+          {
+            id: "9",
+            at:
+              anomaly === "cross-page"
+                ? "2026-10-27T08:10:00Z"
+                : "2026-10-27T07:00:00Z",
+          },
+        ],
+        "second",
+      ),
+      webPage([{ id: "8", at: "2026-10-27T06:00:00Z" }], "third"),
+      webPage([{ id: "7", at: "2026-10-27T05:00:00Z" }], "fourth"),
+    ];
+    const client = new XWebSessionContentSourceClient(webConfig, (async () =>
+      Response.json(pages.shift())) as typeof fetch);
+    let cursor: Record<string, unknown> = {
+      startTime: "2026-10-27T09:50:00Z",
+      endTime: "2026-10-27T10:00:00Z",
+    };
+    for (let index = 0; index < 4; index++) {
+      const page = await client.fetchPage({ externalUserId: "42" }, cursor);
+      assert.equal(page.complete, false);
+      assert.equal(page.boundaryReached, false);
+      cursor = page.nextCursor!;
+    }
+    assert.equal(cursor.orderUnsafe, true);
+  });
+}
+
+test("web self-quote expansions do not turn an ordered primary timeline into an unsafe scan", async () => {
+  const first = webPage(
+    [
+      { id: "12", at: "2026-10-27T09:59:00Z" },
+      { id: "11", at: "2026-10-27T09:55:00Z" },
+    ],
+    "first",
+  );
+  const entries = first.data.user.result.timeline_v2.timeline.instructions;
+  Object.assign(entries[0], {
+    quoted_status_result: {
+      result: {
+        rest_id: "1",
+        legacy: {
+          user_id_str: "42",
+          created_at: "2026-10-01T00:00:00Z",
+          extended_entities: { media: [] },
+        },
+      },
+    },
+  });
+  const pages = [
+    first,
+    webPage([{ id: "10", at: "2026-10-27T08:00:00Z" }], "second"),
+    webPage([{ id: "9", at: "2026-10-27T07:00:00Z" }], "third"),
+  ];
+  const client = new XWebSessionContentSourceClient(webConfig, (async () =>
+    Response.json(pages.shift())) as typeof fetch);
+  let cursor: Record<string, unknown> = {
+    startTime: "2026-10-27T09:50:00Z",
+    endTime: "2026-10-27T10:00:00Z",
+  };
+  for (let index = 0; index < 3; index++) {
+    const page = await client.fetchPage({ externalUserId: "42" }, cursor);
+    assert.equal(page.complete, index === 2);
+    assert.equal(page.boundaryReached, index === 2);
+    assert.equal(page.nextCursor?.orderUnsafe, false);
+    cursor = page.nextCursor!;
+  }
+});
+
+test("web does not use repost timestamps as old-page evidence", async () => {
+  const pages = [
+    webPage([{ id: "12", at: "2026-10-27T08:00:00Z" }], "first"),
+    webPage([{ id: "11", at: "2026-10-27T07:00:00Z", repost: true }], "second"),
+    webPage([{ id: "10", at: "2026-10-27T06:00:00Z" }], "third"),
+  ];
+  const client = new XWebSessionContentSourceClient(webConfig, (async () =>
+    Response.json(pages.shift())) as typeof fetch);
+  let cursor: Record<string, unknown> = {
+    startTime: "2026-10-27T09:50:00Z",
+    endTime: "2026-10-27T10:00:00Z",
+  };
+  for (let index = 0; index < 3; index++) {
+    const page = await client.fetchPage({ externalUserId: "42" }, cursor);
+    assert.equal(page.complete, false);
+    assert.equal(page.boundaryReached, false);
+    cursor = page.nextCursor!;
+  }
+});
 
 for (const kind of ["official", "web"] as const) {
   for (const fixture of [

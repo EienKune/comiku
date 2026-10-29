@@ -6,12 +6,13 @@ import {
   ArrayMinSize,
   ArrayUnique,
 } from "class-validator";
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional, PickType } from "@nestjs/swagger";
 import {
   SourceFetchItemStatus,
   SourceFetchRunStatus,
   SourceFetchTrigger,
   SourceAdapterHealth,
+  JobStatus,
 } from "../generated/prisma/client.js";
 
 export class RunSourceFetchDto {
@@ -57,6 +58,11 @@ export class SourceFetchRunItemDto {
 }
 
 export class SourceFetchRunDto {
+  @ApiProperty({ type: Number }) attempts!: number;
+  @ApiProperty({ enum: JobStatus, enumName: "JobStatus", nullable: true })
+  jobStatus!: JobStatus | null;
+  @ApiProperty({ type: String, format: "date-time", nullable: true })
+  nextRetryAt!: string | null;
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ enum: SourceFetchTrigger, enumName: "SourceFetchTrigger" })
   trigger!: SourceFetchTrigger;
@@ -69,4 +75,32 @@ export class SourceFetchRunDto {
   @ApiProperty({ type: String, format: "date-time" }) startedAt!: string;
   @ApiProperty({ type: String, format: "date-time", nullable: true })
   completedAt!: string | null;
+}
+
+export class SourceFetchAcceptedDto extends PickType(SourceFetchRunDto, [
+  "id",
+  "status",
+] as const) {}
+
+export class SourceFetchProgressSnapshotDto {
+  @ApiProperty({ type: String, format: "uuid" }) id!: string;
+  @ApiProperty({ enum: SourceFetchTrigger, enumName: "SourceFetchTrigger" })
+  trigger!: SourceFetchTrigger;
+  @ApiProperty({ enum: SourceFetchRunStatus, enumName: "SourceFetchRunStatus" })
+  status!: SourceFetchRunStatus;
+  @ApiProperty({ type: String, format: "date-time" }) startedAt!: string;
+  @ApiProperty({ type: String, format: "date-time", nullable: true })
+  completedAt!: string | null;
+  @ApiProperty({ type: Number }) pagesFetched!: number;
+  @ApiProperty({ type: Number }) candidatesCreated!: number;
+  @ApiProperty({ type: Number }) mediaStored!: number;
+  @ApiProperty({ type: String, format: "date-time", nullable: true })
+  nextRetryAt!: string | null;
+}
+
+export class SourceFetchProgressDto {
+  @ApiProperty({ type: SourceFetchProgressSnapshotDto, nullable: true })
+  active!: SourceFetchProgressSnapshotDto | null;
+  @ApiProperty({ type: SourceFetchProgressSnapshotDto, nullable: true })
+  lastManual!: SourceFetchProgressSnapshotDto | null;
 }

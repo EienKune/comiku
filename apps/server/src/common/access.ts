@@ -15,6 +15,7 @@ export type Permission =
   | "self"
   | "members:read"
   | "accounts:manage"
+  | "system:manage"
   | "audit:read"
   | "authors:read"
   | "authors:sensitive"
@@ -65,6 +66,7 @@ export function permissionsFor(
   if (roles.includes(Role.admin)) {
     permissions.push(
       "accounts:manage",
+      "system:manage",
       "audit:read",
       "authors:sensitive",
       "authors:manage",

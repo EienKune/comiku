@@ -38,6 +38,15 @@ export interface SourcePage {
   items: NormalizedSourceContent[];
   nextCursor?: SourceCursor;
   complete: boolean;
+  /** When supplied, adapter coverage replaces the generic per-page date heuristic. */
+  boundaryReached?: boolean;
+  /** Adapter-owned discovery baseline, committed only after complete coverage. */
+  checkpoint?: Record<string, unknown>;
+}
+
+export interface SourceScanContext {
+  /** Last successful adapter-owned baseline. Never contains credentials. */
+  checkpoint?: Record<string, unknown>;
 }
 
 export interface ContentSourceClient {
@@ -49,11 +58,16 @@ export interface ContentSourceClient {
   readonly available: boolean;
   readonly allowedMediaHosts: readonly string[];
   initialCursor(mode: FirstSyncMode, now: Date): SourceCursor;
+  prepareCursor?(
+    account: SourceAccountIdentity,
+    cursor: SourceCursor,
+  ): SourceCursor;
   checkAccount(account: SourceAccountIdentity): Promise<SourceAccountProfile>;
   resolveProfileByHandle?(handle: string): Promise<SourceAccountProfile>;
   fetchPage(
     account: SourceAccountIdentity,
     cursor: SourceCursor,
+    context?: SourceScanContext,
   ): Promise<SourcePage>;
 }
 

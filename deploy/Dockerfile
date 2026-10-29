@@ -36,6 +36,14 @@ ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000 COMIKU_RELEASE=${COMIKU_RELEASE}
 USER node
 CMD ["node", "dist/main.js"]
 
+# Optional collection runtime. The default runtime keeps its original footprint.
+FROM runtime AS gallery-runtime
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/gallery-dl \
+    && /opt/gallery-dl/bin/pip install --no-cache-dir -r dist/source-ingestion/adapters/gallery-dl/python/requirements.txt
+USER node
+
 FROM ${POSTGRES_IMAGE} AS backup
 COPY --from=build /usr/local/bin/node /usr/local/bin/node
 WORKDIR /app/apps/server

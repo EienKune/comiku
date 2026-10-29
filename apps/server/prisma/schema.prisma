@@ -530,6 +530,8 @@ model SourceFetchRun {
   completedAt   DateTime?            @map("completed_at") @db.Timestamptz(3)
 
   @@index([startedAt])
+  @@index([trigger, startedAt])
+  @@index([status, startedAt])
   @@map("source_fetch_runs")
 }
 
@@ -570,6 +572,8 @@ model SourceAdapterState {
   enabled               Boolean                 @default(true)
   health                SourceAdapterHealth     @default(idle)
   cursorJson            Json                    @default("{}") @map("cursor_json")
+  discoveryCheckpointJson Json                         @default("{}") @map("discovery_checkpoint_json")
+  completedThroughAt      DateTime?                    @map("completed_through_at") @db.Timestamptz(3)
   highWaterPublishedAt  DateTime?               @map("high_water_published_at") @db.Timestamptz(3)
   highWaterExternalId   String?                 @map("high_water_external_id") @db.VarChar(255)
   lastAttemptAt         DateTime?               @map("last_attempt_at") @db.Timestamptz(3)
@@ -617,6 +621,10 @@ model CandidatePost {
   postedAt                DateTime               @map("posted_at") @db.Timestamptz(3)
   rawJson                 Json                   @map("raw_json")
   tagDisposition          CandidateTagDisposition @default(neutral) @map("tag_disposition")
+  analysisScore           Float?                 @map("analysis_score")
+  analysisState           String                 @default("unprocessed") @map("analysis_state") @db.VarChar(20)
+  analysisModelKey        String?                @map("analysis_model_key") @db.VarChar(64)
+  analysisPredictions     Json?                  @map("analysis_predictions")
   status                  CandidateStatus        @default(pending)
   fetchedAt               DateTime               @default(now()) @map("fetched_at") @db.Timestamptz(3)
   reviewedById            String?                @map("reviewed_by") @db.Uuid
@@ -740,12 +748,33 @@ model CandidateMedia {
   width           Int?
   height          Int?
   mediaType       String        @map("media_type") @db.VarChar(32)
+  analyses        CandidateMediaAnalysis[]
   createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@unique([candidatePostId, externalMediaId])
   @@unique([candidatePostId, orderIndex])
   @@index([fileObjectId])
   @@map("candidate_media")
+}
+
+model CandidateMediaAnalysis {
+  id              String         @id @default(uuid()) @db.Uuid
+  mediaId         String         @map("media_id") @db.Uuid
+  media           CandidateMedia @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  modelKey        String         @map("model_key") @db.VarChar(64)
+  modelRevision   String         @map("model_revision") @db.Text
+  decisionVersion String         @map("decision_version") @db.Text
+  sourceSha256    String         @map("source_sha256") @db.VarChar(64)
+  status          String         @default("queued") @db.VarChar(20)
+  score           Float?
+  resultJson      Json?          @map("result_json")
+  lastError       String?        @map("last_error") @db.VarChar(100)
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([mediaId, modelKey])
+  @@index([modelKey, status])
+  @@map("candidate_media_analyses")
 }
 
 model Work {

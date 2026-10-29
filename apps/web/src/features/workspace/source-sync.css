@@ -1,0 +1,26 @@
+.source-sync-control {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.source-sync-tooltip {
+  display: grid;
+  gap: var(--space-3);
+  white-space: normal;
+}
+.source-sync-tooltip p {
+  margin: 0;
+}
+.source-sync-summary {
+  display: grid;
+  gap: var(--space-1);
+}
+.source-sync-summary + .source-sync-summary {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+.source-sync-summary time,
+.source-sync-summary p {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
