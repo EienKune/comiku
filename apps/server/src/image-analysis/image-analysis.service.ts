@@ -1,3 +1,4 @@
+import type { CandidateClassificationScoresDto } from "./classification-scores.dto.js";
 import {
   AnalysisScheduling,
   analysisJobModelKey,
@@ -34,6 +35,95 @@ export class ImageAnalysisService {
   }
   get activeModelKey(): string | null {
     return this.model?.modelKey ?? null;
+  }
+  /** Read-only narrow projection: no evidence, storage URLs, or inference side effects. */
+  async classificationScores(
+    id: string,
+  ): Promise<CandidateClassificationScoresDto> {
+    const candidate = await this.db.candidatePost.findFirst({
+      where: { id, author: { deletedAt: null } },
+      select: { id: true },
+    });
+    if (!candidate) throw new NotFoundException("候选不存在");
+    const model = this.model;
+    const columns = (model?.identity.labels ?? []).map((label) => {
+      const display = model?.labelPresentation?.find(
+        (item) => item.label === label,
+      );
+      return {
+        label,
+        text: display?.text ?? label,
+        tone: display?.tone ?? ("neutral" as const),
+      };
+    });
+    // Rebuild bounded score objects in PostgreSQL, so even a corrupt stored
+    // vector cannot hydrate arbitrary evidence or oversized label strings.
+    const rows = await this.db.$queryRaw<
+      {
+        mediaId: string;
+        status: string | null;
+        result: unknown;
+      }[]
+    >`
+      SELECT m.id AS "mediaId", a.status,
+        CASE WHEN a.status = 'succeeded' THEN jsonb_build_object(
+          'score', CASE WHEN jsonb_typeof(a.result_json->'score') = 'number' THEN a.result_json->'score' END,
+          'predictedClass', CASE WHEN jsonb_typeof(a.result_json->'predictedClass') = 'string'
+            AND length(a.result_json->>'predictedClass') <= 256 THEN a.result_json->'predictedClass' END,
+          'classScores', CASE WHEN jsonb_typeof(a.result_json->'classScores') = 'array' THEN
+            CASE WHEN jsonb_array_length(a.result_json->'classScores') = ${columns.length} THEN
+              (SELECT jsonb_agg(jsonb_build_object(
+                'label', CASE WHEN jsonb_typeof(v->'label') = 'string' AND length(v->>'label') <= 256 THEN v->'label' END,
+                'value', CASE WHEN jsonb_typeof(v->'value') = 'number' THEN v->'value' END
+              ) ORDER BY ordinal) FROM jsonb_array_elements(a.result_json->'classScores') WITH ORDINALITY AS scores(v, ordinal))
+            END END,
+          'evidence', '[]'::jsonb
+        ) END AS result
+      FROM candidate_media m
+      JOIN candidate_posts c ON c.id = m.candidate_post_id
+      JOIN authors author ON author.id = c.author_id AND author.deleted_at IS NULL
+      JOIN file_objects f ON f.id = m.file_object_id
+      LEFT JOIN candidate_media_analyses a ON a.media_id = m.id
+        AND a.model_key = ${model?.modelKey ?? ""}
+        AND a.source_sha256 = f.checksum
+        AND f.lifecycle_status = 'active' AND f.deleted_at IS NULL
+      WHERE m.candidate_post_id = ${id}::uuid
+      ORDER BY m.order_index, m.id
+    `;
+    return {
+      modelKey: model?.modelKey ?? null,
+      columns,
+      images: rows.map((row, index) => {
+        const base = {
+          mediaId: row.mediaId,
+          index: index + 1,
+          scores: null,
+          winner: null,
+        };
+        if (!model) return { ...base, state: "unavailable" };
+        if (row.status === "queued" || row.status === "running")
+          return { ...base, state: "pending" };
+        if (row.status === "failed") return { ...base, state: "failed" };
+        if (row.status === "succeeded") {
+          try {
+            const result = validateImageAnalysisResult(
+              row.result,
+              model.identity.labels,
+            );
+            return {
+              mediaId: row.mediaId,
+              index: index + 1,
+              state: "succeeded",
+              scores: result.classScores.map((item) => item.value),
+              winner: model.identity.labels.indexOf(result.predictedClass),
+            };
+          } catch {
+            /* Malformed or obsolete data is unavailable, never zero. */
+          }
+        }
+        return { ...base, state: "unavailable" };
+      }),
+    };
   }
   get candidateQueryPolicy() {
     return {

@@ -34,6 +34,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/candidates/{id}/classification-scores": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getCandidateClassificationScores"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/candidates/{id}/analysis-retry": {
         parameters: {
             query?: never;
@@ -1900,6 +1916,28 @@ export interface components {
             /** @enum {string} */
             service: "comiku-server";
         };
+        CandidateClassificationTagDto: {
+            label: string;
+            text: string;
+            /** @enum {string} */
+            tone: "neutral" | "info" | "success" | "warning" | "danger";
+        };
+        CandidateClassificationImageDto: {
+            /** Format: uuid */
+            mediaId: string;
+            index: number;
+            /** @enum {string} */
+            state: "succeeded" | "pending" | "failed" | "unavailable";
+            /** @description Probabilities aligned with columns; null when unusable. */
+            scores: number[] | null;
+            /** @description Zero-based winning column; null when unusable. */
+            winner: number | null;
+        };
+        CandidateClassificationScoresDto: {
+            modelKey: string | null;
+            columns: components["schemas"]["CandidateClassificationTagDto"][];
+            images: components["schemas"]["CandidateClassificationImageDto"][];
+        };
         RetryAnalysisDto: {
             queued: number;
         };
@@ -2467,12 +2505,6 @@ export interface components {
         };
         /** @enum {string} */
         CandidateStatus: "pending" | "imported" | "discarded";
-        CandidateClassificationTagDto: {
-            label: string;
-            text: string;
-            /** @enum {string} */
-            tone: "neutral" | "info" | "success" | "warning" | "danger";
-        };
         /** @enum {string} */
         CandidateTagDisposition: "valid" | "neutral" | "blocked";
         /** @enum {string} */
@@ -3705,6 +3737,90 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    getCandidateClassificationScores: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: unknown;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateClassificationScoresDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
             };
         };
     };

@@ -1,3 +1,4 @@
+import { CandidateClassificationScores } from "./CandidateClassificationScores";
 import {
   useCandidateReviewSession,
   type CandidateBaseFilter,
@@ -2759,9 +2760,11 @@ function CandidateGridSection({
                 <p>{candidate.text || "此原帖没有文字说明。"}</p>
                 <div className="workspace-tags">
                   {candidate.classificationTags?.map((category) => (
-                    <Badge key={category.label} tone={category.tone}>
-                      {category.text}
-                    </Badge>
+                    <CandidateClassificationScores
+                      key={`${candidate.id}:${category.label}`}
+                      candidateId={candidate.id}
+                      category={category}
+                    />
                   ))}
                   <Badge
                     tone={
