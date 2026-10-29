@@ -86,7 +86,6 @@ test("reloaded source history includes durable attempt and retry timing without 
     null,
     null,
     null,
-    null,
   ] as unknown as ConstructorParameters<typeof SourceFetchService>;
   const result = await new SourceFetchService(...args).get(run.id);
   assert.equal(result.attempts, 2);

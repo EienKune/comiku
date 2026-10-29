@@ -123,7 +123,6 @@ async function fixture(platform?: string) {
     registry,
     downloader,
     files as any,
-    { available: false } as any,
     environment,
   );
   // Synthetic credential provider: actual platform materials are tested in D6's dedicated suite.

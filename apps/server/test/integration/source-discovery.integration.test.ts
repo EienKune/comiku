@@ -120,7 +120,6 @@ async function fixture() {
       store,
       purgeUnreferenced: (id: string) => files.purgeUnreferenced(id),
     } as any,
-    { available: false } as any,
     environment,
   );
   const generation = createHash("sha256").update(key).digest("hex");

@@ -72,7 +72,6 @@ async function withFixture(
           null,
           null,
           null,
-          null,
           environment,
         ] as unknown as ConstructorParameters<typeof SourceFetchService>;
         const service = new SourceFetchService(...args);

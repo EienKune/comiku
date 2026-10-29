@@ -96,7 +96,6 @@ async function fixture() {
           throw new Error("No storage allowed");
         },
       } as any,
-      { available: false } as any,
       environment,
     );
   const service = make(jobs),

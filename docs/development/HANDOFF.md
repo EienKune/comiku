@@ -49,6 +49,8 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## Image analysis
 
+- Use `ImageAnalysisAdapter` for model integrations. Source ingestion no longer invokes the unused legacy classifier hook. Retain manual manga/photo decisions and historical suggestion reads; retiring that hook does not authorize deleting historical data or automatically mapping model labels to visual classes.
+
 - Per-image classification scores use an authorized lazy read, with one ordered taxonomy and aligned numeric vectors. Restrict the SQL join to the configured model and active file checksum; project bounded scalar/vector fields in PostgreSQL instead of hydrating stored evidence. Revalidate the complete taxonomy and predicted winner with empty projected evidence. Missing, malformed, failed and pending rows carry explicit states, never invented zero scores; keep every media row in current visible order.
 - Score inspection mounts its query only while the portal is open. Always refresh on reopening and hide cached vectors until that opening has a fresh successful read; errors hide scores so a model switch cannot display old scores as current. Track success per opening with the query observer, not just a cached timestamp. Keep the mounted table during later background reads in that same opening so polling does not reset its scroll position. Only pending visible rows may poll. Portal crossing and internal scroll must preserve inspection, while Escape/outside/unmount clean up listeners and requests. Position the portal after the parent ref has mounted as well as after data changes: a child's first layout effect can run before the portal ref is attached and otherwise leave a slow loading state invisible.
 

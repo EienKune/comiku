@@ -3,10 +3,6 @@ import { GalleryDlContentSource } from "./adapters/gallery-dl/gallery-dl-content
 import { ENVIRONMENT, type Environment } from "../config/environment.js";
 import { DatabaseModule } from "../database/database.module.js";
 import { FilesModule } from "../files/files.module.js";
-import {
-  CANDIDATE_MEDIA_CLASSIFIER,
-  DisabledCandidateMediaClassifier,
-} from "./candidate-classifier.js";
 import { HttpMediaDownloader, MEDIA_DOWNLOADER } from "./media-downloader.js";
 import { SourceFetchController } from "./source-fetch.controller.js";
 import { SourceFetchService } from "./source-fetch.service.js";
@@ -41,10 +37,6 @@ import { ContentSourceRegistry } from "./source-registry.js";
         }
         return registry;
       },
-    },
-    {
-      provide: CANDIDATE_MEDIA_CLASSIFIER,
-      useFactory: () => new DisabledCandidateMediaClassifier(),
     },
     { provide: MEDIA_DOWNLOADER, useFactory: () => new HttpMediaDownloader() },
     SourceFetchService,

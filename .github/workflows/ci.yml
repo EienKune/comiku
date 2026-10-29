@@ -79,6 +79,23 @@ jobs:
           node-version-file: .node-version
       - run: docker compose --env-file deploy/production.env.example -f deploy/compose.production.yml config --quiet
       - run: docker build --target runtime --build-arg COMIKU_RELEASE=test-ci -f deploy/Dockerfile -t comiku-server:test .
+      - name: Build optional gallery-dl runtime
+        run: docker build --target gallery-runtime --build-arg COMIKU_RELEASE=test-ci -f deploy/Dockerfile -t comiku-gallery:test .
+      - name: Check packaged gallery-dl runtime offline
+        run: |
+          docker run --rm --network none \
+            --workdir /app/apps/server/dist/source-ingestion/adapters/gallery-dl/python \
+            --entrypoint /opt/gallery-dl/bin/python \
+            comiku-gallery:test -c '
+          import os
+          from pathlib import Path
+          import adapter
+          from gallery_dl import version
+
+          assert os.getuid() != 0, "gallery-runtime must run as a non-root user"
+          assert Path("requirements.txt").read_text().strip() == "gallery-dl==" + version.__version__
+          print("Packaged gallery-dl bridge and pinned dependency load successfully")
+          '
       - run: docker build --target tools --build-arg COMIKU_RELEASE=test-ci -f deploy/Dockerfile -t comiku-tools:test .
       - run: docker build --target backup --build-arg COMIKU_RELEASE=test-ci -f deploy/Dockerfile -t comiku-backup:test .
       - name: Isolated Linux HTTPS and recovery drill (no real X/R2)
