@@ -184,7 +184,7 @@ test("existing current-model results rebuild bounded summaries without new infer
   ]);
 });
 
-test("review promotion uses declared labels and inclusive confidence, rejecting malformed caches", () => {
+test("review promotion uses declared winning labels without an extra confidence threshold, rejecting malformed caches", () => {
   const example = createExampleImageAnalysisAdapter();
   const service = (
     model: ReturnType<typeof activateImageAnalysisAdapter> | null,
@@ -198,7 +198,7 @@ test("review promotion uses declared labels and inclusive confidence, rejecting 
   const current = service(activateImageAnalysisAdapter(example));
   for (const [predictions, expected] of [
     [[{ label: "comic", confidence: 0.5 }], true],
-    [[{ label: "comic", confidence: 0.485 }], false],
+    [[{ label: "comic", confidence: 0.485 }], true],
     [[{ label: "comic_related", confidence: 0.99 }], false],
     [[{ label: "other", confidence: 0.99 }], false],
     [

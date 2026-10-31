@@ -224,7 +224,12 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
     });
     const cookie = response.headers.get("set-cookie");
     if (cookie) browser.cookie = cookie.split(";")[0];
-    return { status: response.status, data: (await response.json()) as T };
+    return {
+      status: response.status,
+      data: (response.headers.get("content-type")?.includes("application/json")
+        ? await response.json()
+        : await response.text()) as T,
+    };
   }
 
   async function createBrowser(
@@ -667,17 +672,15 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
     }>(reviewer, "GET", "/api/candidates?status=pending");
     assert.equal(page.status, 200);
     assert.equal(page.data.items.length, 2);
-    assert.equal(page.data.items[0].tagDisposition, "valid");
+    assert.equal("tagDisposition" in page.data.items[0], false);
     assert.deepEqual(page.data.items[0].hashtags, ["BlueArchive"]);
     assert.deepEqual(page.data.items[0].sourceAdapters, ["fixture_default"]);
     assert.equal(page.data.items[0].sourceLanguage, "ja");
-    assert.equal(page.data.items[0].visualClass, "manga");
-    assert.equal(page.data.items[0].visualClassSource, "default");
-    assert.equal(page.data.items[0].classificationRevision, null);
+    assert.equal("visualClass" in page.data.items[0], false);
     const validOnly = await request<{ items: { id: string }[] }>(
       reviewer,
       "GET",
-      "/api/candidates?status=pending&triageGroup=valid_manga&sourceLanguage=ja",
+      "/api/candidates?status=pending&triageGroup=priority&sourceLanguage=ja",
     );
     assert.deepEqual(
       validOnly.data.items.map((item) => item.id),
@@ -691,44 +694,26 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
     );
     const first = page.data.items[0];
     const second = page.data.items[1];
-    const classified = await request<{
-      visualClass: string;
-      visualClassSource: string;
-      classificationRevision: number | null;
-    }>(source, "PATCH", `/api/candidates/${first.id}/classification`, {
-      label: "photo",
-      expectedRevision: null,
-    });
-    assert.equal(classified.status, 200);
-    assert.equal(classified.data.visualClass, "photo");
-    assert.equal(classified.data.visualClassSource, "human");
-    assert.equal(classified.data.classificationRevision, 0);
-    const photoOnly = await request<{ items: { id: string }[]; total: number }>(
-      reviewer,
-      "GET",
-      "/api/candidates?status=pending&triageGroup=photo",
-    );
-    assert.equal(photoOnly.data.total, 1);
-    assert.deepEqual(
-      photoOnly.data.items.map((item) => item.id),
-      [first.id],
-    );
-    const resorted = await request<{ items: { id: string }[] }>(
-      reviewer,
-      "GET",
-      "/api/candidates?status=pending",
-    );
-    assert.equal(resorted.data.items.at(-1)?.id, first.id);
     assert.equal(
       (
         await request(
           source,
           "PATCH",
           `/api/candidates/${first.id}/classification`,
-          { label: "manga", expectedRevision: null },
+          { label: "photo", expectedRevision: null },
         )
       ).status,
-      409,
+      404,
+    );
+    assert.equal(
+      (
+        await request(
+          reviewer,
+          "GET",
+          "/api/candidates?status=pending&triageGroup=photo",
+        )
+      ).status,
+      400,
     );
     assert.match(
       (

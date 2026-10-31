@@ -1,6 +1,7 @@
 import { BadRequestException } from "@nestjs/common";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { Prisma } from "../generated/prisma/client.js";
+import type { CandidateTagRule } from "./candidate-review-evidence.js";
 import type { CandidateQueryDto } from "./candidates.dto.js";
 
 export function normalizeCandidateFilter(query: Partial<CandidateQueryDto>) {
@@ -38,7 +39,7 @@ export function encodeCandidateCursor(
   cursor: CandidateCursor,
   secret?: string,
 ) {
-  const body = Buffer.from(JSON.stringify({ v: 1, ...cursor })).toString(
+  const body = Buffer.from(JSON.stringify({ v: 2, ...cursor })).toString(
     "base64url",
   );
   return secret
@@ -68,7 +69,7 @@ export function decodeCandidateCursor(
       Buffer.from(parts[0], "base64url").toString("utf8"),
     );
     if (
-      value.v !== 1 ||
+      value.v !== 2 ||
       Object.entries(binding).some(([key, expected]) => value[key] !== expected)
     )
       throw Error();
@@ -97,7 +98,7 @@ export function decodeCandidateCursor(
     return value;
   } catch {
     throw new BadRequestException(
-      "候选分页游标无效：需要版本 1 的不透明游标，旧 UUID 游标不再支持",
+      "候选分页游标无效：需要版本 2 的不透明游标，旧 UUID 游标不再支持",
     );
   }
 }
@@ -107,12 +108,13 @@ export interface CandidateAnalysisPolicy {
   labels: readonly string[];
   positiveLabels: readonly string[];
   minimumConfidence: number;
+  lowPriorityLabels?: readonly string[];
 }
 
 /** Only controlled identifiers are SQL text. Every user/adapter value is a parameter. */
 export function candidateBaseWhere(filter: CandidateFilter) {
   const clauses = [
-    Prisma.sql`c.status::text = ${filter.status}`,
+    Prisma.sql`c.status = ${filter.status}::"CandidateStatus"`,
     Prisma.sql`a.deleted_at IS NULL`,
   ];
   if (filter.authorId)
@@ -134,42 +136,78 @@ export function candidateBaseWhere(filter: CandidateFilter) {
   return Prisma.join(clauses, " AND ");
 }
 
-/** Equivalent to hasEvidence + promotesReview, including malformed and partial summaries. */
+/** Current files and bounded class vectors are projected in SQL; evidence never leaves storage. */
 export function candidateRankingCte(
   filter: CandidateFilter,
   policy: CandidateAnalysisPolicy,
+  rules: readonly CandidateTagRule[] = [],
+  candidateIds?: readonly string[],
 ) {
   const labels = [...policy.labels];
-  const positive = [...policy.positiveLabels];
-  return Prisma.sql`WITH evidence AS (
-    SELECT c.id, c.posted_at, c.tag_disposition,
-      COALESCE(d.label::text, s.label::text, 'manga') AS visual,
-      CASE WHEN c.analysis_model_key = ${policy.modelKey} AND c.analysis_score BETWEEN 0 AND 1
-        AND p.n > 0 AND p.n <= ${labels.length} AND p.valid AND p.n = p.distinct_labels
-        THEN c.analysis_score ELSE NULL END AS score,
-      COALESCE(p.promotes, false) AS promotes
-    FROM candidate_posts c JOIN authors a ON a.id = c.author_id
-    LEFT JOIN candidate_classification_decisions d ON d.candidate_post_id = c.id
-    LEFT JOIN LATERAL (SELECT label FROM candidate_classification_suggestions WHERE candidate_post_id = c.id ORDER BY created_at DESC LIMIT 1) s ON true
-    LEFT JOIN LATERAL (
-      SELECT count(*)::int AS n, count(DISTINCT e->>'label')::int AS distinct_labels,
-        bool_and(COALESCE(jsonb_typeof(e) = 'object' AND jsonb_typeof(e->'label') = 'string'
-          AND (e->>'label') = ANY(${labels}::text[])
-          AND CASE WHEN jsonb_typeof(e->'confidence') = 'number' THEN (e->>'confidence')::numeric BETWEEN 0 AND 1 ELSE false END
-          AND CASE WHEN jsonb_typeof(e->'score') = 'number' THEN (e->>'score')::numeric BETWEEN 0 AND 1 ELSE false END, false)) AS valid,
-        bool_or((e->>'label') = ANY(${positive}::text[]) AND CASE WHEN jsonb_typeof(e->'confidence') = 'number' THEN (e->>'confidence')::numeric >= ${policy.minimumConfidence} ELSE false END) AS promotes
-      FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.analysis_predictions) = 'array' THEN c.analysis_predictions ELSE '[]'::jsonb END) e
-    ) p ON true
-    WHERE ${candidateBaseWhere(filter)}
+  return Prisma.sql`WITH scope AS MATERIALIZED (
+    SELECT c.id,c.posted_at FROM candidate_posts c JOIN authors a ON a.id=c.author_id
+    WHERE ${candidateBaseWhere(filter)} ${candidateIds ? Prisma.sql`AND c.id=ANY(${[...candidateIds]}::uuid[])` : Prisma.empty}
+  ), rule_snapshot AS MATERIALIZED (
+    SELECT * FROM jsonb_to_recordset(${JSON.stringify(rules)}::jsonb) AS r("normalizedValue" text,"groupId" text,"groupName" text,"groupRevision" int,direction text)
+  ), tag_evidence AS (
+    SELECT h.candidate_post_id AS id,
+      jsonb_agg(h.display_value ORDER BY h.normalized_value) AS hashtags,
+      jsonb_agg(jsonb_build_object('normalizedValue',h.normalized_value,'displayValue',h.display_value,'groupId',r."groupId",'groupName',r."groupName",'groupRevision',r."groupRevision",'direction',r.direction) ORDER BY h.normalized_value) FILTER (WHERE r."groupId" IS NOT NULL) AS matches,
+      bool_or(r.direction='priority') AS priority,bool_or(r.direction='deprioritize') AS deprioritize
+    FROM scope c JOIN candidate_hashtags h ON h.candidate_post_id=c.id
+    LEFT JOIN rule_snapshot r ON r."normalizedValue"=h.normalized_value
+    GROUP BY h.candidate_post_id
+  ), image_rows AS MATERIALIZED (
+    SELECT c.id,ma.score,ma.result_json->>'predictedClass' AS winner,
+          COALESCE(f.lifecycle_status='active' AND f.deleted_at IS NULL AND ma.status='succeeded'
+            AND ma.source_sha256=f.checksum AND ma.score BETWEEN 0 AND 1
+            AND CASE WHEN jsonb_typeof(ma.result_json->'score')='number' THEN (ma.result_json->>'score')::numeric BETWEEN 0 AND 1 AND (ma.result_json->>'score')::numeric=ma.score::text::numeric ELSE false END
+            AND vector.n=${labels.length} AND vector.n>0 AND vector.valid AND abs(vector.total-1)<=0.00001
+            AND jsonb_typeof(ma.result_json->'predictedClass')='string' AND vector.winner=ma.result_json->>'predictedClass',false) AS valid
+    FROM scope c JOIN candidate_media m ON m.candidate_post_id=c.id
+    JOIN file_objects f ON f.id=m.file_object_id
+    LEFT JOIN candidate_media_analyses ma ON ma.media_id=m.id AND ma.model_key=${policy.modelKey}
+        LEFT JOIN LATERAL (
+          SELECT count(*)::int AS n,bool_and(COALESCE(x.shape AND x.label=(${labels}::text[])[x.ordinal] AND x.value BETWEEN 0 AND 1,false)) AS valid,sum(CASE WHEN x.value BETWEEN 0 AND 1 THEN x.value END) AS total,
+            (array_agg(x.label ORDER BY x.value DESC NULLS LAST,x.ordinal))[1] AS winner
+          FROM (
+            SELECT ordinal,jsonb_typeof(v)='object' AND jsonb_typeof(v->'label')='string' AS shape,(v->>'label') AS label,CASE WHEN jsonb_typeof(v->'value')='number' THEN (v->>'value')::numeric END AS value
+            FROM jsonb_array_elements(CASE WHEN jsonb_typeof(ma.result_json->'classScores')='array' THEN CASE WHEN jsonb_array_length(ma.result_json->'classScores')=${labels.length} THEN ma.result_json->'classScores' ELSE '[]'::jsonb END ELSE '[]'::jsonb END) WITH ORDINALITY AS scores(v,ordinal)
+          ) x
+        ) vector ON true
+  ), image_evidence AS (
+    SELECT id,max(score) FILTER (WHERE valid) AS score,
+      (array_agg(winner ORDER BY score DESC NULLS LAST,array_position(${labels}::text[],winner)) FILTER (WHERE valid))[1] AS representative_class,
+      bool_or(valid AND winner=ANY(${[...policy.positiveLabels]}::text[])) AS promotes,
+      count(*)>0 AND bool_and(valid AND winner=ANY(${[...(policy.lowPriorityLabels ?? [])]}::text[])) AS all_low
+    FROM image_rows GROUP BY id
+  ), evidence AS (
+    SELECT c.id,c.posted_at,
+      COALESCE(t.hashtags,'[]'::jsonb) AS hashtags,
+      COALESCE(t.matches,'[]'::jsonb) AS matches,
+      COALESCE(t.priority,false) AS tag_positive,COALESCE(t.deprioritize,false) AS tag_negative,
+      v.score,v.representative_class,COALESCE(v.promotes,false) AS model_positive,
+      COALESCE(v.all_low,false) AS all_low
+    FROM scope c LEFT JOIN tag_evidence t ON t.id=c.id LEFT JOIN image_evidence v ON v.id=c.id
   ), grouped AS (
-    SELECT *, CASE WHEN visual = 'photo' THEN 'photo'
-      WHEN tag_disposition = 'blocked' THEN 'blocked_manga'
-      WHEN tag_disposition = 'valid' OR (score IS NOT NULL AND promotes) THEN 'valid_manga'
-      ELSE 'neutral_manga' END AS triage_group FROM evidence
+    SELECT *, (tag_positive OR model_positive) AND tag_negative AS conflict,
+      CASE WHEN (tag_positive OR model_positive) AND tag_negative THEN 'uncertain'
+        WHEN tag_positive OR model_positive THEN 'priority'
+        WHEN tag_negative OR all_low THEN 'low_priority' ELSE 'uncertain' END AS triage_group
+    FROM evidence
   ), ranked AS (
-    SELECT id, posted_at, triage_group, score AS frozen_score,
-      CASE WHEN ${filter.status} <> 'pending' THEN 0 WHEN triage_group = 'valid_manga' THEN 0 WHEN triage_group = 'neutral_manga' THEN 1 WHEN triage_group = 'blocked_manga' THEN 2 ELSE 3 END AS rank,
-      CASE WHEN ${filter.status} = 'pending' THEN COALESCE(score, -1) ELSE -1 END AS sort_score
+    SELECT id,posted_at,triage_group,score AS frozen_score,representative_class,
+      CASE WHEN ${filter.status}<>'pending' THEN 0 WHEN triage_group='priority' THEN 0 WHEN conflict THEN 1 WHEN triage_group='uncertain' THEN 2 ELSE 3 END AS rank,
+      CASE WHEN ${filter.status}='pending' THEN COALESCE(score,-1) ELSE -1 END AS sort_score,
+      jsonb_build_object('hashtags',hashtags,'tagRuleMatches',matches,'modelPositive',model_positive,'allLow',all_low,
+        'triageReasons',to_jsonb(array_remove(ARRAY[
+          CASE WHEN conflict THEN 'rule_conflict' END,
+          CASE WHEN tag_positive THEN 'priority_tag' END,
+          CASE WHEN model_positive THEN 'priority_model' END,
+          CASE WHEN tag_negative THEN 'deprioritize_tag' END,
+          CASE WHEN NOT tag_positive AND NOT tag_negative AND NOT model_positive AND all_low THEN 'all_images_low' END,
+          CASE WHEN triage_group='uncertain' AND NOT conflict THEN 'insufficient_evidence' END
+        ]::text[],NULL))) AS reason_json
     FROM grouped
   )`;
 }

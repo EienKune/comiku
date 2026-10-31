@@ -8,7 +8,7 @@ export type CandidateBaseFilter = Pick<
   "status" | "search" | "sourceLanguage" | "fetchedAfter"
 >;
 
-/** One scope owns one membership snapshot; all four sections share it. */
+/** One scope owns one membership snapshot; all sections share it. */
 export function useCandidateReviewSession(filter: CandidateBaseFilter) {
   const cache = useQueryClient();
   const key = ["candidate-review-session", filter] as const;

@@ -11,7 +11,7 @@ test("score projection enforces current model, checksum, lifecycle and valid vec
   const f = await candidateReviewFixture();
   const fileIds = Array.from({ length: 9 }, () => randomUUID());
   try {
-    const post = await f.post();
+    const post = await f.post({ analysisPredictions: [] });
     await f.db.fileObject.createMany({
       data: fileIds.map((id, index) => ({
         id,
@@ -127,7 +127,7 @@ test("binary and 100-label score contracts keep complete ordered numeric vectors
   const f = await candidateReviewFixture();
   const fileId = randomUUID();
   try {
-    const post = await f.post();
+    const post = await f.post({ analysisPredictions: [] });
     await f.db.fileObject.create({
       data: {
         id: fileId,

@@ -38,6 +38,7 @@ function fixture(activeModelKey: string | null) {
     work: null,
   }));
   const db = {
+    $queryRaw: async () => [],
     candidatePost: {
       findMany: async (input: { where: { id?: { in: string[] } } }) =>
         rows.filter(
@@ -50,23 +51,33 @@ function fixture(activeModelKey: string | null) {
   return new CandidatesService(db, {} as FileObjectsService, undefined, {
     activeModelKey,
     promotesReview: () => false,
-    classificationTags: () => [],
+    classificationTags: () => [
+      { label: "comic", text: "Comic", tone: "neutral" },
+    ],
     hasEvidence: () => true,
   } as unknown as ImageAnalysisService);
 }
 
 // SQL ordering/group/pending semantics are exercised against PostgreSQL in
 // candidate-review-sessions.integration and candidate-analysis-model.integration.
-test("DTO priority only uses current model evidence and preserves partial positive evidence", async () => {
+test("DTO categories only use current model evidence and preserve partial positive evidence", async () => {
   const service = fixture("model-b");
-  assert.equal((await service.get("old")).reviewPriority, "unprocessed");
-  assert.equal((await service.get("legacy")).reviewPriority, "unprocessed");
-  assert.equal((await service.get("incomplete")).reviewPriority, "high");
-  assert.equal((await service.get("current")).reviewPriority, "low");
-});
-test("disabled model hides cached DTO priority", async () => {
+  assert.deepEqual((await service.get("old")).classificationTags, []);
+  assert.deepEqual((await service.get("legacy")).classificationTags, []);
+  assert.equal("reviewPriority" in (await service.get("incomplete")), false);
   assert.equal(
-    (await fixture(null).get("incomplete")).reviewPriority,
-    "unprocessed",
+    (await service.get("incomplete")).classificationTags?.[0]?.label,
+    "comic",
+  );
+  assert.equal(
+    (await service.get("current")).classificationTags?.[0]?.label,
+    "comic",
+  );
+  assert.equal((await service.get("current")).triageGroup, "uncertain");
+});
+test("disabled model hides cached DTO categories", async () => {
+  assert.deepEqual(
+    (await fixture(null).get("incomplete")).classificationTags,
+    [],
   );
 });

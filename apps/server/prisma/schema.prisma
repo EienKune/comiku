@@ -682,6 +682,9 @@ model CandidateReviewSession {
   normalizedFilterJson Json @map("normalized_filter_json")
   filterHash String @map("filter_hash") @db.VarChar(64)
   modelKey String? @map("model_key") @db.VarChar(64)
+  policyVersion Int @default(2) @map("policy_version")
+  rulesVersion String? @map("rules_version") @db.VarChar(64)
+  reviewPolicyKey String? @map("review_policy_key") @db.VarChar(64)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   lastUsedAt DateTime @default(now()) @map("last_used_at") @db.Timestamptz(3)
   expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
@@ -702,6 +705,7 @@ model CandidateReviewSessionEntry {
   ordinal Int
   triageGroup String @map("triage_group") @db.VarChar(32)
   frozenScore Float? @map("frozen_score")
+  reasonJson Json? @map("reason_json")
 
   @@id([sessionId, candidateId])
   @@unique([sessionId, ordinal])

@@ -15,8 +15,8 @@ import { useCandidateAnalysisRefresh } from "./use-candidate-analysis-refresh";
 type CandidatePage = InfiniteData<
   components["schemas"]["CandidatePageDto"] & { analysisPending?: boolean }
 >;
-const sourceKey = ["candidates", "pending", "neutral_manga"] as const;
-const destinationKey = ["candidates", "pending", "valid_manga"] as const;
+const sourceKey = ["candidates", "pending", "uncertain"] as const;
+const destinationKey = ["candidates", "pending", "priority"] as const;
 const disposers: (() => void)[] = [];
 
 function page(
@@ -30,13 +30,15 @@ function page(
           ? [
               {
                 id: "synthetic-candidate",
-                reviewPriority: priority,
+                text: priority,
               } as components["schemas"]["CandidateDto"],
             ]
           : [],
         total: priority ? 1 : 0,
         nextCursor: null,
-        ...(analysisPending === undefined ? {} : { analysisPending }),
+        analysisPending:
+          analysisPending ??
+          (priority === "queued" || priority === "unprocessed"),
       },
     ],
     pageParams: [null],
@@ -102,8 +104,7 @@ test("range metadata follows an unprocessed candidate through queueing and compl
     await vi.advanceTimersByTimeAsync(5_000);
   });
   expect(
-    client.getQueryData<CandidatePage>(sourceKey)?.pages[0].items[0]
-      ?.reviewPriority,
+    client.getQueryData<CandidatePage>(sourceKey)?.pages[0].items[0]?.text,
   ).toBe("queued");
   expect(readSource).toHaveBeenCalledTimes(1);
 
@@ -114,8 +115,7 @@ test("range metadata follows an unprocessed candidate through queueing and compl
   });
   await waitFor(() =>
     expect(
-      client.getQueryData<CandidatePage>(sourceKey)?.pages[0].items[0]
-        ?.reviewPriority,
+      client.getQueryData<CandidatePage>(sourceKey)?.pages[0].items[0]?.text,
     ).toBe("high"),
   );
   expect(vi.getTimerCount()).toBe(0);

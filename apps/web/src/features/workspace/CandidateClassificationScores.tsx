@@ -260,6 +260,7 @@ export function CandidateClassificationScores({
             onFocus={cancelClose}
             onBlur={later}
           >
+            <p className="candidate-scores__heading">模型预测分数</p>
             <div
               ref={scroll}
               tabIndex={0}

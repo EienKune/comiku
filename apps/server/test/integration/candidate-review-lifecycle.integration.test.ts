@@ -118,10 +118,13 @@ test("SQL supports a binary adapter taxonomy and hard expiry cannot be renewed",
       undefined,
       analysis,
     );
-    const post = await f.post({
-      analysisModelKey: model.modelKey,
-      analysisPredictions: [{ label: "accept", confidence: 0.6, score: 0.8 }],
-    });
+    const post = await f.post(
+      {
+        analysisModelKey: model.modelKey,
+        analysisPredictions: [{ label: "accept", confidence: 0.6, score: 0.8 }],
+      },
+      model.identity.labels,
+    );
     const session = await service.createReviewSession(f.actor.id, {
       ...f.filter,
       idempotencyKey: randomUUID(),
@@ -131,7 +134,7 @@ test("SQL supports a binary adapter taxonomy and hard expiry cannot be renewed",
         await service.list(
           {
             ...f.filter,
-            triageGroup: "valid_manga",
+            triageGroup: "priority",
             reviewSessionId: session.sessionId,
           },
           f.actor.id,

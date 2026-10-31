@@ -209,7 +209,7 @@ test("cached current-model successes keep polling until an older summary is rebu
     await analysis.schedulePending(post.id);
     const page = await candidates.list(query);
     assert.equal(page.analysisPending, false);
-    assert.equal(page.items[0]?.reviewPriority, "medium");
+    assert.equal(page.items[0]?.triageGroup, "priority");
     assert.equal(
       await db.backgroundJob.count({
         where: { kind: "image_analysis", resourceId: post.media[0]!.id },
@@ -296,7 +296,16 @@ test("pending scope spans groups and pages but excludes analysis that cannot pro
             sourceSha256: file.checksum,
             status: "succeeded",
             score: 0.9,
-            resultJson: {},
+            resultJson: {
+              score: 0.9,
+              predictedClass: "comic",
+              classScores: [
+                { label: "comic", value: 0.9 },
+                { label: "comic_related", value: 0.05 },
+                { label: "other", value: 0.05 },
+              ],
+              evidence: [],
+            },
           },
         });
         await db.candidatePost.update({
@@ -312,7 +321,7 @@ test("pending scope spans groups and pages but excludes analysis that cannot pro
     assert.ok(page.nextCursor);
     const group = await candidates.list({
       ...query,
-      triageGroup: "valid_manga",
+      triageGroup: "priority",
     });
     assert.equal(group.total, 1);
     assert.equal(group.analysisPending, true);
@@ -467,9 +476,7 @@ test("model switches hide stale summaries and rebuild existing history in bounde
     const candidates = app.get(CandidatesService),
       analysis = app.get(ImageAnalysisService);
     const before = await candidates.list({ authorId: author.id, limit: 24 });
-    assert.ok(
-      before.items.every((post) => post.reviewPriority === "unprocessed"),
-    );
+    assert.ok(before.items.every((post) => post.triageGroup === "uncertain"));
     assert.equal(before.items[0].id, postIds.at(-1));
     await analysis.schedulePending();
     assert.equal(
@@ -481,7 +488,7 @@ test("model switches hide stale summaries and rebuild existing history in bounde
     await analysis.schedulePending();
     const after = await candidates.list({ authorId: author.id, limit: 24 });
     assert.equal(after.items.length, 21);
-    assert.ok(after.items.every((post) => post.reviewPriority === "failed"));
+    assert.ok(after.items.every((post) => post.triageGroup === "uncertain"));
     assert.equal(after.analysisPending, false);
     assert.equal(
       await db.candidatePost.count({
@@ -653,7 +660,7 @@ test("current-model SQL-null prediction caches rebuild from winners without infe
     assert.deepEqual(service.classificationTags(rebuilt.analysisPredictions), [
       { label: "comic", text: "漫画／插画", tone: "success" },
     ]);
-    assert.equal(service.promotesReview(rebuilt.analysisPredictions), false);
+    assert.equal(service.promotesReview(rebuilt.analysisPredictions), true);
     const updatedPolicy = activateImageAnalysisAdapter({
       ...example,
       reviewPolicy: { positiveLabels: ["comic"], minimumConfidence: 0.4 },

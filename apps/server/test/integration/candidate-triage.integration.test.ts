@@ -146,12 +146,12 @@ test("current BA winning classes rebuild into five promoted and two neutral post
     const valid = await candidates.list({
       limit: 100,
       authorId: author.id,
-      triageGroup: "valid_manga",
+      triageGroup: "priority",
     });
     const neutral = await candidates.list({
       limit: 100,
       authorId: author.id,
-      triageGroup: "neutral_manga",
+      triageGroup: "uncertain",
     });
     assert.deepEqual(
       valid.items.map((row) => row.id).sort(),
@@ -164,15 +164,10 @@ test("current BA winning classes rebuild into five promoted and two neutral post
     assert.ok(
       [...valid.items, ...neutral.items].every(
         (row) =>
-          row.tagDisposition === "neutral" &&
+          row.tagRuleMatches.length === 0 &&
           row.status === "pending" &&
           row.revision === 0,
       ),
-    );
-    assert.equal(
-      valid.items.find((row) => row.id === postIds[0])?.reviewPriority,
-      "high",
-      "Independent ranking score is preserved when the winning BA class promotes",
     );
     assert.equal(
       await db.candidateMediaAnalysis.count({
@@ -208,30 +203,22 @@ test("current BA winning classes rebuild into five promoted and two neutral post
         await candidates.list({
           limit: 100,
           authorId: author.id,
-          triageGroup: "valid_manga",
+          triageGroup: "priority",
         })
       ).total,
-      3,
+      5,
     );
     assert.deepEqual(
       (
         await candidates.list({
           limit: 100,
           authorId: author.id,
-          triageGroup: "photo",
+          triageGroup: "priority",
         })
-      ).items.map((row) => row.id),
-      [postIds[3]],
-    );
-    assert.deepEqual(
-      (
-        await candidates.list({
-          limit: 100,
-          authorId: author.id,
-          triageGroup: "blocked_manga",
-        })
-      ).items.map((row) => row.id),
-      [postIds[4]],
+      ).items
+        .map((row) => row.id)
+        .sort(),
+      [postIds[0], ...postIds.slice(3)].sort(),
     );
   } finally {
     await db.backgroundJob.deleteMany({

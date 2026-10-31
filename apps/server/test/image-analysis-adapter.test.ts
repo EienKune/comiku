@@ -255,6 +255,7 @@ test("review policies are validated and frozen without changing inference identi
   assert.deepEqual(active.reviewPolicy, {
     positiveLabels: ["comic"],
     minimumConfidence: 0.5,
+    lowPriorityLabels: [],
   });
   assert.ok(Object.isFrozen(active.reviewPolicy));
   assert.ok(Object.isFrozen(active.reviewPolicy!.positiveLabels));

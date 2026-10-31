@@ -17,7 +17,11 @@ export function createExampleImageAnalysisAdapter(): ImageAnalysisAdapter {
       { label: "comic_related", text: "漫画相关", tone: "info" },
       { label: "other", text: "其他内容", tone: "neutral" },
     ],
-    reviewPolicy: { positiveLabels: ["comic"], minimumConfidence: 0.5 },
+    reviewPolicy: {
+      positiveLabels: ["comic"],
+      minimumConfidence: 0.5,
+      lowPriorityLabels: ["other"],
+    },
     async analyze(_itemId, _body, signal) {
       signal.throwIfAborted();
       return {

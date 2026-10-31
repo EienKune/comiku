@@ -22,7 +22,6 @@ import {
   MaxLength,
   Min,
   MinLength,
-  ValidateIf,
   ValidateNested,
 } from "class-validator";
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
@@ -32,8 +31,6 @@ import {
   CandidateUploadSessionStatus,
   ReferencedPostType,
   SourceLanguage,
-  CandidateVisualClass,
-  CandidateTagDisposition,
   CandidateTagGroupKind,
 } from "../generated/prisma/client.js";
 import {
@@ -43,6 +40,45 @@ import {
 
 const trimmed = ({ value }: { value: unknown }) =>
   typeof value === "string" ? value.trim() : value;
+
+export const CANDIDATE_TRIAGE_GROUPS = [
+  "priority",
+  "uncertain",
+  "low_priority",
+] as const;
+export type CandidateTriageGroup = (typeof CANDIDATE_TRIAGE_GROUPS)[number];
+export const CANDIDATE_TRIAGE_REASONS = [
+  "rule_conflict",
+  "priority_tag",
+  "priority_model",
+  "deprioritize_tag",
+  "all_images_low",
+  "insufficient_evidence",
+] as const;
+export type CandidateTriageReason = (typeof CANDIDATE_TRIAGE_REASONS)[number];
+export class CandidateTagRuleMatchDto {
+  @ApiProperty({ type: String }) normalizedValue!: string;
+  @ApiProperty({ type: String }) displayValue!: string;
+  @ApiProperty({ type: String, format: "uuid" }) groupId!: string;
+  @ApiProperty({ type: String }) groupName!: string;
+  @ApiProperty({ type: Number }) groupRevision!: number;
+  @ApiProperty({ enum: ["priority", "deprioritize"] }) direction!:
+    "priority" | "deprioritize";
+}
+export class CandidateReviewPolicyClassDto {
+  @ApiProperty({ type: String }) label!: string;
+  @ApiProperty({ type: String }) text!: string;
+  @ApiProperty({ enum: IMAGE_ANALYSIS_LABEL_TONES })
+  tone!: ImageAnalysisLabelPresentation["tone"];
+  @ApiProperty({ enum: CANDIDATE_TRIAGE_GROUPS })
+  triageGroup!: CandidateTriageGroup;
+}
+export class CandidateReviewPolicyDto {
+  @ApiProperty({ type: String, nullable: true }) modelKey!: string | null;
+  @ApiProperty({ type: String }) policyKey!: string;
+  @ApiProperty({ type: CandidateReviewPolicyClassDto, isArray: true })
+  classes!: CandidateReviewPolicyClassDto[];
+}
 
 export class CandidateQueryDto {
   @ApiPropertyOptional({ enum: CandidateStatus, enumName: "CandidateStatus" })
@@ -68,11 +104,11 @@ export class CandidateQueryDto {
   sourceLanguage?: SourceLanguage;
 
   @ApiPropertyOptional({
-    enum: ["valid_manga", "neutral_manga", "blocked_manga", "photo"],
+    enum: ["priority", "uncertain", "low_priority"],
   })
   @IsOptional()
-  @IsIn(["valid_manga", "neutral_manga", "blocked_manga", "photo"])
-  triageGroup?: "valid_manga" | "neutral_manga" | "blocked_manga" | "photo";
+  @IsIn(["priority", "uncertain", "low_priority"])
+  triageGroup?: CandidateTriageGroup;
 
   @ApiPropertyOptional({ type: String, format: "date-time" })
   @IsOptional()
@@ -86,7 +122,7 @@ export class CandidateQueryDto {
 
   @ApiPropertyOptional({
     type: String,
-    description: "Opaque v1 cursor; legacy UUID cursors are rejected",
+    description: "Opaque v2 cursor; legacy cursors are rejected",
   })
   @IsOptional()
   @IsString()
@@ -128,10 +164,9 @@ export class CreateCandidateReviewSessionDto extends CandidateQueryDto {
 }
 
 export class CandidateReviewCountsDto {
-  @ApiProperty({ type: Number }) valid_manga!: number;
-  @ApiProperty({ type: Number }) neutral_manga!: number;
-  @ApiProperty({ type: Number }) blocked_manga!: number;
-  @ApiProperty({ type: Number }) photo!: number;
+  @ApiProperty({ type: Number }) priority!: number;
+  @ApiProperty({ type: Number }) uncertain!: number;
+  @ApiProperty({ type: Number }) low_priority!: number;
 }
 
 export class CandidateReviewSessionDto {
@@ -152,11 +187,12 @@ export class CandidateDto {
   @ApiPropertyOptional({ type: Boolean }) canRetryAnalysis?: boolean;
   @ApiPropertyOptional({ type: CandidateClassificationTagDto, isArray: true })
   classificationTags?: CandidateClassificationTagDto[];
-  @ApiPropertyOptional({
-    enum: ["high", "medium", "low", "unprocessed", "queued", "failed"],
-  })
-  reviewPriority?:
-    "high" | "medium" | "low" | "unprocessed" | "queued" | "failed";
+  @ApiProperty({ enum: CANDIDATE_TRIAGE_GROUPS })
+  triageGroup!: CandidateTriageGroup;
+  @ApiProperty({ enum: CANDIDATE_TRIAGE_REASONS, isArray: true })
+  triageReasons!: CandidateTriageReason[];
+  @ApiProperty({ type: CandidateTagRuleMatchDto, isArray: true })
+  tagRuleMatches!: CandidateTagRuleMatchDto[];
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: String, format: "uuid" }) authorId!: string;
   @ApiProperty({ type: String }) authorName!: string;
@@ -167,17 +203,6 @@ export class CandidateDto {
   sourceLanguage!: SourceLanguage;
   @ApiProperty({ type: String, isArray: true }) sourceAdapters!: string[];
   @ApiProperty({ type: String, isArray: true }) hashtags!: string[];
-  @ApiProperty({
-    enum: CandidateTagDisposition,
-    enumName: "CandidateTagDisposition",
-  })
-  tagDisposition!: CandidateTagDisposition;
-  @ApiProperty({ enum: CandidateVisualClass, enumName: "CandidateVisualClass" })
-  visualClass!: CandidateVisualClass;
-  @ApiProperty({ enum: ["human", "model", "default"] })
-  visualClassSource!: "human" | "model" | "default";
-  @ApiProperty({ type: Number, nullable: true })
-  classificationRevision!: number | null;
   @ApiProperty({ type: String }) externalPostId!: string;
   @ApiProperty({ type: String, nullable: true }) externalPostUrl!:
     string | null;
@@ -281,18 +306,6 @@ export class UpdateCandidateTagGroupDto extends CreateCandidateTagGroupDto {
   @IsInt()
   @Min(0)
   expectedRevision!: number;
-}
-
-export class SetCandidateClassificationDto {
-  @ApiProperty({ enum: CandidateVisualClass, enumName: "CandidateVisualClass" })
-  @IsEnum(CandidateVisualClass)
-  label!: CandidateVisualClass;
-
-  @ApiProperty({ type: Number, minimum: 0, nullable: true })
-  @ValidateIf((_object, value) => value !== null)
-  @IsInt()
-  @Min(0)
-  expectedRevision!: number | null;
 }
 
 export enum CandidateAction {

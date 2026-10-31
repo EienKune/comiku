@@ -190,12 +190,7 @@ test("four non-due readers share one snapshot while their page queries remain he
       signalAll = resolve;
     });
     const arrived = new Set<string>();
-    const groups = [
-      "valid_manga",
-      "neutral_manga",
-      "blocked_manga",
-      "photo",
-    ] as const;
+    const groups = ["priority", "uncertain", "low_priority"] as const;
     const reads = groups.map((triageGroup) => {
       const db = new Proxy(f.db, {
         get(target, key) {
@@ -221,7 +216,7 @@ test("four non-due readers share one snapshot while their page queries remain he
                       strings.join("?").includes("SELECT c.id, e.ordinal")
                     ) {
                       arrived.add(triageGroup);
-                      if (arrived.size === 4) signalAll(arrived.size);
+                      if (arrived.size === 3) signalAll(arrived.size);
                       await gate;
                     }
                     return result;
@@ -248,7 +243,7 @@ test("four non-due readers share one snapshot while their page queries remain he
     const results = await settled;
     assert.equal(
       concurrent,
-      4,
+      3,
       "All four ordinary readers must reach their page barrier without waiting for another reader to commit",
     );
     assert.ok(results.every((result) => result.status === "fulfilled"));

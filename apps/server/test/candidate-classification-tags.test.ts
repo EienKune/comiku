@@ -166,6 +166,7 @@ test("candidate tags require valid current results even when sibling work is inc
     fetchedAt: new Date(0),
   };
   const db = {
+    $queryRaw: async () => [],
     candidatePost: { findUnique: async () => row },
   } as unknown as PrismaService;
   const service = new CandidatesService(
@@ -176,9 +177,8 @@ test("candidate tags require valid current results even when sibling work is inc
   );
   const dto = await service.get(row.id);
   assert.deepEqual(dto.classificationTags, [expected[1]]);
-  assert.equal(dto.visualClass, "photo");
-  assert.equal(dto.classificationRevision, 2);
-  assert.equal(dto.tagDisposition, "blocked");
+  for (const key of ["visualClass", "classificationRevision", "tagDisposition"])
+    assert.equal(key in dto, false);
   for (const state of ["queued", "failed"]) {
     row.analysisState = state;
     assert.deepEqual((await service.get(row.id)).classificationTags, [

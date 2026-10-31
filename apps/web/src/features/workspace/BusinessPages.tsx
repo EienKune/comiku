@@ -1,4 +1,8 @@
 import { CandidateClassificationScores } from "./CandidateClassificationScores";
+import { CandidateTags } from "./CandidateTags";
+import { CandidateMediaPreview } from "./CandidateMediaPreview";
+import { CandidateRulesDialog } from "./CandidateRulesDialog";
+import "./candidates.css";
 import {
   useCandidateReviewSession,
   type CandidateBaseFilter,
@@ -17,13 +21,18 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type FormEvent,
   type ReactNode,
 } from "react";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
 import {
   RefreshCw,
@@ -91,7 +100,6 @@ type Author = components["schemas"]["AuthorDto"];
 type AuthorImportPreview = components["schemas"]["AuthorImportPreviewDto"];
 type ResolvedXProfile = components["schemas"]["ResolvedXProfileDto"];
 type Candidate = components["schemas"]["CandidateDto"];
-type CandidateTagGroup = components["schemas"]["CandidateTagGroupDto"];
 type CandidateUploadSession =
   components["schemas"]["CandidateUploadSessionDto"];
 type CandidateUploadContentType =
@@ -193,14 +201,6 @@ const candidateLabels: Record<string, string> = {
   pending: "待处理",
   imported: "已入库",
   discarded: "已忽略",
-};
-const candidateTagGroupLabels: Record<
-  components["schemas"]["CandidateTagGroupKind"],
-  string
-> = {
-  valid: "有效作品标签",
-  gray: "灰名单",
-  blocked: "排除标签",
 };
 const stageLabels: Record<WorkStage, string> = {
   translate: "翻译",
@@ -1682,85 +1682,6 @@ function AuthorEvidencePanel({
   );
 }
 
-function CandidateCover({ candidate }: { candidate: Candidate }) {
-  const media = candidate.media[0];
-  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const lightboxMedia =
-    lightboxIndex === null ? undefined : candidate.media[lightboxIndex];
-  const query = useImageUrl(
-    ["thumbnail", "candidate-media", candidate.id, media?.id],
-    async () =>
-      unwrap(
-        await client.GET("/api/candidates/{candidateId}/media/{mediaId}/url", {
-          params: {
-            path: { candidateId: candidate.id, mediaId: media!.id },
-            query: { variant: "thumbnail" },
-          },
-        }),
-      ),
-    Boolean(media),
-  );
-  const lightboxQuery = useImageUrl(
-    ["candidate-media", candidate.id, lightboxMedia?.id],
-    async () =>
-      unwrap(
-        await client.GET("/api/candidates/{candidateId}/media/{mediaId}/url", {
-          params: {
-            path: { candidateId: candidate.id, mediaId: lightboxMedia!.id },
-          },
-        }),
-      ),
-    Boolean(lightboxMedia),
-  );
-  const safe = isDisplayableImageUrl(query.data?.url);
-  return (
-    <>
-      <button
-        type="button"
-        className="workspace-cover workspace-cover-button"
-        aria-label={`查看 ${candidate.authorName} 的图片组大图`}
-        onClick={() => setLightboxIndex(0)}
-      >
-        {safe ? (
-          <img src={query.data!.url!} alt="" loading="lazy" />
-        ) : (
-          <ImageIcon aria-hidden="true" />
-        )}
-        <Badge>{candidate.media.length} P</Badge>
-      </button>
-      {lightboxIndex !== null && (
-        <ImageLightbox
-          src={
-            isDisplayableImageUrl(lightboxQuery.data?.url)
-              ? lightboxQuery.data!.url
-              : undefined
-          }
-          alt={`${candidate.authorName} 的候选图片第 ${lightboxIndex + 1} 页`}
-          index={lightboxIndex}
-          count={candidate.media.length}
-          thumbnailSrc={
-            lightboxIndex === 0 && isDisplayableImageUrl(query.data?.url)
-              ? query.data!.url
-              : undefined
-          }
-          loading={lightboxQuery.isPending}
-          onClose={() => setLightboxIndex(null)}
-          onPrevious={
-            lightboxIndex > 0
-              ? () => setLightboxIndex((value) => (value ?? 1) - 1)
-              : undefined
-          }
-          onNext={
-            lightboxIndex < candidate.media.length - 1
-              ? () => setLightboxIndex((value) => (value ?? -1) + 1)
-              : undefined
-          }
-        />
-      )}
-    </>
-  );
-}
-
 function CandidateMediaThumbnail({
   candidateId,
   media,
@@ -2432,208 +2353,66 @@ function ManualCandidateUpload({
   );
 }
 
-function CandidateTagGroupPanel() {
-  const action = useAction();
-  const [name, setName] = useState("");
-  const [aliases, setAliases] = useState("");
-  const [editing, setEditing] = useState<CandidateTagGroup | null>(null);
-  const [kind, setKind] =
-    useState<components["schemas"]["CandidateTagGroupKind"]>("valid");
-  const query = useApiQuery(["candidate-tag-groups"], async () =>
-    unwrap(await client.GET("/api/candidates/tag-groups")),
-  );
-
-  async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    await action.run(async () => {
-      const values = aliases
-        .split(/[,，\s]+/)
-        .map((value) => value.trim())
-        .filter(Boolean);
-      if (editing) {
-        await unwrap(
-          await client.PATCH("/api/candidates/tag-groups/{id}", {
-            params: { path: { id: editing.id } },
-            body: {
-              name,
-              kind,
-              enabled: editing.enabled,
-              aliases: values,
-              expectedRevision: editing.revision,
-            },
-          }),
-        );
-      } else {
-        await unwrap(
-          await client.POST("/api/candidates/tag-groups", {
-            body: { name, kind, enabled: true, aliases: values },
-          }),
-        );
-      }
-      setName("");
-      setAliases("");
-      setEditing(null);
-      await Promise.all([
-        query.refetch(),
-        queryClient.invalidateQueries({ queryKey: ["candidates"] }),
-      ]);
-      action.setSuccess("标签组已保存，候选优先级已重新计算");
-    });
-  }
-
-  async function toggle(group: CandidateTagGroup) {
-    await action.run(async () => {
-      await unwrap(
-        await client.PATCH("/api/candidates/tag-groups/{id}", {
-          params: { path: { id: group.id } },
-          body: {
-            name: group.name,
-            kind: group.kind,
-            enabled: !group.enabled,
-            aliases: group.aliases,
-            expectedRevision: group.revision,
-          },
-        }),
-      );
-      await Promise.all([
-        query.refetch(),
-        queryClient.invalidateQueries({ queryKey: ["candidates"] }),
-      ]);
-      action.setSuccess(group.enabled ? "标签组已停用" : "标签组已启用");
-    });
-  }
-
-  return (
-    <Surface className="workspace-tag-groups" variant="soft">
-      <div className="workspace-panel-heading">
-        <div>
-          <h2>候选标签规则</h2>
-          <p>只有命中已启用“有效作品标签”组的候选会优先显示。</p>
-        </div>
-      </div>
-      <form onSubmit={(event) => void save(event)}>
-        <TextField
-          label="标签组名称"
-          value={name}
-          required
-          maxLength={100}
-          onChange={(event) => setName(event.target.value)}
-        />
-        <SelectField
-          label="规则类型"
-          value={kind}
-          onValueChange={(value) =>
-            setKind(value as components["schemas"]["CandidateTagGroupKind"])
-          }
-        >
-          <option value="valid">有效作品标签</option>
-          <option value="gray">灰名单</option>
-          <option value="blocked">排除标签</option>
-        </SelectField>
-        <TextField
-          label="标签别名"
-          value={aliases}
-          required
-          placeholder="#ブルアカ，#블루아카，#BlueArchive"
-          onChange={(event) => setAliases(event.target.value)}
-        />
-        <div className="workspace-inline-actions">
-          <Button type="submit" size="sm" loading={action.busy}>
-            {editing ? "保存修改" : "新增标签组"}
-          </Button>
-          {editing && (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setEditing(null);
-                setName("");
-                setAliases("");
-                setKind("valid");
-              }}
-            >
-              取消
-            </Button>
-          )}
-        </div>
-      </form>
-      <Feedback error={action.error} success={action.success} />
-      <PageState query={query} empty={(groups) => !groups.length}>
-        {(groups) => (
-          <ul className="workspace-tag-group-list">
-            {groups.map((group) => (
-              <li key={group.id}>
-                <div>
-                  <strong>{group.name}</strong>
-                  <span>
-                    {candidateTagGroupLabels[group.kind]} ·{" "}
-                    {group.aliases.join("、")}
-                  </span>
-                </div>
-                <div className="workspace-inline-actions">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    disabled={action.busy}
-                    onClick={() => {
-                      setEditing(group);
-                      setName(group.name);
-                      setAliases(group.aliases.join("，"));
-                      setKind(group.kind);
-                    }}
-                  >
-                    编辑
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    loading={action.busy}
-                    onClick={() => void toggle(group)}
-                  >
-                    {group.enabled ? "停用" : "启用"}
-                  </Button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </PageState>
-    </Surface>
-  );
-}
-
-type CandidateTriageGroup =
-  "valid_manga" | "neutral_manga" | "blocked_manga" | "photo";
-
+type CandidateTriageGroup = Candidate["triageGroup"];
 const candidateTriageSections: {
   value: CandidateTriageGroup;
   title: string;
-  description: string;
 }[] = [
-  {
-    value: "valid_manga",
-    title: "有效标签漫画 / 插画",
-    description: "命中配置的作品标签或模型确认，优先审核。",
-  },
-  {
-    value: "neutral_manga",
-    title: "普通漫画 / 插画",
-    description: "未命中有效标签或模型确认，保留人工判断。",
-  },
-  {
-    value: "blocked_manga",
-    title: "黑名单标签漫画 / 插画",
-    description: "命中排除标签，仍保留人工判断入口。",
-  },
-  {
-    value: "photo",
-    title: "现实照片",
-    description: "人工或分类器标记为照片，统一排在最后。",
-  },
+  { value: "priority", title: "优先审核" },
+  { value: "uncertain", title: "待判断" },
+  { value: "low_priority", title: "低优先级" },
 ];
+
+function CandidateDescription({ text }: { text: string | null }) {
+  const container = useRef<HTMLDivElement>(null);
+  const paragraph = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [expandable, setExpandable] = useState(false);
+  useLayoutEffect(() => {
+    const element = paragraph.current;
+    const wrapper = container.current;
+    if (!element || !wrapper) return;
+    const measure = () => {
+      // Measure the actual three-line layout even while the text is expanded.
+      // Restore the visible class synchronously so inspection never flickers.
+      const collapsed = element.classList.contains(
+        "candidate-description__collapsed",
+      );
+      element.classList.add("candidate-description__collapsed");
+      const overflows = element.scrollHeight > element.clientHeight;
+      if (!collapsed)
+        element.classList.remove("candidate-description__collapsed");
+      setExpandable(overflows);
+      if (!overflows) setExpanded(false);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(wrapper);
+    return () => observer.disconnect();
+  }, [text]);
+  if (!text) return null;
+  return (
+    <div ref={container} className="candidate-description">
+      <p
+        ref={paragraph}
+        className={expanded ? undefined : "candidate-description__collapsed"}
+      >
+        {text}
+      </p>
+      {expandable && (
+        <button
+          type="button"
+          className="candidate-description__toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? "收起全文" : "展开全文"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 function CandidateAuthorIdentity({ candidate }: { candidate: Candidate }) {
   const avatar = useApiQuery(
@@ -2662,6 +2441,19 @@ function CandidateAuthorIdentity({ candidate }: { candidate: Candidate }) {
             ? `${candidate.platform === "pixiv" ? "p@" : "@"}${candidate.authorHandle}`
             : candidate.platform}
         </span>
+        <div className="candidate-author-meta">
+          <span>
+            {candidate.platform === "x"
+              ? "X"
+              : candidate.platform === "pixiv"
+                ? "Pixiv"
+                : candidate.platform}
+          </span>
+          <span>{sourceLanguageLabels[candidate.sourceLanguage]}</span>
+          <time dateTime={candidate.postedAt}>
+            {new Date(candidate.postedAt).toLocaleDateString("zh-CN")}
+          </time>
+        </div>
       </div>
     </div>
   );
@@ -2676,8 +2468,10 @@ function CandidateGridSection({
   selected,
   onToggle,
   onSelectLoaded,
-  onClassify,
   onRetryAnalysis,
+  open = true,
+  onOpenChange,
+  scopeTotal,
   orderingCandidateId,
   onToggleOrdering,
 }: {
@@ -2689,15 +2483,15 @@ function CandidateGridSection({
   selected: ReadonlyMap<string, number>;
   onToggle: (candidate: Candidate) => void;
   onSelectLoaded: (candidates: Candidate[]) => void;
-  onClassify: (
-    candidate: Candidate,
-    label: components["schemas"]["CandidateVisualClass"],
-  ) => void;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  scopeTotal?: number;
   onRetryAnalysis: (candidate: Candidate) => void;
   orderingCandidateId: string | null;
   onToggleOrdering: (id: string) => void;
 }) {
   const user = useAccount();
+  const cache = useQueryClient();
   const query = useInfiniteQuery({
     queryKey: [
       "candidates",
@@ -2706,7 +2500,7 @@ function CandidateGridSection({
       sessionId,
       baseFilter,
     ],
-    enabled: Boolean(sessionId),
+    enabled: Boolean(sessionId) && open,
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam, signal }) => {
       const response = await client.GET("/api/candidates", {
@@ -2733,7 +2527,20 @@ function CandidateGridSection({
     getNextPageParam: (page) => page.nextCursor,
   });
   const items = query.data?.pages.flatMap((page) => page.items) ?? [];
-  const total = query.data?.pages[0]?.total ?? 0;
+  const liveTotal = query.data?.pages[0]?.total;
+  const total = liveTotal ?? scopeTotal ?? 0;
+  useEffect(() => {
+    if (!group || liveTotal === undefined) return;
+    cache.setQueryData<components["schemas"]["CandidateReviewSessionDto"]>(
+      ["candidate-review-session", baseFilter],
+      (current) =>
+        current &&
+        current.sessionId === sessionId &&
+        current.counts[group] !== liveTotal
+          ? { ...current, counts: { ...current.counts, [group]: liveTotal } }
+          : current,
+    );
+  }, [cache, group, liveTotal, baseFilter, sessionId]);
   const section = candidateTriageSections.find((item) => item.value === group);
   const content = (
     <>
@@ -2741,7 +2548,7 @@ function CandidateGridSection({
         <div className="workspace-card-grid workspace-media-grid">
           {items.map((candidate) => (
             <Surface className="workspace-media-card" key={candidate.id}>
-              <CandidateCover candidate={candidate} />
+              <CandidateMediaPreview candidate={candidate} />
               <div className="workspace-card-body">
                 <div className="workspace-card-title">
                   <CandidateAuthorIdentity candidate={candidate} />
@@ -2757,37 +2564,22 @@ function CandidateGridSection({
                     {candidateLabels[candidate.status]}
                   </Badge>
                 </div>
-                <p>{candidate.text || "此原帖没有文字说明。"}</p>
-                <div className="workspace-tags">
-                  {candidate.classificationTags?.map((category) => (
-                    <CandidateClassificationScores
-                      key={`${candidate.id}:${category.label}`}
-                      candidateId={candidate.id}
-                      category={category}
-                    />
-                  ))}
-                  <Badge
-                    tone={
-                      candidate.tagDisposition === "valid"
-                        ? "success"
-                        : candidate.tagDisposition === "blocked"
-                          ? "danger"
-                          : "neutral"
-                    }
-                  >
-                    {candidate.tagDisposition === "valid"
-                      ? "有效标签"
-                      : candidate.tagDisposition === "blocked"
-                        ? "黑名单标签"
-                        : "普通标签"}
-                  </Badge>
-                  <Badge>
-                    {sourceLanguageLabels[candidate.sourceLanguage]}
-                  </Badge>
-                  {candidate.hashtags.map((tag) => (
-                    <Badge key={tag}>#{tag}</Badge>
-                  ))}
-                </div>
+                <CandidateDescription text={candidate.text} />
+                <CandidateTags
+                  hashtags={candidate.hashtags}
+                  matches={candidate.tagRuleMatches ?? []}
+                  model={
+                    candidate.classificationTags?.[0] ? (
+                      <CandidateClassificationScores
+                        candidateId={candidate.id}
+                        category={candidate.classificationTags[0]}
+                      />
+                    ) : undefined
+                  }
+                />
+                {candidate.triageReasons?.includes("rule_conflict") && (
+                  <p className="candidate-conflict">优先与降级线索冲突</p>
+                )}
                 <footer>
                   {user.permissions.includes("candidates:manage") && (
                     <label className="account-checkbox">
@@ -2821,25 +2613,7 @@ function CandidateGridSection({
                         图片顺序
                       </Button>
                     )}
-                  {user.permissions.includes("candidates:manage") && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={() =>
-                        onClassify(
-                          candidate,
-                          candidate.visualClass === "photo" ? "manga" : "photo",
-                        )
-                      }
-                    >
-                      {candidate.visualClass === "photo"
-                        ? "恢复为漫画 / 插画"
-                        : "标记为照片"}
-                    </Button>
-                  )}
-                  {(candidate.canRetryAnalysis ??
-                    candidate.reviewPriority === "failed") &&
+                  {candidate.canRetryAnalysis &&
                     user.permissions.includes("candidates:manage") && (
                       <Button
                         size="sm"
@@ -2885,15 +2659,19 @@ function CandidateGridSection({
   );
   if (!section) return <PageState query={query}>{() => content}</PageState>;
   return (
-    <details className="workspace-candidate-section" open>
+    <details
+      id={`candidate-section-${group}`}
+      className="workspace-candidate-section"
+      open={open}
+      onToggle={(event) => onOpenChange?.(event.currentTarget.open)}
+    >
       <summary>
         <span>
           <strong>{section.title}</strong>
-          <small>{section.description}</small>
         </span>
         <Badge>{total}</Badge>
       </summary>
-      {user.permissions.includes("candidates:manage") && (
+      {open && user.permissions.includes("candidates:manage") && (
         <div className="workspace-candidate-section-actions">
           <Button
             size="sm"
@@ -2905,7 +2683,7 @@ function CandidateGridSection({
           </Button>
         </div>
       )}
-      <PageState query={query}>{() => content}</PageState>
+      {open && <PageState query={query}>{() => content}</PageState>}
     </details>
   );
 }
@@ -2922,6 +2700,43 @@ export function CandidatesPage() {
     () => new Map(),
   );
   const [showUpload, setShowUpload] = useState(false);
+  const [showRules, setShowRules] = useState(false);
+  const lowStorageKey = `comiku.candidates.low-priority-open:${user.id}`;
+  const [lowOpen, setLowOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem(lowStorageKey) === "true";
+    } catch {
+      return false;
+    }
+  });
+  function changeLowOpen(open: boolean) {
+    setLowOpen(open);
+    try {
+      window.localStorage.setItem(lowStorageKey, String(open));
+    } catch {
+      /* Temporary expansion works without storage. */
+    }
+  }
+  const [expandedGroups, setExpandedGroups] = useState({
+    priority: true,
+    uncertain: true,
+  });
+  function changeGroupOpen(group: CandidateTriageGroup, open: boolean) {
+    if (group === "low_priority") changeLowOpen(open);
+    else setExpandedGroups((current) => ({ ...current, [group]: open }));
+  }
+  function locateGroup(group: CandidateTriageGroup) {
+    changeGroupOpen(group, true);
+    requestAnimationFrame(() =>
+      document.getElementById(`candidate-section-${group}`)?.scrollIntoView?.({
+        block: "start",
+        behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")
+          .matches
+          ? "instant"
+          : "smooth",
+      }),
+    );
+  }
   const [orderingCandidateId, setOrderingCandidateId] = useState<string | null>(
     null,
   );
@@ -2952,24 +2767,6 @@ export function CandidatesPage() {
       );
       await queryClient.invalidateQueries({ queryKey: ["candidates"] });
       action.setSuccess("识别已重新排队");
-    });
-  }
-  async function classify(
-    candidate: Candidate,
-    label: components["schemas"]["CandidateVisualClass"],
-  ) {
-    await action.run(async () => {
-      await unwrap(
-        await client.PATCH("/api/candidates/{id}/classification", {
-          params: { path: { id: candidate.id } },
-          body: {
-            label,
-            expectedRevision: candidate.classificationRevision,
-          },
-        }),
-      );
-      await queryClient.invalidateQueries({ queryKey: ["candidates"] });
-      action.setSuccess("候选分类已更新");
     });
   }
   const batch = useCallback(
@@ -3127,7 +2924,30 @@ export function CandidatesPage() {
             <SourceSyncControl onCompleted={invalidateWorkViews} />
           </>
         )}
+        <Button variant="secondary" onClick={() => setShowRules(true)}>
+          审核规则
+        </Button>
       </Toolbar>
+      {showRules && (
+        <CandidateRulesDialog
+          canManage={user.permissions.includes("authors:admin")}
+          onClose={() => setShowRules(false)}
+        />
+      )}
+      {status === "pending" && (
+        <nav className="candidate-section-nav" aria-label="候选审核区域">
+          {candidateTriageSections.map((section) => (
+            <button
+              key={section.value}
+              type="button"
+              onClick={() => locateGroup(section.value)}
+            >
+              {section.title}{" "}
+              <span>{review.session?.counts[section.value] ?? 0}</span>
+            </button>
+          ))}
+        </nav>
+      )}
       {showUpload && (
         <ManualCandidateUpload
           onClose={() => setShowUpload(false)}
@@ -3139,7 +2959,6 @@ export function CandidatesPage() {
           }
         />
       )}
-      {user.permissions.includes("authors:admin") && <CandidateTagGroupPanel />}
       <Feedback error={review.error ?? action.error} success={action.success} />
       {status === "pending" ? (
         <div className="workspace-candidate-sections">
@@ -3163,7 +2982,13 @@ export function CandidatesPage() {
               onSelectLoaded={(candidates) =>
                 setSelected((current) => selectCandidates(current, candidates))
               }
-              onClassify={(candidate, label) => void classify(candidate, label)}
+              open={
+                section.value === "low_priority"
+                  ? lowOpen
+                  : expandedGroups[section.value]
+              }
+              onOpenChange={(open) => changeGroupOpen(section.value, open)}
+              scopeTotal={review.session?.counts[section.value]}
               onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
               orderingCandidateId={orderingCandidateId}
               onToggleOrdering={(id) =>
@@ -3190,7 +3015,6 @@ export function CandidatesPage() {
             })
           }
           onSelectLoaded={() => undefined}
-          onClassify={(candidate, label) => void classify(candidate, label)}
           onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
           orderingCandidateId={orderingCandidateId}
           onToggleOrdering={(id) =>

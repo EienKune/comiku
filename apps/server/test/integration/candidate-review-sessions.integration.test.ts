@@ -14,7 +14,7 @@ test("snapshot survives new posts and score/group changes; state, owner, filter,
     const a = await f.post({ analysisScore: 0.9 });
     const b = await f.post({ analysisScore: 0.8 });
     const c = await f.post({ analysisScore: 0.7 });
-    const photo = await f.post();
+    const photo = await f.post({ analysisPredictions: [] });
     await f.db.candidateClassificationDecision.create({
       data: {
         candidatePostId: photo.id,
@@ -28,12 +28,12 @@ test("snapshot survives new posts and score/group changes; state, owner, filter,
       "expiresAt",
       "sessionId",
     ]);
-    assert.equal(session.counts.valid_manga, 3);
-    assert.equal(session.counts.photo, 1);
+    assert.equal(session.counts.priority, 3);
+    assert.equal(session.counts.uncertain, 1);
     const query = {
       ...f.filter,
       reviewSessionId: session.sessionId,
-      triageGroup: "valid_manga" as const,
+      triageGroup: "priority" as const,
       limit: 1,
     };
     const first = await f.service.list(query, f.actor.id);
@@ -63,7 +63,7 @@ test("snapshot survives new posts and score/group changes; state, owner, filter,
     );
     assert.equal(third.nextCursor, null);
     assert.equal(
-      (await f.service.list({ ...query, triageGroup: "photo" }, f.actor.id))
+      (await f.service.list({ ...query, triageGroup: "uncertain" }, f.actor.id))
         .items[0].id,
       photo.id,
     );
@@ -78,7 +78,7 @@ test("snapshot survives new posts and score/group changes; state, owner, filter,
     );
     await assert.rejects(
       f.service.list(
-        { ...query, triageGroup: "photo", cursor: first.nextCursor! },
+        { ...query, triageGroup: "uncertain", cursor: first.nextCursor! },
         f.actor.id,
       ),
       /游标/,
@@ -174,117 +174,11 @@ test("atomic replacement, idempotency and concurrent tabs keep quota available; 
       /过期/,
     );
     const restored = await f.create(old.id);
-    assert.equal(restored.counts.valid_manga, 1);
+    assert.equal(restored.counts.priority, 1);
     const liveQuery = { ...f.filter, limit: 1 };
     await assert.rejects(
       f.service.list({ ...liveQuery, cursor: randomUUID() }, f.actor.id),
       /版本/,
-    );
-  } finally {
-    await f.close();
-  }
-});
-
-test("SQL ranking validates every cache entry and preserves photo > blocked > manual/current model > neutral", async () => {
-  const f = await candidateReviewFixture();
-  try {
-    const positive = await f.post({ analysisState: "failed" });
-    const partial = await f.post({
-      analysisState: "queued",
-      analysisScore: 0.9,
-    });
-    const threshold = await f.post({
-      analysisPredictions: [{ label: "positive", confidence: 0.5, score: 0.8 }],
-    });
-    const below = await f.post({
-      analysisPredictions: [
-        { label: "positive", confidence: 0.49, score: 0.8 },
-      ],
-    });
-    const tagged = await f.post({
-      tagDisposition: "valid",
-      analysisPredictions: [],
-    });
-    const blocked = await f.post({ tagDisposition: "blocked" });
-    const photo = await f.post({ tagDisposition: "blocked" });
-    await f.db.candidateClassificationDecision.create({
-      data: {
-        candidatePostId: photo.id,
-        label: "photo",
-        decidedById: f.actor.id,
-      },
-    });
-    const malformed = [];
-    for (const predictions of [
-      null,
-      [],
-      {},
-      [null],
-      [{ confidence: 0.9, score: 0.9 }],
-      [{ label: "unknown", confidence: 0.9, score: 0.9 }],
-      [{ label: "positive", confidence: "0.9", score: 0.9 }],
-      [{ label: "positive", confidence: 0.9 }],
-      [{ label: "positive", confidence: 0.9, score: null }],
-      [{ label: "positive", confidence: 1.1, score: 0.9 }],
-      [
-        { label: "positive", confidence: 0.9, score: 0.9 },
-        { label: "positive", confidence: 0.9, score: 0.9 },
-      ],
-    ]) {
-      malformed.push(
-        await f.post({
-          analysisPredictions: predictions === null ? undefined : predictions,
-        }),
-      );
-      if (predictions === null)
-        await f.db
-          .$executeRaw`UPDATE candidate_posts SET analysis_predictions = NULL WHERE id = ${malformed.at(-1)!.id}::uuid`;
-    }
-    const old = await f.post({ analysisModelKey: "retired" });
-    const session = await f.create();
-    const ids = async (
-      triageGroup: "valid_manga" | "neutral_manga" | "blocked_manga" | "photo",
-    ) =>
-      (
-        await f.service.list(
-          {
-            ...f.filter,
-            reviewSessionId: session.sessionId,
-            triageGroup,
-            limit: 100,
-          },
-          f.actor.id,
-        )
-      ).items
-        .map((row) => row.id)
-        .sort();
-    assert.deepEqual(
-      await ids("valid_manga"),
-      [positive.id, partial.id, threshold.id, tagged.id].sort(),
-    );
-    assert.deepEqual(
-      await ids("neutral_manga"),
-      [below.id, old.id, ...malformed.map((row) => row.id)].sort(),
-    );
-    assert.deepEqual(await ids("blocked_manga"), [blocked.id]);
-    assert.deepEqual(await ids("photo"), [photo.id]);
-    const live = await f.service.list({ ...f.filter, limit: 1 }, f.actor.id);
-    assert.equal(live.items[0].id, partial.id);
-    const next = await f.service.list(
-      { ...f.filter, limit: 100, cursor: live.nextCursor! },
-      f.actor.id,
-    );
-    assert.equal(next.items.length, 18);
-    assert.ok(next.items.every((row) => row.id !== partial.id));
-    const disabled = new CandidatesService(f.db, {} as never);
-    assert.deepEqual(
-      (
-        await disabled.list(
-          { ...f.filter, triageGroup: "valid_manga" },
-          f.actor.id,
-        )
-      ).items.map((row) => row.id),
-      [tagged.id],
     );
   } finally {
     await f.close();

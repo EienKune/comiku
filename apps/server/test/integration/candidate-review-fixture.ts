@@ -32,6 +32,7 @@ export async function candidateReviewFixture() {
       authorizationStatus: "authorized",
     },
   });
+  const fileIds: string[] = [];
   const model = activateImageAnalysisAdapter({
     identity: {
       adapterId: "review-fixture",
@@ -42,7 +43,11 @@ export async function candidateReviewFixture() {
       preprocessVersion: "1",
       labels: ["positive", "related", "other"],
     },
-    reviewPolicy: { positiveLabels: ["positive"], minimumConfidence: 0.5 },
+    reviewPolicy: {
+      positiveLabels: ["positive"],
+      minimumConfidence: 0.5,
+      lowPriorityLabels: ["other"],
+    },
     async analyze() {
       throw Error("No inference");
     },
@@ -64,8 +69,11 @@ export async function candidateReviewFixture() {
     service,
     filter,
     sessions: new CandidateReviewSessions(db),
-    async post(data: Partial<Prisma.CandidatePostUncheckedCreateInput> = {}) {
-      return db.candidatePost.create({
+    async post(
+      data: Partial<Prisma.CandidatePostUncheckedCreateInput> = {},
+      labels: readonly string[] = model.identity.labels,
+    ) {
+      const post = await db.candidatePost.create({
         data: {
           authorId: author.id,
           platform: "synthetic-review",
@@ -77,11 +85,77 @@ export async function candidateReviewFixture() {
           analysisState: "succeeded",
           analysisScore: 0.8,
           analysisPredictions: [
-            { label: "positive", confidence: 0.8, score: 0.8 },
+            {
+              label: "positive",
+              confidence: 0.8,
+              score: data.analysisScore ?? 0.8,
+            },
           ],
           ...data,
         },
       });
+      const predictions = Array.isArray(post.analysisPredictions)
+        ? post.analysisPredictions
+        : [];
+      for (const [index, raw] of predictions.entries()) {
+        const entry = raw as {
+          label?: string;
+          confidence?: number;
+          score?: number;
+        } | null;
+        const file = await db.fileObject.create({
+          data: {
+            objectKey: `review-${randomUUID()}`,
+            bucketScope: "source",
+            kind: "fixture",
+            contentType: "image/jpeg",
+            size: 1,
+            checksum: "a".repeat(64),
+          },
+        });
+        fileIds.push(file.id);
+        const media = await db.candidateMedia.create({
+          data: {
+            candidatePostId: post.id,
+            fileObjectId: file.id,
+            externalMediaId: randomUUID(),
+            orderIndex: index,
+            mediaType: "photo",
+          },
+        });
+        const confidence = entry?.confidence;
+        const result =
+          entry &&
+          typeof confidence === "number" &&
+          typeof entry.score === "number" &&
+          labels.includes(entry.label ?? "")
+            ? {
+                score: entry.score,
+                predictedClass: entry.label,
+                classScores: labels.map((label) => ({
+                  label,
+                  value:
+                    label === entry.label
+                      ? confidence
+                      : (1 - confidence) / (labels.length - 1),
+                })),
+                evidence: [],
+              }
+            : raw;
+        await db.candidateMediaAnalysis.create({
+          data: {
+            mediaId: media.id,
+            modelKey: post.analysisModelKey ?? "legacy",
+            modelRevision: "1",
+            decisionVersion: "1",
+            sourceSha256: file.checksum,
+            status: "succeeded",
+            score: typeof entry?.score === "number" ? entry.score : null,
+            resultJson: result as Prisma.InputJsonValue,
+          },
+        });
+      }
+      return post;
     },
     async create(replaceSessionId?: string, idempotencyKey = randomUUID()) {
       return service.createReviewSession(actor.id, {
@@ -98,6 +172,7 @@ export async function candidateReviewFixture() {
         where: { actorId: actor.id },
       });
       await db.candidatePost.deleteMany({ where: { authorId: author.id } });
+      await db.fileObject.deleteMany({ where: { id: { in: fileIds } } });
       await db.author.delete({ where: { id: author.id } });
       await db.userRole.deleteMany({ where: { userId: actor.id } });
       await db.user.delete({ where: { id: actor.id } });

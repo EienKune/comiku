@@ -39,12 +39,12 @@ test("base filter normalizes search and dates and excludes paging/group", () => 
     normalizeCandidateFilter({
       limit: 24,
       search: " @Alice ",
-      triageGroup: "photo",
+      triageGroup: "low_priority",
     }),
     normalizeCandidateFilter({
       limit: 100,
       search: "Alice",
-      triageGroup: "valid_manga",
+      triageGroup: "priority",
     }),
   );
   assert.notDeepEqual(

@@ -39,10 +39,11 @@ export interface ImageAnalysisAdapter {
   readonly identity: ImageAnalysisIdentity;
   /** Display metadata does not change inference outputs or model identity. */
   readonly labelPresentation?: readonly Readonly<ImageAnalysisLabelPresentation>[];
-  /** Review routing reads cached class confidence; changing this does not change inference identity. */
+  /** Review routing maps validated winning classes; changing this does not change inference identity. */
   readonly reviewPolicy?: {
     readonly positiveLabels: readonly string[];
     readonly minimumConfidence: number;
+    readonly lowPriorityLabels?: readonly string[];
   };
   analyze(
     itemId: string,
@@ -184,7 +185,16 @@ export function activateImageAnalysisAdapter(
       typeof policy.minimumConfidence !== "number" ||
       !Number.isFinite(policy.minimumConfidence) ||
       policy.minimumConfidence < 0 ||
-      policy.minimumConfidence > 1)
+      policy.minimumConfidence > 1 ||
+      (policy.lowPriorityLabels !== undefined &&
+        (!Array.isArray(policy.lowPriorityLabels) ||
+          Array.from(policy.lowPriorityLabels).some(
+            (label) =>
+              !identity.labels.includes(label) ||
+              policy.positiveLabels.includes(label),
+          ) ||
+          new Set(policy.lowPriorityLabels).size !==
+            policy.lowPriorityLabels.length)))
   )
     throw new Error("Invalid image analysis review policy");
   const reviewPolicy =
@@ -193,6 +203,9 @@ export function activateImageAnalysisAdapter(
       : Object.freeze({
           positiveLabels: Object.freeze([...policy.positiveLabels]),
           minimumConfidence: policy.minimumConfidence,
+          lowPriorityLabels: Object.freeze([
+            ...(policy.lowPriorityLabels ?? []),
+          ]),
         });
   const presentation = adapter.labelPresentation;
   if (

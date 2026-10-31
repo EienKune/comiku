@@ -125,12 +125,16 @@ export class ImageAnalysisService {
       }),
     };
   }
+  get labelPresentation() {
+    return this.model?.labelPresentation ?? [];
+  }
   get candidateQueryPolicy() {
     return {
       modelKey: this.activeModelKey,
       labels: this.model?.identity.labels ?? [],
       positiveLabels: this.model?.reviewPolicy?.positiveLabels ?? [],
       minimumConfidence: this.model?.reviewPolicy?.minimumConfidence ?? 0,
+      lowPriorityLabels: this.model?.reviewPolicy?.lowPriorityLabels ?? [],
     };
   }
   /** Evidence validity is independent from sibling completion and retry state. */
@@ -150,10 +154,8 @@ export class ImageAnalysisService {
     const policy = this.model?.reviewPolicy;
     return Boolean(
       policy &&
-      this.cachedPredictions(predictions).some(
-        (entry) =>
-          policy.positiveLabels.includes(entry.label) &&
-          entry.confidence >= policy.minimumConfidence,
+      this.cachedPredictions(predictions).some((entry) =>
+        policy.positiveLabels.includes(entry.label),
       ),
     );
   }

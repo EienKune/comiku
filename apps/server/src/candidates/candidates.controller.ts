@@ -37,6 +37,7 @@ import {
   CandidateQueryDto,
   CreateCandidateReviewSessionDto,
   CandidateReviewSessionDto,
+  CandidateReviewPolicyDto,
   CandidateUploadSessionDto,
   CandidateTagGroupDto,
   CreateCandidateTagGroupDto,
@@ -44,7 +45,6 @@ import {
   ManualCandidateUploadDto,
   ManualUploadResultDto,
   ReorderCandidateMediaDto,
-  SetCandidateClassificationDto,
   UpdateManualCandidateDto,
   UpdateCandidateTagGroupDto,
 } from "./candidates.dto.js";
@@ -95,6 +95,14 @@ export class CandidatesController {
     return this.candidates.createReviewSession(request.actor.userId, input);
   }
 
+  @Get("review-policy")
+  @Access({ permission: "candidates:read" })
+  @ApiOperation({ operationId: "getCandidateReviewPolicy" })
+  @ApiOkResponse({ type: CandidateReviewPolicyDto })
+  reviewPolicy() {
+    return this.candidates.reviewPolicy();
+  }
+
   @Get("tag-groups")
   @Access({ permission: "candidates:read" })
   @ApiOperation({ operationId: "listCandidateTagGroups" })
@@ -127,21 +135,6 @@ export class CandidatesController {
     input: UpdateCandidateTagGroupDto,
   ) {
     return this.candidates.updateTagGroup(id, input);
-  }
-
-  @Patch(":id/classification")
-  @Access({ permission: "candidates:manage" })
-  @ApiOperation({ operationId: "setCandidateClassification" })
-  @ApiParam({ name: "id", format: "uuid" })
-  @ApiBody({ type: SetCandidateClassificationDto })
-  @ApiOkResponse({ type: CandidateDto })
-  setClassification(
-    @Req() request: AuthRequest,
-    @Param("id", ParseUUIDPipe) id: string,
-    @Body(bodyValidation(SetCandidateClassificationDto))
-    input: SetCandidateClassificationDto,
-  ) {
-    return this.candidates.setClassification(request.actor.userId, id, input);
   }
 
   @Patch(":id/manual-metadata")
