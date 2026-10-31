@@ -45,7 +45,6 @@ export async function candidateReviewFixture() {
     },
     reviewPolicy: {
       positiveLabels: ["positive"],
-      minimumConfidence: 0.5,
       lowPriorityLabels: ["other"],
     },
     async analyze() {

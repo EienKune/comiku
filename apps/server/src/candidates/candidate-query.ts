@@ -107,7 +107,6 @@ export interface CandidateAnalysisPolicy {
   modelKey: string | null;
   labels: readonly string[];
   positiveLabels: readonly string[];
-  minimumConfidence: number;
   lowPriorityLabels?: readonly string[];
 }
 

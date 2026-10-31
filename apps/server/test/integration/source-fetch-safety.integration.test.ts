@@ -798,6 +798,35 @@ async function blockedBy(db: PrismaService, pid: number) {
   );
 }
 
+function beforeCandidateCreate(
+  db: PrismaService,
+  beforeCreate: (tx: any) => Promise<void>,
+) {
+  const original = db.$transaction.bind(db);
+  (db as any).$transaction = (action: any, options: any) =>
+    original(
+      (tx: any) =>
+        action(
+          new Proxy(tx, {
+            get(target, key) {
+              if (key !== "candidatePost") return Reflect.get(target, key);
+              return new Proxy(target.candidatePost, {
+                get(delegate, method) {
+                  if (method !== "create") return Reflect.get(delegate, method);
+                  return async (data: any) => {
+                    // Pause at the actual candidate write, after its authorization fences.
+                    await beforeCreate(tx);
+                    return delegate.create(data);
+                  };
+                },
+              });
+            },
+          }),
+        ),
+      options,
+    );
+}
+
 for (const mutation of ["author", "account", "adapter"] as const)
   test(`PostgreSQL candidate commit holds the ${mutation} row against a concurrent real management write`, async () => {
     const f = await fixture();
@@ -808,13 +837,11 @@ for (const mutation of ["author", "account", "adapter"] as const)
     try {
       const prepared = await f.prepareSave();
       let pid = 0;
-      const original = (f.service as any).tagDisposition.bind(f.service);
-      (f.service as any).tagDisposition = async (tx: any, tags: any) => {
+      beforeCandidateCreate(f.db, async (tx) => {
         [{ pid }] = await tx.$queryRaw`SELECT pg_backend_pid() AS pid`;
         entered.resolve();
         await release.promise;
-        return original(tx, tags);
-      };
+      });
       const pendingSave: Promise<unknown> = prepared.save();
       saving = pendingSave;
       await Promise.race([
@@ -1017,13 +1044,11 @@ test("PostgreSQL source persistence blocks normal role replacement until its pro
     const prepared = await f.prepareSave();
     const revoke = await actorAdministration(f);
     let pid = 0;
-    const original = (f.service as any).tagDisposition.bind(f.service);
-    (f.service as any).tagDisposition = async (tx: any, tags: any) => {
+    beforeCandidateCreate(f.db, async (tx) => {
       [{ pid }] = await tx.$queryRaw`SELECT pg_backend_pid() AS pid`;
       entered.resolve();
       await release.promise;
-      return original(tx, tags);
-    };
+    });
     saving = Promise.resolve(prepared.save());
     await Promise.race([
       entered.promise,

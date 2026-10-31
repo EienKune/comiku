@@ -42,7 +42,6 @@ export interface ImageAnalysisAdapter {
   /** Review routing maps validated winning classes; changing this does not change inference identity. */
   readonly reviewPolicy?: {
     readonly positiveLabels: readonly string[];
-    readonly minimumConfidence: number;
     readonly lowPriorityLabels?: readonly string[];
   };
   analyze(
@@ -182,10 +181,6 @@ export function activateImageAnalysisAdapter(
         (label) => !identity.labels.includes(label),
       ) ||
       new Set(policy.positiveLabels).size !== policy.positiveLabels.length ||
-      typeof policy.minimumConfidence !== "number" ||
-      !Number.isFinite(policy.minimumConfidence) ||
-      policy.minimumConfidence < 0 ||
-      policy.minimumConfidence > 1 ||
       (policy.lowPriorityLabels !== undefined &&
         (!Array.isArray(policy.lowPriorityLabels) ||
           Array.from(policy.lowPriorityLabels).some(
@@ -202,7 +197,6 @@ export function activateImageAnalysisAdapter(
       ? undefined
       : Object.freeze({
           positiveLabels: Object.freeze([...policy.positiveLabels]),
-          minimumConfidence: policy.minimumConfidence,
           lowPriorityLabels: Object.freeze([
             ...(policy.lowPriorityLabels ?? []),
           ]),

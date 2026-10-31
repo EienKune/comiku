@@ -104,7 +104,7 @@ test("SQL supports a binary adapter taxonomy and hard expiry cannot be renewed",
     const model = activateImageAnalysisAdapter({
       ...f.model,
       identity: { ...f.model.identity, labels: ["accept", "reject"] },
-      reviewPolicy: { positiveLabels: ["accept"], minimumConfidence: 0 },
+      reviewPolicy: { positiveLabels: ["accept"] },
     });
     const analysis = new ImageAnalysisService(
       f.db,

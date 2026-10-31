@@ -24,7 +24,6 @@ export function createBaPixaiImageAnalysisAdapter(
     ],
     reviewPolicy: {
       positiveLabels: ["ba_art"],
-      minimumConfidence: 0,
       lowPriorityLabels: ["other"],
     },
     async analyze(itemId, body, signal) {

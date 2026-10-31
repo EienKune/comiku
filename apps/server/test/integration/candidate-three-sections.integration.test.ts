@@ -23,7 +23,7 @@ test("three review sections retain both tag directions and freeze reasons until 
       aliases: [`no${randomUUID()}`],
     });
     groupIds.push(no.id);
-    const p = await f.post({
+    await f.post({
       analysisPredictions: [],
       hashtags: {
         create: [
@@ -37,9 +37,6 @@ test("three review sections retain both tag directions and freeze reasons until 
           },
         ],
       },
-    });
-    const old = await f.db.candidateClassificationDecision.create({
-      data: { candidatePostId: p.id, label: "photo", decidedById: f.actor.id },
     });
     const session = await f.create();
     assert.equal(session.counts.uncertain, 1);
@@ -62,12 +59,6 @@ test("three review sections retain both tag directions and freeze reasons until 
     assert.deepEqual(unchanged.triageReasons, card.triageReasons);
     const refreshed = await f.create(session.sessionId);
     assert.equal(refreshed.counts.priority, 1);
-    assert.deepEqual(
-      await f.db.candidateClassificationDecision.findUnique({
-        where: { candidatePostId: p.id },
-      }),
-      old,
-    );
   } finally {
     await f.close();
     await f.db.$connect();
@@ -78,7 +69,7 @@ test("three review sections retain both tag directions and freeze reasons until 
   }
 });
 
-test("current valid image winners route posts conservatively, without legacy classification or cache precedence", async () => {
+test("current valid image winners route posts conservatively, independently of the post summary cache", async () => {
   const f = await candidateReviewFixture();
   try {
     const positive = await f.post({
@@ -180,17 +171,6 @@ test("current valid image winners route posts conservatively, without legacy cla
         });
       }
     }
-    await f.db.candidateClassificationDecision.create({
-      data: {
-        candidatePostId: positive.id,
-        label: "photo",
-        decidedById: f.actor.id,
-      },
-    });
-    await f.db.candidatePost.update({
-      where: { id: positive.id },
-      data: { tagDisposition: "blocked" },
-    });
     const positiveCard = await f.service.get(positive.id);
     assert.equal(positiveCard.triageGroup, "priority");
     assert.equal(positiveCard.classificationTags?.[0]?.label, "other");

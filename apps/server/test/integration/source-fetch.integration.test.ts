@@ -660,13 +660,9 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
       items: {
         id: string;
         revision: number;
-        tagDisposition: "valid" | "neutral" | "blocked";
         hashtags: string[];
         sourceAdapters: string[];
         sourceLanguage: string;
-        visualClass: string;
-        visualClassSource: string;
-        classificationRevision: number | null;
         media: { id: string; orderIndex: number }[];
       }[];
     }>(reviewer, "GET", "/api/candidates?status=pending");

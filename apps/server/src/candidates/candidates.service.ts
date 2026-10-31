@@ -30,7 +30,7 @@ import {
 } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
 import { extname } from "node:path";
-import { CandidateTagDisposition, Prisma } from "../generated/prisma/client.js";
+import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../database/prisma.service.js";
 import { FileObjectsService } from "../files/file-objects.service.js";
 import { ImageAnalysisService } from "../image-analysis/image-analysis.service.js";
@@ -287,7 +287,6 @@ export class CandidatesService {
         modelKey: null,
         labels: [],
         positiveLabels: [],
-        minimumConfidence: 0,
         lowPriorityLabels: [],
       }
     );
@@ -566,25 +565,6 @@ export class CandidatesService {
     )
       throw new BadRequestException("标签别名不能重复");
     return valid;
-  }
-
-  private async tagDisposition(
-    db: Prisma.TransactionClient | PrismaService,
-    hashtags: { normalizedValue: string }[],
-  ): Promise<CandidateTagDisposition> {
-    if (!hashtags.length) return CandidateTagDisposition.neutral;
-    const matches = await db.candidateTagAlias.findMany({
-      where: {
-        normalizedValue: { in: hashtags.map((tag) => tag.normalizedValue) },
-        group: { enabled: true, kind: { in: ["valid", "blocked"] } },
-      },
-      select: { group: { select: { kind: true } } },
-    });
-    if (matches.some(({ group }) => group.kind === "blocked"))
-      return CandidateTagDisposition.blocked;
-    if (matches.some(({ group }) => group.kind === "valid"))
-      return CandidateTagDisposition.valid;
-    return CandidateTagDisposition.neutral;
   }
 
   private async withCandidateConflict<T>(action: () => Promise<T>) {
@@ -1011,7 +991,6 @@ export class CandidatesService {
         await this.assertUploadActor(tx, actorId, input.authorId);
         const candidateText = input.text?.trim() || null;
         const hashtags = collectHashtags([], candidateText ?? undefined);
-        const tagDisposition = await this.tagDisposition(tx, hashtags);
         const candidate = await tx.candidatePost.create({
           data: {
             authorId: input.authorId,
@@ -1027,7 +1006,6 @@ export class CandidatesService {
               automaticallySorted: group.automaticallySorted,
               warnings: group.warnings,
             },
-            tagDisposition,
             hashtags: { create: hashtags },
             sourceObservations: {
               create: {
@@ -1134,14 +1112,12 @@ export class CandidatesService {
       ) {
         throw new ConflictException("候选已更新或当前状态不能修改上传信息");
       }
-      const tagDisposition = await this.tagDisposition(tx, hashtags);
       const changed = await tx.candidatePost.updateMany({
         where: { id, status: "pending", revision: input.expectedRevision },
         data: {
           authorId: input.authorId,
           text,
           externalPostUrl: input.sourceUrl?.trim() || null,
-          tagDisposition,
           revision: { increment: 1 },
         },
       });

@@ -248,13 +248,13 @@ test("review policies are validated and frozen without changing inference identi
     await import("../src/image-analysis/example-adapter.js");
   const example = createExampleImageAnalysisAdapter();
   const positiveLabels = ["comic"];
-  const reviewPolicy = { positiveLabels, minimumConfidence: 0.5 };
+  const lowPriorityLabels: string[] = [];
+  const reviewPolicy = { positiveLabels, lowPriorityLabels };
   const active = activateImageAnalysisAdapter({ ...example, reviewPolicy });
   positiveLabels[0] = "other";
-  reviewPolicy.minimumConfidence = 0.1;
+  lowPriorityLabels.push("other");
   assert.deepEqual(active.reviewPolicy, {
     positiveLabels: ["comic"],
-    minimumConfidence: 0.5,
     lowPriorityLabels: [],
   });
   assert.ok(Object.isFrozen(active.reviewPolicy));
@@ -262,19 +262,21 @@ test("review policies are validated and frozen without changing inference identi
   assert.equal(
     activateImageAnalysisAdapter({
       ...example,
-      reviewPolicy: { positiveLabels: ["other"], minimumConfidence: 0.9 },
+      reviewPolicy: { positiveLabels: ["other"] },
     }).modelKey,
     active.modelKey,
   );
   for (const invalid of [
     null,
-    { positiveLabels: "comic", minimumConfidence: 0.5 },
-    { positiveLabels: ["unknown"], minimumConfidence: 0.5 },
-    { positiveLabels: ["comic", "comic"], minimumConfidence: 0.5 },
-    { positiveLabels: new Array<string>(1), minimumConfidence: 0.5 },
-    ...[Number.NaN, Number.POSITIVE_INFINITY, -0.1, 1.1, "0.5"].map(
-      (minimumConfidence) => ({ positiveLabels: ["comic"], minimumConfidence }),
-    ),
+    { positiveLabels: "comic" },
+    { positiveLabels: ["unknown"] },
+    { positiveLabels: ["comic", "comic"] },
+    { positiveLabels: new Array<string>(1) },
+    { positiveLabels: ["comic"], lowPriorityLabels: ["unknown"] },
+    { positiveLabels: ["comic"], lowPriorityLabels: ["comic"] },
+    { positiveLabels: ["comic"], lowPriorityLabels: ["other", "other"] },
+    { positiveLabels: ["comic"], lowPriorityLabels: "other" },
+    { positiveLabels: ["comic"], lowPriorityLabels: new Array<string>(1) },
   ])
     assert.throws(() =>
       activateImageAnalysisAdapter({

@@ -251,7 +251,7 @@ test("review promotion uses declared winning labels without an extra confidence 
       ...example,
       identity: { ...example.identity, labels: ["accept", "reject"] },
       labelPresentation: undefined,
-      reviewPolicy: { positiveLabels: ["accept"], minimumConfidence: 0.8 },
+      reviewPolicy: { positiveLabels: ["accept"] },
     }),
   );
   assert.equal(

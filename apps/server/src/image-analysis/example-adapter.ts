@@ -19,7 +19,6 @@ export function createExampleImageAnalysisAdapter(): ImageAnalysisAdapter {
     ],
     reviewPolicy: {
       positiveLabels: ["comic"],
-      minimumConfidence: 0.5,
       lowPriorityLabels: ["other"],
     },
     async analyze(_itemId, _body, signal) {

@@ -14,14 +14,7 @@ test("snapshot survives new posts and score/group changes; state, owner, filter,
     const a = await f.post({ analysisScore: 0.9 });
     const b = await f.post({ analysisScore: 0.8 });
     const c = await f.post({ analysisScore: 0.7 });
-    const photo = await f.post({ analysisPredictions: [] });
-    await f.db.candidateClassificationDecision.create({
-      data: {
-        candidatePostId: photo.id,
-        label: "photo",
-        decidedById: f.actor.id,
-      },
-    });
+    const uncertain = await f.post({ analysisPredictions: [] });
     const session = await f.create();
     assert.deepEqual(Object.keys(session).sort(), [
       "counts",
@@ -45,7 +38,7 @@ test("snapshot survives new posts and score/group changes; state, owner, filter,
     });
     await f.db.candidatePost.update({
       where: { id: b.id },
-      data: { tagDisposition: "blocked", revision: 1 },
+      data: { revision: 1 },
     });
     const second = await f.service.list(
       { ...query, cursor: first.nextCursor! },
@@ -65,7 +58,7 @@ test("snapshot survives new posts and score/group changes; state, owner, filter,
     assert.equal(
       (await f.service.list({ ...query, triageGroup: "uncertain" }, f.actor.id))
         .items[0].id,
-      photo.id,
+      uncertain.id,
     );
     await assert.rejects(f.service.list(query, randomUUID()), /职务|用户/);
     await assert.rejects(

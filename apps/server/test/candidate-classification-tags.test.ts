@@ -142,7 +142,7 @@ test("malformed prediction caches never create classification tags", () => {
   }
 });
 
-test("candidate tags require valid current results even when sibling work is incomplete and do not depend on review group or manual classification", async () => {
+test("candidate tags require valid current results even when sibling work is incomplete and do not depend on review group", async () => {
   const model = activateImageAnalysisAdapter(adapter());
   const row = {
     id: "synthetic-candidate",
@@ -154,11 +154,8 @@ test("candidate tags require valid current results even when sibling work is inc
     analysisSummaryVersion: 1,
     analysisScore: 0.8,
     analysisPredictions: [{ label: "ba_related", confidence: 0.8, score: 0.2 }],
-    classificationDecision: { label: "photo", revision: 2 },
-    classificationSuggestions: [],
     sourceObservations: [],
     hashtags: [],
-    tagDisposition: "blocked",
     status: "imported",
     media: [],
     work: null,

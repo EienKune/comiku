@@ -268,7 +268,6 @@ test("pending scope spans groups and pages but excludes analysis that cannot pro
           externalPostId: randomUUID(),
           postedAt: new Date(),
           rawJson: {},
-          tagDisposition: completed ? "valid" : "neutral",
           analysisModelKey: completed ? model.modelKey : null,
           analysisState: completed ? "succeeded" : "unprocessed",
           analysisScore: completed ? 0.9 : null,
@@ -663,7 +662,7 @@ test("current-model SQL-null prediction caches rebuild from winners without infe
     assert.equal(service.promotesReview(rebuilt.analysisPredictions), true);
     const updatedPolicy = activateImageAnalysisAdapter({
       ...example,
-      reviewPolicy: { positiveLabels: ["comic"], minimumConfidence: 0.4 },
+      reviewPolicy: { positiveLabels: ["comic"] },
     });
     assert.equal(updatedPolicy.modelKey, model.modelKey);
     assert.equal(

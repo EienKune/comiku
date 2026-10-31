@@ -36,7 +36,6 @@ model User {
   candidatesReviewed                  CandidatePost[]               @relation("CandidateReviewedBy")
   typesetUploadSessions               TypesetUploadSession[]
   candidateUploadSessions             CandidateUploadSession[]      @relation("CandidateUploadSessionCreatedBy")
-  candidateClassificationDecisions    CandidateClassificationDecision[] @relation("CandidateClassificationDecidedBy")
   worksImported                       Work[]                        @relation("WorkImportedBy")
   candidateActions                    CandidateActionLog[]          @relation("CandidateActionActor")
   workParticipations                  WorkStageParticipant[]
@@ -304,20 +303,9 @@ enum SourceAdapterHealth {
   disabled
 }
 
-enum CandidateVisualClass {
-  manga
-  photo
-}
-
 enum CandidateTagGroupKind {
   valid
   gray
-  blocked
-}
-
-enum CandidateTagDisposition {
-  valid
-  neutral
   blocked
 }
 
@@ -642,7 +630,6 @@ model CandidatePost {
   referencedPostId        String?                @map("referenced_post_id") @db.VarChar(255)
   postedAt                DateTime               @map("posted_at") @db.Timestamptz(3)
   rawJson                 Json                   @map("raw_json")
-  tagDisposition          CandidateTagDisposition @default(neutral) @map("tag_disposition")
   analysisScore           Float?                 @map("analysis_score")
   analysisState           String                 @default("unprocessed") @map("analysis_state") @db.VarChar(20)
   analysisSummaryVersion  Int                    @default(0) @map("analysis_summary_version")
@@ -660,8 +647,6 @@ model CandidatePost {
   uploadItem              CandidateUploadItem?
   hashtags                CandidateHashtag[]
   sourceObservations      CandidateSourceObservation[]
-  classificationSuggestions CandidateClassificationSuggestion[]
-  classificationDecision CandidateClassificationDecision?
   createdAt               DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt               DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -669,7 +654,6 @@ model CandidatePost {
   @@index([status, fetchedAt])
   @@index([authorId, status, fetchedAt])
   @@index([authorExternalAccountId, fetchedAt])
-  @@index([status, tagDisposition, postedAt, id])
   @@map("candidate_posts")
 }
 
@@ -770,34 +754,6 @@ model CandidateTagAlias {
 
   @@index([groupId])
   @@map("candidate_tag_aliases")
-}
-
-model CandidateClassificationSuggestion {
-  id             String               @id @default(uuid()) @db.Uuid
-  candidatePostId String               @map("candidate_post_id") @db.Uuid
-  candidatePost  CandidatePost        @relation(fields: [candidatePostId], references: [id], onDelete: Cascade)
-  label          CandidateVisualClass
-  classifierName String               @map("classifier_name") @db.VarChar(100)
-  classifierVersion String            @map("classifier_version") @db.VarChar(100)
-  score          Float
-  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
-
-  @@index([candidatePostId, createdAt], map: "candidate_classification_suggestions_candidate_post_id_created_")
-  @@map("candidate_classification_suggestions")
-}
-
-model CandidateClassificationDecision {
-  candidatePostId String               @id @map("candidate_post_id") @db.Uuid
-  candidatePost   CandidatePost        @relation(fields: [candidatePostId], references: [id], onDelete: Cascade)
-  label           CandidateVisualClass
-  decidedById     String               @map("decided_by") @db.Uuid
-  decidedBy       User                 @relation("CandidateClassificationDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
-  revision        Int                  @default(0)
-  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
-
-  @@index([label, updatedAt])
-  @@map("candidate_classification_decisions")
 }
 
 model CandidateMedia {
