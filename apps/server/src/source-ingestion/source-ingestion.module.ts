@@ -38,7 +38,12 @@ import { ContentSourceRegistry } from "./source-registry.js";
         return registry;
       },
     },
-    { provide: MEDIA_DOWNLOADER, useFactory: () => new HttpMediaDownloader() },
+    {
+      provide: MEDIA_DOWNLOADER,
+      inject: [ENVIRONMENT],
+      useFactory: (environment: Environment) =>
+        new HttpMediaDownloader(fetch, environment.sourceMediaMaxBytes),
+    },
     SourceFetchService,
   ],
   exports: [ContentSourceRegistry, MEDIA_DOWNLOADER, SourceFetchService],

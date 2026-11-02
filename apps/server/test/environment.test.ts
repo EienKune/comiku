@@ -18,6 +18,7 @@ test("validates configuration and uses explicit development defaults", () => {
     sourceScheduleMinutes: 60,
     sourceFailureThreshold: 3,
     sourceCooldownMinutes: 360,
+    sourceMediaMaxBytes: 50 * 1024 * 1024,
     typesetBatchMaxBytes: 512 * 1024 * 1024,
     typesetBatchMaxWorks: 20,
     objectStorageDriver: "local",
@@ -184,5 +185,22 @@ test("typeset batch safety caps remain bounded and configurable", () => {
   ])
     assert.throws(() =>
       parseEnvironment({ DATABASE_URL: databaseUrl, ...fields }),
+    );
+});
+
+test("source media size configuration is bounded independently of manual uploads", () => {
+  assert.equal(
+    parseEnvironment({ DATABASE_URL: databaseUrl, SOURCE_MEDIA_MAX_MIB: "100" })
+      .sourceMediaMaxBytes,
+    100 * 1024 * 1024,
+  );
+  for (const value of ["0", "101", "1.5", "no", "Infinity"])
+    assert.throws(
+      () =>
+        parseEnvironment({
+          DATABASE_URL: databaseUrl,
+          SOURCE_MEDIA_MAX_MIB: value,
+        }),
+      /SOURCE_MEDIA_MAX_MIB/,
     );
 });

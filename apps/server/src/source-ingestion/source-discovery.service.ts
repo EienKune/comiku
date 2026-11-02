@@ -1,3 +1,4 @@
+import { isMediaPolicyRejection } from "./media-policy.js";
 import type { PrismaService } from "../database/prisma.service.js";
 import { Prisma } from "../generated/prisma/client.js";
 import type { NormalizedSourceContent } from "./content-source.js";
@@ -18,7 +19,7 @@ export function recoveryDue(failures: number, now = new Date()): Date | null {
   if (failures >= 8) return null;
   return new Date(
     now.getTime() +
-      (failures <= 1 ? 900000 : failures === 2 ? 3600000 : 21600000),
+      (failures === 0 ? 300000 : failures === 1 ? 600000 : 1800000),
   );
 }
 export function recoveryKey(discoveryId: string, campaign: number) {
@@ -232,7 +233,9 @@ export class SourceDiscoveryService {
       },
       data: {
         failureCode,
-        nextRetryAt: recoveryDue(0),
+        ...(isMediaPolicyRejection(failureCode)
+          ? { state: "needs_attention", nextRetryAt: null }
+          : { nextRetryAt: recoveryDue(0) }),
         revision: { increment: 1 },
       },
     });

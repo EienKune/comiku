@@ -27,6 +27,7 @@ test("HTTP liveness, readiness and OpenAPI remain distinct when the database fai
         sourceScheduleMinutes: 60,
         sourceFailureThreshold: 3,
         sourceCooldownMinutes: 360,
+        sourceMediaMaxBytes: 50 * 1024 * 1024,
         typesetBatchMaxBytes: 512 * 1024 * 1024,
         typesetBatchMaxWorks: 20,
         objectStorageDriver: "memory",
