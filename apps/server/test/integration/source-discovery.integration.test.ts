@@ -10,6 +10,7 @@ import {
 import { PrismaService } from "../../src/database/prisma.service.js";
 import { JobsService } from "../../src/jobs/jobs.service.js";
 import { FileObjectsService } from "../../src/files/file-objects.service.js";
+import { SourceResponseError } from "../../src/source-ingestion/source-response.js";
 import { SourceFetchService } from "../../src/source-ingestion/source-fetch.service.js";
 import { ContentSourceRegistry } from "../../src/source-ingestion/source-registry.js";
 import type {
@@ -29,6 +30,7 @@ async function fixture() {
   const requests: string[] = [];
   const fileIds: string[] = [];
   const deleted: string[] = [];
+  let failureReason: string | undefined;
   let failing = true,
     metadataMissing = false,
     refreshes = 0;
@@ -111,8 +113,15 @@ async function fixture() {
     {
       download: async (u: string) => {
         requests.push(u);
-        if (failing && u.includes("/1/1.png"))
+        if (failing && u.includes("/1/1.png")) {
+          if (failureReason)
+            throw new SourceResponseError("configuration", {
+              reason: failureReason,
+              scope: "media",
+              diagnostic: { limit_bytes: 52428800, declared_bytes: 53477376 },
+            });
           throw new Error("synthetic CDN unavailable");
+        }
         return { body: Buffer.from("x"), contentType: "image/png" };
       },
     } as any,
@@ -224,6 +233,9 @@ async function fixture() {
     scan,
     due,
     cleanup,
+    setFailureReason: (v: string) => {
+      failureReason = v;
+    },
     setFail: (v: boolean) => {
       failing = v;
     },
@@ -786,6 +798,50 @@ test("pre-ledger candidate adoption proves historical assets and preserves termi
     }
   } finally {
     await f.db.work.deleteMany({ where: { id: { in: workIds } } });
+    await f.cleanup();
+  }
+});
+
+test("policy rejection persists the exact reason and stops automatic retries without losing other media or posts", async () => {
+  const f = await fixture();
+  const messages: string[] = [];
+  const info = console.info;
+  console.info = (line: string) => {
+    messages.push(line);
+  };
+  try {
+    f.setFailureReason("media_size_limit");
+    const run = await f.scan();
+    assert.equal(run.status, "partial_failed");
+    const posts = await f.db.sourceDiscoveryPost.findMany({
+      where: { accountId: f.account.id },
+      include: { media: true },
+      orderBy: { externalPostId: "asc" },
+    });
+    assert.equal(posts[0].state, "needs_attention");
+    assert.equal(posts[0].failureCode, "media_size_limit");
+    assert.equal(posts[0].nextRetryAt, null);
+    assert.equal(posts[0].media.filter((m) => m.fileObjectId).length, 1);
+    assert.equal(
+      posts[0].media.find((m) => !m.fileObjectId)?.failureCode,
+      "media_size_limit",
+    );
+    assert.equal(posts[1].state, "complete");
+    await f.due();
+    assert.equal(
+      await f.db.sourceRecoveryCampaign.count({
+        where: { discoveryPostId: posts[0].id },
+      }),
+      0,
+    );
+    const log = messages
+      .map((m) => JSON.parse(m))
+      .find((m) => m.event === "media_failed");
+    assert.equal(log.reason, "media_size_limit");
+    assert.equal(log.diagnostic.limit_bytes, "52428800");
+    assert.equal(log.diagnostic.declared_bytes, "53477376");
+  } finally {
+    console.info = info;
     await f.cleanup();
   }
 });

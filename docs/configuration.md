@@ -82,3 +82,11 @@ BA 常驻推理进程可用独立 EnvironmentFile 注入 `PIXAI_MODEL_DIR`、`PI
 - **安装后缺少 Prisma Client**：运行 `pnpm db:generate`；构建和测试脚本会自动生成。不要从另一台机器复制生成客户端或原生依赖。
 
 普通测试与 CI 不访问真实外部服务；相关凭据、费用、访问权限和网络测试属于部署者显式启用的独立工作。
+
+## Source image size and recovery
+
+`SOURCE_MEDIA_MAX_MIB` limits original image downloads (default 50 MiB, integer 1–100). Both declared and actual streamed bytes are checked; rejected bodies are cancelled. This also applies to remote author profile downloads using the shared downloader; manual uploads retain their separate 25 MiB limit. Each active download can briefly retain chunks plus the final buffer (roughly twice the limit); X and Pixiv may download concurrently. Account for these buffers, thumbnail processing and the separate model process before increasing the limit. Pixel safety limits are unchanged.
+
+Size-limit and forbidden-URL rejections retain controlled media reasons and put the discovery in `needs_attention`; repeating those requests cannot fix the policy. Unsupported-type and empty-body responses also retain specific reasons but remain retryable, since a CDN can transiently return an HTTP-200 error page or empty response. Diagnostics include `limit_bytes` plus `declared_bytes` or `observed_bytes` when available. They never include credentials or raw response bodies. Changing configuration does not silently reopen an existing terminal gap; operators must inspect and explicitly authorize recovery.
+
+Transient post gaps first become eligible after 5 minutes; after the first failed recovery campaign they wait 10 minutes, then 30 minutes between remaining campaigns, up to eight campaigns. Each campaign uses the normal job executor (at most three executions, 5/10-second delays). These are earliest eligibility times, not promises of execution time: platform gates, the shared per-platform queue and maintenance scan can add a delay. Account cooldown (`SOURCE_COOLDOWN_MINUTES`) remains separate.

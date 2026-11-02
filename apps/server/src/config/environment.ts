@@ -26,6 +26,7 @@ export interface Environment {
   sourceScheduleMinutes: number;
   sourceFailureThreshold: number;
   sourceCooldownMinutes: number;
+  sourceMediaMaxBytes: number;
   typesetBatchMaxBytes: number;
   typesetBatchMaxWorks: number;
   objectStorageDriver: "memory" | "local" | "r2";
@@ -149,6 +150,9 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
       "Typeset batch limits must be at most 20 works and 1024 MiB.",
     );
   }
+  const sourceMediaMaxMiB = integer("SOURCE_MEDIA_MAX_MIB", 50, 1);
+  if (sourceMediaMaxMiB > 100)
+    throw new Error("SOURCE_MEDIA_MAX_MIB must be at most 100.");
   const r2Names = [
     "R2_ACCOUNT_ID",
     "R2_ACCESS_KEY_ID",
@@ -260,6 +264,7 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
     sourceOverlapMinutes: integer("SOURCE_OVERLAP_MINUTES", 10, 1),
     sourceFailureThreshold: integer("SOURCE_FAILURE_THRESHOLD", 3, 1),
     sourceCooldownMinutes: integer("SOURCE_COOLDOWN_MINUTES", 360, 1),
+    sourceMediaMaxBytes: sourceMediaMaxMiB * 1024 * 1024,
     typesetBatchMaxBytes:
       integer("TYPESET_BATCH_MAX_MIB", 512, 1) * 1024 * 1024,
     typesetBatchMaxWorks: integer("TYPESET_BATCH_MAX_WORKS", 20, 1),

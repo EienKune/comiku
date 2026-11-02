@@ -1,3 +1,4 @@
+import { MEDIA_POLICY_REASONS } from "./media-policy.js";
 import { SourceResponseError } from "./source-response.js";
 
 export type SourceFailureScope =
@@ -14,11 +15,12 @@ export interface SourceFailureDetails {
   scope: SourceFailureScope;
   diagnostic?: unknown;
 }
-const reasons = new Set(
-  "unknown_failure auth_failed source_forbidden challenge_required rate_limited network_error source_not_found post_not_found not_found connector_failed cursor_invalid discovery_incomplete limit_reached runtime_unavailable source_identity_conflict source_unresolved process_output_limit process_timeout process_start process_exit invalid_json media_network_error storage_failure invalid_response configuration_error".split(
+const reasons = new Set([
+  ...MEDIA_POLICY_REASONS,
+  ..."unknown_failure auth_failed source_forbidden challenge_required rate_limited network_error source_not_found post_not_found not_found connector_failed cursor_invalid discovery_incomplete limit_reached runtime_unavailable source_identity_conflict source_unresolved process_output_limit process_timeout process_start process_exit invalid_json media_network_error storage_failure invalid_response configuration_error".split(
     " ",
   ),
-);
+]);
 const scopes = new Set(
   "credential source post media transport storage protocol configuration".split(
     " ",
@@ -38,7 +40,7 @@ export function controlledFailureDetails(
   });
 }
 const fields = new Set(
-  "stage guard exception_type runtime_version message traceback field http_status http_method http_endpoint http_response_bytes http_response_headers http_response_excerpt response_excerpt upstream_logs exitCode signal killed timeout duration stderr runId jobId attempt campaignId campaign accountId platform adapter page postId mediaId windowStart windowEnd credentialGeneration".split(
+  "stage guard exception_type runtime_version message traceback field http_status http_method http_endpoint http_response_bytes http_response_headers http_response_excerpt response_excerpt upstream_logs limit_bytes declared_bytes observed_bytes exitCode signal killed timeout duration stderr runId jobId attempt campaignId campaign accountId platform adapter page postId mediaId windowStart windowEnd credentialGeneration".split(
     " ",
   ),
 );
