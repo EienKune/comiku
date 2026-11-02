@@ -20,7 +20,6 @@ import {
   Injectable,
 } from "@nestjs/common";
 import {
-  CandidateTagDisposition,
   Prisma,
   SourceFetchTrigger,
   type JobStatus,
@@ -2232,7 +2231,6 @@ export class SourceFetchService {
           })),
           skipDuplicates: true,
         });
-        await this.refreshTagDisposition(tx, existing.id);
         const discovery = await tx.sourceDiscoveryPost.findUnique({
           where: {
             accountId_platform_externalPostId: {
@@ -2438,7 +2436,6 @@ export class SourceFetchService {
         await this.assertEligible(account, state, leaseId, tx);
         await this.assertActor(createdById, tx);
         signal.throwIfAborted();
-        const tagDisposition = await this.tagDisposition(tx, hashtags);
         const created = await tx.candidatePost.create({
           data: {
             authorId: account.authorId,
@@ -2456,7 +2453,6 @@ export class SourceFetchService {
             referencedPostId: content.referencedContentId,
             postedAt: new Date(content.publishedAt),
             rawJson: content.rawJson as Prisma.InputJsonValue,
-            tagDisposition,
             hashtags: { create: hashtags },
             sourceObservations: {
               create: {
@@ -2532,7 +2528,6 @@ export class SourceFetchService {
             })),
             skipDuplicates: true,
           });
-          await this.refreshTagDisposition(tx, duplicate.id);
         });
         return { created: false, mediaStored: 0 };
       }
@@ -2563,40 +2558,6 @@ export class SourceFetchService {
         observationCount: { increment: 1 },
       },
     });
-  }
-
-  private async refreshTagDisposition(
-    tx: Prisma.TransactionClient,
-    candidatePostId: string,
-  ) {
-    const hashtags = await tx.candidateHashtag.findMany({
-      where: { candidatePostId },
-      select: { normalizedValue: true },
-    });
-    const tagDisposition = await this.tagDisposition(tx, hashtags);
-    await tx.candidatePost.update({
-      where: { id: candidatePostId },
-      data: { tagDisposition },
-    });
-  }
-
-  private async tagDisposition(
-    db: Prisma.TransactionClient | PrismaService,
-    hashtags: { normalizedValue: string }[],
-  ): Promise<CandidateTagDisposition> {
-    if (!hashtags.length) return CandidateTagDisposition.neutral;
-    const matches = await db.candidateTagAlias.findMany({
-      where: {
-        normalizedValue: { in: hashtags.map((tag) => tag.normalizedValue) },
-        group: { enabled: true, kind: { in: ["valid", "blocked"] } },
-      },
-      select: { group: { select: { kind: true } } },
-    });
-    if (matches.some(({ group }) => group.kind === "blocked"))
-      return CandidateTagDisposition.blocked;
-    if (matches.some(({ group }) => group.kind === "valid"))
-      return CandidateTagDisposition.valid;
-    return CandidateTagDisposition.neutral;
   }
 
   private compareExternalIds(left: string, right: string | null) {

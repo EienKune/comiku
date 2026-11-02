@@ -22,7 +22,10 @@ export function createBaPixaiImageAnalysisAdapter(
       { label: "ba_related", text: "BA 相关", tone: "info" },
       { label: "other", text: "非 BA 内容", tone: "neutral" },
     ],
-    reviewPolicy: { positiveLabels: ["ba_art"], minimumConfidence: 0 },
+    reviewPolicy: {
+      positiveLabels: ["ba_art"],
+      lowPriorityLabels: ["other"],
+    },
     async analyze(itemId, body, signal) {
       const result = await client.analyze(itemId, body, signal);
       return {

@@ -125,12 +125,15 @@ export class ImageAnalysisService {
       }),
     };
   }
+  get labelPresentation() {
+    return this.model?.labelPresentation ?? [];
+  }
   get candidateQueryPolicy() {
     return {
       modelKey: this.activeModelKey,
       labels: this.model?.identity.labels ?? [],
       positiveLabels: this.model?.reviewPolicy?.positiveLabels ?? [],
-      minimumConfidence: this.model?.reviewPolicy?.minimumConfidence ?? 0,
+      lowPriorityLabels: this.model?.reviewPolicy?.lowPriorityLabels ?? [],
     };
   }
   /** Evidence validity is independent from sibling completion and retry state. */
@@ -150,10 +153,8 @@ export class ImageAnalysisService {
     const policy = this.model?.reviewPolicy;
     return Boolean(
       policy &&
-      this.cachedPredictions(predictions).some(
-        (entry) =>
-          policy.positiveLabels.includes(entry.label) &&
-          entry.confidence >= policy.minimumConfidence,
+      this.cachedPredictions(predictions).some((entry) =>
+        policy.positiveLabels.includes(entry.label),
       ),
     );
   }
@@ -164,11 +165,23 @@ export class ImageAnalysisService {
     const byLabel = new Map(entries.map((entry) => [entry.label, entry.score]));
     let winner: string | undefined;
     let maximum = -1;
+    let bestPriority = 3;
+    const policy = this.candidateQueryPolicy;
     for (const label of this.model?.identity.labels ?? []) {
       const score = byLabel.get(label);
-      if (score !== undefined && score > maximum) {
+      const priority = policy.positiveLabels.includes(label)
+        ? 0
+        : policy.lowPriorityLabels.includes(label)
+          ? 2
+          : 1;
+      if (
+        score !== undefined &&
+        (priority < bestPriority ||
+          (priority === bestPriority && score > maximum))
+      ) {
         winner = label;
         maximum = score;
+        bestPriority = priority;
       }
     }
     if (!winner) return [];

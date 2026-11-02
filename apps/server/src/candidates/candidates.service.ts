@@ -1,4 +1,10 @@
 import {
+  candidateTagRules,
+  candidateReviewPolicyKey,
+  emptyCandidateReviewReason,
+  type CandidateReviewRow,
+} from "./candidate-review-evidence.js";
+import {
   CandidateReviewSessions,
   assertCandidateReader,
 } from "./candidate-review-sessions.js";
@@ -24,7 +30,7 @@ import {
 } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
 import { extname } from "node:path";
-import { CandidateTagDisposition, Prisma } from "../generated/prisma/client.js";
+import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../database/prisma.service.js";
 import { FileObjectsService } from "../files/file-objects.service.js";
 import { ImageAnalysisService } from "../image-analysis/image-analysis.service.js";
@@ -47,7 +53,6 @@ import {
   type CandidateQueryDto,
   type ManualCandidateUploadDto,
   type ReorderCandidateMediaDto,
-  type SetCandidateClassificationDto,
   type UpdateManualCandidateDto,
   type UpdateCandidateTagGroupDto,
 } from "./candidates.dto.js";
@@ -78,11 +83,6 @@ const details = {
   sourceObservations: {
     select: { adapterKey: true },
     orderBy: { adapterKey: "asc" },
-  },
-  classificationDecision: true,
-  classificationSuggestions: {
-    orderBy: { createdAt: "desc" },
-    take: 1,
   },
 } as const;
 type CandidateDetails = Prisma.CandidatePostGetPayload<{
@@ -241,18 +241,9 @@ export class CandidatesService {
           ? (this.analysis?.classificationTags(candidate.analysisPredictions) ??
             [])
           : [],
-      reviewPriority:
-        analysis.score !== null
-          ? analysis.score >= 0.8
-            ? "high"
-            : analysis.score >= 0.5
-              ? "medium"
-              : "low"
-          : analysis.state === "failed"
-            ? "failed"
-            : analysis.state === "queued"
-              ? "queued"
-              : "unprocessed",
+      triageGroup: "uncertain",
+      triageReasons: ["insufficient_evidence"],
+      tagRuleMatches: [],
       authorId: candidate.authorId,
       authorName: candidate.author.displayName,
       authorHandle: account?.handle ?? null,
@@ -265,18 +256,6 @@ export class CandidatesService {
         (observation) => observation.adapterKey,
       ),
       hashtags: candidate.hashtags.map((hashtag) => hashtag.displayValue),
-      tagDisposition: candidate.tagDisposition,
-      visualClass:
-        candidate.classificationDecision?.label ??
-        candidate.classificationSuggestions[0]?.label ??
-        "manga",
-      visualClassSource: candidate.classificationDecision
-        ? "human"
-        : candidate.classificationSuggestions.length
-          ? "model"
-          : "default",
-      classificationRevision:
-        candidate.classificationDecision?.revision ?? null,
       externalPostId: candidate.externalPostId,
       externalPostUrl: candidate.externalPostUrl,
       text: candidate.text,
@@ -308,9 +287,55 @@ export class CandidatesService {
         modelKey: null,
         labels: [],
         positiveLabels: [],
-        minimumConfidence: 0,
+        lowPriorityLabels: [],
       }
     );
+  }
+  reviewPolicy() {
+    const policy = this.queryPolicy;
+    const presentation = this.analysis?.labelPresentation ?? [];
+    return {
+      modelKey: policy.modelKey,
+      policyKey: candidateReviewPolicyKey(policy),
+      classes: policy.labels.map((label) => ({
+        label,
+        text:
+          presentation.find((entry) => entry.label === label)?.text ?? label,
+        tone:
+          presentation.find((entry) => entry.label === label)?.tone ??
+          ("neutral" as const),
+        triageGroup: policy.positiveLabels.includes(label)
+          ? ("priority" as const)
+          : policy.lowPriorityLabels?.includes(label)
+            ? ("low_priority" as const)
+            : ("uncertain" as const),
+      })),
+    };
+  }
+  private reviewDto(
+    candidate: Parameters<CandidatesService["dto"]>[0],
+    row?: CandidateReviewRow,
+  ) {
+    const dto = this.dto(candidate);
+    const reason = row?.reason_json ?? emptyCandidateReviewReason;
+    return {
+      ...dto,
+      ...(row && "representative_class" in row
+        ? {
+            classificationTags: row.representative_class
+              ? this.reviewPolicy()
+                  .classes.filter(
+                    (entry) => entry.label === row.representative_class,
+                  )
+                  .map(({ label, text, tone }) => ({ label, text, tone }))
+              : [],
+          }
+        : {}),
+      triageGroup: row?.triage_group ?? dto.triageGroup,
+      triageReasons: reason.triageReasons,
+      tagRuleMatches: reason.tagRuleMatches,
+      hashtags: row ? reason.hashtags : dto.hashtags,
+    };
   }
   createReviewSession(actorId: string, input: CreateCandidateReviewSessionDto) {
     return this.reviewSessions.create(actorId, input, this.queryPolicy);
@@ -353,6 +378,9 @@ export class CandidatesService {
           rank: number;
           sort_score: number;
           posted_at: Date;
+          triage_group: CandidateReviewRow["triage_group"];
+          reason_json: CandidateReviewRow["reason_json"];
+          representative_class?: string | null;
         };
         let page: PageRow[];
         let total: number;
@@ -364,9 +392,10 @@ export class CandidatesService {
           total = count[0].count;
           page = await tx.$queryRaw<
             PageRow[]
-          >`SELECT c.id, e.ordinal FROM candidate_review_session_entries e JOIN candidate_posts c ON c.id = e.candidate_id JOIN authors a ON a.id = c.author_id WHERE ${where} AND e.ordinal > ${cursor?.ordinal ?? 0} ORDER BY e.ordinal LIMIT ${limit + 1}`;
+          >`SELECT c.id, e.ordinal, e.triage_group, e.reason_json FROM candidate_review_session_entries e JOIN candidate_posts c ON c.id = e.candidate_id JOIN authors a ON a.id = c.author_id WHERE ${where} AND e.ordinal > ${cursor?.ordinal ?? 0} ORDER BY e.ordinal LIMIT ${limit + 1}`;
         } else {
-          const cte = candidateRankingCte(filter, policy);
+          const rules = await candidateTagRules(tx);
+          const cte = candidateRankingCte(filter, policy, rules.rules);
           const group = query.triageGroup
             ? Prisma.sql`triage_group = ${query.triageGroup}`
             : Prisma.sql`true`;
@@ -380,7 +409,7 @@ export class CandidatesService {
             : Prisma.empty;
           page = await tx.$queryRaw<
             PageRow[]
-          >`${cte} SELECT id, rank, sort_score, posted_at FROM ranked WHERE ${group} ${keyset} ORDER BY rank, sort_score DESC, posted_at DESC, id DESC LIMIT ${limit + 1}`;
+          >`${cte} SELECT id, rank, sort_score, posted_at, triage_group, reason_json, representative_class FROM ranked WHERE ${group} ${keyset} ORDER BY rank, sort_score DESC, posted_at DESC, id DESC LIMIT ${limit + 1}`;
         }
         const hasNext = page.length > limit;
         page = page.slice(0, limit);
@@ -394,6 +423,21 @@ export class CandidatesService {
               include: this.detailsWithAnalysis(),
             })
           : [];
+        if (session && page.length) {
+          const live = await tx.$queryRaw<
+            { id: string; representative_class: string | null }[]
+          >`${candidateRankingCte(
+            filter,
+            policy,
+            [],
+            page.map((row) => row.id),
+          )} SELECT id,representative_class FROM ranked`;
+          const classes = new Map(
+            live.map((row) => [row.id, row.representative_class]),
+          );
+          for (const row of page)
+            row.representative_class = classes.get(row.id) ?? null;
+        }
         const byId = new Map(loaded.map((row) => [row.id, row]));
         const pending = await tx.$queryRaw<{ pending: boolean }[]>(
           candidatePendingSql(filter, policy.modelKey, session?.id),
@@ -403,7 +447,7 @@ export class CandidatesService {
           analysisPending: pending[0].pending,
           items: page.flatMap((row) => {
             const current = byId.get(row.id);
-            return current ? [this.dto(current)] : [];
+            return current ? [this.reviewDto(current, row)] : [];
           }),
           total,
           nextCursor:
@@ -435,7 +479,11 @@ export class CandidatesService {
       include: this.detailsWithAnalysis(),
     });
     if (!candidate) throw new NotFoundException("候选不存在");
-    return this.dto(candidate);
+    const rules = await candidateTagRules(this.db);
+    const rows = await this.db.$queryRaw<
+      CandidateReviewRow[]
+    >`${candidateRankingCte(normalizeCandidateFilter({ status: candidate.status }), this.queryPolicy, rules.rules, [id])} SELECT id,triage_group,reason_json,representative_class FROM ranked`;
+    return this.reviewDto(candidate, rows[0]);
   }
 
   async listTagGroups(): Promise<CandidateTagGroupDto[]> {
@@ -456,6 +504,8 @@ export class CandidatesService {
   async createTagGroup(
     input: CreateCandidateTagGroupDto,
   ): Promise<CandidateTagGroupDto> {
+    if (input.kind === "gray")
+      throw new BadRequestException("不能新建灰名单规则");
     const aliases = this.tagAliases(input.aliases);
     await this.withCandidateConflict(() =>
       this.db.candidateTagGroup.create({
@@ -467,7 +517,6 @@ export class CandidatesService {
         },
       }),
     );
-    await this.refreshAllTagDispositions();
     return (await this.listTagGroups()).find(
       (group) => group.name === input.name.trim(),
     )!;
@@ -480,6 +529,12 @@ export class CandidatesService {
     const aliases = this.tagAliases(input.aliases);
     await this.withCandidateConflict(() =>
       this.db.$transaction(async (tx) => {
+        const existing = await tx.candidateTagGroup.findUnique({
+          where: { id },
+          select: { kind: true },
+        });
+        if (input.kind === "gray" && existing?.kind !== "gray")
+          throw new BadRequestException("不能新增灰名单行为");
         const changed = await tx.candidateTagGroup.updateMany({
           where: { id, revision: input.expectedRevision },
           data: {
@@ -497,34 +552,7 @@ export class CandidatesService {
         });
       }),
     );
-    await this.refreshAllTagDispositions();
     return (await this.listTagGroups()).find((group) => group.id === id)!;
-  }
-
-  async setClassification(
-    actorId: string,
-    id: string,
-    input: SetCandidateClassificationDto,
-  ): Promise<CandidateDto> {
-    if (!(await this.db.candidatePost.count({ where: { id } })))
-      throw new NotFoundException("候选不存在");
-    const existing = await this.db.candidateClassificationDecision.findUnique({
-      where: { candidatePostId: id },
-    });
-    if (existing && input.expectedRevision !== existing.revision)
-      throw new ConflictException("人工分类已更新，请刷新后重试");
-    if (!existing && input.expectedRevision !== null)
-      throw new ConflictException("人工分类状态已变化，请刷新后重试");
-    await this.db.candidateClassificationDecision.upsert({
-      where: { candidatePostId: id },
-      create: { candidatePostId: id, label: input.label, decidedById: actorId },
-      update: {
-        label: input.label,
-        decidedById: actorId,
-        revision: { increment: 1 },
-      },
-    });
-    return this.get(id);
   }
 
   private tagAliases(values: string[]) {
@@ -537,50 +565,6 @@ export class CandidatesService {
     )
       throw new BadRequestException("标签别名不能重复");
     return valid;
-  }
-
-  private async refreshAllTagDispositions() {
-    await this.db.$executeRaw`
-      UPDATE candidate_posts AS candidate
-      SET tag_disposition = CASE
-        WHEN EXISTS (
-          SELECT 1 FROM candidate_hashtags AS hashtag
-          JOIN candidate_tag_aliases AS alias ON alias.normalized_value = hashtag.normalized_value
-          JOIN candidate_tag_groups AS tag_group ON tag_group.id = alias.group_id
-          WHERE hashtag.candidate_post_id = candidate.id
-            AND tag_group.enabled = true
-            AND tag_group.kind = 'blocked'::"CandidateTagGroupKind"
-        ) THEN 'blocked'::"CandidateTagDisposition"
-        WHEN EXISTS (
-          SELECT 1 FROM candidate_hashtags AS hashtag
-          JOIN candidate_tag_aliases AS alias ON alias.normalized_value = hashtag.normalized_value
-          JOIN candidate_tag_groups AS tag_group ON tag_group.id = alias.group_id
-          WHERE hashtag.candidate_post_id = candidate.id
-            AND tag_group.enabled = true
-            AND tag_group.kind = 'valid'::"CandidateTagGroupKind"
-        ) THEN 'valid'::"CandidateTagDisposition"
-        ELSE 'neutral'::"CandidateTagDisposition"
-      END
-    `;
-  }
-
-  private async tagDisposition(
-    db: Prisma.TransactionClient | PrismaService,
-    hashtags: { normalizedValue: string }[],
-  ): Promise<CandidateTagDisposition> {
-    if (!hashtags.length) return CandidateTagDisposition.neutral;
-    const matches = await db.candidateTagAlias.findMany({
-      where: {
-        normalizedValue: { in: hashtags.map((tag) => tag.normalizedValue) },
-        group: { enabled: true, kind: { in: ["valid", "blocked"] } },
-      },
-      select: { group: { select: { kind: true } } },
-    });
-    if (matches.some(({ group }) => group.kind === "blocked"))
-      return CandidateTagDisposition.blocked;
-    if (matches.some(({ group }) => group.kind === "valid"))
-      return CandidateTagDisposition.valid;
-    return CandidateTagDisposition.neutral;
   }
 
   private async withCandidateConflict<T>(action: () => Promise<T>) {
@@ -862,6 +846,24 @@ export class CandidatesService {
   ): Promise<CandidateUploadSessionDto> {
     const canUpload =
       session.status === "pending" && session.expiresAt.getTime() > Date.now();
+    const reviewRows = new Map<string, CandidateReviewRow>();
+    const candidates = session.items.flatMap((item) =>
+      item.candidatePost ? [item.candidatePost] : [],
+    );
+    if (candidates.length) {
+      const rules = await candidateTagRules(this.db);
+      for (const status of new Set(
+        candidates.map((candidate) => candidate.status),
+      )) {
+        const ids = candidates
+          .filter((candidate) => candidate.status === status)
+          .map((candidate) => candidate.id);
+        const rows = await this.db.$queryRaw<
+          CandidateReviewRow[]
+        >`${candidateRankingCte(normalizeCandidateFilter({ status }), this.queryPolicy, rules.rules, ids)} SELECT id,triage_group,reason_json,representative_class FROM ranked`;
+        for (const row of rows) reviewRows.set(row.id, row);
+      }
+    }
     const items = await Promise.all(
       session.items.map(async (item) => {
         const lifetime = Math.min(
@@ -903,7 +905,12 @@ export class CandidatesService {
                 (warning): warning is string => typeof warning === "string",
               )
             : [],
-          candidate: item.candidatePost ? this.dto(item.candidatePost) : null,
+          candidate: item.candidatePost
+            ? this.reviewDto(
+                item.candidatePost,
+                reviewRows.get(item.candidatePost.id),
+              )
+            : null,
         };
       }),
     );
@@ -984,7 +991,6 @@ export class CandidatesService {
         await this.assertUploadActor(tx, actorId, input.authorId);
         const candidateText = input.text?.trim() || null;
         const hashtags = collectHashtags([], candidateText ?? undefined);
-        const tagDisposition = await this.tagDisposition(tx, hashtags);
         const candidate = await tx.candidatePost.create({
           data: {
             authorId: input.authorId,
@@ -1000,7 +1006,6 @@ export class CandidatesService {
               automaticallySorted: group.automaticallySorted,
               warnings: group.warnings,
             },
-            tagDisposition,
             hashtags: { create: hashtags },
             sourceObservations: {
               create: {
@@ -1107,14 +1112,12 @@ export class CandidatesService {
       ) {
         throw new ConflictException("候选已更新或当前状态不能修改上传信息");
       }
-      const tagDisposition = await this.tagDisposition(tx, hashtags);
       const changed = await tx.candidatePost.updateMany({
         where: { id, status: "pending", revision: input.expectedRevision },
         data: {
           authorId: input.authorId,
           text,
           externalPostUrl: input.sourceUrl?.trim() || null,
-          tagDisposition,
           revision: { increment: 1 },
         },
       });

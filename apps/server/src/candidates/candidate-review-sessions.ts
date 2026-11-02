@@ -1,4 +1,9 @@
 import {
+  candidateTagRules,
+  candidateReviewPolicyKey,
+  CANDIDATE_REVIEW_POLICY_VERSION,
+} from "./candidate-review-evidence.js";
+import {
   ConflictException,
   ForbiddenException,
   GoneException,
@@ -87,6 +92,7 @@ export class CandidateReviewSessions {
           if (replaced && replaced.actorId !== actorId)
             throw new ForbiddenException("审核会话不属于当前用户");
         }
+        const ruleSnapshot = await candidateTagRules(tx);
         const session = await tx.candidateReviewSession.create({
           data: {
             id: randomUUID(),
@@ -96,6 +102,9 @@ export class CandidateReviewSessions {
             normalizedFilterJson: filter,
             filterHash,
             modelKey: policy.modelKey,
+            policyVersion: CANDIDATE_REVIEW_POLICY_VERSION,
+            rulesVersion: ruleSnapshot.version,
+            reviewPolicyKey: candidateReviewPolicyKey(policy),
             createdAt: now,
             lastUsedAt: now,
             expiresAt: new Date(+now + REVIEW_IDLE_MS),
@@ -103,9 +112,9 @@ export class CandidateReviewSessions {
           },
         });
         const inserted =
-          await tx.$executeRaw`${candidateRankingCte(filter, policy)}
-        INSERT INTO candidate_review_session_entries(session_id, candidate_id, ordinal, triage_group, frozen_score)
-        SELECT ${session.id}::uuid, id, row_number() OVER (ORDER BY rank, sort_score DESC, posted_at DESC, id DESC)::int, triage_group, frozen_score
+          await tx.$executeRaw`${candidateRankingCte(filter, policy, ruleSnapshot.rules)}
+        INSERT INTO candidate_review_session_entries(session_id, candidate_id, ordinal, triage_group, frozen_score, reason_json)
+        SELECT ${session.id}::uuid, id, row_number() OVER (ORDER BY rank, sort_score DESC, posted_at DESC, id DESC)::int, triage_group, frozen_score, reason_json
         FROM ranked ORDER BY rank, sort_score DESC, posted_at DESC, id DESC LIMIT ${REVIEW_MAX_MEMBERS + 1}`;
         if (inserted > REVIEW_MAX_MEMBERS)
           throw new BadRequestException(
@@ -156,6 +165,8 @@ export class CandidateReviewSessions {
       throw new GoneException("审核会话已过期，请刷新列表");
     if (session.actorId !== actorId)
       throw new ForbiddenException("审核会话不属于当前用户");
+    if (session.policyVersion !== CANDIDATE_REVIEW_POLICY_VERSION)
+      throw new ConflictException("审核会话格式已更新，请刷新列表");
     if (session.filterHash !== filterHash || session.modelKey !== modelKey)
       throw new ConflictException("审核筛选或模型已改变，请刷新列表");
     return session;
@@ -228,10 +239,9 @@ export class CandidateReviewSessions {
       { group: string; count: number }[]
     >`SELECT e.triage_group AS "group", count(*)::int AS count FROM candidate_review_session_entries e JOIN candidate_posts c ON c.id = e.candidate_id JOIN authors a ON a.id = c.author_id WHERE e.session_id = ${session.id}::uuid AND ${candidateBaseWhere(session.normalizedFilterJson as CandidateFilter)} GROUP BY e.triage_group`;
     const counts = {
-      valid_manga: 0,
-      neutral_manga: 0,
-      blocked_manga: 0,
-      photo: 0,
+      priority: 0,
+      uncertain: 0,
+      low_priority: 0,
     };
     for (const row of rows)
       if (row.group in counts)

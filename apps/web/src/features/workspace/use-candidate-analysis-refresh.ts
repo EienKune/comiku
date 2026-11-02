@@ -31,11 +31,7 @@ export function useCandidateAnalysisRefresh() {
               }
             >
           | undefined;
-        return data?.pages.some(
-          (page) =>
-            page.analysisPending ??
-            page.items.some((item) => item.reviewPriority === "queued"),
-        );
+        return data?.pages.some((page) => page.analysisPending === true);
       });
       if (queued && timer === undefined) timer = setInterval(refresh, 5000);
       else if (!queued && timer !== undefined) {

@@ -34,7 +34,7 @@ test("binary analysis persists independent priority, retries failures and preser
         adapterId: "binary-fixture",
         labels: ["accept", "reject"],
       },
-      reviewPolicy: { positiveLabels: ["accept"], minimumConfidence: 0.5 },
+      reviewPolicy: { positiveLabels: ["accept"] },
     }),
   };
   model.analyze = async (): Promise<ImageAnalysisResult> => {
@@ -588,7 +588,7 @@ test("partial BA evidence survives failures and malformed siblings, with indepen
     const page = await candidates.list({
       authorId: author.id,
       limit: 24,
-      triageGroup: "valid_manga",
+      triageGroup: "priority",
     });
     assert.equal(
       page.analysisPending,
@@ -597,46 +597,10 @@ test("partial BA evidence survives failures and malformed siblings, with indepen
     );
     assert.equal(page.items[0]?.id, post.id);
     assert.equal(page.items[0]?.canRetryAnalysis, true);
-    assert.equal(page.items[0]?.reviewPriority, "low");
+    assert.equal(page.items[0]?.triageGroup, "priority");
     assert.deepEqual(page.items[0]?.classificationTags, [
       { label: "ba_art", text: "BA 漫画／插画", tone: "success" },
     ]);
-    await db.candidateClassificationSuggestion.create({
-      data: {
-        candidatePostId: post.id,
-        label: "photo",
-        classifierName: "legacy-fixture",
-        classifierVersion: "1",
-        score: 1,
-      },
-    });
-    assert.equal(
-      (
-        await candidates.list({
-          authorId: author.id,
-          limit: 24,
-          triageGroup: "photo",
-        })
-      ).items[0]?.id,
-      post.id,
-    );
-    await db.candidateClassificationSuggestion.deleteMany({
-      where: { candidatePostId: post.id },
-    });
-    await db.candidatePost.update({
-      where: { id: post.id },
-      data: { tagDisposition: "blocked" },
-    });
-    assert.equal(
-      (
-        await candidates.list({
-          authorId: author.id,
-          limit: 24,
-          triageGroup: "blocked_manga",
-        })
-      ).items[0]?.id,
-      post.id,
-    );
     const disabled = new ImageAnalysisService(
       db,
       app.get(JobsService),

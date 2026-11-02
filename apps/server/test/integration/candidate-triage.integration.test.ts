@@ -20,7 +20,7 @@ const url = process.env.TEST_DATABASE_URL;
 if (!url || !new URL(url).pathname.endsWith("_test"))
   throw Error("Isolated TEST_DATABASE_URL required");
 
-test("current BA winning classes rebuild into five promoted and two neutral posts while preserving manual and tag decisions", async () => {
+test("current BA winning classes rebuild into five promoted and two neutral posts while preserving candidate business state", async () => {
   const model = activateImageAnalysisAdapter({
     identity: {
       adapterId: "triage-fixture",
@@ -31,7 +31,7 @@ test("current BA winning classes rebuild into five promoted and two neutral post
       preprocessVersion: "fixture",
       labels: ["ba_art", "ba_related", "other"],
     },
-    reviewPolicy: { positiveLabels: ["ba_art"], minimumConfidence: 0 },
+    reviewPolicy: { positiveLabels: ["ba_art"] },
     analyze: async () => {
       throw Error("Existing results must not repeat inference");
     },
@@ -134,24 +134,17 @@ test("current BA winning classes rebuild into five promoted and two neutral post
         };
       }),
     });
-    const human = await db.candidateClassificationDecision.create({
-      data: {
-        candidatePostId: postIds[0],
-        label: "manga",
-        decidedById: actor.id,
-      },
-    });
     await app.get(ImageAnalysisService).schedulePending();
     const candidates = app.get(CandidatesService);
     const valid = await candidates.list({
       limit: 100,
       authorId: author.id,
-      triageGroup: "valid_manga",
+      triageGroup: "priority",
     });
     const neutral = await candidates.list({
       limit: 100,
       authorId: author.id,
-      triageGroup: "neutral_manga",
+      triageGroup: "uncertain",
     });
     assert.deepEqual(
       valid.items.map((row) => row.id).sort(),
@@ -164,15 +157,10 @@ test("current BA winning classes rebuild into five promoted and two neutral post
     assert.ok(
       [...valid.items, ...neutral.items].every(
         (row) =>
-          row.tagDisposition === "neutral" &&
+          row.tagRuleMatches.length === 0 &&
           row.status === "pending" &&
           row.revision === 0,
       ),
-    );
-    assert.equal(
-      valid.items.find((row) => row.id === postIds[0])?.reviewPriority,
-      "high",
-      "Independent ranking score is preserved when the winning BA class promotes",
     );
     assert.equal(
       await db.candidateMediaAnalysis.count({
@@ -186,52 +174,27 @@ test("current BA winning classes rebuild into five promoted and two neutral post
       }),
       0,
     );
-    assert.deepEqual(
-      await db.candidateClassificationDecision.findUniqueOrThrow({
-        where: { candidatePostId: postIds[0] },
-      }),
-      human,
-    );
-    await db.candidateClassificationDecision.create({
-      data: {
-        candidatePostId: postIds[3],
-        label: "photo",
-        decidedById: actor.id,
-      },
-    });
-    await db.candidatePost.update({
-      where: { id: postIds[4] },
-      data: { tagDisposition: "blocked" },
-    });
     assert.equal(
       (
         await candidates.list({
           limit: 100,
           authorId: author.id,
-          triageGroup: "valid_manga",
+          triageGroup: "priority",
         })
       ).total,
-      3,
+      5,
     );
     assert.deepEqual(
       (
         await candidates.list({
           limit: 100,
           authorId: author.id,
-          triageGroup: "photo",
+          triageGroup: "priority",
         })
-      ).items.map((row) => row.id),
-      [postIds[3]],
-    );
-    assert.deepEqual(
-      (
-        await candidates.list({
-          limit: 100,
-          authorId: author.id,
-          triageGroup: "blocked_manga",
-        })
-      ).items.map((row) => row.id),
-      [postIds[4]],
+      ).items
+        .map((row) => row.id)
+        .sort(),
+      [postIds[0], ...postIds.slice(3)].sort(),
     );
   } finally {
     await db.backgroundJob.deleteMany({
