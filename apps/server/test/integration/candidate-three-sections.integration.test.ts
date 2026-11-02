@@ -173,7 +173,7 @@ test("current valid image winners route posts conservatively, independently of t
     }
     const positiveCard = await f.service.get(positive.id);
     assert.equal(positiveCard.triageGroup, "priority");
-    assert.equal(positiveCard.classificationTags?.[0]?.label, "other");
+    assert.equal(positiveCard.classificationTags?.[0]?.label, "positive");
     assert.ok(positiveCard.triageReasons.includes("priority_model"));
     assert.equal((await f.service.get(low.id)).triageGroup, "low_priority");
     const page = await f.service.list(
@@ -406,6 +406,45 @@ test("editing rules after their atomic read cannot mix the new explanations into
   } finally {
     if (groupId)
       await f.db.candidateTagGroup.delete({ where: { id: groupId } });
+    await f.close();
+  }
+});
+
+test("representative category prefers review priority without changing ranks, routing or frozen reasons", async () => {
+  const f = await candidateReviewFixture();
+  try {
+    const mixed = await f.post({
+      analysisPredictions: [
+        { label: "related", confidence: 0.96, score: 0.038 },
+        { label: "other", confidence: 0.86, score: 0.042 },
+      ],
+    });
+    const higher = await f.post({
+      analysisPredictions: [{ label: "related", confidence: 0.8, score: 0.2 }],
+    });
+    const session = await f.create();
+    assert.equal(session.counts.uncertain, 2);
+    const frozenQuery = {
+      ...f.filter,
+      triageGroup: "uncertain" as const,
+      reviewSessionId: session.sessionId,
+    };
+    for (const query of [f.filter, frozenQuery]) {
+      const page = await f.service.list(query, f.actor.id);
+      assert.deepEqual(
+        page.items.map((i) => i.id),
+        [higher.id, mixed.id],
+      );
+      const card = page.items.find((i) => i.id === mixed.id)!;
+      assert.equal(card.classificationTags?.[0]?.label, "related");
+      assert.equal(card.triageGroup, "uncertain");
+      assert.deepEqual(card.triageReasons, ["insufficient_evidence"]);
+    }
+    assert.equal(
+      (await f.service.get(mixed.id)).classificationTags?.[0]?.label,
+      "related",
+    );
+  } finally {
     await f.close();
   }
 });

@@ -72,7 +72,7 @@ test("invalid label presentation fails activation without accepting foreign clas
   }
 });
 
-test("the post displays one highest-ranking image category, independently of winning confidence", () => {
+test("the post displays its highest-priority category while ranking remains independent", () => {
   const service = analysis();
   const predictions = [
     { label: "other", confidence: 0.9, score: 0.1 },
@@ -100,7 +100,7 @@ test("the post displays one highest-ranking image category, independently of win
     { label: "ba_art", confidence: 0.38, score: 0.38 },
     { label: "other", confidence: 0.55, score: 0.4 },
   ];
-  assert.deepEqual(service.classificationTags(mixed), [expected[2]]);
+  assert.deepEqual(service.classificationTags(mixed), [expected[0]]);
   assert.equal(
     service.promotesReview(mixed),
     true,
@@ -202,4 +202,17 @@ test("candidate tags require valid current results even when sibling work is inc
     ).classificationTags,
     [],
   );
+});
+
+test("related outranks other for a mixed post even when its ranking score is lower", () => {
+  const service = analysis();
+  const related = { label: "ba_related", confidence: 0.96, score: 0.038 };
+  const other = { label: "other", confidence: 0.86, score: 0.042 };
+  for (const entries of [
+    [related, other],
+    [other, related],
+  ])
+    assert.deepEqual(service.classificationTags(entries), [expected[1]]);
+  assert.equal(service.promotesReview([related, other]), false);
+  assert.deepEqual(service.classificationTags([other]), [expected[2]]);
 });

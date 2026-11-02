@@ -145,3 +145,13 @@ test("new rules never offer gray while existing gray records remain editable", a
     expect(screen.getByRole("option", { name: "历史灰名单" })).toBeTruthy(),
   );
 });
+
+test("routing explanation covers multi-image badges, conflicts, strict low evidence and refresh concisely", async () => {
+  mount(false);
+  await screen.findByText("合成插画");
+  expect(screen.getByText(/多图模型标签按/)).toBeTruthy();
+  expect(screen.getByText(/全部图片均为低优先级类/)).toBeTruthy();
+  expect(screen.getByText(/正向线索与降级标签冲突/)).toBeTruthy();
+  expect(screen.getByText(/其余情况/)).toBeTruthy();
+  expect(screen.getByText(/不重新下载或识别/)).toBeTruthy();
+});

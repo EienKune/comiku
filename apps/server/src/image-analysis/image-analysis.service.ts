@@ -165,11 +165,23 @@ export class ImageAnalysisService {
     const byLabel = new Map(entries.map((entry) => [entry.label, entry.score]));
     let winner: string | undefined;
     let maximum = -1;
+    let bestPriority = 3;
+    const policy = this.candidateQueryPolicy;
     for (const label of this.model?.identity.labels ?? []) {
       const score = byLabel.get(label);
-      if (score !== undefined && score > maximum) {
+      const priority = policy.positiveLabels.includes(label)
+        ? 0
+        : policy.lowPriorityLabels.includes(label)
+          ? 2
+          : 1;
+      if (
+        score !== undefined &&
+        (priority < bestPriority ||
+          (priority === bestPriority && score > maximum))
+      ) {
         winner = label;
         maximum = score;
+        bestPriority = priority;
       }
     }
     if (!winner) return [];

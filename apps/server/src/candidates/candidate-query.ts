@@ -176,7 +176,7 @@ export function candidateRankingCte(
         ) vector ON true
   ), image_evidence AS (
     SELECT id,max(score) FILTER (WHERE valid) AS score,
-      (array_agg(winner ORDER BY score DESC NULLS LAST,array_position(${labels}::text[],winner)) FILTER (WHERE valid))[1] AS representative_class,
+      (array_agg(winner ORDER BY CASE WHEN winner=ANY(${[...policy.positiveLabels]}::text[]) THEN 0 WHEN winner=ANY(${[...(policy.lowPriorityLabels ?? [])]}::text[]) THEN 2 ELSE 1 END,score DESC NULLS LAST,array_position(${labels}::text[],winner)) FILTER (WHERE valid))[1] AS representative_class,
       bool_or(valid AND winner=ANY(${[...policy.positiveLabels]}::text[])) AS promotes,
       count(*)>0 AND bool_and(valid AND winner=ANY(${[...(policy.lowPriorityLabels ?? [])]}::text[])) AS all_low
     FROM image_rows GROUP BY id
