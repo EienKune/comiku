@@ -382,10 +382,6 @@ function AccountEditor({
         ? "last_24_hours"
         : "none"),
   );
-  const [replaceConfirmed, setReplaceConfirmed] = useState(false);
-  const replacing = Boolean(
-    account && externalUserId.trim() !== account.externalUserId,
-  );
   useEffect(() => {
     const element = dialog.current;
     element?.showModal();
@@ -398,8 +394,6 @@ function AccountEditor({
         throw new Error(
           "请先同步 X 资料；若已知稳定用户 ID，也可在高级区手动填写。",
         );
-      if (replacing && !replaceConfirmed)
-        throw new Error("请确认更换账号，原有来源记录将保留。");
       const collectionChanged =
         (fetchEnabled && !account?.fetchEnabled) ||
         firstSyncMode !== (account?.firstSyncMode ?? "none");
@@ -410,7 +404,6 @@ function AccountEditor({
       )
         throw new Error("当前没有支持所选首次同步范围的可用抓取通道");
       const fields = {
-        externalUserId: externalUserId.trim(),
         handle: platform === "x" ? handle : null,
         displayNameSnapshot: nickname.trim() || null,
         fetchEnabled,
@@ -434,7 +427,11 @@ function AccountEditor({
         await unwrap(
           await client.POST("/api/authors/{authorId}/accounts", {
             params: { path: { authorId } },
-            body: { ...fields, platform },
+            body: {
+              ...fields,
+              platform,
+              externalUserId: externalUserId.trim(),
+            },
           }),
         );
       await onSaved();
@@ -471,7 +468,7 @@ function AccountEditor({
           <>
             <TextField
               label="X @账号"
-              hint="输入 @ 后的名称，也可粘贴 X 主页地址。更换实际账号请同步资料或填写新的稳定 ID。"
+              hint="输入 @ 后的名称，也可粘贴 X 主页地址。"
               required
               value={handle}
               onChange={(event) => {
@@ -491,11 +488,17 @@ function AccountEditor({
                       body: { handle, authorId },
                     }),
                   );
+                  if (
+                    account &&
+                    result.externalUserId !== account.externalUserId
+                  )
+                    throw new Error(
+                      "同步结果属于不同的 X 账号，请通过新建入口关联新账号。",
+                    );
                   setProfile(result);
                   setHandle(result.handle);
                   setId(result.externalUserId);
                   setNickname(result.displayName);
-                  setReplaceConfirmed(false);
                   action.setSuccess("X 昵称和头像已同步，保存后生效");
                 })
               }
@@ -519,10 +522,10 @@ function AccountEditor({
                 label="X 稳定用户 ID"
                 hint="平台分配的身份 ID，与可修改的 @账号不同。通常由同步自动获取；只有已知该 ID 时才手动填写，不要填 @名称。"
                 value={externalUserId}
+                readOnly={Boolean(account)}
                 onChange={(event) => {
                   setId(event.target.value);
                   setProfile(null);
-                  setReplaceConfirmed(false);
                 }}
               />
             </OptionalSection>
@@ -536,9 +539,9 @@ function AccountEditor({
             pattern="[1-9][0-9]*"
             required
             value={externalUserId}
+            readOnly={Boolean(account)}
             onChange={(event) => {
               setId(event.target.value);
-              setReplaceConfirmed(false);
             }}
           />
         )}
@@ -591,17 +594,6 @@ function AccountEditor({
               )}
             </SelectField>
           </>
-        )}
-        {replacing && (
-          <label className="account-checkbox">
-            <input
-              type="checkbox"
-              required
-              checked={replaceConfirmed}
-              onChange={(event) => setReplaceConfirmed(event.target.checked)}
-            />
-            确认更换平台身份：旧关联及来源保留，新账号从新的抓取范围开始。
-          </label>
         )}
         <Feedback
           error={action.error || capabilityError?.message}

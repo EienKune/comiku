@@ -196,6 +196,63 @@ test("an existing profile-only Pixiv account can enable a supported collection w
   assert.equal(result.revision, 1);
 });
 
+test("a changed stable identity is rejected without changing the account or adapter state", async () => {
+  const service = fixture([adapter()], input);
+  await assert.rejects(
+    service.updateAccount("author", "account", {
+      ...input,
+      externalUserId: "654321",
+      displayNameSnapshot: "Another person",
+      expectedRevision: 2,
+    }),
+    ConflictException,
+  );
+  const result = await service.updateAccount("author", "account", {
+    ...input,
+    displayNameSnapshot: "Same person",
+    expectedRevision: 2,
+  });
+  assert.equal(result.id, "account");
+  assert.equal(result.externalUserId, "123456");
+  assert.equal(result.deletedAt, null);
+  assert.equal(result.displayNameSnapshot, "Same person");
+  assert.equal(result.revision, 3);
+  assert.equal(result.adapterStates[0].revision, 3);
+  assert.equal(result.adapterStates[0].enabled, true);
+});
+
+test("X profile errors distinguish unconfigured sources from unsupported profile capability", async () => {
+  const x = { ...adapter(), platform: "x", adapterKey: "x_gallery_dl" };
+  for (const clients of [[], [{ ...x, available: false }]]) {
+    await assert.rejects(
+      fixture(clients).resolveXProfile("actor", "artist"),
+      /尚未配置/,
+    );
+  }
+  for (const metered of [false, true])
+    await assert.rejects(
+      fixture([{ ...x, metered }]).resolveXProfile("actor", "artist"),
+      /采集适配器尚未支持资料同步/,
+    );
+});
+
+test("an available synthetic X profile capability still resolves profiles", async () => {
+  const client: ContentSourceClient = {
+    ...adapter(),
+    platform: "x",
+    adapterKey: "x_profile_fixture",
+    resolveProfileByHandle: async (handle) => ({
+      externalUserId: "777",
+      handle,
+      displayName: "Synthetic artist",
+    }),
+  };
+  const result = await fixture([client]).resolveXProfile("actor", "artist");
+  assert.equal(result.externalUserId, "777");
+  assert.equal(result.displayName, "Synthetic artist");
+  assert.equal(result.adapterKey, "x_profile_fixture");
+});
+
 test("missing and unavailable Pixiv adapters remain profile-only", async () => {
   for (const clients of [[], [adapter(false)]]) {
     const service = fixture(clients);

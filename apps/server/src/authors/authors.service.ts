@@ -576,10 +576,13 @@ export class AuthorsService {
     };
   }
 
-  private async validateProfileAvatar(id?: string | null) {
+  private async validateProfileAvatar(
+    id?: string | null,
+    tx?: Prisma.TransactionClient,
+  ) {
     if (!id) return;
     if (
-      !(await this.db.fileObject.findFirst({
+      !(await (tx ?? this.db).fileObject.findFirst({
         where: {
           id,
           kind: "source_profile_avatar",
@@ -680,7 +683,6 @@ export class AuthorsService {
     id: string,
     revision: number,
     actorId?: string,
-    action = "unbind",
   ) {
     const current = await tx.authorExternalAccount.findFirst({
       where: { id, authorId, deletedAt: null },
@@ -692,7 +694,7 @@ export class AuthorsService {
         deletedAt: new Date(),
         fetchEnabled: false,
         revision: { increment: 1 },
-        metadataJson: this.changeMetadata(current, action, actorId),
+        metadataJson: this.changeMetadata(current, "unbind", actorId),
       },
     });
     if (!result.count)
@@ -768,7 +770,6 @@ export class AuthorsService {
     input: UpdateExternalAccountDto,
     actorId?: string,
   ): Promise<ExternalAccountDto> {
-    await this.validateProfileAvatar(input.avatarFileObjectId);
     return this.withConflict(() =>
       this.db.$transaction(async (tx) => {
         const current = await tx.authorExternalAccount.findFirst({
@@ -777,6 +778,14 @@ export class AuthorsService {
         if (!current) throw new NotFoundException("平台账号不存在");
         if (current.revision !== input.expectedRevision)
           throw new ConflictException("平台账号已更新，请刷新后重试");
+        if (
+          input.externalUserId != null &&
+          input.externalUserId.trim() !== current.externalUserId
+        )
+          throw new ConflictException(
+            "平台用户 ID 不可修改；不同 ID 属于新账号，请通过新建入口关联。",
+          );
+        await this.validateProfileAvatar(input.avatarFileObjectId, tx);
         if (
           current.platform !== "pixiv" ||
           input.firstSyncMode !== current.firstSyncMode ||
@@ -790,35 +799,9 @@ export class AuthorsService {
         }
         const identity = this.identity(
           current.platform,
-          input.externalUserId ?? current.externalUserId,
+          current.externalUserId,
           input.handle === undefined ? current.handle : input.handle,
         );
-        if (identity.externalUserId !== current.externalUserId) {
-          if (current.platform === "x" && !input.handle?.trim())
-            throw new BadRequestException("更换 X 身份时请同时填写新 @账号");
-          await this.stopAccount(
-            tx,
-            authorId,
-            id,
-            input.expectedRevision,
-            actorId,
-            "replace",
-          );
-          const data = this.accountData(authorId, {
-            ...input,
-            platform: current.platform,
-            externalUserId: identity.externalUserId,
-          });
-          return this.account(
-            await tx.authorExternalAccount.create({
-              data: {
-                ...data,
-                metadataJson: { ...data.metadataJson, replacesAccountId: id },
-              },
-              include: accountDetails,
-            }),
-          );
-        }
         const result = await tx.authorExternalAccount.updateMany({
           where: {
             id,
@@ -1014,13 +997,15 @@ export class AuthorsService {
   ): Promise<ResolvedXProfileDto> {
     const handle = this.normalizeXHandle(inputHandle);
     const errors: string[] = [];
-    for (const client of this.sources.forPlatform("x")) {
-      if (!client.available) continue;
+    const available = this.sources
+      .forPlatform("x")
+      .filter((client) => client.available);
+    for (const client of available) {
+      if (!client.resolveProfileByHandle) continue;
       try {
         if (client.metered) {
           await this.sourceFetch.consumeMeteredBudget(client.adapterKey);
         }
-        if (!client.resolveProfileByHandle) continue;
         const profile = await client.resolveProfileByHandle(handle);
         const normalizedHandle = this.normalizeXHandle(
           profile.handle ?? handle,
@@ -1075,7 +1060,9 @@ export class AuthorsService {
     throw new BadRequestException(
       errors.length
         ? `无法同步 X 资料：${errors.at(-1)}`
-        : "X 资料同步通道尚未配置",
+        : available.length
+          ? "当前 X 采集适配器尚未支持资料同步"
+          : "X 资料同步通道尚未配置",
     );
   }
 

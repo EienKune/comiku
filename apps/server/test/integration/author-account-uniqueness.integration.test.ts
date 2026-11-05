@@ -135,7 +135,7 @@ test("the forward migration archives duplicate identities, keeps source referenc
   }
 });
 
-test("same-author X synchronization is allowed while identity replacement preserves history and resets source state", async () => {
+test("same-author X synchronization is allowed while identity changes preserve all stored state by rejecting the edit", async () => {
   const db = new PrismaService(
     parseEnvironment({ NODE_ENV: "test", DATABASE_URL: testUrl }),
   );
@@ -266,49 +266,51 @@ test("same-author X synchronization is allowed while identity replacement preser
       }),
       ConflictException,
     );
-    const replaced = await service.updateAccount(author.id, original.id, {
-      externalUserId: randomUUID(),
-      handle: "replacement",
-      fetchEnabled: true,
-      firstSyncMode: "last_24_hours",
+    const snapshot = async () => ({
+      account: await db.authorExternalAccount.findUniqueOrThrow({
+        where: { id: original.id },
+        include: { adapterStates: true },
+      }),
+      scan: await db.sourceAccountScanState.findUniqueOrThrow({
+        where: { accountId: original.id },
+      }),
+      candidate: await db.candidatePost.findUniqueOrThrow({
+        where: { id: candidate.id },
+      }),
+      accounts: await db.authorExternalAccount.count({
+        where: { authorId: author.id },
+      }),
+    });
+    const before = await snapshot();
+    await assert.rejects(
+      service.updateAccount(author.id, original.id, {
+        externalUserId: randomUUID(),
+        handle: "replacement",
+        displayNameSnapshot: "Another person",
+        fetchEnabled: true,
+        firstSyncMode: "last_24_hours",
+        expectedRevision: original.revision,
+      }),
+      ConflictException,
+    );
+    assert.deepEqual(await snapshot(), before);
+    const edited = await service.updateAccount(author.id, original.id, {
+      externalUserId: oldIdentity,
+      handle: "artist_renamed",
+      displayNameSnapshot: "Same artist",
+      fetchEnabled: false,
+      firstSyncMode: "none",
       expectedRevision: original.revision,
     });
-    assert.notEqual(replaced.id, original.id);
-    assert.equal(
-      (
-        await db.candidatePost.findUniqueOrThrow({
-          where: { id: candidate.id },
-        })
-      ).authorExternalAccountId,
-      original.id,
-    );
-    const old = await db.authorExternalAccount.findUniqueOrThrow({
-      where: { id: original.id },
-      include: { adapterStates: true },
-    });
-    assert.ok(old.deletedAt);
-    assert.equal(old.adapterStates[0].fetchLeaseId, null);
-    assert.equal(old.adapterStates[0].enabled, false);
-    const fresh = await db.sourceAdapterState.findFirstOrThrow({
-      where: { externalAccountId: replaced.id },
-    });
-    assert.deepEqual(fresh.cursorJson, {});
-    assert.equal(fresh.highWaterExternalId, null);
-    assert.equal(
-      await db.sourceAccountScanState.findUnique({
-        where: { accountId: replaced.id },
-      }),
-      null,
-    );
-    const oldScan = await db.sourceAccountScanState.findUniqueOrThrow({
-      where: { accountId: original.id },
-    });
-    assert.equal(
-      oldScan.discoveredThroughAt?.toISOString(),
-      coverage.toISOString(),
-    );
-    assert.deepEqual(oldScan.windowJson, unfinished);
-    assert.equal(oldScan.epoch, 9);
+    assert.equal(edited.id, original.id);
+    assert.equal(edited.externalUserId, oldIdentity);
+    assert.equal(edited.handle, "artist_renamed");
+    assert.equal(edited.displayNameSnapshot, "Same artist");
+    assert.equal(edited.fetchEnabled, false);
+    const after = await snapshot();
+    assert.deepEqual(after.account.adapterStates, before.account.adapterStates);
+    assert.deepEqual(after.scan, before.scan);
+    assert.deepEqual(after.candidate, before.candidate);
   } finally {
     if (candidateId)
       await db.candidatePost.delete({ where: { id: candidateId } });

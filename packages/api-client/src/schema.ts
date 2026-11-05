@@ -2452,7 +2452,7 @@ export interface components {
             firstSyncMode: components["schemas"]["FirstSyncMode"];
         };
         UpdateExternalAccountDto: {
-            /** @description 更换平台身份时归档旧关联并创建新关联，保留历史来源 */
+            /** @description 稳定平台用户 ID 不可修改；兼容旧客户端传入相同 ID，不同 ID 返回 409。新账号使用新建入口关联。 */
             externalUserId?: string;
             /** Format: uuid */
             avatarFileObjectId?: string | null;

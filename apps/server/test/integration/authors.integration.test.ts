@@ -349,7 +349,7 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       ).status,
       403,
     );
-    const replacement = await request<{ id: string; revision: number }>(
+    const rejectedIdentity = await request(
       source,
       "PATCH",
       `/api/authors/${authorId}/accounts/${pixiv.data.id}`,
@@ -361,8 +361,58 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
         expectedRevision: pixiv.data.revision,
       },
     );
-    assert.equal(replacement.status, 200);
-    assert.notEqual(replacement.data.id, pixiv.data.id);
+    assert.equal(rejectedIdentity.status, 409);
+    const unchangedAccounts = await request<
+      {
+        id: string;
+        externalUserId: string;
+        revision: number;
+        displayNameSnapshot: string | null;
+      }[]
+    >(source, "GET", `/api/authors/${authorId}/accounts`);
+    const unchangedPixiv = unchangedAccounts.data.find(
+      (item) => item.id === pixiv.data.id,
+    );
+    assert.equal(unchangedPixiv?.externalUserId, pixivId);
+    assert.equal(unchangedPixiv?.revision, pixiv.data.revision);
+    assert.notEqual(unchangedPixiv?.displayNameSnapshot, "新昵称");
+    const editedAccount = await request<{ id: string; revision: number }>(
+      source,
+      "PATCH",
+      `/api/authors/${authorId}/accounts/${pixiv.data.id}`,
+      {
+        externalUserId: pixivId,
+        displayNameSnapshot: "新昵称",
+        fetchEnabled: false,
+        firstSyncMode: "none",
+        expectedRevision: pixiv.data.revision,
+      },
+    );
+    assert.equal(editedAccount.status, 200);
+    assert.equal(editedAccount.data.id, pixiv.data.id);
+    assert.equal(
+      (
+        await request<unknown[]>(
+          source,
+          "GET",
+          `/api/authors/${authorId}/accounts/archived`,
+        )
+      ).data.length,
+      0,
+    );
+    assert.equal(
+      (
+        await request(
+          source,
+          "DELETE",
+          `/api/authors/${authorId}/accounts/${pixiv.data.id}`,
+          {
+            expectedRevision: editedAccount.data.revision,
+          },
+        )
+      ).status,
+      200,
+    );
     const archivedAccounts = await request<{ id: string; revision: number }[]>(
       source,
       "GET",
@@ -371,28 +421,6 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
     assert.equal(archivedAccounts.data.length, 1);
     const oldAccount = archivedAccounts.data[0];
     assert.equal(oldAccount.id, pixiv.data.id);
-    assert.equal(
-      (
-        await request(
-          source,
-          "POST",
-          `/api/authors/${authorId}/accounts/${oldAccount.id}/restore`,
-          { expectedRevision: oldAccount.revision },
-        )
-      ).status,
-      409,
-    );
-    assert.equal(
-      (
-        await request(
-          source,
-          "DELETE",
-          `/api/authors/${authorId}/accounts/${replacement.data.id}`,
-          { expectedRevision: replacement.data.revision },
-        )
-      ).status,
-      200,
-    );
     const restoredAccount = await request<{ fetchEnabled: boolean }>(
       source,
       "POST",
@@ -415,7 +443,7 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
           },
         )
       ).status,
-      400,
+      409,
     );
 
     const raceAuthor = await request<{ id: string }>(
