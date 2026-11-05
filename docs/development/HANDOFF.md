@@ -2,6 +2,12 @@
 
 This tracked document records reusable implementation constraints. Business rules live in [architecture](../architecture.md), configuration in [configuration](../configuration.md), and visual rules in [DESIGN](../../DESIGN.md). Keep machine addresses, credentials, real samples, local experiments and deployment session notes outside the public repository.
 
+## Author attachments
+
+- Selecting images is local form state. Once an author creation response has succeeded, preserve its ID and completed binding steps when a later attachment fails; do not restart author creation for an upload retry. This form-local recovery does not prove idempotency when the initial creation response is lost or the page is reopened.
+- Keep a known direct-upload session until its server state is inspected. A lost finalize response can leave a locally pending session completed remotely; local expiry must not unlock file replacement. Recreate only a confirmed failed/expired session or a server-confirmed pending session past expiry. Attachment adoption and session completion share a transaction, so completed sessions must not be uploaded again.
+- Author metadata and authorization attachments share the author's revision. Preserve upload recovery across query refreshes; synchronize a clean form with newer data, but keep dirty edits on their original baseline until the user explicitly loads the latest metadata. A successful metadata save followed by an attachment failure must not PATCH the same metadata again on retry.
+
 ## Source ingestion
 
 - A stable platform user ID is immutable on account edits. Reject a changed ID before any account, adapter or history writes; compatibility inputs with the same ID still allow nickname/handle edits and pause. Unbinding/restoring is a separate lifecycle operation and must keep the original source identity. Profile synchronization must not overwrite an edited account's read-only ID when a result belongs to another account.

@@ -17,6 +17,8 @@ import { refreshReviewViews } from "./review-cache";
 import { useCandidateAnalysisRefresh } from "./use-candidate-analysis-refresh";
 import { SourceSyncControl } from "./SourceSyncControl";
 import { MemberAvatar } from "../account/MemberAvatar";
+import { ImagePicker } from "../../components/ImagePicker";
+import { AuthorImageUpload } from "./author-image-upload";
 import {
   useCallback,
   useDeferredValue,
@@ -1038,6 +1040,15 @@ function AuthorCreateDialog({
   const [avatar, setAvatar] = useState<File | null>(null);
   const [evidence, setEvidence] = useState<File[]>([]);
   const [preview, setPreview] = useState<AuthorImportPreview | null>(null);
+  const [savedAuthorId, setSavedAuthorId] = useState<string | null>(null);
+  const [accountsSaved, setAccountsSaved] = useState(false);
+  const progress = useRef({
+    authorId: null as string | null,
+    accounts: new Set<string>(),
+    avatar: new AuthorImageUpload(),
+    evidence: new AuthorImageUpload(),
+  });
+  const fieldsDisabled = action.busy || Boolean(savedAuthorId);
   useEffect(() => {
     const dialog = ref.current;
     dialog?.showModal();
@@ -1099,94 +1110,152 @@ function AuthorCreateDialog({
     });
   }
 
+  async function close() {
+    if (action.busy) return;
+    if (progress.current.authorId) {
+      await onCompleted(
+        accountsSaved
+          ? "作者已保存；附件可在作者详情中补传或核对结果"
+          : "作者已保存；账号绑定未完成，请在作者详情中继续维护",
+      );
+    } else onClose();
+  }
+
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await action.run(async () => {
-      if (xHandle.trim() && !xProfile) {
-        throw new Error("请先同步 X 资料，或清空 X @账号后再创建作者");
-      }
-      if (pixivUserId.trim() && !/^[1-9][0-9]*$/.test(pixivUserId.trim()))
-        throw new Error("Pixiv 用户 ID 必须是主页 /users/ 后的数字");
-      let author = await unwrap(
-        await client.POST("/api/authors", {
-          body: {
-            displayName,
-            sourceLanguage,
-            authorizationStatus: status,
-            tagNames: tags
-              .split(/[,，]/)
-              .map((value) => value.trim())
-              .filter(Boolean),
-          },
-        }),
-      );
-      if (xProfile) {
-        await unwrap(
-          await client.POST("/api/authors/{authorId}/accounts", {
-            params: { path: { authorId: author.id } },
-            body: {
-              platform: "x",
-              externalUserId: xProfile.externalUserId,
-              handle: xProfile.handle,
-              profileUrl: xProfile.profileUrl,
-              displayNameSnapshot: xProfile.displayName,
-              avatarFileObjectId: xProfile.avatarFileObjectId,
-              profileSyncAdapter: xProfile.adapterKey,
-              profileSyncedAt: xProfile.syncedAt,
-              fetchEnabled: true,
-              firstSyncMode: "last_24_hours",
+      let step = "基础信息";
+      try {
+        if (!progress.current.authorId) {
+          if (xHandle.trim() && !xProfile) {
+            throw new Error("请先同步 X 资料，或清空 X @账号后再创建作者");
+          }
+          if (pixivUserId.trim() && !/^[1-9][0-9]*$/.test(pixivUserId.trim()))
+            throw new Error("Pixiv 用户 ID 必须是主页 /users/ 后的数字");
+          const author = await unwrap(
+            await client.POST("/api/authors", {
+              body: {
+                displayName,
+                sourceLanguage,
+                authorizationStatus: status,
+                tagNames: tags
+                  .split(/[,，]/)
+                  .map((value) => value.trim())
+                  .filter(Boolean),
+              },
+            }),
+          );
+          progress.current.authorId = author.id;
+          setSavedAuthorId(author.id);
+        }
+        const id = progress.current.authorId;
+        const readAuthor = async () =>
+          unwrap(
+            await client.GET("/api/authors/{id}", {
+              params: { path: { id } },
+            }),
+          );
+        // A successful response records the step immediately. A retry also reads
+        // existing identities so a lost binding response cannot hide a saved account.
+        step = "读取作者信息";
+        const existing = await readAuthor();
+        const hasAccount = (platform: "x" | "pixiv", externalUserId: string) =>
+          progress.current.accounts.has(platform) ||
+          existing.externalAccounts?.some(
+            (account) =>
+              account.platform === platform &&
+              account.externalUserId === externalUserId,
+          );
+        if (xProfile && !hasAccount("x", xProfile.externalUserId)) {
+          step = "X 账号绑定";
+          await unwrap(
+            await client.POST("/api/authors/{authorId}/accounts", {
+              params: { path: { authorId: id } },
+              body: {
+                platform: "x",
+                externalUserId: xProfile.externalUserId,
+                handle: xProfile.handle,
+                profileUrl: xProfile.profileUrl,
+                displayNameSnapshot: xProfile.displayName,
+                avatarFileObjectId: xProfile.avatarFileObjectId,
+                profileSyncAdapter: xProfile.adapterKey,
+                profileSyncedAt: xProfile.syncedAt,
+                fetchEnabled: true,
+                firstSyncMode: "last_24_hours",
+              },
+            }),
+          );
+          progress.current.accounts.add("x");
+        }
+        if (pixivUserId.trim() && !hasAccount("pixiv", pixivUserId.trim())) {
+          step = "Pixiv 账号绑定";
+          await unwrap(
+            await client.POST("/api/authors/{authorId}/accounts", {
+              params: { path: { authorId: id } },
+              body: {
+                platform: "pixiv",
+                externalUserId: pixivUserId.trim(),
+                fetchEnabled: false,
+                firstSyncMode: "none",
+              },
+            }),
+          );
+          progress.current.accounts.add("pixiv");
+        }
+        setAccountsSaved(true);
+        if (avatar) {
+          step = "头像上传";
+          const author = await readAuthor();
+          await progress.current.avatar.upload(
+            {
+              purpose: "author_avatar",
+              resourceId: id,
+              expectedRevision: author.revision,
             },
-          }),
-        );
-      }
-      if (pixivUserId.trim()) {
-        await unwrap(
-          await client.POST("/api/authors/{authorId}/accounts", {
-            params: { path: { authorId: author.id } },
-            body: {
-              platform: "pixiv",
-              externalUserId: pixivUserId.trim(),
-              fetchEnabled: false,
-              firstSyncMode: "none",
+            [avatar],
+          );
+          setAvatar(null);
+        }
+        if (evidence.length) {
+          step = "授权凭证上传";
+          const author = await readAuthor();
+          await progress.current.evidence.upload(
+            {
+              purpose: "author_evidence",
+              resourceId: id,
+              expectedRevision: author.revision,
             },
-          }),
+            evidence,
+          );
+          setEvidence([]);
+        }
+        step = "刷新作者目录";
+        await onCompleted(
+          status === "authorized" && !evidence.length
+            ? "作者已创建；建议随后补充授权凭证"
+            : "作者已创建",
+        );
+      } catch (error) {
+        if (!progress.current.authorId) throw error;
+        const message =
+          error instanceof Error ? error.message : "请求失败，请稍后重试";
+        throw new Error(
+          `作者已保存；${step}未完成：${message}。${/版本|更新|基线|变化|冲突/.test(message) ? "请先核对作者详情，再继续保存。" : "请继续保存，已完成步骤不会重复。"}`,
+          { cause: error },
         );
       }
-      if (avatar) {
-        await uploadDirect(
-          {
-            purpose: "author_avatar",
-            resourceId: author.id,
-            expectedRevision: author.revision,
-          },
-          [avatar],
-        );
-        const refreshed = await unwrap(
-          await client.GET("/api/authors/{id}", {
-            params: { path: { id: author.id } },
-          }),
-        );
-        author = { ...author, revision: refreshed.revision };
-      }
-      if (evidence.length)
-        await uploadDirect(
-          {
-            purpose: "author_evidence",
-            resourceId: author.id,
-            expectedRevision: author.revision,
-          },
-          evidence,
-        );
-      await onCompleted(
-        status === "authorized" && !evidence.length
-          ? "作者已创建；建议随后补充授权凭证"
-          : "作者已创建",
-      );
     });
   }
 
   return (
-    <dialog ref={ref} className="workspace-business-dialog" onCancel={onClose}>
+    <dialog
+      ref={ref}
+      className="workspace-business-dialog"
+      onCancel={(event) => {
+        event.preventDefault();
+        void close();
+      }}
+    >
       <header>
         <div>
           <span>作者目录</span>
@@ -1196,7 +1265,8 @@ function AuthorCreateDialog({
           variant="ghost"
           size="sm"
           leadingIcon={<X size={16} />}
-          onClick={onClose}
+          disabled={action.busy}
+          onClick={() => void close()}
         >
           关闭
         </Button>
@@ -1206,6 +1276,7 @@ function AuthorCreateDialog({
           variant="secondary"
           size="sm"
           leadingIcon={<Download size={15} />}
+          disabled={fieldsDisabled}
           onClick={() => void downloadTemplate()}
         >
           获取批量导入模板
@@ -1216,6 +1287,7 @@ function AuthorCreateDialog({
           <input
             className="sr-only"
             type="file"
+            disabled={fieldsDisabled}
             accept=".csv,text/csv"
             onChange={(event) => void previewCsv(event.target.files?.[0])}
           />
@@ -1271,6 +1343,7 @@ function AuthorCreateDialog({
           <div className="account-form-row">
             <TextField
               label="X @账号"
+              disabled={fieldsDisabled}
               value={xHandle}
               onChange={(event) => {
                 setXHandle(event.target.value);
@@ -1281,7 +1354,7 @@ function AuthorCreateDialog({
               type="button"
               variant="secondary"
               loading={action.busy}
-              disabled={!xHandle.trim()}
+              disabled={fieldsDisabled || !xHandle.trim()}
               onClick={() => void syncProfile()}
             >
               同步昵称和头像
@@ -1297,12 +1370,14 @@ function AuthorCreateDialog({
           <TextField
             required
             label="作者昵称"
+            disabled={fieldsDisabled}
             value={displayName}
             onChange={(event) => setDisplayName(event.target.value)}
           />
           <div className="account-form-row">
             <SelectField
               label="作者母语"
+              disabled={fieldsDisabled}
               value={sourceLanguage}
               onValueChange={(value) =>
                 setSourceLanguage(value as SourceLanguage)
@@ -1314,6 +1389,7 @@ function AuthorCreateDialog({
             </SelectField>
             <SelectField
               label="授权状态"
+              disabled={fieldsDisabled}
               value={status}
               onValueChange={(value) => setStatus(value as typeof status)}
             >
@@ -1325,36 +1401,44 @@ function AuthorCreateDialog({
           </div>
           <TextField
             label="标签"
+            disabled={fieldsDisabled}
             hint="使用逗号分隔"
             value={tags}
             onChange={(event) => setTags(event.target.value)}
           />
-          <fieldset className="workspace-file-fields">
-            <legend>作者头像与授权凭证</legend>
-            <label>
-              手动头像
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                onChange={(event) => setAvatar(event.target.files?.[0] ?? null)}
-              />
-            </label>
-            <label>
-              授权凭证（可多张）
-              <input
-                type="file"
-                multiple
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                onChange={(event) =>
-                  setEvidence(Array.from(event.target.files ?? []))
-                }
-              />
-            </label>
-          </fieldset>
+          {savedAuthorId && (
+            <p className="account-success" role="status">
+              作者已保存。
+              {accountsSaved
+                ? "账号已保存；头像和授权凭证可稍后在详情中补传。"
+                : "账号绑定尚未完成；基础信息已锁定。"}
+            </p>
+          )}
+          <ImagePicker
+            label="手动头像"
+            files={avatar ? [avatar] : []}
+            onChange={(files) => {
+              setAvatar(files[0] ?? null);
+              progress.current.avatar = new AuthorImageUpload();
+            }}
+            maxFileSize={5 * 1024 * 1024}
+            disabled={action.busy || progress.current.avatar.locked}
+          />
+          <ImagePicker
+            label="授权凭证（可多张）"
+            multiple
+            files={evidence}
+            onChange={(files) => {
+              setEvidence(files);
+              progress.current.evidence = new AuthorImageUpload();
+            }}
+            disabled={action.busy || progress.current.evidence.locked}
+          />
           <fieldset className="workspace-file-fields">
             <legend>Pixiv 信息账号（可选，不抓取）</legend>
             <TextField
               label="Pixiv 用户 ID"
+              disabled={fieldsDisabled}
               hint="主页 /users/123456 中的数字；不是登录账号名。不需要单独填写主页。"
               inputMode="numeric"
               pattern="[1-9][0-9]*"
@@ -1363,9 +1447,23 @@ function AuthorCreateDialog({
             />
           </fieldset>
           <Feedback error={action.error} success={action.success} />
-          <Button type="submit" loading={action.busy}>
-            保存作者
-          </Button>
+          <div className="workspace-dialog-actions">
+            <Button type="submit" loading={action.busy}>
+              {savedAuthorId ? "继续保存" : "保存作者"}
+            </Button>
+            {accountsSaved &&
+              !progress.current.avatar.locked &&
+              !progress.current.evidence.locked && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={action.busy}
+                  onClick={() => void close()}
+                >
+                  稍后补传
+                </Button>
+              )}
+          </div>
         </form>
       )}
     </dialog>
@@ -1421,7 +1519,7 @@ export function AuthorDetailPage() {
                   </div>
                 </dl>
                 {user.permissions.includes("authors:manage") && (
-                  <AuthorEditForm key={author.revision} author={author} />
+                  <AuthorEditForm key={author.id} author={author} />
                 )}
               </Surface>
               <AuthorAccountsPanel
@@ -1454,38 +1552,112 @@ function AuthorEditForm({ author }: { author: Author }) {
     author.tags.map((tag) => tag.name).join("，"),
   );
   const [avatar, setAvatar] = useState<File | null>(null);
+  const saved = useRef(false);
+  const [baselineRevision, setBaselineRevision] = useState(author.revision);
+  const [detailsSaved, setDetailsSaved] = useState(false);
+  const [metadataDirty, setMetadataDirty] = useState(false);
+  const upload = useRef(new AuthorImageUpload());
+  const fieldsDisabled = action.busy || detailsSaved;
+  const loadSnapshot = useCallback((snapshot: Author) => {
+    setBaselineRevision(snapshot.revision);
+    setDisplayName(snapshot.displayName);
+    setStatus(snapshot.authorizationStatus);
+    setSourceLanguage(snapshot.sourceLanguage);
+    setTags(snapshot.tags.map((tag) => tag.name).join("，"));
+    setMetadataDirty(false);
+  }, []);
+  useEffect(() => {
+    if (
+      !metadataDirty &&
+      !action.busy &&
+      !detailsSaved &&
+      author.revision > baselineRevision
+    )
+      loadSnapshot(author);
+  }, [
+    author,
+    baselineRevision,
+    metadataDirty,
+    action.busy,
+    detailsSaved,
+    loadSnapshot,
+  ]);
+  async function loadLatest() {
+    await action.run(async () => {
+      const latest = await unwrap(
+        await client.GET("/api/authors/{id}", {
+          params: { path: { id: author.id } },
+        }),
+      );
+      loadSnapshot(latest);
+      queryClient.setQueryData(["author", author.id], latest);
+      action.setSuccess("已加载最新资料，可继续编辑");
+    });
+  }
   async function save(event: FormEvent) {
     event.preventDefault();
     await action.run(async () => {
-      const saved = await unwrap(
-        await client.PATCH("/api/authors/{id}", {
-          params: { path: { id: author.id } },
-          body: {
-            displayName,
-            sourceLanguage,
-            authorizationStatus: status,
-            tagNames: tags
-              .split(/[,，]/)
-              .map((item) => item.trim())
-              .filter(Boolean),
-            expectedRevision: author.revision,
-          },
-        }),
-      );
-      if (avatar) {
-        await uploadDirect(
-          {
-            purpose: "author_avatar",
-            resourceId: author.id,
-            expectedRevision: saved.revision,
-          },
-          [avatar],
+      let step = "资料保存";
+      try {
+        if (!saved.current) {
+          await unwrap(
+            await client.PATCH("/api/authors/{id}", {
+              params: { path: { id: author.id } },
+              body: {
+                displayName,
+                sourceLanguage,
+                authorizationStatus: status,
+                tagNames: tags
+                  .split(/[,，]/)
+                  .map((item) => item.trim())
+                  .filter(Boolean),
+                expectedRevision: baselineRevision,
+              },
+            }),
+          );
+          saved.current = true;
+          setDetailsSaved(true);
+        }
+        if (avatar) {
+          step = "头像上传";
+          const current = await unwrap(
+            await client.GET("/api/authors/{id}", {
+              params: { path: { id: author.id } },
+            }),
+          );
+          await upload.current.upload(
+            {
+              purpose: "author_avatar",
+              resourceId: author.id,
+              expectedRevision: current.revision,
+            },
+            [avatar],
+          );
+          setAvatar(null);
+          queryClient.removeQueries({ queryKey: ["author-avatar", author.id] });
+        }
+        step = "读取保存结果";
+        const refreshed = await unwrap(
+          await client.GET("/api/authors/{id}", {
+            params: { path: { id: author.id } },
+          }),
         );
-        queryClient.removeQueries({ queryKey: ["author-avatar", author.id] });
+        loadSnapshot(refreshed);
+        await queryClient.invalidateQueries({
+          queryKey: ["author", author.id],
+        });
+        await queryClient.invalidateQueries({ queryKey: ["authors"] });
+        saved.current = false;
+        setDetailsSaved(false);
+        action.setSuccess("作者信息已保存");
+      } catch (error) {
+        if (!saved.current) throw error;
+        const message = error instanceof Error ? error.message : "请求失败";
+        throw new Error(
+          `作者信息已保存；${step}未完成：${message}。${/版本|更新|基线|变化|冲突/.test(message) ? "请先核对作者详情，再继续操作。" : "请继续操作，已完成步骤不会重复。"}`,
+          { cause: error },
+        );
       }
-      await queryClient.invalidateQueries({ queryKey: ["author", author.id] });
-      await queryClient.invalidateQueries({ queryKey: ["authors"] });
-      action.setSuccess("作者信息已保存");
     });
   }
   return (
@@ -1497,13 +1669,21 @@ function AuthorEditForm({ author }: { author: Author }) {
       <TextField
         required
         label="作者昵称"
+        disabled={fieldsDisabled}
         value={displayName}
-        onChange={(event) => setDisplayName(event.target.value)}
+        onChange={(event) => {
+          setMetadataDirty(true);
+          setDisplayName(event.target.value);
+        }}
       />
       <SelectField
         label="作者母语"
+        disabled={fieldsDisabled}
         value={sourceLanguage}
-        onValueChange={(value) => setSourceLanguage(value as SourceLanguage)}
+        onValueChange={(value) => {
+          setMetadataDirty(true);
+          setSourceLanguage(value as SourceLanguage);
+        }}
       >
         <option value="ja">日语</option>
         <option value="ko">韩语</option>
@@ -1511,8 +1691,12 @@ function AuthorEditForm({ author }: { author: Author }) {
       </SelectField>
       <SelectField
         label="授权状态"
+        disabled={fieldsDisabled}
         value={status}
-        onValueChange={(value) => setStatus(value as typeof status)}
+        onValueChange={(value) => {
+          setMetadataDirty(true);
+          setStatus(value as typeof status);
+        }}
       >
         <option value="pending">待确认</option>
         <option value="authorized">已授权</option>
@@ -1521,20 +1705,52 @@ function AuthorEditForm({ author }: { author: Author }) {
       </SelectField>
       <TextField
         label="标签"
+        disabled={fieldsDisabled}
         value={tags}
-        onChange={(event) => setTags(event.target.value)}
+        onChange={(event) => {
+          setMetadataDirty(true);
+          setTags(event.target.value);
+        }}
       />
-      <label>
-        手动头像（可选）
-        <input
-          type="file"
-          accept="image/png,image/jpeg,image/webp,image/gif"
-          onChange={(event) => setAvatar(event.target.files?.[0] ?? null)}
-        />
-      </label>
+      <ImagePicker
+        label="手动头像（可选）"
+        files={avatar ? [avatar] : []}
+        onChange={(files) => {
+          setAvatar(files[0] ?? null);
+          upload.current = new AuthorImageUpload();
+        }}
+        maxFileSize={5 * 1024 * 1024}
+        disabled={action.busy || upload.current.locked}
+      />
+      {detailsSaved && (
+        <p className="account-success" role="status">
+          基础信息已保存。
+          {avatar
+            ? "可继续上传头像；未完成的上传会话将沿用原选择。"
+            : "请继续读取保存结果。"}
+        </p>
+      )}
+      {!detailsSaved &&
+        metadataDirty &&
+        (author.revision !== baselineRevision || Boolean(action.error)) && (
+          <div className="workspace-stacked-form">
+            <p className="workspace-muted">
+              加载最新资料会替换当前未保存的基础信息。
+            </p>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={action.busy}
+              onClick={() => void loadLatest()}
+            >
+              加载最新资料
+            </Button>
+          </div>
+        )}
       <Feedback error={action.error} success={action.success} />
       <Button size="sm" type="submit" loading={action.busy}>
-        保存作者
+        {detailsSaved ? (avatar ? "继续上传头像" : "确认保存结果") : "保存作者"}
       </Button>
     </form>
   );
@@ -1551,20 +1767,27 @@ function AuthorEvidencePanel({
 }) {
   const action = useAction();
   const [files, setFiles] = useState<File[]>([]);
+  const uploadProgress = useRef(new AuthorImageUpload());
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!files.length) return;
     const form = event.currentTarget;
     await action.run(async () => {
-      await uploadDirect(
+      const current = await unwrap(
+        await client.GET("/api/authors/{id}", {
+          params: { path: { id: author.id } },
+        }),
+      );
+      await uploadProgress.current.upload(
         {
           purpose: "author_evidence",
           resourceId: author.id,
-          expectedRevision: author.revision,
+          expectedRevision: current.revision,
         },
         files,
       );
       setFiles([]);
+      uploadProgress.current = new AuthorImageUpload();
       form.reset();
       await onUpdated();
       action.setSuccess("授权凭证已上传");
@@ -1608,7 +1831,7 @@ function AuthorEvidencePanel({
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={index === 0}
+                      disabled={action.busy || index === 0}
                       onClick={() => void move(index, -1)}
                     >
                       <ArrowUp size={14} />
@@ -1617,7 +1840,7 @@ function AuthorEvidencePanel({
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={index === items.length - 1}
+                      disabled={action.busy || index === items.length - 1}
                       onClick={() => void move(index, 1)}
                     >
                       <ArrowDown size={14} />
@@ -1626,6 +1849,7 @@ function AuthorEvidencePanel({
                     <Button
                       size="sm"
                       variant="danger"
+                      disabled={action.busy}
                       onClick={() =>
                         void action.run(async () => {
                           await unwrap(
@@ -1660,20 +1884,23 @@ function AuthorEvidencePanel({
           className="workspace-stacked-form"
           onSubmit={(event) => void upload(event)}
         >
-          <label>
-            添加凭证图片
-            <input
-              required
-              multiple
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif"
-              onChange={(event) =>
-                setFiles(Array.from(event.target.files ?? []))
-              }
-            />
-          </label>
+          <ImagePicker
+            label="添加凭证图片"
+            multiple
+            files={files}
+            onChange={(next) => {
+              setFiles(next);
+              uploadProgress.current = new AuthorImageUpload();
+            }}
+            disabled={action.busy || uploadProgress.current.locked}
+          />
           <Feedback error={action.error} success={action.success} />
-          <Button type="submit" size="sm" loading={action.busy}>
+          <Button
+            type="submit"
+            size="sm"
+            disabled={!files.length}
+            loading={action.busy}
+          >
             上传凭证
           </Button>
         </form>

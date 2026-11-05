@@ -1,4 +1,5 @@
 import { Avatar } from "../components/Avatar";
+import { ImagePicker } from "../components/ImagePicker";
 import { useEffect, useRef, useState } from "react";
 import { OptionalSection } from "../components/OptionalSection";
 import { PlatformLinks } from "../components/PlatformLinks";
@@ -71,6 +72,84 @@ const colorTokens = [
   { name: "Amber", value: "#F6BA4C", className: "amber" },
   { name: "Danger", value: "#F26B83", className: "danger" },
 ];
+
+function ImagePickerDemo() {
+  const [avatar, setAvatar] = useState<File[]>([]);
+  const [evidence, setEvidence] = useState<File[]>([]);
+  const [disabled, setDisabled] = useState(false);
+  function showSamples() {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 96;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.fillStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue("--color-brand")
+      .trim();
+    context.fillRect(0, 0, 96, 96);
+    context.fillStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue("--color-on-brand")
+      .trim();
+    context.font = "48px sans-serif";
+    context.textAlign = "center";
+    context.fillText("A", 48, 66);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      setAvatar([new File([blob], "示例头像.png", { type: "image/png" })]);
+      setEvidence(
+        [1, 2].map(
+          (index) =>
+            new File(
+              [blob],
+              `授权凭证-用于检查窄屏长文件名和移除操作-${index}.png`,
+              { type: "image/png" },
+            ),
+        ),
+      );
+    }, "image/png");
+  }
+  return (
+    <Surface
+      className="component-panel component-panel--wide"
+      id="image-picker-demo"
+    >
+      <h3>作者图片选择</h3>
+      <div className="button-showcase">
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={disabled}
+          onClick={showSamples}
+        >
+          显示合成示例
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-pressed={disabled}
+          onClick={() => setDisabled((value) => !value)}
+        >
+          {disabled ? "启用选择" : "禁用选择"}
+        </Button>
+      </div>
+      <div className="field-grid">
+        <ImagePicker
+          label="示例头像"
+          files={avatar}
+          onChange={setAvatar}
+          maxFileSize={5 * 1024 * 1024}
+          disabled={disabled}
+        />
+        <ImagePicker
+          label="示例授权凭证"
+          files={evidence}
+          onChange={setEvidence}
+          multiple
+          disabled={disabled}
+        />
+      </div>
+    </Surface>
+  );
+}
 
 function PlaygroundSection({
   id,
@@ -476,6 +555,7 @@ export function DesignSystemPlayground() {
             description="组件保留足够圆润度与呼吸感，但尺寸和状态遵循工作型应用的效率要求。"
           >
             <div className="component-grid">
+              <ImagePickerDemo />
               <Surface className="component-panel component-panel--wide">
                 <div className="panel-heading">
                   <div>
