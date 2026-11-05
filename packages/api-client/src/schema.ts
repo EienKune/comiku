@@ -674,6 +674,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/authors/creation-requests/{idempotencyKey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAuthorCreationResult"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/authors/{id}": {
         parameters: {
             query?: never;
@@ -2391,12 +2407,18 @@ export interface components {
         ResolveXProfileDto: {
             /**
              * Format: uuid
+             * @description 刷新已绑定账号时优先按该账号不可变数字 ID 查询
+             */
+            accountId?: string;
+            /**
+             * Format: uuid
              * @description 编辑当前作者时允许同步其已绑定 X 账号
              */
             authorId?: string;
             handle: string;
         };
         ResolvedXProfileDto: {
+            profileProof: string;
             externalUserId: string;
             handle: string;
             displayName: string;
@@ -2408,11 +2430,36 @@ export interface components {
             /** Format: date-time */
             syncedAt: string;
         };
+        CreateAuthorAccountDto: {
+            /** @description X 资料解析返回的短时身份凭证 */
+            profileProof?: string;
+            platform: string;
+            externalUserId: string;
+            handle?: string | null;
+            profileUrl?: string | null;
+            displayNameSnapshot?: string | null;
+            /** Format: uuid */
+            avatarFileObjectId?: string | null;
+            profileSyncAdapter?: string | null;
+            /** Format: date-time */
+            profileSyncedAt?: string | null;
+            fetchEnabled: boolean;
+            firstSyncMode: components["schemas"]["FirstSyncMode"];
+        };
         CreateAuthorDto: {
             displayName: string;
             sourceLanguage: components["schemas"]["SourceLanguage"];
             authorizationStatus: components["schemas"]["AuthorizationStatus"];
             tagNames: string[];
+            /**
+             * Format: uuid
+             * @description 同一保存意图重试时保留；不同资料复用将返回409。
+             */
+            idempotencyKey?: string;
+            accounts?: components["schemas"]["CreateAuthorAccountDto"][];
+        };
+        AuthorCreationResultDto: {
+            author: components["schemas"]["ManagedAuthorDto"] | null;
         };
         AuthorEvidenceDto: {
             /** Format: uuid */
@@ -2438,6 +2485,8 @@ export interface components {
             expectedRevision: number;
         };
         CreateExternalAccountDto: {
+            /** @description X 资料解析返回的短时身份凭证 */
+            profileProof?: string;
             platform: string;
             externalUserId: string;
             handle?: string | null;
@@ -2452,6 +2501,8 @@ export interface components {
             firstSyncMode: components["schemas"]["FirstSyncMode"];
         };
         UpdateExternalAccountDto: {
+            /** @description X 身份变更或重新启用采集时的短时身份凭证 */
+            profileProof?: string;
             /** @description 稳定平台用户 ID 不可修改；兼容旧客户端传入相同 ID，不同 ID 返回 409。新账号使用新建入口关联。 */
             externalUserId?: string;
             /** Format: uuid */
@@ -7508,6 +7559,90 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResolvedXProfileDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    getAuthorCreationResult: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                idempotencyKey: unknown;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthorCreationResultDto"];
                 };
             };
             /** @description 请求字段无效 */

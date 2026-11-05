@@ -11,6 +11,7 @@ import { PrismaService } from "../../src/database/prisma.service.js";
 import { AuthorsService } from "../../src/authors/authors.service.js";
 import { ContentSourceRegistry } from "../../src/source-ingestion/source-registry.js";
 import { hashPassword } from "../../src/users/password.js";
+import { XProfileProofs } from "../../src/authors/x-profile-proof.js";
 
 loadRootEnvironment();
 const testUrl = process.env.TEST_DATABASE_URL;
@@ -190,13 +191,36 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       200,
     );
 
+    const xIdentity = BigInt(
+      `0x${randomUUID().replaceAll("-", "").slice(0, 15)}`,
+    ).toString();
+    const profileProofs = new XProfileProofs();
+    // Substitute server-issued evidence in this HTTP lifecycle fixture. Real
+    // native resolution and proof trust boundaries have their own synthetic tests.
+    const profileProof = (
+      targetAuthorId: string,
+      externalUserId: string,
+      handle: string,
+    ) =>
+      profileProofs.issue(
+        {
+          externalUserId,
+          handle,
+          avatarFileObjectId: null,
+          adapterKey: "x_gallery_dl",
+          syncedAt: new Date().toISOString(),
+        },
+        source.userId!,
+        targetAuthorId,
+      );
     const account = await request<{
       id: string;
       revision: number;
       providerAvailable: boolean;
     }>(source, "POST", `/api/authors/${authorId}/accounts`, {
       platform: "X",
-      externalUserId: `fixture-${prefix}`,
+      externalUserId: xIdentity,
+      profileProof: profileProof(authorId, xIdentity, "fixture"),
       handle: "fixture",
       profileUrl: "https://x.com/fixture",
       displayNameSnapshot: "Fixture",
@@ -234,13 +258,14 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       )
     ).data.externalAccounts[0];
     assert.equal("fetchEnabled" in publicAccount, false);
-    assert.equal(publicAccount.externalUserId, `fixture-${prefix}`);
+    assert.equal(publicAccount.externalUserId, xIdentity);
     const updatedAccount = await request<{ revision: number }>(
       source,
       "PATCH",
       `/api/authors/${authorId}/accounts/${account.data.id}`,
       {
         handle: "updated",
+        profileProof: profileProof(authorId, xIdentity, "updated"),
         profileUrl: null,
         displayNameSnapshot: null,
         fetchEnabled: false,
@@ -257,6 +282,7 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
           `/api/authors/${authorId}/accounts/${account.data.id}`,
           {
             handle: "stale",
+            profileProof: profileProof(authorId, xIdentity, "stale"),
             profileUrl: null,
             displayNameSnapshot: null,
             fetchEnabled: false,
@@ -330,7 +356,12 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       (
         await request(source, "POST", `/api/authors/${authorId}/accounts`, {
           platform: "x",
-          externalUserId: `other-${prefix}`,
+          externalUserId: (BigInt(xIdentity) + 10n).toString(),
+          profileProof: profileProof(
+            authorId,
+            (BigInt(xIdentity) + 10n).toString(),
+            "other",
+          ),
           handle: "other",
           fetchEnabled: false,
           firstSyncMode: "none",
@@ -456,7 +487,12 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       [1, 2].map((index) =>
         request(source, "POST", `/api/authors/${raceAuthor.data.id}/accounts`, {
           platform: "x",
-          externalUserId: `race-${prefix}-${index}`,
+          externalUserId: (BigInt(xIdentity) + BigInt(index)).toString(),
+          profileProof: profileProof(
+            raceAuthor.data.id,
+            (BigInt(xIdentity) + BigInt(index)).toString(),
+            "race",
+          ),
           handle: "race",
           fetchEnabled: false,
           firstSyncMode: "none",

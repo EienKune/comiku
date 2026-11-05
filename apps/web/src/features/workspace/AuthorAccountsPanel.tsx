@@ -391,9 +391,15 @@ function AccountEditor({
     event.preventDefault();
     await action.run(async () => {
       if (!externalUserId.trim())
-        throw new Error(
-          "请先同步 X 资料；若已知稳定用户 ID，也可在高级区手动填写。",
-        );
+        throw new Error("请先同步 X 资料，获取可信平台身份。");
+      if (
+        platform === "x" &&
+        (!account ||
+          handle.toLowerCase() !== (account.handle ?? "").toLowerCase() ||
+          (fetchEnabled && !account.fetchEnabled)) &&
+        !profile
+      )
+        throw new Error("请先同步 X 资料后保存账号。");
       const collectionChanged =
         (fetchEnabled && !account?.fetchEnabled) ||
         firstSyncMode !== (account?.firstSyncMode ?? "none");
@@ -413,6 +419,7 @@ function AccountEditor({
               avatarFileObjectId: profile.avatarFileObjectId,
               profileSyncAdapter: profile.adapterKey,
               profileSyncedAt: profile.syncedAt,
+              profileProof: profile.profileProof,
             }
           : {}),
       };
@@ -485,7 +492,15 @@ function AccountEditor({
                 void action.run(async () => {
                   const result = await unwrap(
                     await client.POST("/api/authors/x-profile/resolve", {
-                      body: { handle, authorId },
+                      body: {
+                        handle,
+                        authorId,
+                        ...(account &&
+                        handle.toLowerCase() ===
+                          (account.handle ?? "").toLowerCase()
+                          ? { accountId: account.id }
+                          : {}),
+                      },
                     }),
                   );
                   if (
@@ -520,13 +535,9 @@ function AccountEditor({
             >
               <TextField
                 label="X 稳定用户 ID"
-                hint="平台分配的身份 ID，与可修改的 @账号不同。通常由同步自动获取；只有已知该 ID 时才手动填写，不要填 @名称。"
+                hint="由平台资料同步获取，关联后不可修改。"
                 value={externalUserId}
-                readOnly={Boolean(account)}
-                onChange={(event) => {
-                  setId(event.target.value);
-                  setProfile(null);
-                }}
+                readOnly
               />
             </OptionalSection>
           </>

@@ -5010,6 +5010,112 @@
         ]
       }
     },
+    "/api/authors/creation-requests/{idempotencyKey}": {
+      "get": {
+        "operationId": "getAuthorCreationResult",
+        "parameters": [
+          {
+            "name": "idempotencyKey",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorCreationResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "authors"
+        ]
+      }
+    },
     "/api/authors/{id}": {
       "get": {
         "operationId": "getAuthor",
@@ -17314,6 +17420,11 @@
       "ResolveXProfileDto": {
         "type": "object",
         "properties": {
+          "accountId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "刷新已绑定账号时优先按该账号不可变数字 ID 查询"
+          },
           "authorId": {
             "type": "string",
             "format": "uuid",
@@ -17331,6 +17442,9 @@
       "ResolvedXProfileDto": {
         "type": "object",
         "properties": {
+          "profileProof": {
+            "type": "string"
+          },
           "externalUserId": {
             "type": "string"
           },
@@ -17361,6 +17475,7 @@
           }
         },
         "required": [
+          "profileProof",
           "externalUserId",
           "handle",
           "displayName",
@@ -17369,6 +17484,71 @@
           "avatarUrl",
           "adapterKey",
           "syncedAt"
+        ]
+      },
+      "CreateAuthorAccountDto": {
+        "type": "object",
+        "properties": {
+          "profileProof": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "X 资料解析返回的短时身份凭证"
+          },
+          "platform": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+          },
+          "externalUserId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 255
+          },
+          "profileUrl": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2048
+          },
+          "displayNameSnapshot": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 255
+          },
+          "avatarFileObjectId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "profileSyncAdapter": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 64
+          },
+          "profileSyncedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "fetchEnabled": {
+            "type": "boolean"
+          },
+          "firstSyncMode": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FirstSyncMode"
+              }
+            ]
+          }
+        },
+        "required": [
+          "platform",
+          "externalUserId",
+          "fetchEnabled",
+          "firstSyncMode"
         ]
       },
       "CreateAuthorDto": {
@@ -17399,6 +17579,18 @@
             "items": {
               "type": "string"
             }
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid",
+            "description": "同一保存意图重试时保留；不同资料复用将返回409。"
+          },
+          "accounts": {
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreateAuthorAccountDto"
+            }
           }
         },
         "required": [
@@ -17406,6 +17598,23 @@
           "sourceLanguage",
           "authorizationStatus",
           "tagNames"
+        ]
+      },
+      "AuthorCreationResultDto": {
+        "type": "object",
+        "properties": {
+          "author": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ManagedAuthorDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "author"
         ]
       },
       "AuthorEvidenceDto": {
@@ -17511,6 +17720,11 @@
       "CreateExternalAccountDto": {
         "type": "object",
         "properties": {
+          "profileProof": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "X 资料解析返回的短时身份凭证"
+          },
           "platform": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_-]{0,31}$"
@@ -17571,6 +17785,11 @@
       "UpdateExternalAccountDto": {
         "type": "object",
         "properties": {
+          "profileProof": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "X 身份变更或重新启用采集时的短时身份凭证"
+          },
           "externalUserId": {
             "type": "string",
             "minLength": 1,

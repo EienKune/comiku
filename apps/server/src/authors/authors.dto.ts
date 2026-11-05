@@ -16,8 +16,9 @@ import {
   Max,
   Min,
   MinLength,
+  ValidateNested,
 } from "class-validator";
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional, OmitType } from "@nestjs/swagger";
 import {
   AuthorizationStatus,
   FirstSyncMode,
@@ -51,6 +52,27 @@ export class CreateAuthorDto {
   @IsString({ each: true })
   @MaxLength(64, { each: true })
   tagNames!: string[];
+
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    description: "同一保存意图重试时保留；不同资料复用将返回409。",
+  })
+  @IsOptional()
+  @IsUUID()
+  idempotencyKey?: string;
+
+  @ApiPropertyOptional({
+    type: () => CreateAuthorAccountDto,
+    isArray: true,
+    maxItems: 10,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => CreateAuthorAccountDto)
+  accounts?: CreateAuthorAccountDto[];
 }
 
 export class AuthorQueryDto {
@@ -97,7 +119,10 @@ export class AuthorQueryDto {
   tag?: string;
 }
 
-export class UpdateAuthorDto extends CreateAuthorDto {
+export class UpdateAuthorDto extends OmitType(CreateAuthorDto, [
+  "idempotencyKey",
+  "accounts",
+] as const) {
   @ApiProperty({ type: Number, minimum: 0 })
   @IsInt()
   @Min(0)
@@ -112,6 +137,15 @@ export class RevisionDto {
 }
 
 export class CreateExternalAccountDto {
+  @ApiPropertyOptional({
+    type: String,
+    maxLength: 4096,
+    description: "X 资料解析返回的短时身份凭证",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  profileProof?: string;
   @ApiProperty({ type: String, pattern: "^[a-z][a-z0-9_-]{0,31}$" })
   @Transform(trimmed)
   @IsString()
@@ -168,7 +202,18 @@ export class CreateExternalAccountDto {
   firstSyncMode!: FirstSyncMode;
 }
 
+export class CreateAuthorAccountDto extends CreateExternalAccountDto {}
+
 export class UpdateExternalAccountDto {
+  @ApiPropertyOptional({
+    type: String,
+    maxLength: 4096,
+    description: "X 身份变更或重新启用采集时的短时身份凭证",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  profileProof?: string;
   @ApiPropertyOptional({
     type: String,
     minLength: 1,
@@ -337,7 +382,20 @@ export class ManagedAuthorDto extends AuthorDto {
   declare externalAccounts: ExternalAccountDto[];
 }
 
+export class AuthorCreationResultDto {
+  @ApiProperty({ type: ManagedAuthorDto, nullable: true })
+  author!: ManagedAuthorDto | null;
+}
+
 export class ResolveXProfileDto {
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    description: "刷新已绑定账号时优先按该账号不可变数字 ID 查询",
+  })
+  @IsOptional()
+  @IsUUID()
+  accountId?: string;
   @ApiPropertyOptional({
     type: String,
     format: "uuid",
@@ -355,6 +413,7 @@ export class ResolveXProfileDto {
 }
 
 export class ResolvedXProfileDto {
+  @ApiProperty({ type: String }) profileProof!: string;
   @ApiProperty({ type: String }) externalUserId!: string;
   @ApiProperty({ type: String }) handle!: string;
   @ApiProperty({ type: String }) displayName!: string;

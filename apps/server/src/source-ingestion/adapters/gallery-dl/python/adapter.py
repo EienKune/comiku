@@ -1000,6 +1000,47 @@ def collect_post(source, post_id):
         raise error from None
 
 
+def collect_profile(source):
+    """Native info metadata only; never enumerate a user's timeline."""
+    if version.__version__ != "1.32.11" or source.get("platform") != "x":
+        raise AdapterError("runtime_unavailable")
+    remote_id, handle = source.get("remote_id"), source.get("handle")
+    if remote_id is not None:
+        if not isinstance(remote_id, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", remote_id):
+            raise AdapterError("source_unresolved")
+        target = "id:" + remote_id
+    else:
+        if not isinstance(handle, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,15}", handle):
+            raise AdapterError("source_unresolved")
+        target = handle
+    ext = None
+    try:
+        config.set(("extractor", "twitter"), "metadata-user", False)
+        config.set(("extractor", "twitter"), "transform", True)
+        config.set(("extractor", "twitter"), "ratelimit", "abort")
+        ext = twitter.TwitterInfoExtractor.from_url("https://x.com/" + target + "/info")
+        ext.initialize()
+        install_x_http_checks(ext)
+        entries = list(ext.items())
+        if len(entries) != 1 or len(entries[0]) != 3 or entries[0][0] != 2:
+            raise AdapterError("source_unresolved")
+        data = entries[0][2]
+        uid, name = str(data.get("id", "")), data.get("name")
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", uid) or not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,15}", name):
+            raise AdapterError("source_unresolved")
+        if (remote_id is not None and remote_id != uid) or (remote_id is None and handle.lower() != name.lower()):
+            raise AdapterError("source_identity_conflict")
+        return {"version": 1, "platform": "x", "profile": {
+            "external_user_id": uid, "handle": name,
+            "display_name": data.get("nick") if isinstance(data.get("nick"), str) else name,
+            "avatar_url": data.get("profile_image") if isinstance(data.get("profile_image"), str) else None,
+        }}
+    except Exception as exc:
+        error = exc if isinstance(exc, AdapterError) else AdapterError(safe_error(exc))
+        error.result = {"error": str(error), "diagnostic": safe_diagnostic(attach_http_diagnostic(ext, exc), "profile")}
+        raise error from None
+
+
 def stringify_ids(value):
     """Preserve platform identifiers across the JSON -> JavaScript boundary."""
     if isinstance(value, dict):
@@ -1026,7 +1067,9 @@ def main():
         config.set(("extractor",), "sleep-request", 0)
         source = request["source"]
         mode = source.get("mode", "page")
-        if mode == "post":
+        if mode == "profile":
+            result = collect_profile(source)
+        elif mode == "post":
             result = collect_post(source, source.get("post_id"))
         elif mode == "page":
             result = collect(source, request.get("cursor"))

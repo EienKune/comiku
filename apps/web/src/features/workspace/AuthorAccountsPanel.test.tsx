@@ -547,3 +547,59 @@ test("Pixiv can explicitly select seven days while retaining the disabled defaul
     body: { firstSyncMode: "last_7_days", fetchEnabled: true },
   });
 });
+
+test("X profile refresh uses the bound account ID and carries signed proof when saving", async () => {
+  const x: Account = {
+    ...pixiv,
+    id: "x-account",
+    platform: "x",
+    externalUserId: "777",
+    handle: "old",
+  };
+  collectionFixture([x], []);
+  const post = vi.spyOn(client, "POST").mockResolvedValue(
+    success({
+      externalUserId: "777",
+      handle: "latest",
+      displayName: "Artist",
+      profileUrl: "https://x.com/latest",
+      avatarFileObjectId: null,
+      avatarUrl: null,
+      adapterKey: "x_gallery_dl",
+      syncedAt: "2026-11-05T00:00:00Z",
+      profileProof: "synthetic-proof",
+    }),
+  );
+  const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(x));
+  setup([x]);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+  fireEvent.click(screen.getByRole("button", { name: "同步昵称和头像" }));
+  await waitFor(() =>
+    expect((screen.getByLabelText("X @账号") as HTMLInputElement).value).toBe(
+      "latest",
+    ),
+  );
+  expect(post.mock.calls[0][1]).toMatchObject({
+    body: { accountId: "x-account" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+  await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+  expect(patch.mock.calls[0][1]).toMatchObject({
+    body: { profileProof: "synthetic-proof" },
+  });
+});
+
+test("new X identity cannot be entered as an unverified stable ID", async () => {
+  collectionFixture([], []);
+  setup([]);
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "关联 X" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "关联 X" }));
+  expect(
+    (screen.getByLabelText("X 稳定用户 ID") as HTMLInputElement).readOnly,
+  ).toBe(true);
+});

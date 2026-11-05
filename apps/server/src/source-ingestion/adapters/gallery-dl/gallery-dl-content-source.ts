@@ -13,6 +13,7 @@ import type {
   SourceScanContext,
   SourceDiscoveryFailure,
   SourcePostResult,
+  SourceAccountProfile,
 } from "../../content-source.js";
 import { jsonObject, SourceResponseError } from "../../source-response.js";
 import {
@@ -291,7 +292,7 @@ export class GalleryDlContentSource implements ContentSourceClient {
                 [bridge, request],
                 {
                   signal,
-                  timeout: 120_000,
+                  timeout: source.mode === "profile" ? 45_000 : 120_000,
                   maxBuffer: 16 * 1024 * 1024,
                   windowsHide: true,
                   encoding: "utf8",
@@ -357,9 +358,60 @@ export class GalleryDlContentSource implements ContentSourceClient {
     };
   }
   async checkAccount(account: SourceAccountIdentity) {
+    if (this.platform === "x")
+      return this.profile({ remote_id: account.externalUserId });
     if (!/^\d+$/.test(account.externalUserId)) invalid();
     await this.fetchPage(account, this.initialCursor("none", new Date()));
     return { externalUserId: account.externalUserId, handle: account.handle };
+  }
+  async resolveProfileByHandle(handle: string): Promise<SourceAccountProfile> {
+    if (this.platform !== "x" || !/^[A-Za-z0-9_]{1,15}$/.test(handle))
+      return invalid();
+    return this.profile({ handle });
+  }
+  private async profile(target: {
+    remote_id?: string;
+    handle?: string;
+  }): Promise<SourceAccountProfile> {
+    if (target.remote_id && !/^[1-9][0-9]{0,19}$/.test(target.remote_id))
+      return invalid();
+    const page = await this.runner(
+      { mode: "profile", platform: this.platform, ...target },
+      null,
+    );
+    if (page.error)
+      await this.decodePage(
+        { externalUserId: target.remote_id ?? "1" },
+        {},
+        page,
+      );
+    const profile = jsonObject(page.profile);
+    if (
+      page.version !== 1 ||
+      page.platform !== "x" ||
+      !profile ||
+      typeof profile.external_user_id !== "string" ||
+      !/^[1-9][0-9]{0,19}$/.test(profile.external_user_id) ||
+      typeof profile.handle !== "string" ||
+      !/^[A-Za-z0-9_]{1,15}$/.test(profile.handle) ||
+      (target.remote_id && target.remote_id !== profile.external_user_id) ||
+      (target.handle &&
+        target.handle.toLowerCase() !== profile.handle.toLowerCase())
+    )
+      return invalid();
+    return {
+      externalUserId: profile.external_user_id,
+      handle: profile.handle,
+      displayName:
+        typeof profile.display_name === "string"
+          ? profile.display_name.slice(0, 255)
+          : profile.handle,
+      profileUrl: `https://x.com/${profile.handle}`,
+      ...(typeof profile.avatar_url === "string" &&
+      profile.avatar_url.length <= 2048
+        ? { avatarUrl: profile.avatar_url }
+        : {}),
+    };
   }
   async fetchPage(
     account: SourceAccountIdentity,

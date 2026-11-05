@@ -1,4 +1,8 @@
+import { createHash } from "node:crypto";
 import { DirectUploadsService } from "../transfers/direct-uploads.service.js";
+import { ENVIRONMENT, type Environment } from "../config/environment.js";
+import { XProfileProofs } from "./x-profile-proof.js";
+import { sourceDiagnostic } from "../source-ingestion/source-diagnostics.js";
 import {
   BadRequestException,
   ConflictException,
@@ -7,6 +11,7 @@ import {
   Injectable,
   NotFoundException,
   Optional,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import {
   AuthorizationStatus,
@@ -54,6 +59,43 @@ import {
   AUTHOR_IMPORT_TEMPLATE,
   parseAuthorImportCsv,
 } from "./author-import.js";
+
+import {
+  authorQuery,
+  authorCursor,
+  type AuthorPosition,
+} from "./author-query.js";
+
+const authorListDetails = {
+  id: true,
+  displayName: true,
+  sourceLanguage: true,
+  authorizationStatus: true,
+  revision: true,
+  avatarFileObjectId: true,
+  createdAt: true,
+  updatedAt: true,
+  deletedAt: true,
+  tags: {
+    select: { tag: { select: { id: true, name: true, revision: true } } },
+  },
+  externalAccounts: {
+    where: { deletedAt: null },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      platform: true,
+      externalUserId: true,
+      handle: true,
+      profileUrl: true,
+      displayNameSnapshot: true,
+      avatarFileObjectId: true,
+    },
+  },
+} satisfies Prisma.AuthorSelect;
+type AuthorListRow = Prisma.AuthorGetPayload<{
+  select: typeof authorListDetails;
+}>;
 
 const authorDetails = {
   tags: { include: { tag: true } },
@@ -129,7 +171,48 @@ export class AuthorsService {
     @Optional()
     @Inject(DirectUploadsService)
     private readonly directUploads?: DirectUploadsService,
+    @Optional() @Inject(ENVIRONMENT) private readonly environment?: Environment,
   ) {}
+
+  private get profileProofs() {
+    return new XProfileProofs(this.environment?.authorProfileProofSecret);
+  }
+
+  /** Validate offline before entering author/account write transactions. */
+  private async prepareAccountIdentity(
+    input: CreateExternalAccountDto,
+    actorId?: string,
+    authorId?: string,
+  ): Promise<CreateExternalAccountDto> {
+    if (normalizePlatform(input.platform) !== "x")
+      return {
+        ...input,
+        profileSyncAdapter: undefined,
+        profileSyncedAt: undefined,
+      };
+    const proof = this.profileProofs.verify(
+      input.profileProof,
+      actorId,
+      authorId,
+    );
+    if (
+      proof.externalUserId !== input.externalUserId.trim() ||
+      !input.handle ||
+      proof.handle.toLowerCase() !==
+        this.normalizeXHandle(input.handle).toLowerCase() ||
+      (input.avatarFileObjectId !== undefined &&
+        input.avatarFileObjectId !== proof.avatarFileObjectId)
+    )
+      throw new ConflictException("X 资料凭证与账号不一致，请重新同步");
+    return {
+      ...input,
+      externalUserId: proof.externalUserId,
+      handle: proof.handle,
+      avatarFileObjectId: proof.avatarFileObjectId,
+      profileSyncAdapter: proof.adapterKey,
+      profileSyncedAt: proof.syncedAt,
+    };
+  }
 
   private account(account: ExternalAccount): ExternalAccountDto {
     const activeStates = account.adapterStates.filter(
@@ -182,7 +265,9 @@ export class AuthorsService {
     };
   }
 
-  private accountSummary(account: ExternalAccount): ExternalAccountSummaryDto {
+  private accountSummary(
+    account: AuthorListRow["externalAccounts"][number],
+  ): ExternalAccountSummaryDto {
     return {
       externalUserId: account.externalUserId,
       id: account.id,
@@ -194,7 +279,7 @@ export class AuthorsService {
     };
   }
 
-  private author(author: AuthorWithDetails): AuthorDto {
+  private author(author: AuthorListRow): AuthorDto {
     return {
       id: author.id,
       displayName: author.displayName,
@@ -288,94 +373,33 @@ export class AuthorsService {
   }
 
   async list(query: AuthorQueryDto = {}): Promise<AuthorPageDto> {
-    const limit = query.limit ?? 50;
-    const search = query.search?.replace(/^@/, "").trim() ?? "";
-    const baseWhere: Prisma.AuthorWhereInput = {
-      deletedAt: null,
-      authorizationStatus: query.authorizationStatus,
-      ...(query.platform
-        ? {
-            externalAccounts: {
-              some: {
-                platform: query.platform.toLowerCase(),
-                deletedAt: null,
-              },
-            },
-          }
-        : {}),
-      ...(query.tag
-        ? {
-            tags: {
-              some: {
-                tag: {
-                  normalizedName: query.tag
-                    .normalize("NFKC")
-                    .trim()
-                    .toLowerCase(),
-                },
-              },
-            },
-          }
-        : {}),
-      ...(search
-        ? {
-            OR: [
-              { displayName: { contains: search, mode: "insensitive" } },
-              {
-                externalAccounts: {
-                  some: {
-                    deletedAt: null,
-                    handle: { contains: search, mode: "insensitive" },
-                  },
-                },
-              },
-            ],
-          }
-        : {}),
-    };
-    const all = await this.db.author.findMany({
-      where: baseWhere,
-      include: authorDetails,
-      orderBy: [{ displayName: "asc" }, { id: "asc" }],
-    });
-    if (search) {
-      const term = search.toLowerCase();
-      all.sort((left, right) => {
-        const rank = (author: AuthorWithDetails) => {
-          const handles = author.externalAccounts
-            .filter((account) => account.platform === "x" && account.handle)
-            .map((account) => account.handle!.toLowerCase());
-          if (handles.includes(term)) return 0;
-          if (handles.some((handle) => handle.startsWith(term))) return 1;
-          if (handles.some((handle) => handle.includes(term))) return 2;
-          return 3;
+    const plan = authorQuery(query);
+    // A short read-only snapshot makes count, positions and summaries agree.
+    // No external work or unbounded account adapter state belongs in this read.
+    return this.db.$transaction(
+      async (tx) => {
+        const positions = await tx.$queryRaw<AuthorPosition[]>(plan.page);
+        const [count] = await tx.$queryRaw<{ total: number }[]>(plan.count);
+        const page = positions.slice(0, plan.limit);
+        const summaries = page.length
+          ? await tx.author.findMany({
+              where: { id: { in: page.map((item) => item.id) } },
+              select: authorListDetails,
+              take: plan.limit,
+            })
+          : [];
+        const byId = new Map(summaries.map((author) => [author.id, author]));
+        return {
+          items: page.map((position) => this.author(byId.get(position.id)!)),
+          total: count?.total ?? 0,
+          nextCursor:
+            positions.length > plan.limit && page.length
+              ? authorCursor(plan.scope, page.at(-1)!)
+              : null,
         };
-        return (
-          rank(left) - rank(right) ||
-          left.displayName.localeCompare(right.displayName) ||
-          left.id.localeCompare(right.id)
-        );
-      });
-    }
-    let start = 0;
-    if (query.cursor) {
-      try {
-        const cursorId = Buffer.from(query.cursor, "base64url").toString();
-        start = all.findIndex((author) => author.id === cursorId) + 1;
-        if (start === 0) throw new Error();
-      } catch {
-        throw new BadRequestException("作者分页游标无效或已过期");
-      }
-    }
-    const page = all.slice(start, start + limit);
-    return {
-      items: page.map((author) => this.author(author)),
-      total: all.length,
-      nextCursor:
-        start + page.length < all.length && page.length
-          ? Buffer.from(page.at(-1)!.id).toString("base64url")
-          : null,
-    };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
   }
 
   listArchived(): Promise<ManagedAuthorDto[]> {
@@ -438,13 +462,164 @@ export class AuthorsService {
     return this.author(author);
   }
 
-  create(input: CreateAuthorDto): Promise<ManagedAuthorDto> {
+  private async assertCreateActor(
+    tx: Prisma.TransactionClient,
+    actorId: string,
+  ) {
+    // The same rows protect both permission checks and writes against concurrent revocation.
+    await tx.$queryRaw(
+      Prisma.sql`SELECT id FROM users WHERE id = ${actorId}::uuid FOR SHARE`,
+    );
+    await tx.$queryRaw(
+      Prisma.sql`SELECT user_id FROM user_roles WHERE user_id = ${actorId}::uuid FOR SHARE`,
+    );
+    if (
+      !(await tx.user.count({
+        where: {
+          id: actorId,
+          isActive: true,
+          mustChangePassword: false,
+          roles: { some: { role: { in: ["source", "admin"] } } },
+        },
+      }))
+    )
+      throw new ForbiddenException("当前职务不能维护作者");
+  }
+
+  private creationPayloadHash(input: CreateAuthorDto) {
+    // Proof signatures/TTL and provider timestamps are transport evidence, not a new intent.
+    // All user-visible account values that can be persisted still participate in the hash.
+    const accounts = (input.accounts ?? [])
+      .map((account) => {
+        const platform = normalizePlatform(account.platform);
+        const identity = this.identity(
+          platform,
+          account.externalUserId,
+          account.handle,
+        );
+        return {
+          platform,
+          ...identity,
+          displayNameSnapshot: account.displayNameSnapshot?.trim() || null,
+          avatarFileObjectId: account.avatarFileObjectId || null,
+          fetchEnabled: account.fetchEnabled,
+          firstSyncMode: account.firstSyncMode,
+        };
+      })
+      .sort((left, right) =>
+        left.platform < right.platform
+          ? -1
+          : left.platform > right.platform
+            ? 1
+            : 0,
+      );
+    return createHash("sha256")
+      .update(
+        JSON.stringify({
+          displayName: input.displayName.trim(),
+          sourceLanguage: input.sourceLanguage,
+          authorizationStatus: input.authorizationStatus,
+          tags: this.tags(input.tagNames).sort((left, right) =>
+            left.normalizedName < right.normalizedName
+              ? -1
+              : left.normalizedName > right.normalizedName
+                ? 1
+                : 0,
+          ),
+          accounts,
+        }),
+      )
+      .digest("hex");
+  }
+
+  async getCreationResult(
+    actorId: string,
+    idempotencyKey: string,
+  ): Promise<ManagedAuthorDto | null> {
+    return this.db.$transaction(async (tx) => {
+      await this.assertCreateActor(tx, actorId);
+      const request = await tx.authorCreationRequest.findUnique({
+        where: { actorId_idempotencyKey: { actorId, idempotencyKey } },
+        include: { author: { include: authorDetails } },
+      });
+      return request?.author ? this.managed(request.author) : null;
+    });
+  }
+
+  async create(
+    input: CreateAuthorDto,
+    actorId?: string,
+  ): Promise<ManagedAuthorDto> {
     const tags = this.tags(input.tagNames);
+    const accounts = input.accounts ?? [];
+    if (!actorId && (input.idempotencyKey || accounts.length))
+      throw new ForbiddenException("创建账号关联和恢复标识需要当前操作人");
+    if (
+      new Set(accounts.map((account) => normalizePlatform(account.platform)))
+        .size !== accounts.length
+    )
+      throw new BadRequestException("同一作者每个平台只能关联一个有效账号");
+    const payloadHash = this.creationPayloadHash(input);
+    // Replaying a committed request must work even after its original profile proof expires.
+    if (actorId && input.idempotencyKey) {
+      const previous = await this.db.$transaction(async (tx) => {
+        await this.assertCreateActor(tx, actorId);
+        const request = await tx.authorCreationRequest.findUnique({
+          where: {
+            actorId_idempotencyKey: {
+              actorId,
+              idempotencyKey: input.idempotencyKey!,
+            },
+          },
+          include: { author: { include: authorDetails } },
+        });
+        if (request && request.payloadHash !== payloadHash)
+          throw new ConflictException(
+            "该保存标识已用于其他作者资料，请先恢复原保存结果",
+          );
+        return request?.author ? this.managed(request.author) : null;
+      });
+      if (previous) return previous;
+    }
+    const prepared = await Promise.all(
+      accounts.map((account) => this.prepareAccountIdentity(account, actorId)),
+    );
+    // Profile proof verification and any future provider work must finish before this transaction.
     return this.withConflict(() =>
       this.db.$transaction(async (tx) => {
+        if (actorId) await this.assertCreateActor(tx, actorId);
+        let requestId: string | undefined;
+        if (actorId && input.idempotencyKey) {
+          await tx.authorCreationRequest.createMany({
+            data: {
+              actorId,
+              idempotencyKey: input.idempotencyKey,
+              payloadHash,
+            },
+            skipDuplicates: true,
+          });
+          await tx.$queryRaw(
+            Prisma.sql`SELECT id FROM author_creation_requests WHERE actor_id = ${actorId}::uuid AND idempotency_key = ${input.idempotencyKey}::uuid FOR UPDATE`,
+          );
+          const request = await tx.authorCreationRequest.findUniqueOrThrow({
+            where: {
+              actorId_idempotencyKey: {
+                actorId,
+                idempotencyKey: input.idempotencyKey,
+              },
+            },
+            include: { author: { include: authorDetails } },
+          });
+          if (request.payloadHash !== payloadHash)
+            throw new ConflictException(
+              "该保存标识已用于其他作者资料，请先恢复原保存结果",
+            );
+          if (request.author) return this.managed(request.author);
+          requestId = request.id;
+        }
         const author = await tx.author.create({
           data: {
-            displayName: input.displayName,
+            displayName: input.displayName.trim(),
             sourceLanguage: input.sourceLanguage,
             authorizationStatus: input.authorizationStatus,
             tags: {
@@ -458,9 +633,24 @@ export class AuthorsService {
               })),
             },
           },
-          include: authorDetails,
         });
-        return this.managed(author);
+        for (const account of prepared) {
+          await this.validateProfileAvatar(account.avatarFileObjectId, tx);
+          await tx.authorExternalAccount.create({
+            data: this.accountData(author.id, account),
+          });
+        }
+        if (requestId)
+          await tx.authorCreationRequest.update({
+            where: { id: requestId },
+            data: { authorId: author.id },
+          });
+        return this.managed(
+          await tx.author.findUniqueOrThrow({
+            where: { id: author.id },
+            include: authorDetails,
+          }),
+        );
       }),
     );
   }
@@ -714,7 +904,9 @@ export class AuthorsService {
   async createAccount(
     authorId: string,
     input: CreateExternalAccountDto,
+    actorId?: string,
   ): Promise<ExternalAccountDto> {
+    input = await this.prepareAccountIdentity(input, actorId, authorId);
     const data = this.accountData(authorId, input);
     await this.validateProfileAvatar(input.avatarFileObjectId);
     return this.withConflict(() =>
@@ -770,6 +962,51 @@ export class AuthorsService {
     input: UpdateExternalAccountDto,
     actorId?: string,
   ): Promise<ExternalAccountDto> {
+    const observed = await this.db.authorExternalAccount.findFirst({
+      where: { id, authorId, deletedAt: null, author: { deletedAt: null } },
+    });
+    if (!observed) throw new NotFoundException("平台账号不存在");
+    if (observed.revision !== input.expectedRevision)
+      throw new ConflictException("平台账号已更新，请刷新后重试");
+    if (
+      input.externalUserId != null &&
+      input.externalUserId.trim() !== observed.externalUserId
+    )
+      throw new ConflictException(
+        "平台用户 ID 不可修改；不同 ID 属于新账号，请通过新建入口关联。",
+      );
+    const wantedHandle =
+      input.handle === undefined ? observed.handle : input.handle;
+    const xIdentityChange =
+      observed.platform === "x" &&
+      ((wantedHandle?.toLowerCase() ?? null) !==
+        (observed.handle?.toLowerCase() ?? null) ||
+        (input.fetchEnabled && !observed.fetchEnabled) ||
+        input.avatarFileObjectId != null);
+    const prepared =
+      observed.platform === "x" && (xIdentityChange || input.profileProof)
+        ? await this.prepareAccountIdentity(
+            {
+              ...input,
+              platform: "x",
+              externalUserId: observed.externalUserId,
+              handle: wantedHandle,
+            },
+            actorId,
+            authorId,
+          )
+        : null;
+    input = {
+      ...input,
+      profileSyncAdapter: prepared?.profileSyncAdapter,
+      profileSyncedAt: prepared?.profileSyncedAt,
+      ...(prepared
+        ? {
+            handle: prepared.handle,
+            avatarFileObjectId: prepared.avatarFileObjectId,
+          }
+        : {}),
+    };
     return this.withConflict(() =>
       this.db.$transaction(async (tx) => {
         const current = await tx.authorExternalAccount.findFirst({
@@ -787,7 +1024,6 @@ export class AuthorsService {
           );
         await this.validateProfileAvatar(input.avatarFileObjectId, tx);
         if (
-          current.platform !== "pixiv" ||
           input.firstSyncMode !== current.firstSyncMode ||
           (input.fetchEnabled && !current.fetchEnabled)
         ) {
@@ -994,22 +1230,52 @@ export class AuthorsService {
     actorId: string,
     inputHandle: string,
     authorId?: string,
+    accountId?: string,
   ): Promise<ResolvedXProfileDto> {
     const handle = this.normalizeXHandle(inputHandle);
-    const errors: string[] = [];
+    const bound =
+      accountId && authorId
+        ? await this.db.authorExternalAccount.findFirst({
+            where: {
+              id: accountId,
+              authorId,
+              platform: "x",
+              deletedAt: null,
+              author: { deletedAt: null },
+            },
+          })
+        : null;
+    if (accountId && !bound) throw new NotFoundException("平台账号不存在");
     const available = this.sources
       .forPlatform("x")
       .filter((client) => client.available);
+    let failed = false;
     for (const client of available) {
-      if (!client.resolveProfileByHandle) continue;
+      if (!bound && !client.resolveProfileByHandle) continue;
       try {
-        if (client.metered) {
-          await this.sourceFetch.consumeMeteredBudget(client.adapterKey);
-        }
-        const profile = await client.resolveProfileByHandle(handle);
-        const normalizedHandle = this.normalizeXHandle(
-          profile.handle ?? handle,
+        const profile = await this.sourceFetch.platforms.profileNetwork(
+          actorId,
+          async () => {
+            if (client.metered)
+              await this.sourceFetch.consumeMeteredBudget(client.adapterKey);
+            const resolved = await (bound
+              ? client.checkAccount({ externalUserId: bound.externalUserId })
+              : client.resolveProfileByHandle!(handle));
+            if (
+              !/^[1-9][0-9]{0,19}$/.test(resolved.externalUserId) ||
+              !resolved.handle
+            )
+              throw new BadRequestException("X 资料缺少有效身份");
+            const returnedHandle = this.normalizeXHandle(resolved.handle);
+            if (
+              (bound && bound.externalUserId !== resolved.externalUserId) ||
+              (!bound && returnedHandle.toLowerCase() !== handle.toLowerCase())
+            )
+              throw new ConflictException("X 资料与绑定身份不一致，请核实账号");
+            return resolved;
+          },
         );
+        const normalizedHandle = this.normalizeXHandle(profile.handle!);
         const conflict = await this.db.authorExternalAccount.findFirst({
           where: {
             platform: "x",
@@ -1018,51 +1284,72 @@ export class AuthorsService {
           },
           include: { author: { select: { id: true, displayName: true } } },
         });
-        if (conflict && conflict.author.id !== authorId) {
+        if (conflict && conflict.author.id !== authorId)
           throw new ConflictException(
             `该 X 账号已绑定作者“${conflict.author.displayName}”`,
           );
-        }
-        let avatarFileObjectId: string | null = null;
-        let avatarUrl: string | null = null;
+        let avatarFileObjectId: string | null = null,
+          avatarUrl: string | null = null;
         if (profile.avatarUrl) {
-          const media = await this.downloader.download(
-            profile.avatarUrl,
-            client.allowedMediaHosts,
-          );
-          const file = await this.files.store({
-            body: media.body,
-            contentType: media.contentType,
-            bucketScope: "private",
-            kind: "source_profile_avatar",
-            sourceName: profile.avatarUrl,
-            createdById: actorId,
-          });
-          avatarFileObjectId = file.id;
-          avatarUrl = (await this.files.signedReadUrl(file.id)).url;
+          try {
+            const media = await this.downloader.download(
+              profile.avatarUrl,
+              client.allowedMediaHosts,
+            );
+            const file = await this.files.store({
+              body: media.body,
+              contentType: media.contentType,
+              bucketScope: "private",
+              kind: "source_profile_avatar",
+              sourceName: profile.avatarUrl,
+              createdById: actorId,
+            });
+            avatarFileObjectId = file.id;
+            avatarUrl = (await this.files.signedReadUrl(file.id)).url;
+          } catch {
+            /* Optional avatar failure must not erase a verified identity. */
+          }
         }
         const syncedAt = new Date().toISOString();
-        return {
+        const identity = {
           externalUserId: profile.externalUserId,
           handle: normalizedHandle,
-          displayName: profile.displayName?.trim() || normalizedHandle,
-          profileUrl: profile.profileUrl ?? `https://x.com/${normalizedHandle}`,
           avatarFileObjectId,
-          avatarUrl,
           adapterKey: client.adapterKey,
           syncedAt,
         };
+        return {
+          ...identity,
+          displayName:
+            profile.displayName?.trim().slice(0, 255) || normalizedHandle,
+          profileUrl: `https://x.com/${normalizedHandle}`,
+          avatarUrl,
+          profileProof: this.profileProofs.issue(identity, actorId, authorId),
+        };
       } catch (error) {
-        if (error instanceof ConflictException) throw error;
-        errors.push(error instanceof Error ? error.message : "未知错误");
+        if (
+          error instanceof ConflictException ||
+          error instanceof NotFoundException
+        )
+          throw error;
+        failed = true;
+        console.warn(
+          JSON.stringify({
+            event: "source_profile_failed",
+            adapterKey: client.adapterKey,
+            ...sourceDiagnostic(error),
+          }),
+        );
       }
     }
+    if (failed)
+      throw new ServiceUnavailableException(
+        "无法同步 X 资料，请稍后重试或联系管理员检查图源",
+      );
     throw new BadRequestException(
-      errors.length
-        ? `无法同步 X 资料：${errors.at(-1)}`
-        : available.length
-          ? "当前 X 采集适配器尚未支持资料同步"
-          : "X 资料同步通道尚未配置",
+      available.length
+        ? "当前 X 采集适配器尚未支持资料同步"
+        : "X 资料同步通道尚未配置",
     );
   }
 
@@ -1334,14 +1621,14 @@ export class AuthorsService {
           );
         }
       }
-      if (
-        row.xHandle &&
-        !row.xExternalUserId &&
-        resolveProfiles &&
-        !row.errors.length
-      ) {
+      if (row.xHandle && resolveProfiles && !row.errors.length) {
         try {
           const profile = await this.resolveXProfile(actorId, row.xHandle);
+          if (
+            row.xExternalUserId &&
+            row.xExternalUserId !== profile.externalUserId
+          )
+            throw new ConflictException("X 用户 ID 与平台返回身份不一致");
           row.xExternalUserId = profile.externalUserId;
           row.xHandle = profile.handle;
           row.xDisplayName = profile.displayName;
@@ -1441,7 +1728,7 @@ export class AuthorsService {
     rows: AuthorImportRowDto[],
   ): Promise<AuthorImportResultDto> {
     if (!rows.length) throw new BadRequestException("没有可导入的作者");
-    const validated = await this.validateImportRows(actorId, rows, false);
+    const validated = await this.validateImportRows(actorId, rows, true);
     const invalid = validated.filter((row) => row.errors.length);
     if (invalid.length) {
       throw new BadRequestException(

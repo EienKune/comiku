@@ -88,6 +88,7 @@ import { deleteTranslationDraft } from "../editor/draft-storage";
 import { TypesetBatchTools } from "./TypesetBatchTools";
 import { ReviewRequestActions } from "./ReviewRequestActions";
 import { AuthorAccountsPanel } from "./AuthorAccountsPanel";
+import { AuthorPicker } from "./AuthorPicker";
 import { sourceAdapterLabels } from "./source-labels";
 import {
   canHandleStage,
@@ -1027,6 +1028,26 @@ function AuthorCreateDialog({
   onClose: () => void;
   onCompleted: (message: string) => Promise<void>;
 }) {
+  const user = useAccount();
+  const requestStorageKey = `comiku:author-creation:${user.id}`;
+  const [previousRequestId] = useState(() => {
+    try {
+      const stored = sessionStorage.getItem(requestStorageKey);
+      return stored &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          stored,
+        )
+        ? stored
+        : null;
+    } catch {
+      return null;
+    }
+  });
+  const [requestId] = useState(() => previousRequestId ?? crypto.randomUUID());
+  const [restoring, setRestoring] = useState(Boolean(previousRequestId));
+  const [hasPendingRequest, setHasPendingRequest] = useState(
+    Boolean(previousRequestId),
+  );
   const ref = useRef<HTMLDialogElement>(null);
   const action = useAction();
   const [displayName, setDisplayName] = useState("");
@@ -1041,14 +1062,47 @@ function AuthorCreateDialog({
   const [evidence, setEvidence] = useState<File[]>([]);
   const [preview, setPreview] = useState<AuthorImportPreview | null>(null);
   const [savedAuthorId, setSavedAuthorId] = useState<string | null>(null);
-  const [accountsSaved, setAccountsSaved] = useState(false);
   const progress = useRef({
     authorId: null as string | null,
-    accounts: new Set<string>(),
     avatar: new AuthorImageUpload(),
     evidence: new AuthorImageUpload(),
   });
-  const fieldsDisabled = action.busy || Boolean(savedAuthorId);
+  const fieldsDisabled = action.busy || restoring || Boolean(savedAuthorId);
+  function clearRequest() {
+    try {
+      sessionStorage.removeItem(requestStorageKey);
+    } catch {
+      /* Storage may be unavailable. */
+    }
+    setHasPendingRequest(false);
+  }
+  const recoverCreation = useCallback(async () => {
+    const { author } = await unwrap(
+      await client.GET("/api/authors/creation-requests/{idempotencyKey}", {
+        params: { path: { idempotencyKey: requestId } },
+      }),
+    );
+    if (!author) return null;
+    progress.current.authorId = author.id;
+    setSavedAuthorId(author.id);
+    if (author.displayName) setDisplayName(author.displayName);
+    if (author.sourceLanguage) setSourceLanguage(author.sourceLanguage);
+    if (author.authorizationStatus) setStatus(author.authorizationStatus);
+    return author;
+  }, [requestId]);
+  const runCreationAction = action.run;
+  useEffect(() => {
+    if (!previousRequestId) return;
+    let active = true;
+    void runCreationAction(async () => {
+      await recoverCreation();
+    }).finally(() => {
+      if (active) setRestoring(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [previousRequestId, recoverCreation, runCreationAction]);
   useEffect(() => {
     const dialog = ref.current;
     dialog?.showModal();
@@ -1113,11 +1167,8 @@ function AuthorCreateDialog({
   async function close() {
     if (action.busy) return;
     if (progress.current.authorId) {
-      await onCompleted(
-        accountsSaved
-          ? "作者已保存；附件可在作者详情中补传或核对结果"
-          : "作者已保存；账号绑定未完成，请在作者详情中继续维护",
-      );
+      await onCompleted("作者已保存；附件可在作者详情中补传或核对结果");
+      clearRequest();
     } else onClose();
   }
 
@@ -1132,8 +1183,38 @@ function AuthorCreateDialog({
           }
           if (pixivUserId.trim() && !/^[1-9][0-9]*$/.test(pixivUserId.trim()))
             throw new Error("Pixiv 用户 ID 必须是主页 /users/ 后的数字");
-          const author = await unwrap(
-            await client.POST("/api/authors", {
+          const accounts: components["schemas"]["CreateExternalAccountDto"][] =
+            [];
+          if (xProfile)
+            accounts.push({
+              platform: "x",
+              externalUserId: xProfile.externalUserId,
+              handle: xProfile.handle,
+              profileUrl: xProfile.profileUrl,
+              displayNameSnapshot: xProfile.displayName,
+              avatarFileObjectId: xProfile.avatarFileObjectId,
+              profileProof: xProfile.profileProof,
+              fetchEnabled: true,
+              firstSyncMode: "last_24_hours",
+            });
+          if (pixivUserId.trim())
+            accounts.push({
+              platform: "pixiv",
+              externalUserId: pixivUserId.trim(),
+              fetchEnabled: false,
+              firstSyncMode: "none",
+            });
+          // Persist only the opaque request ID. Draft text, profile proofs and files stay in memory.
+          try {
+            sessionStorage.setItem(requestStorageKey, requestId);
+          } catch {
+            /* Current form still retains the key. */
+          }
+          setHasPendingRequest(true);
+          let author;
+          let result;
+          try {
+            result = await client.POST("/api/authors", {
               body: {
                 displayName,
                 sourceLanguage,
@@ -1142,67 +1223,24 @@ function AuthorCreateDialog({
                   .split(/[,，]/)
                   .map((value) => value.trim())
                   .filter(Boolean),
+                accounts,
+                idempotencyKey: requestId,
               },
-            }),
-          );
+            });
+          } catch (error) {
+            // The transaction may have committed before the response was lost.
+            author = await recoverCreation().catch(() => null);
+            if (!author) throw error;
+          }
+          author ??= await unwrap(result!);
           progress.current.authorId = author.id;
           setSavedAuthorId(author.id);
         }
         const id = progress.current.authorId;
         const readAuthor = async () =>
           unwrap(
-            await client.GET("/api/authors/{id}", {
-              params: { path: { id } },
-            }),
+            await client.GET("/api/authors/{id}", { params: { path: { id } } }),
           );
-        // A successful response records the step immediately. A retry also reads
-        // existing identities so a lost binding response cannot hide a saved account.
-        step = "读取作者信息";
-        const existing = await readAuthor();
-        const hasAccount = (platform: "x" | "pixiv", externalUserId: string) =>
-          progress.current.accounts.has(platform) ||
-          existing.externalAccounts?.some(
-            (account) =>
-              account.platform === platform &&
-              account.externalUserId === externalUserId,
-          );
-        if (xProfile && !hasAccount("x", xProfile.externalUserId)) {
-          step = "X 账号绑定";
-          await unwrap(
-            await client.POST("/api/authors/{authorId}/accounts", {
-              params: { path: { authorId: id } },
-              body: {
-                platform: "x",
-                externalUserId: xProfile.externalUserId,
-                handle: xProfile.handle,
-                profileUrl: xProfile.profileUrl,
-                displayNameSnapshot: xProfile.displayName,
-                avatarFileObjectId: xProfile.avatarFileObjectId,
-                profileSyncAdapter: xProfile.adapterKey,
-                profileSyncedAt: xProfile.syncedAt,
-                fetchEnabled: true,
-                firstSyncMode: "last_24_hours",
-              },
-            }),
-          );
-          progress.current.accounts.add("x");
-        }
-        if (pixivUserId.trim() && !hasAccount("pixiv", pixivUserId.trim())) {
-          step = "Pixiv 账号绑定";
-          await unwrap(
-            await client.POST("/api/authors/{authorId}/accounts", {
-              params: { path: { authorId: id } },
-              body: {
-                platform: "pixiv",
-                externalUserId: pixivUserId.trim(),
-                fetchEnabled: false,
-                firstSyncMode: "none",
-              },
-            }),
-          );
-          progress.current.accounts.add("pixiv");
-        }
-        setAccountsSaved(true);
         if (avatar) {
           step = "头像上传";
           const author = await readAuthor();
@@ -1235,6 +1273,7 @@ function AuthorCreateDialog({
             ? "作者已创建；建议随后补充授权凭证"
             : "作者已创建",
         );
+        clearRequest();
       } catch (error) {
         if (!progress.current.authorId) throw error;
         const message =
@@ -1408,10 +1447,8 @@ function AuthorCreateDialog({
           />
           {savedAuthorId && (
             <p className="account-success" role="status">
-              作者已保存。
-              {accountsSaved
-                ? "账号已保存；头像和授权凭证可稍后在详情中补传。"
-                : "账号绑定尚未完成；基础信息已锁定。"}
+              作者已保存。 账号已保存；头像和授权凭证可稍后在详情中补传。
+              <Link to={`/authors/${savedAuthorId}`}>打开作者详情</Link>
             </p>
           )}
           <ImagePicker
@@ -1446,12 +1483,36 @@ function AuthorCreateDialog({
               onChange={(event) => setPixivUserId(event.target.value)}
             />
           </fieldset>
+          {hasPendingRequest && !savedAuthorId && (
+            <p role="status">
+              保留了本次保存标识。刷新后可检查保存结果；草稿和图片需重新选择。
+            </p>
+          )}
           <Feedback error={action.error} success={action.success} />
           <div className="workspace-dialog-actions">
+            {hasPendingRequest && !savedAuthorId && (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={action.busy || restoring}
+                onClick={() =>
+                  void action.run(async () => {
+                    const author = await recoverCreation();
+                    action.setSuccess(
+                      author
+                        ? "已恢复保存结果，可继续上传附件"
+                        : "尚未查到已保存结果，请使用本次标识重试保存",
+                    );
+                  })
+                }
+              >
+                检查保存结果
+              </Button>
+            )}
             <Button type="submit" loading={action.busy}>
               {savedAuthorId ? "继续保存" : "保存作者"}
             </Button>
-            {accountsSaved &&
+            {savedAuthorId &&
               !progress.current.avatar.locked &&
               !progress.current.evidence.locked && (
                 <Button
@@ -2086,12 +2147,6 @@ function ManualCandidateUpload({
   const [recoverableSessionId, setRecoverableSessionId] = useState(
     storedCandidateUploadSessionId,
   );
-  const authors = useApiQuery(["authors", "manual-upload"], async () =>
-    unwrap(await client.GET("/api/authors")),
-  );
-  const availableAuthors = (authors.data?.items ?? []).filter(
-    (author) => author.authorizationStatus === "authorized",
-  );
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
@@ -2102,9 +2157,6 @@ function ManualCandidateUpload({
       else dialog.removeAttribute("open");
     };
   }, []);
-  useEffect(() => {
-    if (!authorId && availableAuthors[0]) setAuthorId(availableAuthors[0].id);
-  }, [authorId, availableAuthors]);
 
   function applyCompletedSession(result: CandidateUploadSession) {
     setCompleted(result);
@@ -2398,19 +2450,13 @@ function ManualCandidateUpload({
                   <Badge>{draft.media.length} 页</Badge>
                 </div>
                 <div className="workspace-upload-preview-fields">
-                  <SelectField
-                    label="授权作者"
+                  <AuthorPicker
                     value={draft.authorId}
+                    disabled={action.busy}
                     onValueChange={(value) =>
                       updateDraft(candidate.id, { authorId: value })
                     }
-                  >
-                    {availableAuthors.map((author) => (
-                      <option key={author.id} value={author.id}>
-                        {author.displayName}
-                      </option>
-                    ))}
-                  </SelectField>
+                  />
                   <TextField
                     label="原帖配文（可选）"
                     value={draft.text}
@@ -2476,7 +2522,13 @@ function ManualCandidateUpload({
           <div className="workspace-dialog-actions">
             <Button
               loading={action.busy}
-              disabled={!completed.items.some((item) => item.candidate)}
+              disabled={
+                !completed.items.some((item) => item.candidate) ||
+                completed.items.some(
+                  (item) =>
+                    item.candidate && !drafts[item.candidate.id]?.authorId,
+                )
+              }
               onClick={() => void confirmUpload()}
             >
               确认{destination === "direct" ? "并直接入库" : "进入候选池"}
@@ -2492,19 +2544,12 @@ function ManualCandidateUpload({
             每张裸图单独形成图组；每个 ZIP 形成一个多页图组。ZIP
             最多读取两层目录，统一的末尾 -1/-01 编号会自动排序。
           </p>
-          <SelectField
-            label="授权作者"
+          <AuthorPicker
             value={authorId}
-            required
             onValueChange={setAuthorId}
-          >
-            <option value="">请选择作者</option>
-            {availableAuthors.map((author) => (
-              <option key={author.id} value={author.id}>
-                {author.displayName}
-              </option>
-            ))}
-          </SelectField>
+            autoSelectFirst
+            disabled={action.busy}
+          />
           <TextField
             label="原帖配文（可选）"
             value={text}
@@ -2563,9 +2608,7 @@ function ManualCandidateUpload({
               </Button>
             </div>
           )}
-          {!availableAuthors.length && !authors.isPending && (
-            <p className="account-error">请先创建至少一位授权有效的作者。</p>
-          )}
+
           <Button
             type="submit"
             loading={action.busy}

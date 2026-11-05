@@ -9,6 +9,7 @@ export interface Environment {
   port: number;
   databaseUrl: string;
   appOrigin: string;
+  authorProfileProofSecret?: string;
   trustedProxyCidrs?: string[];
   galleryDl?: {
     python: string;
@@ -222,6 +223,9 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
   )
     throw new Error("SOURCE_SCHEDULE_ENABLED must be true or false.");
   return {
+    ...(input.AUTHOR_PROFILE_PROOF_SECRET?.trim()
+      ? { authorProfileProofSecret: input.AUTHOR_PROFILE_PROOF_SECRET.trim() }
+      : {}),
     ...(adapter === "example"
       ? { imageAnalysis: { adapter: "example" as const } }
       : adapter === "ba-pixai"

@@ -24,6 +24,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   queryClient.clear();
+  sessionStorage.clear();
 });
 
 async function openCreate() {
@@ -66,43 +67,121 @@ async function openCreate() {
   });
 }
 
-test("a failed account binding resumes the existing author and locks its saved fields", async () => {
+test("base information and platform accounts use one atomic author request, and a rejected save keeps fields editable", async () => {
   vi.spyOn(client, "GET").mockImplementation(async (path) =>
     ok(
       path === "/api/authors"
         ? { items: [], total: 0, nextCursor: null }
-        : { id: "author", revision: 1 },
+        : null,
     ),
   );
   let attempts = 0;
-  const post = vi.spyOn(client, "POST").mockImplementation(async (path) => {
-    if (path === "/api/authors") return ok({ id: "author", revision: 1 });
-    if (++attempts === 1) return failed("账号绑定失败");
-    return ok({ id: "account" });
+  const post = vi.spyOn(client, "POST").mockImplementation(async () => {
+    if (++attempts === 1) return failed("账号已关联其他作者");
+    return ok({ id: "author", revision: 0, externalAccounts: [] });
   });
   await openCreate();
   fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
   expect((await screen.findByRole("alert")).textContent).toContain(
-    "作者已保存",
+    "账号已关联",
   );
+  expect(screen.getByLabelText("作者昵称").hasAttribute("disabled")).toBe(
+    false,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await screen.findByText(/作者已创建/);
+  expect(post).toHaveBeenCalledTimes(2);
+  const requests = post.mock.calls as unknown as [
+    string,
+    { body: Record<string, unknown> },
+  ][];
+  expect(requests.map(([path]) => path)).toEqual([
+    "/api/authors",
+    "/api/authors",
+  ]);
+  expect(requests[0][1].body.accounts).toEqual([
+    {
+      platform: "pixiv",
+      externalUserId: "123456",
+      fetchEnabled: false,
+      firstSyncMode: "none",
+    },
+  ]);
+  expect(requests[0][1].body.idempotencyKey).toBe(
+    requests[1][1].body.idempotencyKey,
+  );
+});
+
+test("a lost initial response recovers the committed author by request ID without a second POST", async () => {
+  let saved = false;
+  const get = vi.spyOn(client, "GET").mockImplementation(async (path) =>
+    ok(
+      path === "/api/authors"
+        ? { items: [], total: 0, nextCursor: null }
+        : {
+            author: saved
+              ? { id: "author", revision: 0, externalAccounts: [] }
+              : null,
+          },
+    ),
+  );
+  const post = vi.spyOn(client, "POST").mockImplementation(async () => {
+    saved = true;
+    throw new TypeError("响应丢失");
+  });
+  await openCreate();
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await screen.findByText(/作者已创建/);
+  expect(post).toHaveBeenCalledTimes(1);
+  expect(
+    (get.mock.calls as unknown as [string, unknown][]).some(
+      ([path]) => path === "/api/authors/creation-requests/{idempotencyKey}",
+    ),
+  ).toBe(true);
+});
+
+test("reopening restores only the same actor request result without persisting draft text or credentials", async () => {
+  const key = "f72f6416-81a0-4508-988b-4c76712c38dc";
+  sessionStorage.setItem("comiku:author-creation:undefined", key);
+  const get = vi.spyOn(client, "GET").mockImplementation(async (path) =>
+    ok(
+      path === "/api/authors"
+        ? { items: [], total: 0, nextCursor: null }
+        : {
+            author: {
+              id: "author",
+              revision: 0,
+              displayName: "已保存作者",
+              sourceLanguage: "ja",
+              authorizationStatus: "pending",
+              externalAccounts: [],
+            },
+          },
+    ),
+  );
+  const post = vi.spyOn(client, "POST");
+  await openCreate();
+  expect(
+    (await screen.findByRole("link", { name: "打开作者详情" })).getAttribute(
+      "href",
+    ),
+  ).toBe("/authors/author");
   expect(screen.getByLabelText("作者昵称").hasAttribute("disabled")).toBe(true);
-  expect(screen.queryByRole("button", { name: "稍后补传" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: /继续保存/ }));
-  await screen.findByText("作者已创建");
+  expect(post).not.toHaveBeenCalled();
+  expect(sessionStorage.getItem("comiku:author-creation:undefined")).toBe(key);
   expect(
-    (post.mock.calls as unknown as [string, unknown][]).filter(
-      ([path]) => path === "/api/authors",
+    (get.mock.calls as unknown as [string, unknown][]).some(
+      ([path, options]) =>
+        path === "/api/authors/creation-requests/{idempotencyKey}" &&
+        (options as { params: { path: { idempotencyKey: string } } }).params
+          .path.idempotencyKey === key,
     ),
-  ).toHaveLength(1);
-  expect(
-    (post.mock.calls as unknown as [string, unknown][]).filter(
-      ([path]) => path === "/api/authors/{authorId}/accounts",
-    ),
-  ).toHaveLength(2);
+  ).toBe(true);
 });
 
 test("completed avatar and account steps survive a lost evidence-finalize response without duplicating attachments", async () => {
   vi.stubGlobal("crypto", {
+    randomUUID: () => "74d00bc2-61ad-4d0c-873f-e7a6ae9706aa",
     subtle: { digest: async () => new ArrayBuffer(32) },
   });
   const fetch = vi.fn(async () => new Response());
@@ -197,7 +276,7 @@ test("completed avatar and account steps survive a lost evidence-finalize respon
     (post.mock.calls as unknown as [string, unknown][]).filter(
       ([path]) => path === "/api/authors/{authorId}/accounts",
     ),
-  ).toHaveLength(1);
+  ).toHaveLength(0);
   expect(
     (post.mock.calls as unknown as [string, unknown][]).filter(
       ([path]) => path === "/api/transfers/uploads",
@@ -226,6 +305,7 @@ test("editing retries a failed avatar at the saved revision and then accepts a n
     }),
   );
   vi.stubGlobal("crypto", {
+    randomUUID: () => "74d00bc2-61ad-4d0c-873f-e7a6ae9706aa",
     subtle: { digest: async () => new ArrayBuffer(32) },
   });
   let revision = 1;

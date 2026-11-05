@@ -162,7 +162,12 @@ function fixture(
     sources,
     null,
     null,
-    null,
+    {
+      platforms: {
+        profileNetwork: async (_actor: string, run: () => Promise<unknown>) =>
+          run(),
+      },
+    },
   ] as unknown as ConstructorParameters<typeof AuthorsService>;
   return new AuthorsService(...args);
 }

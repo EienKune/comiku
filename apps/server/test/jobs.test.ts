@@ -480,3 +480,88 @@ test("execution deferral refunds only its durable primary or secondary fairness 
       assert.equal(job.status, stale ? "running" : "queued");
     }
 });
+
+test("expired interactive profile leases terminate without replay while live profiles and ordinary recovery survive", async () => {
+  const now = new Date("2026-11-05T00:00:00Z");
+  const rows = [
+    {
+      id: "expired-profile",
+      kind: "source_profile_resolve",
+      status: "running",
+      leaseUntil: new Date(0),
+      leaseId: "expired",
+      completedAt: null as Date | null,
+    },
+    {
+      id: "queued-profile",
+      kind: "source_profile_resolve",
+      status: "queued",
+      leaseUntil: null as Date | null,
+      leaseId: null as string | null,
+      completedAt: null as Date | null,
+    },
+    {
+      id: "live-profile",
+      kind: "source_profile_resolve",
+      status: "running",
+      leaseUntil: new Date(now.getTime() + 60000),
+      leaseId: "live",
+      completedAt: null as Date | null,
+    },
+    {
+      id: "ordinary",
+      kind: "fixture",
+      status: "running",
+      leaseUntil: new Date(0),
+      leaseId: "ordinary",
+      completedAt: null as Date | null,
+    },
+  ];
+  type Filter = {
+    kind?: string;
+    status?: string;
+    leaseUntil?: { lte?: Date; gt?: Date };
+    OR?: Filter[];
+  };
+  const matches = (row: (typeof rows)[number], where: Filter): boolean =>
+    (!where.kind || row.kind === where.kind) &&
+    (!where.status || row.status === where.status) &&
+    (!where.leaseUntil?.lte ||
+      (row.leaseUntil !== null && row.leaseUntil <= where.leaseUntil.lte)) &&
+    (!where.leaseUntil?.gt ||
+      (row.leaseUntil !== null && row.leaseUntil > where.leaseUntil.gt)) &&
+    (!where.OR || where.OR.some((item) => matches(row, item)));
+  const jobs = new JobsService(
+    executionDb({
+      backgroundJob: {
+        updateMany: async ({
+          where,
+          data,
+        }: {
+          where: Filter;
+          data: Record<string, unknown>;
+        }) => {
+          let count = 0;
+          for (const row of rows)
+            if (matches(row, where)) {
+              Object.assign(row, data);
+              count++;
+            }
+          return { count };
+        },
+        count: async ({ where }: { where: Filter }) =>
+          rows.filter((row) => matches(row, where)).length,
+      },
+    }),
+  );
+  assert.equal(await jobs.claim("network", now, "source:x"), null);
+  assert.equal(rows[0].status, "failed");
+  assert.equal(rows[0].leaseId, null);
+  assert.deepEqual(rows[0].completedAt, now);
+  assert.equal(rows[1].status, "failed");
+  assert.deepEqual(rows[1].completedAt, now);
+  assert.equal(rows[2].status, "running");
+  assert.equal(rows[2].leaseId, "live");
+  assert.equal(rows[3].status, "queued");
+  assert.equal(rows[3].leaseId, null);
+});
