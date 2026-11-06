@@ -516,15 +516,20 @@ test("expired interactive profile leases terminate without replay while live pro
       leaseId: "ordinary",
       completedAt: null as Date | null,
     },
-  ];
+  ].map((row) => ({ ...row, attempts: 1 }));
   type Filter = {
-    kind?: string;
+    kind?: string | { not: string };
+    attempts?: { gte: number };
     status?: string;
     leaseUntil?: { lte?: Date; gt?: Date };
     OR?: Filter[];
   };
   const matches = (row: (typeof rows)[number], where: Filter): boolean =>
-    (!where.kind || row.kind === where.kind) &&
+    (!where.kind ||
+      (typeof where.kind === "string"
+        ? row.kind === where.kind
+        : row.kind !== where.kind.not)) &&
+    (!where.attempts || row.attempts >= where.attempts.gte) &&
     (!where.status || row.status === where.status) &&
     (!where.leaseUntil?.lte ||
       (row.leaseUntil !== null && row.leaseUntil <= where.leaseUntil.lte)) &&
@@ -551,6 +556,7 @@ test("expired interactive profile leases terminate without replay while live pro
         },
         count: async ({ where }: { where: Filter }) =>
           rows.filter((row) => matches(row, where)).length,
+        findFirst: async () => null,
       },
     }),
   );

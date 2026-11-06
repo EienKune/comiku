@@ -8,6 +8,7 @@ function fixture(platform = "x") {
   let inside = false,
     reserved = false,
     busy = false,
+    postBusy = false,
     lostLease = false,
     generation = "fixture";
   let state = {
@@ -26,15 +27,16 @@ function fixture(platform = "x") {
       }),
     },
     backgroundJob: {
-      count: async () => (busy ? 1 : 0),
+      count: async ({ where }: { where: { kind?: unknown; OR?: unknown } }) =>
+        busy || (postBusy && !where.kind && !where.OR) ? 1 : 0,
       create: async ({ data }: { data: Record<string, unknown> }) => {
         job = data;
         reserved = true;
       },
       updateMany: async () => ({ count: lostLease ? 0 : 1 }),
     },
-    sourceAccountScanState: { count: async () => 0 },
-    sourceAdapterState: { count: async () => 0 },
+    sourceAccountScanState: { count: async () => (postBusy ? 1 : 0) },
+    sourceAdapterState: { count: async () => (postBusy ? 1 : 0) },
     sourcePlatformState: {
       findUnique: async () => state,
       updateMany: async ({ data }: { data: Partial<typeof state> }) => {
@@ -75,6 +77,12 @@ function fixture(platform = "x") {
     setBusy: () => {
       busy = true;
     },
+    setPostBusy: () => {
+      postBusy = true;
+    },
+    setGate: (status: string, cooldownUntil: Date | null = null) => {
+      state = { ...state, status, cooldownUntil };
+    },
     loseLease: () => {
       lostLease = true;
     },
@@ -83,6 +91,51 @@ function fixture(platform = "x") {
     },
   };
 }
+
+for (const platform of ["x", "pixiv"] as const)
+  test(`${platform} profile can resolve while its post and account leases are active`, async () => {
+    const f = fixture(platform);
+    f.setPostBusy();
+    assert.equal(
+      await f.states.profileNetwork("actor", async () => "resolved", platform),
+      "resolved",
+    );
+    assert.equal(f.state().status, "healthy");
+  });
+
+test("a successful profile cannot clear a concurrent authentication pause or active cooldown", async () => {
+  for (const status of ["auth_paused", "cooling_down"]) {
+    const f = fixture();
+    const until = new Date(Date.now() + 60_000);
+    await f.states.profileNetwork("actor", async () => {
+      f.setGate(status, until);
+      return "resolved";
+    });
+    assert.equal(f.state().status, status);
+    assert.equal(f.state().cooldownUntil, until);
+  }
+});
+
+test("authentication and rate failures preserve both the stronger pause and longest cooldown", async () => {
+  for (const status of ["auth_paused", "cooling_down"]) {
+    const f = fixture();
+    const until = new Date(Date.now() + 120_000);
+    const failure = new SourceResponseError("authentication", {
+      scope: "credential",
+      reason: status === "auth_paused" ? "rate_limited" : "auth_failed",
+      diagnostic: { http_response_headers: { "retry-after": "5" } },
+    });
+    await assert.rejects(
+      f.states.profileNetwork("actor", async () => {
+        f.setGate(status, until);
+        throw failure;
+      }),
+      (error) => error === failure,
+    );
+    assert.equal(f.state().status, "auth_paused");
+    assert.equal(f.state().cooldownUntil, until);
+  }
+});
 test("profile lookup reserves platform network capacity outside the transaction", async () => {
   const f = fixture();
   assert.equal(
@@ -101,7 +154,7 @@ test("profile lookup reserves platform network capacity outside the transaction"
     busy.states.profileNetwork("actor", async () => {
       contacted = true;
     }),
-    /等待/,
+    /资料同步正在运行/,
   );
   assert.equal(contacted, false);
 });
@@ -173,7 +226,7 @@ test("Pixiv busy and auth pause prevent network before callback", async () => {
       },
       "pixiv",
     ),
-    /等待/,
+    /资料同步正在运行/,
   );
   assert.equal(called, false);
   const paused = fixture("pixiv");

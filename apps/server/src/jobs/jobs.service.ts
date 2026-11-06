@@ -187,6 +187,9 @@ export class JobsService {
             executionScope,
             status: "running",
             leaseUntil: { gt: now },
+            ...(lane === "network" && executionScope.startsWith("source:")
+              ? { kind: { not: "source_profile_resolve" } }
+              : {}),
           },
         })
       )

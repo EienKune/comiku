@@ -325,7 +325,7 @@ export class SourcePlatformStates {
     const deferred = this.denial(state, actual === generation ? actual : null);
     if (deferred) throw deferred;
   }
-  /** Short interactive metadata call shares the worker's durable platform scope. */
+  /** One interactive metadata call may overlap the platform's one collection job. */
   async profileNetwork<T>(
     actorId: string,
     run: () => Promise<T>,
@@ -342,23 +342,28 @@ export class SourcePlatformStates {
       await this.actor(tx, actorId, "authors:manage");
       const now = new Date();
       if (
-        (await tx.backgroundJob.count({
+        await tx.backgroundJob.count({
           where: {
             lane: "network",
             status: "running",
             leaseUntil: { gt: now },
-            executionScope: { in: ["global", `source:${platform}`] },
+            OR: [
+              { executionScope: "global" },
+              {
+                executionScope: `source:${platform}`,
+                kind: "source_profile_resolve",
+              },
+            ],
           },
-        })) ||
-        !(await this.drained(tx, platform, now))
+        })
       )
-        throw new ConflictException(
-          `${label} 同步正在运行，请等待后再同步资料`,
-        );
+        throw new ConflictException(`${label} 资料同步正在运行，请稍后再试`);
       let state = await tx.sourcePlatformState.findUnique({
         where: { platform },
       });
       if (!state) {
+        if (!(await this.drained(tx, platform, now)))
+          throw new ConflictException(`${label} 同步状态尚未就绪，请稍后再试`);
         await tx.sourcePlatformState.createMany({
           data: { platform, credentialGeneration: generation },
           skipDuplicates: true,
@@ -436,22 +441,34 @@ export class SourcePlatformStates {
     generation: string,
     error?: unknown,
   ) {
+    const now = new Date();
+    const failure = error === undefined ? null : platformFailure(error, now);
+    if (error !== undefined && !failure) return;
+    // Collection and interactive requests can complete in either order. Merge
+    // their evidence under the platform row lock, never under a new scope lock.
+    await this.lock(tx, platform);
     const state = await tx.sourcePlatformState.findUnique({
       where: { platform },
     });
     if (!state || state.credentialGeneration !== generation) return;
-    const failure =
-      error === undefined ? null : platformFailure(error, new Date());
-    if (error !== undefined && !failure) return;
+    if (
+      !failure &&
+      (state.status === "auth_paused" ||
+        (state.cooldownUntil && state.cooldownUntil > now))
+    )
+      return;
     await tx.sourcePlatformState.updateMany({
       where: { platform, credentialGeneration: generation },
       data: failure
         ? {
             ...failure,
+            ...(state.status === "auth_paused"
+              ? { status: state.status, errorCode: state.errorCode }
+              : {}),
             cooldownUntil:
-              failure.cooldownUntil &&
               state.cooldownUntil &&
-              state.cooldownUntil > failure.cooldownUntil
+              (!failure.cooldownUntil ||
+                state.cooldownUntil > failure.cooldownUntil)
                 ? state.cooldownUntil
                 : failure.cooldownUntil,
             revision: { increment: 1 },
