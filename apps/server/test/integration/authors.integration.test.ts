@@ -258,7 +258,17 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
         `/api/authors/${authorId}`,
       )
     ).data.externalAccounts[0];
-    assert.equal("fetchEnabled" in publicAccount, false);
+    assert.equal(publicAccount.fetchEnabled, true);
+    assert.deepEqual(Object.keys(publicAccount).sort(), [
+      "avatarAvailable",
+      "displayNameSnapshot",
+      "externalUserId",
+      "fetchEnabled",
+      "handle",
+      "id",
+      "platform",
+      "profileUrl",
+    ]);
     assert.equal(publicAccount.externalUserId, xIdentity);
     const updatedAccount = await request<{ revision: number }>(
       source,

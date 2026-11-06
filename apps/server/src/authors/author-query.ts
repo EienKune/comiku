@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { BadRequestException } from "@nestjs/common";
 import { Prisma } from "../generated/prisma/client.js";
-import type { AuthorQueryDto } from "./authors.dto.js";
+import { AuthorAccountFilter, type AuthorQueryDto } from "./authors.dto.js";
 
 export type AuthorPosition = { id: string; name: string; rank: number };
 const cursorError = () =>
@@ -27,8 +27,19 @@ export function authorQuery(query: AuthorQueryDto) {
   const platform = query.platform?.toLowerCase() || null;
   const tag = query.tag?.normalize("NFKC").trim().toLowerCase() || null;
   const authorization = query.authorizationStatus ?? null;
+  const xState = query.xState ?? null;
+  const pixivState = query.pixivState ?? null;
   const scope = createHash("sha256")
-    .update(JSON.stringify([search, platform, tag, authorization]))
+    .update(
+      JSON.stringify([
+        search,
+        platform,
+        tag,
+        authorization,
+        xState,
+        pixivState,
+      ]),
+    )
     .digest("hex");
   let cursor: AuthorPosition | undefined;
   if (query.cursor !== undefined) {
@@ -65,11 +76,24 @@ export function authorQuery(query: AuthorQueryDto) {
     }
   }
   const account = Prisma.sql`e.author_id = a.id AND e.deleted_at IS NULL`;
+  const accountState = (
+    platform: "x" | "pixiv",
+    state: AuthorAccountFilter | null,
+  ) => {
+    if (!state) return Prisma.empty;
+    const matching = Prisma.sql`SELECT 1 FROM author_external_accounts e WHERE ${account} AND e.platform = ${platform}
+      ${state === AuthorAccountFilter.enabled || state === AuthorAccountFilter.disabled ? Prisma.sql`AND e.fetch_enabled = ${state === AuthorAccountFilter.enabled}` : Prisma.empty}`;
+    return state === AuthorAccountFilter.unlinked
+      ? Prisma.sql`AND NOT EXISTS (${matching})`
+      : Prisma.sql`AND EXISTS (${matching})`;
+  };
   const handleMatch = (pattern: string) =>
     Prisma.sql`EXISTS (SELECT 1 FROM author_external_accounts e WHERE ${account} AND e.platform = 'x' AND lower(e.handle) LIKE ${pattern} ESCAPE chr(92))`;
   const contains = `%${like(search)}%`;
   const where = Prisma.sql`a.deleted_at IS NULL
     ${authorization ? Prisma.sql`AND a.authorization_status = ${authorization}::"AuthorizationStatus"` : Prisma.empty}
+    ${accountState("x", xState)}
+    ${accountState("pixiv", pixivState)}
     ${platform ? Prisma.sql`AND EXISTS (SELECT 1 FROM author_external_accounts e WHERE ${account} AND e.platform = ${platform})` : Prisma.empty}
     ${tag ? Prisma.sql`AND EXISTS (SELECT 1 FROM author_tags at JOIN tags t ON t.id = at.tag_id WHERE at.author_id = a.id AND t.normalized_name = ${tag})` : Prisma.empty}
     ${search ? Prisma.sql`AND (lower(a.display_name) LIKE ${contains} ESCAPE chr(92) OR EXISTS (SELECT 1 FROM author_external_accounts e WHERE ${account} AND (lower(e.handle) LIKE ${contains} ESCAPE chr(92) OR (e.platform = 'pixiv' AND e.external_user_id LIKE ${contains} ESCAPE chr(92)))))` : Prisma.empty}`;

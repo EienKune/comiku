@@ -2275,6 +2275,8 @@ export interface components {
         /** @enum {string} */
         AuthorizationStatus: "pending" | "authorized" | "expired" | "revoked";
         /** @enum {string} */
+        AuthorAccountFilter: "linked" | "enabled" | "disabled" | "unlinked";
+        /** @enum {string} */
         SourceLanguage: "ja" | "ko" | "en";
         TagDto: {
             /** Format: uuid */
@@ -2291,6 +2293,7 @@ export interface components {
             profileUrl: string | null;
             displayNameSnapshot: string | null;
             avatarAvailable: boolean;
+            fetchEnabled: boolean;
         };
         AuthorDto: {
             /** Format: uuid */
@@ -2340,10 +2343,10 @@ export interface components {
             profileUrl: string | null;
             displayNameSnapshot: string | null;
             avatarAvailable: boolean;
+            fetchEnabled: boolean;
             notes?: string | null;
             /** Format: uuid */
             authorId: string;
-            fetchEnabled: boolean;
             firstSyncMode: components["schemas"]["FirstSyncMode"];
             providerAvailable: boolean;
             revision: number;
@@ -6672,6 +6675,8 @@ export interface operations {
                 cursor?: string;
                 limit?: number;
                 authorizationStatus?: components["schemas"]["AuthorizationStatus"];
+                xState?: components["schemas"]["AuthorAccountFilter"];
+                pixivState?: components["schemas"]["AuthorAccountFilter"];
                 platform?: string;
                 tag?: string;
             };

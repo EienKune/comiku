@@ -1,0 +1,280 @@
+.author-directory {
+  max-width: var(--content-max);
+  margin-inline: auto;
+}
+.author-directory-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.author-directory-toolbar > .ui-field {
+  flex: 1;
+  min-width: 0;
+}
+.author-directory-toolbar .workspace-view-toggle {
+  flex-wrap: nowrap;
+}
+.author-directory-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+.author-directory-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 10rem;
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.author-directory-filter > span:first-child {
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+.author-directory-filter .ui-field__select {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.author-directory-filter .ui-field__select > button[role="combobox"] {
+  padding: 0;
+  font-size: var(--text-xs);
+}
+.author-directory-filter .ui-field__select > button > span.is-placeholder {
+  color: var(--color-text);
+}
+.author-directory-filter:focus-within {
+  border-color: var(--color-focus);
+  box-shadow: var(--shadow-focus);
+}
+.author-directory-filter[data-active="true"] {
+  border-color: var(--color-brand-200);
+  background: var(--color-brand-50);
+}
+.author-directory-filter .ui-select-menu {
+  left: auto;
+  right: 0;
+  min-width: 9rem;
+}
+.author-directory-filter:first-child .ui-select-menu {
+  left: 0;
+  right: auto;
+}
+.author-directory-count {
+  margin-left: auto;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.author-directory-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+.author-directory-card {
+  min-width: 0;
+  min-height: 15.5rem;
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.author-directory-identity {
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+.author-directory-identity > .ui-avatar {
+  width: 2.75rem;
+  height: 2.75rem;
+}
+.author-directory-name {
+  min-width: 0;
+  color: var(--color-text);
+  font-weight: 700;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.author-directory-identity > .ui-badge {
+  align-self: start;
+  margin-top: 2px;
+  white-space: nowrap;
+}
+.author-directory-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.author-directory-tags .ui-badge {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.author-directory-card > .author-directory-tags {
+  margin-top: auto;
+}
+.author-directory-table-wrap {
+  padding: 0;
+  overflow: visible;
+}
+.author-directory-table {
+  table-layout: fixed;
+  width: 100%;
+  border-collapse: collapse;
+}
+.author-directory-table > caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.author-directory-table th {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-align: left;
+}
+.author-directory-table :is(th, td) {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+.author-directory-table th:nth-child(1) {
+  width: 31%;
+}
+.author-directory-table th:nth-child(2) {
+  width: 39%;
+}
+.author-directory-table th:nth-child(3) {
+  width: 11%;
+}
+.author-directory-table th:nth-child(4) {
+  width: 19%;
+}
+.author-directory-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.author-directory-table .author-directory-identity {
+  grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+}
+.author-directory-table .ui-avatar {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+.author-directory-table .author-directory-name {
+  font-size: var(--text-sm);
+}
+.author-directory-table .platform-links--accounts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+@media (max-width: 1400px) {
+  .author-directory-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 1100px) {
+  .author-directory-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .author-directory-table .platform-links--accounts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (min-width: 761px) {
+  .author-directory-table .author-directory-tags .author-directory-language {
+    display: none;
+  }
+}
+@media (max-width: 760px) {
+  .author-directory-toolbar {
+    flex-wrap: wrap;
+  }
+  .author-directory-toolbar > .ui-field {
+    flex-basis: 100%;
+  }
+  .author-directory-toolbar .workspace-view-toggle {
+    margin-right: auto;
+  }
+  .author-directory-filter {
+    flex: 1 1 10rem;
+    min-width: 10rem;
+    gap: var(--space-1);
+    padding-inline: var(--space-2);
+  }
+  .author-directory-filter .ui-field__select > button[role="combobox"] {
+    gap: var(--space-1);
+  }
+  .author-directory-count {
+    width: 100%;
+    text-align: right;
+  }
+  .author-directory-table,
+  .author-directory-table tbody {
+    display: block;
+  }
+  .author-directory-table thead {
+    display: none;
+  }
+  .author-directory-table tr {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .author-directory-table tbody tr:last-child {
+    border-bottom: 0;
+  }
+  .author-directory-table td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+  .author-directory-table .author-directory-language-cell {
+    display: none;
+  }
+  .author-directory-table .platform-links--accounts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .author-directory-table
+    .platform-account-entry:last-child
+    .platform-account-tooltip {
+    left: auto;
+    right: 0;
+  }
+}
+@media (max-width: 600px) {
+  .author-directory-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 420px) {
+  .author-directory-filters {
+    column-gap: var(--space-1);
+  }
+  .author-directory-filter {
+    padding-inline: var(--space-1);
+  }
+  .author-directory-filter > span:first-child {
+    font-size: var(--text-xs);
+  }
+  .author-directory-table .platform-links--accounts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

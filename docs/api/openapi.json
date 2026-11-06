@@ -3731,6 +3731,30 @@
           },
           {
             "required": false,
+            "name": "xState",
+            "in": "query",
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/AuthorAccountFilter"
+                }
+              ]
+            }
+          },
+          {
+            "required": false,
+            "name": "pixivState",
+            "in": "query",
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/AuthorAccountFilter"
+                }
+              ]
+            }
+          },
+          {
+            "required": false,
             "name": "platform",
             "in": "query",
             "schema": {
@@ -16955,6 +16979,15 @@
           "revoked"
         ]
       },
+      "AuthorAccountFilter": {
+        "type": "string",
+        "enum": [
+          "linked",
+          "enabled",
+          "disabled",
+          "unlinked"
+        ]
+      },
       "SourceLanguage": {
         "type": "string",
         "enum": [
@@ -17010,6 +17043,9 @@
           },
           "avatarAvailable": {
             "type": "boolean"
+          },
+          "fetchEnabled": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -17019,7 +17055,8 @@
           "handle",
           "profileUrl",
           "displayNameSnapshot",
-          "avatarAvailable"
+          "avatarAvailable",
+          "fetchEnabled"
         ]
       },
       "AuthorDto": {
@@ -17209,6 +17246,9 @@
           "avatarAvailable": {
             "type": "boolean"
           },
+          "fetchEnabled": {
+            "type": "boolean"
+          },
           "notes": {
             "type": "string",
             "nullable": true,
@@ -17217,9 +17257,6 @@
           "authorId": {
             "type": "string",
             "format": "uuid"
-          },
-          "fetchEnabled": {
-            "type": "boolean"
           },
           "firstSyncMode": {
             "allOf": [
@@ -17259,8 +17296,8 @@
           "profileUrl",
           "displayNameSnapshot",
           "avatarAvailable",
-          "authorId",
           "fetchEnabled",
+          "authorId",
           "firstSyncMode",
           "providerAvailable",
           "revision",

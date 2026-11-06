@@ -92,6 +92,13 @@ export class CreateAuthorDto {
   accounts?: CreateAuthorAccountDto[];
 }
 
+export enum AuthorAccountFilter {
+  linked = "linked",
+  enabled = "enabled",
+  disabled = "disabled",
+  unlinked = "unlinked",
+}
+
 export class AuthorQueryDto {
   @ApiPropertyOptional({ type: String, maxLength: 100 })
   @IsOptional()
@@ -121,6 +128,22 @@ export class AuthorQueryDto {
   @IsOptional()
   @IsEnum(AuthorizationStatus)
   authorizationStatus?: AuthorizationStatus;
+
+  @ApiPropertyOptional({
+    enum: AuthorAccountFilter,
+    enumName: "AuthorAccountFilter",
+  })
+  @IsOptional()
+  @IsEnum(AuthorAccountFilter)
+  xState?: AuthorAccountFilter;
+
+  @ApiPropertyOptional({
+    enum: AuthorAccountFilter,
+    enumName: "AuthorAccountFilter",
+  })
+  @IsOptional()
+  @IsEnum(AuthorAccountFilter)
+  pixivState?: AuthorAccountFilter;
 
   @ApiPropertyOptional({ type: String, maxLength: 32 })
   @IsOptional()
@@ -339,6 +362,7 @@ export class ExternalAccountSummaryDto {
   @ApiProperty({ type: String, nullable: true }) displayNameSnapshot!:
     string | null;
   @ApiProperty({ type: Boolean }) avatarAvailable!: boolean;
+  @ApiProperty({ type: Boolean }) fetchEnabled!: boolean;
 }
 
 export class SourceAdapterStateDto {
@@ -374,7 +398,6 @@ export class ExternalAccountDto extends ExternalAccountSummaryDto {
   @ApiPropertyOptional({ type: String, nullable: true, maxLength: 2000 })
   notes?: string | null;
   @ApiProperty({ type: String, format: "uuid" }) authorId!: string;
-  @ApiProperty({ type: Boolean }) fetchEnabled!: boolean;
   @ApiProperty({ enum: FirstSyncMode, enumName: "FirstSyncMode" })
   firstSyncMode!: FirstSyncMode;
   @ApiProperty({ type: Boolean }) providerAvailable!: boolean;

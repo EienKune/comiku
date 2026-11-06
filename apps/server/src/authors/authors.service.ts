@@ -95,6 +95,7 @@ const authorListDetails = {
       profileUrl: true,
       displayNameSnapshot: true,
       avatarFileObjectId: true,
+      fetchEnabled: true,
     },
   },
 } satisfies Prisma.AuthorSelect;
@@ -291,6 +292,7 @@ export class AuthorsService {
       profileUrl: account.profileUrl,
       displayNameSnapshot: account.displayNameSnapshot,
       avatarAvailable: Boolean(account.avatarFileObjectId),
+      fetchEnabled: account.fetchEnabled,
     };
   }
 

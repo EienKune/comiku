@@ -9,6 +9,10 @@ import {
 import { PrismaService } from "../../src/database/prisma.service.js";
 import { AuthorsService } from "../../src/authors/authors.service.js";
 import { authorQuery } from "../../src/authors/author-query.js";
+import {
+  AuthorAccountFilter,
+  type AuthorQueryDto,
+} from "../../src/authors/authors.dto.js";
 import { ContentSourceRegistry } from "../../src/source-ingestion/source-registry.js";
 import type { Prisma } from "../../src/generated/prisma/client.js";
 loadRootEnvironment();
@@ -29,6 +33,7 @@ test("database author keysets preserve rank, ties and filters with bounded summa
     take: number | undefined;
     ids: number;
     includesAdapters: boolean;
+    includesPrivateFields: boolean;
   }[] = [];
   const rawPageSizes: number[] = [];
   const transaction = db.$transaction.bind(db);
@@ -64,6 +69,10 @@ test("database author keysets preserve rank, ties and filters with bounded summa
                             includesAdapters: JSON.stringify(
                               args.select ?? args.include,
                             ).includes("adapterStates"),
+                            includesPrivateFields:
+                              /notes|metadataJson|discoveryCheckpointJson/.test(
+                                JSON.stringify(args.select ?? args.include),
+                              ),
                           });
                           return model.findMany(args);
                         };
@@ -176,7 +185,11 @@ test("database author keysets preserve rank, ties and filters with bounded summa
     assert(rawPageSizes.every((size) => size <= 51));
     assert(
       reads.every(
-        (read) => read.take === 50 && read.ids <= 50 && !read.includesAdapters,
+        (read) =>
+          read.take === 50 &&
+          read.ids <= 50 &&
+          !read.includesAdapters &&
+          !read.includesPrivateFields,
       ),
     );
     await assert.rejects(
@@ -253,6 +266,257 @@ test("database author keysets preserve rank, ties and filters with bounded summa
         indexes: [...indexes].sort(),
       }),
     );
+  } finally {
+    await db.sourceAdapterState.deleteMany({
+      where: { externalAccount: { authorId: { in: ids } } },
+    });
+    await db.authorExternalAccount.deleteMany({
+      where: { authorId: { in: ids } },
+    });
+    await db.authorTag.deleteMany({ where: { authorId: { in: ids } } });
+    await db.author.deleteMany({ where: { id: { in: ids } } });
+    await db.tag.deleteMany({ where: { id: tagId } });
+    await db.$disconnect();
+  }
+});
+
+test("database author account filters combine active X and Pixiv states without leaking management data", async () => {
+  const db = new PrismaService(
+    parseEnvironment({ NODE_ENV: "test", DATABASE_URL: testUrl }),
+  );
+  const authors = new AuthorsService(
+    db,
+    new ContentSourceRegistry(),
+    null as never,
+    null as never,
+    null as never,
+  );
+  const prefix = `account_states_${randomUUID().replaceAll("-", "")}`;
+  const numeric = BigInt(`0x${randomUUID().replaceAll("-", "")}`).toString();
+  const ids: string[] = Array.from({ length: 12 }, () => randomUUID());
+  const tagId = randomUUID();
+  // Independently hand-checked fixtures: true=on, false=off, null=unlinked.
+  const states: [boolean | null, boolean | null][] = [
+    [true, true],
+    [true, false],
+    [false, true],
+    [false, false],
+    [true, null],
+    [null, true],
+    [null, null],
+    [false, null],
+    [null, false],
+    [null, null],
+    [true, true],
+    [true, true],
+  ];
+  const accounts = states.flatMap((state, index) =>
+    state.flatMap((enabled, platformIndex) =>
+      enabled === null
+        ? []
+        : [
+            {
+              id: randomUUID(),
+              authorId: ids[index],
+              platform: platformIndex === 0 ? "x" : "pixiv",
+              externalUserId: `${numeric}${index}`,
+              fetchEnabled: enabled,
+              notes: "private account note",
+              metadataJson: { private: "account metadata" },
+              deletedAt: null as Date | null,
+            },
+          ],
+    ),
+  );
+  // A deleted account must establish neither linked nor enabled/disabled.
+  for (const [index, platform, enabled] of [
+    [9, "x", true],
+    [9, "pixiv", false],
+    [7, "pixiv", true],
+  ] as const)
+    accounts.push({
+      id: randomUUID(),
+      authorId: ids[index],
+      platform,
+      externalUserId: `${numeric}${index}`,
+      fetchEnabled: enabled,
+      notes: "deleted private note",
+      metadataJson: { private: "deleted metadata" },
+      deletedAt: new Date(),
+    });
+  try {
+    await db.tag.create({
+      data: { id: tagId, name: prefix, normalizedName: prefix },
+    });
+    await db.author.createMany({
+      data: ids.map((id, index) => ({
+        id,
+        displayName: `${prefix} ${String(index).padStart(2, "0")}`,
+        notes: "private author note",
+        authorizationStatus: index === 10 ? "pending" : "authorized",
+        deletedAt: index === 11 ? new Date() : null,
+      })),
+    });
+    await db.authorTag.createMany({
+      data: ids.map((authorId) => ({ authorId, tagId })),
+    });
+    await db.authorExternalAccount.createMany({ data: accounts });
+    await db.sourceAdapterState.createMany({
+      data: accounts.map((account) => ({
+        externalAccountId: account.id,
+        adapterKey: "synthetic_account_filters",
+        discoveryCheckpointJson: { private: "adapter checkpoint" },
+      })),
+    });
+    const cases: { filters: AuthorQueryDto; expected: number[] }[] = [
+      { filters: {}, expected: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] },
+      {
+        filters: { xState: AuthorAccountFilter.linked },
+        expected: [0, 1, 2, 3, 4, 7],
+      },
+      { filters: { xState: AuthorAccountFilter.enabled }, expected: [0, 1, 4] },
+      {
+        filters: { xState: AuthorAccountFilter.disabled },
+        expected: [2, 3, 7],
+      },
+      {
+        filters: { xState: AuthorAccountFilter.unlinked },
+        expected: [5, 6, 8, 9],
+      },
+      {
+        filters: { pixivState: AuthorAccountFilter.linked },
+        expected: [0, 1, 2, 3, 5, 8],
+      },
+      {
+        filters: { pixivState: AuthorAccountFilter.enabled },
+        expected: [0, 2, 5],
+      },
+      {
+        filters: { pixivState: AuthorAccountFilter.disabled },
+        expected: [1, 3, 8],
+      },
+      {
+        filters: { pixivState: AuthorAccountFilter.unlinked },
+        expected: [4, 6, 7, 9],
+      },
+      {
+        filters: {
+          xState: AuthorAccountFilter.enabled,
+          pixivState: AuthorAccountFilter.disabled,
+        },
+        expected: [1],
+      },
+      {
+        filters: {
+          xState: AuthorAccountFilter.disabled,
+          pixivState: AuthorAccountFilter.enabled,
+        },
+        expected: [2],
+      },
+      {
+        filters: {
+          xState: AuthorAccountFilter.enabled,
+          pixivState: AuthorAccountFilter.unlinked,
+        },
+        expected: [4],
+      },
+      {
+        filters: {
+          xState: AuthorAccountFilter.unlinked,
+          pixivState: AuthorAccountFilter.disabled,
+        },
+        expected: [8],
+      },
+      {
+        filters: {
+          xState: AuthorAccountFilter.unlinked,
+          pixivState: AuthorAccountFilter.unlinked,
+        },
+        expected: [6, 9],
+      },
+      {
+        filters: {
+          xState: AuthorAccountFilter.disabled,
+          pixivState: AuthorAccountFilter.linked,
+        },
+        expected: [2, 3],
+      },
+      {
+        filters: { xState: AuthorAccountFilter.unlinked, platform: "x" },
+        expected: [],
+      },
+    ];
+    for (const { filters, expected } of cases) {
+      const found: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await authors.list({
+          tag: prefix,
+          authorizationStatus: "authorized",
+          limit: 2,
+          ...filters,
+          cursor,
+        });
+        assert.equal(page.total, expected.length, JSON.stringify(filters));
+        assert(page.items.length <= 2);
+        assert(!JSON.stringify(page).includes("private"));
+        for (const author of page.items) {
+          const state = states[ids.indexOf(author.id)];
+          assert.equal(
+            author.externalAccounts.length,
+            state.filter((value) => value !== null).length,
+          );
+          for (const account of author.externalAccounts) {
+            assert.deepEqual(Object.keys(account).sort(), [
+              "avatarAvailable",
+              "displayNameSnapshot",
+              "externalUserId",
+              "fetchEnabled",
+              "handle",
+              "id",
+              "platform",
+              "profileUrl",
+            ]);
+            assert.equal(
+              account.fetchEnabled,
+              state[account.platform === "x" ? 0 : 1],
+            );
+          }
+        }
+        found.push(...page.items.map((author) => author.id));
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      assert.deepEqual(
+        found,
+        expected.map((index) => ids[index]),
+        JSON.stringify(filters),
+      );
+      assert.equal(new Set(found).size, found.length);
+    }
+    const options = {
+      tag: prefix,
+      xState: AuthorAccountFilter.linked,
+      pixivState: AuthorAccountFilter.linked,
+      limit: 1,
+    };
+    const first = await authors.list(options);
+    assert(first.nextCursor);
+    for (const changed of [
+      { xState: undefined },
+      { xState: AuthorAccountFilter.enabled },
+      { pixivState: undefined },
+      { pixivState: AuthorAccountFilter.disabled },
+    ])
+      await assert.rejects(
+        authors.list({ ...options, ...changed, cursor: first.nextCursor }),
+      );
+    const empty = await authors.list({
+      tag: prefix,
+      xState: AuthorAccountFilter.unlinked,
+      pixivState: AuthorAccountFilter.enabled,
+      search: "no such author",
+    });
+    assert.deepEqual(empty, { items: [], total: 0, nextCursor: null });
   } finally {
     await db.sourceAdapterState.deleteMany({
       where: { externalAccount: { authorId: { in: ids } } },

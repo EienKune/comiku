@@ -53,11 +53,9 @@ import {
   Inbox,
   Grid2X2,
   List,
-  Plus,
   ScanText,
   Search,
   Upload,
-  UserRound,
   X,
   Zap,
 } from "lucide-react";
@@ -75,7 +73,9 @@ import {
 import { isDisplayableImageUrl } from "../../components/media-url";
 import { ImageLightbox } from "../../components/ImageLightbox";
 import { OptionalSection } from "../../components/OptionalSection";
-import { PlatformLinks } from "../../components/PlatformLinks";
+import { AuthorDirectory } from "./AuthorDirectory";
+import { AuthorAvatar } from "./AuthorAvatar";
+import { sourceLanguageLabels, authorizationLabels } from "./author-labels";
 import { useAccount } from "../account/account-context";
 import { useTopbarActions } from "../account/topbar-actions";
 import {
@@ -132,12 +132,6 @@ type WorkPhase = components["schemas"]["WorkPhase"];
 function workDisplayTitle(work: Pick<Work, "workNumber" | "title">) {
   return work.title?.trim() || `#${work.workNumber} · 待定标题`;
 }
-
-const sourceLanguageLabels: Record<SourceLanguage, string> = {
-  ja: "日语",
-  ko: "韩语",
-  en: "英语",
-};
 
 const workflowLabels: Record<WorkflowStatus, string> = {
   pending_translate: "待翻译",
@@ -202,12 +196,6 @@ const eventLabels: Record<string, string> = {
   typeset_version_reviewed: "成图适配新文本复核",
   archived: "归档作品",
   restored: "恢复作品",
-};
-const authorizationLabels: Record<string, string> = {
-  pending: "待确认",
-  authorized: "已授权",
-  expired: "已过期",
-  revoked: "已撤销",
 };
 const candidateLabels: Record<string, string> = {
   pending: "待处理",
@@ -812,72 +800,18 @@ export function BusinessAuditPage() {
 export function AuthorsPage() {
   const user = useAccount();
   const action = useAction();
-  const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
-  const [view, setView] = useState<"cards" | "rows">("cards");
-  const query = useInfiniteQuery({
-    queryKey: ["authors", search],
-    initialPageParam: null as string | null,
-    queryFn: async ({ pageParam }) =>
-      unwrap(
-        await client.GET("/api/authors", {
-          params: {
-            query: {
-              limit: 50,
-              search: search.trim() || undefined,
-              cursor: pageParam ?? undefined,
-            },
-          },
-        }),
-      ),
-    getNextPageParam: (page) => page.nextCursor,
-  });
-  const items = query.data?.pages.flatMap((page) => page.items) ?? [];
-  const total = query.data?.pages[0]?.total ?? 0;
   return (
     <PermissionGate permission="authors:read">
-      <SectionHeading title="授权作者">
-        集中维护授权状态、多平台账号和自动抓取入口。
-      </SectionHeading>
-      <Toolbar>
-        <SearchField
-          aria-label="搜索作者"
-          placeholder="优先搜索 X @账号，也可搜索作者昵称"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <div
-          className="workspace-view-toggle"
-          role="group"
-          aria-label="作者展示方式"
-        >
-          <Button
-            size="sm"
-            variant={view === "cards" ? "primary" : "ghost"}
-            leadingIcon={<Grid2X2 size={15} />}
-            onClick={() => setView("cards")}
-          >
-            卡片
-          </Button>
-          <Button
-            size="sm"
-            variant={view === "rows" ? "primary" : "ghost"}
-            leadingIcon={<List size={15} />}
-            onClick={() => setView("rows")}
-          >
-            列表
-          </Button>
-        </div>
-        {user.permissions.includes("authors:manage") && (
-          <Button
-            leadingIcon={<Plus size={16} />}
-            onClick={() => setShowCreate(true)}
-          >
-            新增作者
-          </Button>
-        )}
-      </Toolbar>
+      <SectionHeading title="授权作者" />
       <Feedback error={action.error} success={action.success} />
+      <AuthorDirectory
+        onCreate={
+          user.permissions.includes("authors:manage")
+            ? () => setShowCreate(true)
+            : undefined
+        }
+      />
       {showCreate && (
         <AuthorCreateDialog
           onClose={() => setShowCreate(false)}
@@ -888,148 +822,7 @@ export function AuthorsPage() {
           }}
         />
       )}
-      {query.isPending ? (
-        <Surface className="workspace-state">正在加载作者目录…</Surface>
-      ) : query.isError ? (
-        <Surface className="workspace-state">
-          <p>{query.error.message}</p>
-          <Button variant="secondary" onClick={() => void query.refetch()}>
-            重试
-          </Button>
-        </Surface>
-      ) : !items.length ? (
-        <EmptyState
-          icon={<UserRound size={24} />}
-          title="暂无作者"
-          description="可以使用新增作者或 CSV 批量导入。"
-        />
-      ) : view === "cards" ? (
-        <div className="workspace-card-grid workspace-author-grid">
-          {items.map((author) => (
-            <AuthorCard key={author.id} author={author} />
-          ))}
-        </div>
-      ) : (
-        <Surface className="workspace-author-table-wrap">
-          <table className="workspace-author-table">
-            <thead>
-              <tr>
-                <th>作者</th>
-                <th>平台账号</th>
-                <th>母语</th>
-                <th>授权</th>
-                <th>标签</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((author) => (
-                <tr key={author.id}>
-                  <td>
-                    <Link to={`/authors/${author.id}`}>
-                      <AuthorAvatar author={author} />
-                      <strong>{author.displayName}</strong>
-                    </Link>
-                  </td>
-                  <td>
-                    <div className="workspace-author-platforms">
-                      {authorAccountLabel(author)}
-                      <PlatformLinks accounts={author.externalAccounts} />
-                    </div>
-                  </td>
-                  <td>{sourceLanguageLabels[author.sourceLanguage]}</td>
-                  <td>{authorizationLabels[author.authorizationStatus]}</td>
-                  <td>
-                    {author.tags.map((tag) => tag.name).join("、") || "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Surface>
-      )}
-      {items.length > 0 && (
-        <div className="workspace-pagination">
-          <span>
-            已显示 {items.length} / {total} 位作者
-          </span>
-          {query.hasNextPage && (
-            <Button
-              variant="secondary"
-              loading={query.isFetchingNextPage}
-              onClick={() => void query.fetchNextPage()}
-            >
-              加载更多
-            </Button>
-          )}
-        </div>
-      )}
     </PermissionGate>
-  );
-}
-
-function authorAccountLabel(author: Author) {
-  const x = author.externalAccounts.find((account) => account.platform === "x");
-  if (x?.handle) return `@${x.handle}`;
-  const pixiv = author.externalAccounts.find(
-    (account) => account.platform === "pixiv",
-  );
-  return pixiv?.handle ? `p@${pixiv.handle}` : "尚未关联";
-}
-
-function AuthorAvatar({ author }: { author: Author }) {
-  const query = useApiQuery(
-    ["author-avatar", author.id],
-    async () =>
-      unwrap(
-        await client.GET("/api/authors/{id}/avatar/url", {
-          params: { path: { id: author.id } },
-        }),
-      ),
-    author.avatarAvailable,
-  );
-  return (
-    <Avatar
-      className="workspace-avatar workspace-avatar--large"
-      name={author.displayName}
-      src={
-        query.data?.url && isDisplayableImageUrl(query.data.url)
-          ? query.data.url
-          : undefined
-      }
-      loading="lazy"
-    />
-  );
-}
-
-function AuthorCard({ author }: { author: Author }) {
-  return (
-    <Surface className="workspace-author-card">
-      <div className="workspace-card-title">
-        <AuthorAvatar author={author} />
-        <div>
-          <h2>
-            <Link to={`/authors/${author.id}`}>{author.displayName}</Link>
-          </h2>
-          <Badge
-            tone={
-              author.authorizationStatus === "authorized"
-                ? "success"
-                : "warning"
-            }
-          >
-            {authorizationLabels[author.authorizationStatus]}
-          </Badge>
-          <Badge>{sourceLanguageLabels[author.sourceLanguage]}</Badge>
-        </div>
-      </div>
-      <div className="workspace-tags">
-        {author.tags.map((tag) => (
-          <Badge key={tag.id}>{tag.name}</Badge>
-        ))}
-      </div>
-      <p>{authorAccountLabel(author)}</p>
-      <PlatformLinks accounts={author.externalAccounts} />
-    </Surface>
   );
 }
 

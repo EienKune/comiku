@@ -824,6 +824,39 @@ export function DesignSystemPlayground() {
                 ]}
               />
               <PlatformLinks accounts={[]} />
+              <h3>作者目录账号与采集设置</h3>
+              <p>
+                图标后直接展示账号；电源和暂停角标表示采集开关，关闭仍可打开主页。
+              </p>
+              <PlatformLinks
+                variant="accounts"
+                accounts={[
+                  {
+                    platform: "x",
+                    handle: "comiku_demo",
+                    externalUserId: "1",
+                    fetchEnabled: true,
+                  },
+                  {
+                    platform: "pixiv",
+                    handle: null,
+                    externalUserId: "123456",
+                    fetchEnabled: false,
+                  },
+                ]}
+              />
+              <PlatformLinks
+                variant="accounts"
+                collectionBlockedReason="作者授权已过期，当前不会采集"
+                accounts={[
+                  {
+                    platform: "x",
+                    handle: "comiku_one",
+                    externalUserId: "2",
+                    fetchEnabled: true,
+                  },
+                ]}
+              />
               <PlatformLinks
                 accounts={[
                   { platform: "x", handle: "comiku_one", externalUserId: "2" },
