@@ -20,17 +20,18 @@ function statusTone(status: string) {
   return "neutral" as const;
 }
 
-export function SourceFetchHistory() {
+export function SourceFetchHistory({ enabled = true }: { enabled?: boolean }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["source-fetch-history"],
+    enabled,
     queryFn: async () => unwrap(await client.GET("/api/source-fetch/runs")),
-    refetchInterval: 15_000,
+    refetchInterval: enabled ? 15_000 : false,
   });
   return (
     <Surface className="system-history">
       <header className="system-history-heading">
-        <h2>图源采集</h2>
+        <h2>同步记录</h2>
         <Button
           variant="ghost"
           size="sm"

@@ -45,7 +45,7 @@ Account ID 为 32 位十六进制。实现根据 Account ID 生成 S3 endpoint�
 
 Bucket 保持私有，CORS 精确允许当前浏览器 origin，方法为 GET/PUT/HEAD，允许 content-type、x-amz-meta-sha256，按需暴露 ETag。浏览器直接向签名 URL 上传/下载，API 和 worker 负责权限、HEAD/魔数/摘要、解包及采用校验。业务对象与备份对象使用独立 Bucket 和凭据。
 
-只能给 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/`、`staging/direct-upload/` 设置一日过期规则；使用 `R2_KEY_PREFIX` 时规则也须包含该前缀。不要给所有业务对象统一短期过期。原图、缩略图、可恢复版本、交接和发布历史各有引用与清理规则。
+只能给 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/` 设置一日过期规则；使用 `R2_KEY_PREFIX` 时规则也须包含该前缀。`staging/direct-upload/` 由应用根据任务租约与终态回执分阶段清理，不得配置按对象年龄自动删除的规则；升级前须核对桶中实际规则并排除此路径。不要给所有业务对象统一短期过期。原图、缩略图、可恢复版本、交接和发布历史各有引用与清理规则。
 
 local 与 R2 不是自动迁移关系：更换驱动不会搬运已有对象。使用独立测试库/桶验证 R2，不要把原 local 数据库直接切到空 R2 Bucket。
 

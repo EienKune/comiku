@@ -3,9 +3,10 @@ import { Badge, Button, Surface } from "../../components/ui";
 import { client, unwrap } from "../account/api";
 import { sourceAdapterLabels } from "../workspace/source-labels";
 
-export function SourceConnections() {
+export function SourceConnections({ enabled = true }: { enabled?: boolean }) {
   const sources = useQuery({
     queryKey: ["source-capabilities"],
+    enabled,
     queryFn: async () => unwrap(await client.GET("/api/authors/sources")),
   });
   return (
