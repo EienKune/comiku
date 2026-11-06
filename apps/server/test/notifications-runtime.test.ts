@@ -8,6 +8,61 @@ import type { NotificationConnectionRegistry } from "../src/notifications/notifi
 import type { OneBotHttpAdapter } from "../src/notifications/onebot-http.adapter.js";
 import type { Environment } from "../src/config/environment.js";
 
+test("routing uses recipient frozen text even after event metadata and current template change", async () => {
+  let saved!: { text: string };
+  const channel = {
+    id: "channel",
+    enabled: true,
+    audienceGeneration: 1,
+    groupId: "123",
+    connectionKey: "test",
+    connectionFingerprint: "a".repeat(64),
+  };
+  const event = {
+    id: "event",
+    routedAt: null,
+    routeRefs: [
+      {
+        id: channel.id,
+        revision: 1,
+        generation: 1,
+        groupId: "123",
+        connectionKey: "test",
+        connectionFingerprint: "a".repeat(64),
+        content: { text: "FROZEN ORIGINAL BODY" },
+      },
+    ],
+  };
+  const tx = {
+    $queryRaw: async () => [],
+    notificationEvent: {
+      findUniqueOrThrow: async () => event,
+      update: async () => ({}),
+    },
+    notificationChannel: { findUnique: async () => channel },
+    notificationDelivery: {
+      createMany: async ({ data }: { data: { text: string } }) => {
+        saved = data;
+      },
+    },
+  };
+  const db = {
+    $transaction: (fn: (client: typeof tx) => Promise<unknown>) => fn(tx),
+    $queryRaw: async () => [],
+    notificationEvent: { findMany: async () => [event] },
+    notificationDelivery: { findMany: async () => [] },
+  };
+  const runtime = new NotificationRuntimeService(
+    db as never,
+    {} as never,
+    { enabled: true } as never,
+    {} as never,
+    { appOrigin: "https://changed.example" } as Environment,
+  );
+  await runtime.maintain();
+  assert.equal(saved.text, "FROZEN ORIGINAL BODY");
+});
+
 test("disabled runtime registers nothing, polls nothing and sends nothing", async () => {
   const fail = () => {
     throw new Error("disabled notification touched dependency");

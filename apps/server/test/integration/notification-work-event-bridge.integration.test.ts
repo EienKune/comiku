@@ -70,6 +70,7 @@ test(
       enabled: true,
       eventTypes: ["imported", "stage_joined"],
       includeDetails: false,
+      receiverMode: "legacy",
     });
     const workIds: string[] = [];
     const candidateIds: string[] = [];

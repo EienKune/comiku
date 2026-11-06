@@ -66,6 +66,7 @@ test(
       enabled: true,
       eventTypes: ["imported", "archived"],
       includeDetails: false,
+      receiverMode: "legacy",
     });
     const sent: { group: string; text: string }[] = [];
     const outcomes: NotificationSendResult[] = [];

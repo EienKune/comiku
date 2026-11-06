@@ -1723,6 +1723,8 @@ model NotificationChannel {
   enabled Boolean @default(false)
   eventTypes String[] @map("event_types")
   includeDetails Boolean @default(false) @map("include_details")
+  receiverMode String @default("legacy") @map("receiver_mode") @db.VarChar(16)
+  subscriptionRules Json @default("[]") @map("subscription_rules")
   revision Int @default(0)
   audienceGeneration Int @default(1) @map("audience_generation")
   sourceAcceptAfter DateTime @default(now()) @map("source_accept_after") @db.Timestamptz(3)
@@ -1733,6 +1735,18 @@ model NotificationChannel {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
   deliveries NotificationDelivery[]
   @@map("notification_channels")
+}
+
+model NotificationTemplate {
+  eventType String @id @map("event_type") @db.VarChar(64)
+  titleEnabled Boolean @default(false) @map("title_enabled")
+  authorEnabled Boolean @default(false) @map("author_enabled")
+  actorEnabled Boolean @default(false) @map("actor_enabled")
+  note String @default("") @db.VarChar(480)
+  revision Int @default(1)
+  contentRevision Int @default(1) @map("content_revision")
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@map("notification_templates")
 }
 
 model NotificationWorkEventActivation {

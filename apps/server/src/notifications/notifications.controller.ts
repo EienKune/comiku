@@ -35,6 +35,8 @@ import {
   NotificationPreviewInputDto,
   NotificationResolveDto,
   NotificationTestDto,
+  NotificationTemplateDto,
+  NotificationTemplateUpdateDto,
   notificationDeliveryStatuses,
 } from "./notifications.dto.js";
 import { NotificationsService } from "./notifications.service.js";
@@ -54,6 +56,25 @@ export class NotificationsController {
   @ApiOkResponse({ type: NotificationConfigurationDto })
   configuration(): Promise<NotificationConfigurationDto> {
     return this.notifications.configuration();
+  }
+
+  @Patch("templates/:eventType")
+  @Access({ permission: "system:manage" })
+  @ApiOperation({ operationId: "updateNotificationTemplate" })
+  @ApiParam({ name: "eventType", type: String })
+  @ApiBody({ type: NotificationTemplateUpdateDto })
+  @ApiOkResponse({ type: NotificationTemplateDto })
+  updateTemplate(
+    @Req() request: AuthRequest,
+    @Param("eventType") eventType: string,
+    @Body(bodyValidation(NotificationTemplateUpdateDto))
+    input: NotificationTemplateUpdateDto,
+  ): Promise<NotificationTemplateDto> {
+    return this.notifications.updateTemplate(
+      request.actor.userId,
+      eventType,
+      input,
+    );
   }
 
   @Post("channels")
@@ -138,6 +159,7 @@ export class NotificationsController {
       request.actor.userId,
       id,
       input.idempotencyKey,
+      input,
     );
   }
 

@@ -30,6 +30,8 @@ export interface NotificationSafeSnapshot {
   title: string | null;
   authorName: string | null;
   actorName: string | null;
+  metadataObservedAt?: string;
+  metadataOrigin?: "capture_current";
   stage?: WorkStage;
   fromWorkflowStatus?: WorkflowStatus;
   toWorkflowStatus?: WorkflowStatus;
@@ -47,6 +49,8 @@ export interface NotificationEventInput {
   title?: string | null;
   authorName?: string | null;
   actorName?: string | null;
+  metadataObservedAt?: string;
+  metadataOrigin?: "capture_current";
   stage?: WorkStage;
   fromWorkflowStatus?: WorkflowStatus;
   toWorkflowStatus?: WorkflowStatus;
@@ -95,4 +99,26 @@ export interface NotificationFrozenRoute {
   connectionFingerprint: string;
   includeDetails: boolean;
   templateVersion: 1;
+  content?: NotificationFrozenContent;
+}
+
+export interface NotificationFrozenContent {
+  formatVersion: 1 | 2;
+  receiverMode: "legacy" | "templates";
+  templatePolicy: {
+    eventType: NotificationWorkEventType;
+    titleEnabled: boolean;
+    authorEnabled: boolean;
+    actorEnabled: boolean;
+    note: string;
+    revision: number;
+    contentRevision: number;
+  } | null;
+  matchedRule: {
+    eventType: NotificationWorkEventType;
+    stages: WorkStage[] | null;
+  } | null;
+  text: string;
+  metadataObservedAt: string | null;
+  metadataOrigin: "capture_current" | null;
 }

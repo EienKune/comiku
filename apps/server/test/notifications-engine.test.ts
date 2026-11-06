@@ -4,12 +4,15 @@ import { test } from "node:test";
 import { NotificationPublisherService } from "../src/notifications/notification-publisher.service.js";
 import type { PrismaService } from "../src/database/prisma.service.js";
 import type { Prisma } from "../src/generated/prisma/client.js";
+import type { NotificationFrozenRoute } from "../src/notifications/notifications.contracts.js";
 
 test("publisher freezes original routes on a same-key replay and rejects changed facts", async () => {
   type StoredEvent = Prisma.NotificationEventCreateManyInput & { id: string };
   const rows = new Map<string, StoredEvent>();
   let routeReads = 0;
   const tx = {
+    $executeRaw: async () => 1,
+    notificationTemplate: { findMany: async () => [] },
     notificationEvent: {
       findUnique: async ({ where }: { where: { eventKey: string } }) =>
         rows.get(where.eventKey) ?? null,
@@ -24,21 +27,21 @@ test("publisher freezes original routes on a same-key replay and rejects changed
       findUniqueOrThrow: async ({ where }: { where: { eventKey: string } }) =>
         rows.get(where.eventKey),
     },
-    notificationChannel: {
-      findMany: async () => {
-        routeReads++;
-        return [
-          {
-            id: "channel",
-            revision: 2,
-            audienceGeneration: 3,
-            groupId: "123",
-            connectionKey: "synthetic",
-            connectionFingerprint: "a".repeat(64),
-            includeDetails: false,
-          },
-        ];
-      },
+    $queryRaw: async () => {
+      routeReads++;
+      return [
+        {
+          id: "channel",
+          revision: 2,
+          generation: 3,
+          groupId: "123",
+          connectionKey: "synthetic",
+          connectionFingerprint: "a".repeat(64),
+          includeDetails: false,
+          receiverMode: "legacy",
+          subscriptionRules: [],
+        },
+      ];
     },
   };
   const publisher = new NotificationPublisherService({
@@ -66,6 +69,8 @@ test("publisher freezes original routes on a same-key replay and rejects changed
       connectionFingerprint: "a".repeat(64),
       includeDetails: false,
       templateVersion: 1,
+      content: (original.routeRefs as unknown as NotificationFrozenRoute[])[0]
+        .content,
     },
   ]);
   await assert.rejects(

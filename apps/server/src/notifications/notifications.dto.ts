@@ -15,8 +15,10 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from "class-validator";
 import { NOTIFICATION_EVENT_KEYS } from "./notification-events.js";
+import { WorkStage } from "../generated/prisma/enums.js";
 
 export const notificationDeliveryStatuses = [
   "pending",
@@ -38,6 +40,41 @@ export class NotificationConnectionDto {
 export class NotificationEventTypeDto {
   @ApiProperty({ type: String }) type!: string;
   @ApiProperty({ type: String }) label!: string;
+  @ApiProperty({ type: Boolean }) supportsStages!: boolean;
+  @ApiProperty({ enum: WorkStage, isArray: true }) allowedStages!: WorkStage[];
+}
+
+export class NotificationSubscriptionRuleDto {
+  @ApiProperty({ type: String, enum: NOTIFICATION_EVENT_KEYS })
+  @IsIn(NOTIFICATION_EVENT_KEYS)
+  eventType!: string;
+  @ApiProperty({ enum: WorkStage, isArray: true, nullable: true })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @IsIn(Object.values(WorkStage), { each: true })
+  stages!: WorkStage[] | null;
+}
+
+export class NotificationTemplateSettingsDto {
+  @ApiProperty({ type: Boolean }) @IsBoolean() titleEnabled!: boolean;
+  @ApiProperty({ type: Boolean }) @IsBoolean() authorEnabled!: boolean;
+  @ApiProperty({ type: Boolean }) @IsBoolean() actorEnabled!: boolean;
+  @ApiProperty({ type: String, description: "At most 120 Unicode code points" })
+  @IsString()
+  note!: string;
+}
+export class NotificationTemplateDto extends NotificationTemplateSettingsDto {
+  @ApiProperty({ type: String }) eventType!: string;
+  @ApiProperty({ type: Number }) revision!: number;
+  @ApiProperty({ type: Number }) contentRevision!: number;
+  @ApiProperty({ type: Number }) referencedGroupCount!: number;
+}
+export class NotificationTemplateUpdateDto extends NotificationTemplateSettingsDto {
+  @ApiProperty({ type: Number, minimum: 0 })
+  @IsInt()
+  @Min(0)
+  expectedRevision!: number;
 }
 
 export class NotificationChannelDto {
@@ -48,6 +85,10 @@ export class NotificationChannelDto {
   @ApiProperty({ type: Boolean }) enabled!: boolean;
   @ApiProperty({ type: String, isArray: true }) eventTypes!: string[];
   @ApiProperty({ type: Boolean }) includeDetails!: boolean;
+  @ApiProperty({ enum: ["legacy", "templates"] }) receiverMode!:
+    "legacy" | "templates";
+  @ApiProperty({ type: NotificationSubscriptionRuleDto, isArray: true })
+  subscriptionRules!: NotificationSubscriptionRuleDto[];
   @ApiProperty({ type: Number }) revision!: number;
   @ApiProperty({ type: Number }) audienceGeneration!: number;
 }
@@ -62,6 +103,8 @@ export class NotificationConfigurationDto {
   eventTypes!: NotificationEventTypeDto[];
   @ApiProperty({ type: NotificationChannelDto, isArray: true })
   channels!: NotificationChannelDto[];
+  @ApiProperty({ type: NotificationTemplateDto, isArray: true })
+  templates!: NotificationTemplateDto[];
 }
 
 export class NotificationChannelInputDto {
@@ -100,6 +143,18 @@ export class NotificationChannelInputDto {
   @ApiProperty({ type: Boolean })
   @IsBoolean()
   includeDetails!: boolean;
+
+  @ApiPropertyOptional({ enum: ["legacy", "templates"] })
+  @IsOptional()
+  @IsIn(["legacy", "templates"])
+  receiverMode?: "legacy" | "templates";
+  @ApiPropertyOptional({ type: NotificationSubscriptionRuleDto, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(15)
+  @ValidateNested({ each: true })
+  @Type(() => NotificationSubscriptionRuleDto)
+  subscriptionRules?: NotificationSubscriptionRuleDto[];
 }
 
 export class NotificationChannelUpdateDto extends NotificationChannelInputDto {
@@ -116,6 +171,19 @@ export class NotificationPreviewInputDto {
   @ApiProperty({ type: Boolean })
   @IsBoolean()
   includeDetails!: boolean;
+  @ApiPropertyOptional({ type: NotificationTemplateSettingsDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => NotificationTemplateSettingsDto)
+  template?: NotificationTemplateSettingsDto;
+  @ApiPropertyOptional({ enum: WorkStage })
+  @IsOptional()
+  @IsIn(Object.values(WorkStage))
+  stage?: WorkStage;
+  @ApiPropertyOptional({ type: Boolean })
+  @IsOptional()
+  @IsBoolean()
+  missingMetadata?: boolean;
 }
 
 export class NotificationPreviewDto {
@@ -123,6 +191,12 @@ export class NotificationPreviewDto {
 }
 
 export class NotificationDeliveryDto {
+  @ApiProperty({ enum: ["capture_current"], nullable: true })
+  metadataOrigin!: "capture_current" | null;
+  @ApiProperty({ type: Number, nullable: true }) contentRevision!:
+    number | null;
+  @ApiProperty({ type: String, format: "date-time", nullable: true })
+  metadataObservedAt!: string | null;
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: String, format: "uuid" }) channelId!: string;
   @ApiProperty({ type: String }) channelName!: string;
@@ -171,6 +245,24 @@ export class NotificationTestDto {
   @ApiProperty({ type: String, format: "uuid" })
   @IsUUID()
   idempotencyKey!: string;
+  @ApiPropertyOptional({ type: String, enum: NOTIFICATION_EVENT_KEYS })
+  @IsOptional()
+  @IsIn(NOTIFICATION_EVENT_KEYS)
+  eventType?: string;
+  @ApiPropertyOptional({ enum: WorkStage })
+  @IsOptional()
+  @IsIn(Object.values(WorkStage))
+  stage?: WorkStage;
+  @ApiPropertyOptional({ type: Number, minimum: 0 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  expectedRevision?: number;
+  @ApiPropertyOptional({ type: Number, minimum: 0 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  expectedTemplateRevision?: number;
 }
 
 export class NotificationResolveDto extends NotificationTestDto {

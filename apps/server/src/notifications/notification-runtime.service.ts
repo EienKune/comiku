@@ -15,6 +15,7 @@ import { NotificationWorkEventBridgeService } from "./notification-work-event-br
 import type {
   NormalizedNotificationEvent,
   NotificationSendResult,
+  NotificationFrozenContent,
 } from "./notifications.contracts.js";
 import {
   assertNotificationAdministrator,
@@ -66,7 +67,7 @@ export class NotificationRuntimeService implements OnModuleInit {
           where: { id: candidate.id },
         });
         if (event.routedAt) return;
-        const refs = event.routeRefs as {
+        const refs = event.routeRefs as unknown as {
           id: string;
           revision: number;
           generation: number;
@@ -74,6 +75,7 @@ export class NotificationRuntimeService implements OnModuleInit {
           connectionKey?: string;
           connectionFingerprint?: string;
           includeDetails?: boolean;
+          content?: NotificationFrozenContent;
         }[];
         for (const ref of refs) {
           const channel = await tx.notificationChannel.findUnique({
@@ -101,13 +103,15 @@ export class NotificationRuntimeService implements OnModuleInit {
               groupId: ref.groupId ?? channel.groupId,
               status: current ? "pending" : "cancelled",
               errorCode: current ? null : "channel_configuration_changed",
-              text: renderNotificationMessage(
-                event as unknown as NormalizedNotificationEvent,
-                {
-                  includeDetails: ref.includeDetails ?? false,
-                  siteUrl: this.environment.appOrigin,
-                },
-              ),
+              text:
+                ref.content?.text ??
+                renderNotificationMessage(
+                  event as unknown as NormalizedNotificationEvent,
+                  {
+                    includeDetails: ref.includeDetails ?? false,
+                    siteUrl: this.environment.appOrigin,
+                  },
+                ),
             },
             skipDuplicates: true,
           });

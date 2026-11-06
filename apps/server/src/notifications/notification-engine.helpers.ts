@@ -6,6 +6,8 @@ import type {
   NotificationEvent,
   NotificationChannel,
 } from "../generated/prisma/client.js";
+import { normalizeSubscriptionRules } from "./notification-template-policy.js";
+import type { NotificationFrozenRoute } from "./notifications.contracts.js";
 
 export async function assertNotificationAdministrator(
   tx: Prisma.TransactionClient,
@@ -35,6 +37,16 @@ export function channelDto(channel: NotificationChannel) {
     enabled: channel.enabled,
     eventTypes: channel.eventTypes,
     includeDetails: channel.includeDetails,
+    receiverMode:
+      channel.receiverMode === "templates"
+        ? ("templates" as const)
+        : ("legacy" as const),
+    subscriptionRules: normalizeSubscriptionRules(
+      Array.isArray(channel.subscriptionRules) &&
+        channel.subscriptionRules.length
+        ? channel.subscriptionRules
+        : channel.eventTypes.map((eventType) => ({ eventType, stages: null })),
+    ),
     revision: channel.revision,
     audienceGeneration: channel.audienceGeneration,
   };
@@ -47,6 +59,14 @@ export function deliveryDto(
   },
 ) {
   const snapshot = row.event.snapshot as { workNumber?: number | null };
+  const route = (
+    Array.isArray(row.event.routeRefs)
+      ? (row.event.routeRefs as unknown as NotificationFrozenRoute[])
+      : []
+  ).find(
+    (ref) =>
+      ref.id === row.channelId && ref.generation === row.audienceGeneration,
+  );
   return {
     id: row.id,
     channelId: row.channelId,
@@ -62,6 +82,9 @@ export function deliveryDto(
     preview: row.text,
     revision: row.revision,
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
+    contentRevision: route?.content?.templatePolicy?.contentRevision ?? null,
+    metadataObservedAt: route?.content?.metadataObservedAt ?? null,
+    metadataOrigin: route?.content?.metadataOrigin ?? null,
   };
 }
 

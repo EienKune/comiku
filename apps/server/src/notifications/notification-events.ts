@@ -135,6 +135,10 @@ export function normalizeNotificationEvent(
       title: safeText(input.title),
       authorName: safeText(input.authorName),
       actorName: safeText(input.actorName),
+      ...(input.metadataOrigin !== undefined && {
+        metadataOrigin: input.metadataOrigin,
+        metadataObservedAt: input.metadataObservedAt,
+      }),
       ...(input.stage !== undefined && { stage: input.stage }),
       ...(input.fromWorkflowStatus !== undefined && {
         fromWorkflowStatus: input.fromWorkflowStatus,
@@ -242,6 +246,17 @@ export function notificationPreview(
   includeDetails: boolean,
   siteUrl?: string,
 ): string {
+  return renderNotificationMessage(notificationPreviewEvent(type), {
+    includeDetails,
+    siteUrl,
+  });
+}
+
+export function notificationPreviewEvent(
+  type: NotificationEventType,
+  stage?: WorkStage,
+  missingMetadata = false,
+): NormalizedNotificationEvent {
   // Synthetic examples only; producers remain responsible for the real historical facts.
   const history: Partial<NotificationEventInput> =
     type === "review_opened"
@@ -310,19 +325,57 @@ export function notificationPreview(
                                   WorkflowStatus.pending_translate,
                               }
                             : {};
-  return renderNotificationMessage(
-    normalizeNotificationEvent({
-      eventKey: "preview",
-      type,
-      resourceId: "00000000-0000-4000-8000-000000000001",
-      aggregateVersion: 1,
-      occurredAt: "2026-01-01T00:00:00.000Z",
-      workNumber: 1001,
-      title: "合成预览作品",
-      authorName: "预览作者",
-      actorName: "预览成员",
-      ...history,
-    }),
-    { includeDetails, siteUrl },
-  );
+  if (stage && type.startsWith("stage_")) {
+    history.stage = stage;
+    const states = {
+      translate: [
+        WorkflowStatus.pending_translate,
+        WorkflowStatus.translating,
+        WorkflowStatus.pending_proofread,
+      ],
+      proofread: [
+        WorkflowStatus.pending_proofread,
+        WorkflowStatus.proofreading,
+        WorkflowStatus.pending_typeset,
+      ],
+      typeset: [
+        WorkflowStatus.pending_typeset,
+        WorkflowStatus.typesetting,
+        WorkflowStatus.pending_publish,
+      ],
+      publish: [
+        WorkflowStatus.pending_publish,
+        WorkflowStatus.pending_publish,
+        WorkflowStatus.published,
+      ],
+    }[stage];
+    if (type === "stage_submitted") {
+      history.fromWorkflowStatus = states[1];
+      history.toWorkflowStatus = states[2];
+    }
+    if (type === "stage_submission_cancelled") {
+      history.fromWorkflowStatus = states[2];
+      history.toWorkflowStatus = states[1];
+    }
+    if (type === "stage_started") {
+      history.fromWorkflowStatus = states[0];
+      history.toWorkflowStatus = states[1];
+    }
+  }
+  return normalizeNotificationEvent({
+    eventKey: "preview",
+    type,
+    resourceId: "00000000-0000-4000-8000-000000000001",
+    aggregateVersion: 1,
+    occurredAt: "2026-01-01T00:00:00.000Z",
+    workNumber: 1001,
+    ...(missingMetadata
+      ? {}
+      : {
+          title: "合成预览作品",
+          authorName: "预览作者",
+          actorName: "预览成员",
+        }),
+    ...history,
+  });
 }

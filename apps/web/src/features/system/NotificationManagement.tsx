@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
   useInfiniteQuery,
   useQuery,
@@ -15,10 +15,23 @@ import {
 import { client, unwrap } from "../account/api";
 import { Feedback } from "../account/forms";
 import "./notifications.css";
+import {
+  TemplateEditor,
+  SavedSample,
+  type Template,
+  type SubscriptionRule,
+  type EventOption,
+} from "./NotificationTemplateEditor";
 
-type Channel = components["schemas"]["NotificationChannelDto"];
+type Channel = components["schemas"]["NotificationChannelDto"] & {
+  receiverMode?: "legacy" | "templates";
+  subscriptionRules?: SubscriptionRule[];
+};
 type Delivery = components["schemas"]["NotificationDeliveryDto"];
-type ChannelInput = components["schemas"]["NotificationChannelInputDto"];
+type ChannelInput = components["schemas"]["NotificationChannelInputDto"] & {
+  receiverMode?: "legacy" | "templates";
+  subscriptionRules?: SubscriptionRule[];
+};
 type EventType = ChannelInput["eventTypes"][number];
 const statusLabels: Record<Delivery["status"], string> = {
   pending: "排队中",
@@ -48,22 +61,31 @@ export function NotificationManagement({
   enabled?: boolean;
 }) {
   const queryClient = useQueryClient();
+  const [tab, setTab] = useState("groups");
+  const [adopting, setAdopting] = useState(false);
+  const [adoptionPreview, setAdoptionPreview] = useState("");
+  const [adoptionPreviewIdentity, setAdoptionPreviewIdentity] = useState("");
+  const latestAdoptionIdentity = useRef("");
+  const [adoptionBusy, setAdoptionBusy] = useState(false);
   const configuration = useQuery({
     queryKey: ["notification-configuration"],
-    enabled,
+    enabled: enabled && tab !== "history",
     queryFn: async () =>
       unwrap(await client.GET("/api/notifications/configuration")),
     refetchOnWindowFocus: false,
   });
   // The server-owned event catalogue and channel inputs share the same keys.
-  const eventTypes = (configuration.data?.eventTypes ?? []) as {
-    type: EventType;
-    label: string;
-  }[];
+  const eventTypes = (configuration.data?.eventTypes ?? []) as EventOption[];
+  const templates =
+    (
+      configuration.data as typeof configuration.data & {
+        templates?: Template[];
+      }
+    )?.templates ?? [];
   const [status, setStatus] = useState<Delivery["status"] | "">("");
   const deliveries = useInfiniteQuery({
     queryKey: ["notification-deliveries", status],
-    enabled,
+    enabled: enabled && tab === "history",
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) =>
       unwrap(
@@ -86,6 +108,9 @@ export function NotificationManagement({
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
+  const [comparison, setComparison] = useState<
+    (Channel & { connectionName: string }) | null
+  >(null);
   const [previewType, setPreviewType] = useState<EventType | "">("");
   const [preview, setPreview] = useState("");
   const [previewBusy, setPreviewBusy] = useState(false);
@@ -93,14 +118,19 @@ export function NotificationManagement({
   function changeDraft(patch: Partial<ChannelInput>) {
     previewEpoch.current++;
     setPreview("");
+    setAdopting(false);
+    setAdoptionPreview("");
     setDraft((current) => (current ? { ...current, ...patch } : null));
   }
   function edit(channel?: Channel) {
     if (saving) return;
     previewEpoch.current++;
     setPreview("");
+    setAdopting(false);
+    setAdoptionPreview("");
     setError("");
     setSuccess("");
+    setComparison(null);
     setPreviewType(eventTypes[0]?.type ?? "");
     setDraft(
       channel
@@ -113,6 +143,13 @@ export function NotificationManagement({
             enabled: channel.enabled,
             eventTypes: [...channel.eventTypes] as EventType[],
             includeDetails: channel.includeDetails,
+            receiverMode: channel.receiverMode ?? "legacy",
+            subscriptionRules:
+              channel.subscriptionRules ??
+              (channel.eventTypes as EventType[]).map((eventType) => ({
+                eventType,
+                stages: null,
+              })),
           }
         : {
             name: "",
@@ -121,11 +158,21 @@ export function NotificationManagement({
             enabled: false,
             eventTypes: [],
             includeDetails: false,
+            receiverMode: "templates",
+            subscriptionRules: [],
           },
     );
   }
   async function save() {
     if (!draft) return;
+    if (draft.enabled && draft.eventTypes.length === 0) {
+      setError("启用时至少选择一个事件。");
+      return;
+    }
+    if (draft.subscriptionRules?.some((rule) => rule.stages?.length === 0)) {
+      setError("指定职责时至少选择一个职责。");
+      return;
+    }
     setSaving(true);
     setError("");
     setSuccess("");
@@ -137,15 +184,41 @@ export function NotificationManagement({
             body: { ...input, expectedRevision: expectedRevision! },
           })
         : await client.POST("/api/notifications/channels", { body: input });
-      if (result.response.status === 409)
+      if (result.response.status === 409) {
+        setComparison(null);
         throw new Error(
-          "配置已被其他管理员修改。草稿已保留，请重新读取配置后核对。",
+          "配置已被其他管理员修改。草稿已保留，请比较当前版本后核对。",
         );
+      }
       await unwrap(result);
       setDraft(null);
       setSuccess("配置已保存");
       void queryClient.invalidateQueries({
         queryKey: ["notification-configuration"],
+      });
+    } catch (caught) {
+      setError(message(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function compareCurrent() {
+    if (!draft?.id) return;
+    setSaving(true);
+    setError("");
+    setComparison(null);
+    try {
+      const current = await unwrap(
+        await client.GET("/api/notifications/configuration"),
+      );
+      queryClient.setQueryData(["notification-configuration"], current);
+      const channel = current.channels.find((c) => c.id === draft.id);
+      if (!channel) throw new Error("此群配置已不存在，请核对后重新选择。");
+      setComparison({
+        ...channel,
+        connectionName:
+          current.connections.find((c) => c.key === channel.connectionKey)
+            ?.name ?? "连接已缺失",
       });
     } catch (caught) {
       setError(message(caught));
@@ -175,6 +248,98 @@ export function NotificationManagement({
     }
   }
   const data = configuration.data;
+  const adoptionIdentity = JSON.stringify(
+    (draft?.eventTypes ?? []).map((eventType) => {
+      const template = templates.find((t) => t.eventType === eventType);
+      return [
+        eventType,
+        template?.revision,
+        template?.contentRevision,
+        template?.titleEnabled,
+        template?.authorEnabled,
+        template?.actorEnabled,
+        template?.note,
+      ];
+    }),
+  );
+  useLayoutEffect(() => {
+    latestAdoptionIdentity.current = adoptionIdentity;
+  }, [adoptionIdentity]);
+  const original = data?.channels.find((c) => c.id === draft?.id) as
+    Channel | undefined;
+  const audienceChanged =
+    !!original &&
+    !!draft &&
+    (original.groupId !== draft.groupId ||
+      original.connectionKey !== draft.connectionKey ||
+      original.enabled !== draft.enabled ||
+      JSON.stringify(
+        original.subscriptionRules ??
+          original.eventTypes.map((eventType) => ({ eventType, stages: null })),
+      ) !== JSON.stringify(draft.subscriptionRules));
+  async function adoption() {
+    if (!draft) return;
+    const epoch = ++previewEpoch.current;
+    const identity = adoptionIdentity;
+    setAdoptionPreviewIdentity(identity);
+    setAdopting(true);
+    setAdoptionPreview("");
+    setAdoptionBusy(true);
+    setError("");
+    try {
+      const texts = await Promise.all(
+        draft.eventTypes.map(async (eventType) => {
+          const template = templates.find((t) => t.eventType === eventType);
+          return (
+            await unwrap(
+              await client.POST("/api/notifications/preview", {
+                body: {
+                  eventType,
+                  includeDetails: false,
+                  ...(eventTypes.find((e) => e.type === eventType)
+                    ?.supportsStages
+                    ? {
+                        stage:
+                          draft.subscriptionRules?.find(
+                            (r) => r.eventType === eventType,
+                          )?.stages?.[0] ??
+                          eventTypes.find((e) => e.type === eventType)
+                            ?.allowedStages?.[0],
+                      }
+                    : {}),
+                  template: template
+                    ? {
+                        titleEnabled: template.titleEnabled,
+                        authorEnabled: template.authorEnabled,
+                        actorEnabled: template.actorEnabled,
+                        note: template.note,
+                      }
+                    : undefined,
+                },
+              }),
+            )
+          ).text;
+        }),
+      );
+      if (
+        epoch === previewEpoch.current &&
+        identity === latestAdoptionIdentity.current
+      )
+        setAdoptionPreview(
+          texts.join("\n\n") ||
+            "此群尚未订阅事件，切换后使用各事件的公共模板。",
+        );
+    } catch (caught) {
+      if (
+        epoch === previewEpoch.current &&
+        identity === latestAdoptionIdentity.current
+      )
+        setError(message(caught));
+    } finally {
+      setAdoptionBusy(false);
+    }
+  }
+
   return (
     <Surface className="notification-management">
       <header className="notification-heading">
@@ -190,351 +355,606 @@ export function NotificationManagement({
           </Button>
         </div>
       </header>
-      {configuration.isPending && <p role="status">正在读取通知配置…</p>}
-      {configuration.isError && (
-        <p role="alert">通知配置读取失败，请刷新重试。</p>
-      )}
-      {data && (
-        <>
-          {!data.enabled && <p className="account-notice">通知服务已关闭</p>}
-          {data.configurationError && (
-            <p className="account-error" role="alert">
-              连接配置不可用：{data.configurationError}
-            </p>
-          )}
-          <p className="notification-boundary">
-            核心作品事件启用后异步补账推送，通知失败不影响作品操作；启用前历史不自动补推。
-          </p>
-          <section
-            className="notification-connections"
-            aria-labelledby="notification-connections-heading"
+      <div
+        className="system-tabs notification-tabs"
+        role="tablist"
+        aria-label="推送通知分类"
+      >
+        {[
+          ["groups", "群订阅"],
+          ["templates", "消息模板"],
+          ["history", "投递记录"],
+        ].map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            id={`notification-tab-${value}`}
+            aria-controls={`notification-panel-${value}`}
+            aria-selected={tab === value}
+            tabIndex={tab === value ? 0 : -1}
+            onClick={() => setTab(value)}
+            onKeyDown={(event) => {
+              if (
+                !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+              )
+                return;
+              event.preventDefault();
+              const buttons = Array.from(
+                event.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>(
+                  '[role="tab"]',
+                ),
+              );
+              const index = buttons.indexOf(event.currentTarget);
+              const next =
+                event.key === "Home"
+                  ? 0
+                  : event.key === "End"
+                    ? 2
+                    : (index + (event.key === "ArrowRight" ? 1 : 2)) % 3;
+              buttons[next].focus();
+              buttons[next].click();
+            }}
           >
-            <h3 id="notification-connections-heading">连接配置</h3>
-            {data.connections.map((connection) => (
-              <div key={connection.key} className="notification-connection">
-                <strong>{connection.name}</strong>
-                <Badge tone={connection.available ? "neutral" : "warning"}>
-                  {connection.available ? "配置可用" : "配置不可用"}
-                </Badge>
-              </div>
-            ))}
-            {data.connections.length === 0 && <p>暂无连接配置。</p>}
+            {label}
+          </button>
+        ))}
+      </div>
+      <div
+        role="tabpanel"
+        id="notification-panel-groups"
+        aria-labelledby="notification-tab-groups"
+        hidden={tab !== "groups"}
+      >
+        {configuration.isPending && <p role="status">正在读取通知配置…</p>}
+        {configuration.isError && (
+          <p role="alert">通知配置读取失败，请刷新重试。</p>
+        )}
+        {data && (
+          <>
+            {!data.enabled && <p className="account-notice">通知服务已关闭</p>}
+            {data.configurationError && (
+              <p className="account-error" role="alert">
+                连接配置不可用：{data.configurationError}
+              </p>
+            )}
             <p className="notification-boundary">
-              连接状态仅反映服务端配置，不代表 QQ 登录状态。
+              核心作品事件启用后异步补账推送，通知失败不影响作品操作；启用前历史不自动补推。
             </p>
-          </section>
-          <header className="notification-heading">
-            <h3>群订阅</h3>
-            <Button size="sm" disabled={saving} onClick={() => edit()}>
-              新增群目标
-            </Button>
-          </header>
-          <div className="notification-channels">
-            {data.channels.map((channel) => (
-              <article key={channel.id} className="notification-channel">
-                <div>
-                  <strong>{channel.name}</strong>
-                  <span>QQ 群 {channel.groupId}</span>
-                  <span>
-                    {data.connections.find(
-                      (connection) => connection.key === channel.connectionKey,
-                    )?.name ?? "连接已缺失"}
-                    {data.connections.some(
-                      (connection) =>
-                        connection.key === channel.connectionKey &&
-                        !connection.available,
-                    ) && "（不可用）"}
-                  </span>
+            <details
+              className="notification-connections"
+              aria-labelledby="notification-connections-heading"
+            >
+              <summary id="notification-connections-heading">连接配置</summary>
+              {data.connections.map((connection) => (
+                <div key={connection.key} className="notification-connection">
+                  <strong>{connection.name}</strong>
+                  <Badge tone={connection.available ? "neutral" : "warning"}>
+                    {connection.available ? "配置可用" : "配置不可用"}
+                  </Badge>
                 </div>
-                <Badge tone={channel.enabled ? "success" : "neutral"}>
-                  {channel.enabled ? "已启用" : "已停用"}
-                </Badge>
-                <div className="notification-actions">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    aria-label={`编辑 ${channel.name}`}
-                    disabled={saving}
-                    onClick={() => edit(channel)}
-                  >
-                    编辑
-                  </Button>
-                  <TestChannel
-                    channel={channel}
-                    disabled={
-                      !data.enabled ||
-                      !channel.enabled ||
-                      !data.connections.some(
+              ))}
+              {data.connections.length === 0 && <p>暂无连接配置。</p>}
+              <p className="notification-boundary">
+                连接状态仅反映服务端配置，不代表 QQ 登录状态。
+              </p>
+            </details>
+            <header className="notification-heading">
+              <h3>群订阅</h3>
+              <Button size="sm" disabled={saving} onClick={() => edit()}>
+                新增群目标
+              </Button>
+            </header>
+            <div className="notification-channels">
+              {data.channels.map((channel) => (
+                <article key={channel.id} className="notification-channel">
+                  <div>
+                    <strong>{channel.name}</strong>
+                    <span>QQ 群 {channel.groupId}</span>
+                    <span>
+                      {data.connections.find(
+                        (connection) =>
+                          connection.key === channel.connectionKey,
+                      )?.name ?? "连接已缺失"}
+                      {data.connections.some(
                         (connection) =>
                           connection.key === channel.connectionKey &&
-                          connection.available,
+                          !connection.available,
+                      ) && "（不可用）"}
+                    </span>
+                  </div>
+                  <span className="notification-boundary">
+                    {channel.eventTypes
+                      .map(
+                        (type) =>
+                          eventTypes.find((e) => e.type === type)?.label ??
+                          type,
                       )
-                    }
-                    onUpdated={() =>
-                      void queryClient.invalidateQueries({
-                        queryKey: ["notification-deliveries"],
-                      })
-                    }
-                  />
-                </div>
-              </article>
-            ))}
-          </div>
-          {data.channels.length === 0 && <p>暂无群目标。</p>}
-        </>
-      )}
-      <Feedback error={error} success={success} />
-      {draft && data && (
-        <form
-          className="notification-editor"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void save();
-          }}
-        >
-          <h3>{draft.id ? "编辑群目标" : "新增群目标"}</h3>
-          <fieldset disabled={saving}>
-            <div className="notification-fields">
-              <TextField
-                label="名称"
-                required
-                maxLength={80}
-                value={draft.name}
-                onChange={(event) => changeDraft({ name: event.target.value })}
-              />
-              <TextField
-                label="群号"
-                required
-                inputMode="numeric"
-                pattern="[1-9][0-9]{0,19}"
-                maxLength={20}
-                value={draft.groupId}
-                onChange={(event) =>
-                  changeDraft({ groupId: event.target.value })
-                }
-              />
-              <SelectField
-                label="连接"
-                value={draft.connectionKey}
-                required
-                onValueChange={(value) => changeDraft({ connectionKey: value })}
-              >
-                {!data.connections.some(
-                  (connection) => connection.key === draft.connectionKey,
-                ) && (
-                  <option value={draft.connectionKey}>
-                    {draft.connectionKey ? "连接已缺失" : "请选择连接"}
-                  </option>
-                )}
-                {data.connections.map((connection) => (
-                  <option key={connection.key} value={connection.key}>
-                    {connection.name}
-                    {connection.available ? "" : "（不可用）"}
-                  </option>
-                ))}
-              </SelectField>
-            </div>
-            <label className="notification-check">
-              <input
-                type="checkbox"
-                checked={draft.enabled}
-                onChange={(event) =>
-                  changeDraft({ enabled: event.target.checked })
-                }
-              />
-              启用此群通知
-            </label>
-            <fieldset className="notification-events">
-              <legend>事件</legend>
-              {eventTypes.map((event) => (
-                <label className="notification-check" key={event.type}>
-                  <input
-                    type="checkbox"
-                    checked={draft.eventTypes.includes(event.type)}
-                    onChange={(change) =>
-                      changeDraft({
-                        eventTypes: change.target.checked
-                          ? [...draft.eventTypes, event.type]
-                          : draft.eventTypes.filter(
-                              (type) => type !== event.type,
-                            ),
-                      })
-                    }
-                  />
-                  {event.label}
-                </label>
+                      .join(" · ") || "未订阅事件"}
+                  </span>
+                  <Badge tone={channel.enabled ? "success" : "neutral"}>
+                    {channel.enabled ? "已启用" : "已停用"}
+                  </Badge>
+                  <div className="notification-actions">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      aria-label={`编辑 ${channel.name}`}
+                      disabled={saving}
+                      onClick={() => edit(channel)}
+                    >
+                      编辑
+                    </Button>
+                    <SavedSample
+                      channel={channel as Channel}
+                      templates={templates}
+                      events={eventTypes}
+                      unavailableReason={
+                        !data.enabled
+                          ? "通知服务已关闭"
+                          : !channel.enabled
+                            ? "此群已停用"
+                            : !data.connections.some(
+                                  (c) =>
+                                    c.key === channel.connectionKey &&
+                                    c.available,
+                                )
+                              ? "连接配置不可用"
+                              : channel.eventTypes.length === 0
+                                ? "此群尚未订阅事件"
+                                : ""
+                      }
+                      onUpdated={() =>
+                        void queryClient.invalidateQueries({
+                          queryKey: ["notification-deliveries"],
+                        })
+                      }
+                    />
+                  </div>
+                </article>
               ))}
-            </fieldset>
-            <div className="notification-content">
-              <h4>消息内容</h4>
-              <p className="notification-boundary">
-                固定格式包含事件和作品编号；附加信息仅使用事件已留存的内容。
-              </p>
-              <label className="notification-check">
-                <input
-                  type="checkbox"
-                  checked={draft.includeDetails}
+            </div>
+            {data.channels.length === 0 && <p>暂无群目标。</p>}
+          </>
+        )}
+        <Feedback error={error} success={success} />
+        {draft && data && (
+          <form
+            className="notification-editor"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void save();
+            }}
+          >
+            <h3>{draft.id ? "编辑群目标" : "新增群目标"}</h3>
+            <fieldset disabled={saving}>
+              <div className="notification-fields">
+                <TextField
+                  label="名称"
+                  required
+                  maxLength={80}
+                  value={draft.name}
                   onChange={(event) =>
-                    changeDraft({ includeDetails: event.target.checked })
+                    changeDraft({ name: event.target.value })
                   }
                 />
-                包含作者、标题和操作昵称
-              </label>
-              <div className="notification-preview-controls">
+                <TextField
+                  label="群号"
+                  required
+                  inputMode="numeric"
+                  pattern="[1-9][0-9]{0,19}"
+                  maxLength={20}
+                  value={draft.groupId}
+                  onChange={(event) =>
+                    changeDraft({ groupId: event.target.value })
+                  }
+                />
                 <SelectField
-                  label="预览事件"
-                  value={previewType}
-                  onValueChange={(value) => {
-                    previewEpoch.current++;
-                    setPreview("");
-                    setPreviewType(value as EventType);
-                  }}
+                  label="连接"
+                  value={draft.connectionKey}
+                  required
+                  onValueChange={(value) =>
+                    changeDraft({ connectionKey: value })
+                  }
                 >
-                  {eventTypes.map((event) => (
-                    <option key={event.type} value={event.type}>
-                      {event.label}
+                  {!data.connections.some(
+                    (connection) => connection.key === draft.connectionKey,
+                  ) && (
+                    <option value={draft.connectionKey}>
+                      {draft.connectionKey ? "连接已缺失" : "请选择连接"}
+                    </option>
+                  )}
+                  {data.connections.map((connection) => (
+                    <option key={connection.key} value={connection.key}>
+                      {connection.name}
+                      {connection.available ? "" : "（不可用）"}
                     </option>
                   ))}
                 </SelectField>
+              </div>
+              <label className="notification-check">
+                <input
+                  type="checkbox"
+                  checked={draft.enabled}
+                  onChange={(event) =>
+                    changeDraft({ enabled: event.target.checked })
+                  }
+                />
+                启用此群通知
+              </label>
+              <fieldset className="notification-events">
+                <legend>事件</legend>
+                {eventTypes.map((event) => {
+                  const rule = draft.subscriptionRules?.find(
+                    (r) => r.eventType === event.type,
+                  );
+                  return (
+                    <div key={event.type} className="notification-event-rule">
+                      <label className="notification-check">
+                        <input
+                          type="checkbox"
+                          checked={draft.eventTypes.includes(event.type)}
+                          onChange={(change) =>
+                            changeDraft({
+                              eventTypes: change.target.checked
+                                ? [...draft.eventTypes, event.type]
+                                : draft.eventTypes.filter(
+                                    (type) => type !== event.type,
+                                  ),
+                              subscriptionRules: change.target.checked
+                                ? [
+                                    ...(draft.subscriptionRules ?? []),
+                                    { eventType: event.type, stages: null },
+                                  ]
+                                : (draft.subscriptionRules ?? []).filter(
+                                    (r) => r.eventType !== event.type,
+                                  ),
+                            })
+                          }
+                        />
+                        {event.label}
+                      </label>
+                      {rule && event.supportsStages && (
+                        <div className="notification-stage-rules">
+                          <label className="notification-check">
+                            <input
+                              type="checkbox"
+                              aria-label={`${event.label}：指定职责`}
+                              checked={rule.stages !== null}
+                              onChange={(e) =>
+                                changeDraft({
+                                  subscriptionRules:
+                                    draft.subscriptionRules!.map((r) =>
+                                      r.eventType === event.type
+                                        ? {
+                                            ...r,
+                                            stages: e.target.checked
+                                              ? []
+                                              : null,
+                                          }
+                                        : r,
+                                    ),
+                                })
+                              }
+                            />
+                            指定职责
+                          </label>
+                          {rule.stages !== null &&
+                            (event.allowedStages ?? [])
+                              .map(
+                                (stage) =>
+                                  [
+                                    stage,
+                                    {
+                                      translate: "翻译",
+                                      proofread: "校对",
+                                      typeset: "嵌字",
+                                      publish: "发布",
+                                    }[stage],
+                                  ] as const,
+                              )
+                              .map(([stage, label]) => (
+                                <label
+                                  key={stage}
+                                  className="notification-check"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    aria-label={`${event.label}：${label}`}
+                                    checked={rule.stages!.includes(stage)}
+                                    onChange={(e) =>
+                                      changeDraft({
+                                        subscriptionRules:
+                                          draft.subscriptionRules!.map((r) =>
+                                            r.eventType === event.type
+                                              ? {
+                                                  ...r,
+                                                  stages: e.target.checked
+                                                    ? [...r.stages!, stage]
+                                                    : r.stages!.filter(
+                                                        (s) => s !== stage,
+                                                      ),
+                                                }
+                                              : r,
+                                          ),
+                                      })
+                                    }
+                                  />
+                                  {label}
+                                </label>
+                              ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </fieldset>
+              {audienceChanged && (
+                <p className="account-notice" role="status">
+                  修改受众或订阅会取消此群旧代全部未发送记录，包括仍符合新条件的消息。
+                </p>
+              )}
+              {draft.receiverMode === "templates" ? (
+                <p className="notification-boundary">使用公共事件模板</p>
+              ) : (
+                <div className="notification-content">
+                  <h4>旧版消息内容</h4>
+                  <p className="notification-boundary">
+                    固定格式包含事件和作品编号；附加信息仅使用事件已留存的内容。
+                  </p>
+                  <label className="notification-check">
+                    <input
+                      type="checkbox"
+                      checked={draft.includeDetails}
+                      onChange={(event) =>
+                        changeDraft({ includeDetails: event.target.checked })
+                      }
+                    />
+                    包含作者、标题和操作昵称
+                  </label>
+                  <div className="notification-preview-controls">
+                    <SelectField
+                      label="预览事件"
+                      value={previewType}
+                      onValueChange={(value) => {
+                        previewEpoch.current++;
+                        setPreview("");
+                        setPreviewType(value as EventType);
+                      }}
+                    >
+                      {eventTypes.map((event) => (
+                        <option key={event.type} value={event.type}>
+                          {event.label}
+                        </option>
+                      ))}
+                    </SelectField>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      loading={previewBusy}
+                      disabled={!previewType}
+                      onClick={() => void showPreview()}
+                    >
+                      预览内容
+                    </Button>
+                  </div>
+                  {preview && (
+                    <pre className="notification-preview">{preview}</pre>
+                  )}
+                </div>
+              )}
+              {draft.receiverMode === "legacy" && (
+                <div className="notification-content">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    loading={adoptionBusy}
+                    onClick={() => void adoption()}
+                  >
+                    预览并切换事件模板
+                  </Button>
+                  {adopting &&
+                    adoptionPreview &&
+                    adoptionPreviewIdentity === adoptionIdentity && (
+                      <>
+                        <pre className="notification-preview">
+                          {adoptionPreview}
+                        </pre>
+                        <p className="notification-boundary">
+                          仅改变后续消息内容，已有待发保留原文。
+                        </p>
+                        <Button
+                          type="button"
+                          onClick={() => {
+                            changeDraft({ receiverMode: "templates" });
+                            setAdopting(false);
+                          }}
+                        >
+                          确认使用事件模板
+                        </Button>
+                      </>
+                    )}
+                </div>
+              )}
+              <div className="notification-actions">
+                <Button type="submit" loading={saving}>
+                  保存
+                </Button>
                 <Button
                   type="button"
-                  variant="secondary"
-                  loading={previewBusy}
-                  disabled={!previewType}
-                  onClick={() => void showPreview()}
+                  variant="ghost"
+                  onClick={() => {
+                    previewEpoch.current++;
+                    setDraft(null);
+                  }}
                 >
-                  预览内容
+                  取消
                 </Button>
               </div>
-              {preview && <pre className="notification-preview">{preview}</pre>}
-            </div>
-            <div className="notification-actions">
-              <Button type="submit" loading={saving}>
-                保存
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  previewEpoch.current++;
-                  setDraft(null);
-                }}
-              >
-                取消
-              </Button>
-            </div>
-          </fieldset>
-        </form>
-      )}
-      <header className="notification-heading">
-        <h3>投递记录</h3>
-        <div className="notification-actions">
-          <SelectField
-            label="投递状态"
-            value={status}
-            onValueChange={(value) =>
-              setStatus(value as Delivery["status"] | "")
-            }
-          >
-            <option value="">全部状态</option>
-            {Object.entries(statusLabels).map(([key, label]) => (
-              <option value={key} key={key}>
-                {label}
-              </option>
-            ))}
-          </SelectField>
-          <Button
-            variant="ghost"
-            size="sm"
-            loading={deliveries.isFetching}
-            onClick={() => void deliveries.refetch()}
-          >
-            刷新记录
-          </Button>
-        </div>
-      </header>
-      {deliveries.isPending && <p role="status">正在读取投递记录…</p>}
-      {deliveries.isError && <p role="alert">投递记录读取失败，请刷新重试。</p>}
-      <div className="notification-deliveries">
-        {deliveries.data?.pages
-          .flatMap((page) => page.items)
-          .map((delivery) => (
-            <DeliveryRow
-              key={delivery.id}
-              delivery={delivery}
-              eventLabel={
-                eventTypes.find((event) => event.type === delivery.eventType)
-                  ?.label ?? delivery.eventType
-              }
-              onUpdated={() =>
-                void queryClient.invalidateQueries({
-                  queryKey: ["notification-deliveries"],
-                })
-              }
-            />
-          ))}
+              {draft.id && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => void compareCurrent()}
+                >
+                  比较当前版本
+                </Button>
+              )}
+              {comparison && (
+                <section
+                  className="notification-content"
+                  aria-label="当前群配置"
+                >
+                  <strong>当前服务器版本 {comparison.revision}</strong>
+                  <p>
+                    {comparison.name}（QQ 群 {comparison.groupId}）
+                  </p>
+                  <p>
+                    {comparison.connectionName} ·{" "}
+                    {comparison.enabled ? "已启用" : "已停用"}
+                  </p>
+                  <p>
+                    {(
+                      comparison.subscriptionRules ??
+                      comparison.eventTypes.map((eventType) => ({
+                        eventType,
+                        stages: null,
+                      }))
+                    )
+                      .map((rule) => {
+                        const label =
+                          eventTypes.find((e) => e.type === rule.eventType)
+                            ?.label ?? rule.eventType;
+                        return `${label}（${rule.stages === null ? "不限制职责" : rule.stages.map((stage) => ({ translate: "翻译", proofread: "校对", typeset: "嵌字", publish: "发布" })[stage]).join("、")}）`;
+                      })
+                      .join(" · ") || "未订阅事件"}
+                  </p>
+                  <p>
+                    {comparison.receiverMode === "templates"
+                      ? "使用公共事件模板"
+                      : comparison.includeDetails
+                        ? "旧版：包含作者、标题和操作昵称"
+                        : "旧版：仅固定事实"}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      previewEpoch.current++;
+                      setPreview("");
+                      setAdopting(false);
+                      setAdoptionPreview("");
+                      setAdoptionPreviewIdentity("");
+                      setDraft((current) =>
+                        current
+                          ? {
+                              ...current,
+                              expectedRevision: comparison.revision,
+                            }
+                          : null,
+                      );
+                      setComparison(null);
+                      setError("");
+                      setSuccess(
+                        "已采用当前版本号，草稿字段保留。请核对后保存。",
+                      );
+                    }}
+                  >
+                    保留草稿并以当前版本重试
+                  </Button>
+                </section>
+              )}
+            </fieldset>
+          </form>
+        )}
       </div>
-      {deliveries.data?.pages[0]?.items.length === 0 && <p>暂无投递记录。</p>}
-      {deliveries.hasNextPage && (
-        <Button
-          variant="secondary"
-          loading={deliveries.isFetchingNextPage}
-          onClick={() => void deliveries.fetchNextPage()}
-        >
-          加载更多
-        </Button>
-      )}
-    </Surface>
-  );
-}
-
-function TestChannel({
-  channel,
-  disabled,
-  onUpdated,
-}: {
-  channel: Channel;
-  disabled: boolean;
-  onUpdated: () => void;
-}) {
-  const key = useRef<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  async function send() {
-    key.current ??= crypto.randomUUID();
-    setBusy(true);
-    setError("");
-    setSuccess("");
-    try {
-      await unwrap(
-        await client.POST("/api/notifications/channels/{id}/test", {
-          params: { path: { id: channel.id } },
-          body: { idempotencyKey: key.current },
-        }),
-      );
-      key.current = null;
-      setSuccess("测试已排队，请刷新投递记录查看结果。");
-      onUpdated();
-    } catch (caught) {
-      setError(message(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div>
-      <Button
-        variant="secondary"
-        size="sm"
-        disabled={disabled}
-        loading={busy}
-        onClick={() => void send()}
+      <div
+        role="tabpanel"
+        id="notification-panel-templates"
+        aria-labelledby="notification-tab-templates"
+        hidden={tab !== "templates"}
       >
-        发送测试
-      </Button>
-      <Feedback error={error} success={success} />
-    </div>
+        <TemplateEditor
+          templates={templates}
+          events={eventTypes}
+          onUpdated={() =>
+            void queryClient.invalidateQueries({
+              queryKey: ["notification-configuration"],
+            })
+          }
+        />
+      </div>
+      <div
+        role="tabpanel"
+        id="notification-panel-history"
+        aria-labelledby="notification-tab-history"
+        hidden={tab !== "history"}
+      >
+        <header className="notification-heading">
+          <h3>投递记录</h3>
+          <div className="notification-actions">
+            <SelectField
+              label="投递状态"
+              value={status}
+              onValueChange={(value) =>
+                setStatus(value as Delivery["status"] | "")
+              }
+            >
+              <option value="">全部状态</option>
+              {Object.entries(statusLabels).map(([key, label]) => (
+                <option value={key} key={key}>
+                  {label}
+                </option>
+              ))}
+            </SelectField>
+            <Button
+              variant="ghost"
+              size="sm"
+              loading={deliveries.isFetching}
+              onClick={() => void deliveries.refetch()}
+            >
+              刷新记录
+            </Button>
+          </div>
+        </header>
+        {deliveries.isPending && <p role="status">正在读取投递记录…</p>}
+        {deliveries.isError && (
+          <p role="alert">投递记录读取失败，请刷新重试。</p>
+        )}
+        <div className="notification-deliveries">
+          {deliveries.data?.pages
+            .flatMap((page) => page.items)
+            .map((delivery) => (
+              <DeliveryRow
+                key={delivery.id}
+                delivery={delivery}
+                eventLabel={
+                  delivery.eventType === "notification.test"
+                    ? "通知测试"
+                    : (eventTypes.find(
+                        (event) => event.type === delivery.eventType,
+                      )?.label ?? delivery.eventType)
+                }
+                onUpdated={() =>
+                  void queryClient.invalidateQueries({
+                    queryKey: ["notification-deliveries"],
+                  })
+                }
+              />
+            ))}
+        </div>
+        {deliveries.data?.pages[0]?.items.length === 0 && <p>暂无投递记录。</p>}
+        {deliveries.hasNextPage && (
+          <Button
+            variant="secondary"
+            loading={deliveries.isFetchingNextPage}
+            onClick={() => void deliveries.fetchNextPage()}
+          >
+            加载更多
+          </Button>
+        )}
+      </div>
+    </Surface>
   );
 }
 
@@ -609,6 +1029,18 @@ function DeliveryRow({
       </div>
       <details>
         <summary>查看内容</summary>
+        {"contentRevision" in delivery && delivery.contentRevision != null && (
+          <p className="notification-boundary">
+            内容修订 {String(delivery.contentRevision)}
+          </p>
+        )}
+        {"metadataObservedAt" in delivery &&
+          typeof delivery.metadataObservedAt === "string" && (
+            <p className="notification-boundary">
+              资料捕获于{" "}
+              {new Date(delivery.metadataObservedAt).toLocaleString()}
+            </p>
+          )}
         <pre className="notification-preview">{delivery.preview}</pre>
       </details>
       {(delivery.status === "unknown" || delivery.status === "failed") &&

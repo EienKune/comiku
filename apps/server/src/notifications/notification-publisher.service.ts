@@ -1,10 +1,23 @@
-import { ConflictException, Inject, Injectable } from "@nestjs/common";
+import {
+  ConflictException,
+  Inject,
+  Injectable,
+  Optional,
+} from "@nestjs/common";
+import { ENVIRONMENT, type Environment } from "../config/environment.js";
 import { PrismaService } from "../database/prisma.service.js";
 import type { Prisma } from "../generated/prisma/client.js";
 import {
   normalizeNotificationEvent,
   notificationPayloadHash,
+  renderNotificationMessage,
 } from "./notification-events.js";
+import { renderTemplateNotificationMessage } from "./notification-content.js";
+import {
+  readNotificationTemplates,
+  matchesSubscriptionRule,
+  normalizeSubscriptionRules,
+} from "./notification-template-policy.js";
 import type {
   NotificationEventInput,
   NotificationFrozenRoute,
@@ -12,7 +25,10 @@ import type {
 
 @Injectable()
 export class NotificationPublisherService {
-  constructor(@Inject(PrismaService) private readonly db: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly db: PrismaService,
+    @Optional() @Inject(ENVIRONMENT) private readonly environment?: Environment,
+  ) {}
 
   /** DB-only entry point: errors abort the caller's transaction rather than being swallowed. */
   async recordTx(tx: Prisma.TransactionClient, input: NotificationEventInput) {
@@ -22,35 +38,73 @@ export class NotificationPublisherService {
       where: { eventKey: event.eventKey },
     });
     if (prior) return this.replay(prior, payloadHash);
-    const channels = await tx.notificationChannel.findMany({
-      where: { enabled: true, eventTypes: { has: event.type } },
-      select: {
-        id: true,
-        revision: true,
-        audienceGeneration: true,
-        groupId: true,
-        connectionKey: true,
-        connectionFingerprint: true,
-        includeDetails: true,
-      },
-      orderBy: { id: "asc" },
-      take: 51,
-    });
+    // Saved samples explicitly target one group in the management service.
+    if (event.type === "notification.test")
+      return this.recordFrozenRoutesTx(tx, input, []);
+    const eventType = event.type;
+    // Same lock order as capture and sample management: templates, then groups.
+    const templates = await readNotificationTemplates(tx, { lock: true });
+    const template = templates.find((row) => row.eventType === eventType)!;
+    const channels = await tx.$queryRaw<
+      (Omit<NotificationFrozenRoute, "templateVersion"> & {
+        receiverMode: string;
+        subscriptionRules: Prisma.JsonValue;
+      })[]
+    >`
+      SELECT id, revision, audience_generation AS generation, group_id AS "groupId",
+        connection_key AS "connectionKey", connection_fingerprint AS "connectionFingerprint",
+        include_details AS "includeDetails", receiver_mode AS "receiverMode", subscription_rules AS "subscriptionRules"
+      FROM notification_channels WHERE enabled = true AND ${eventType} = ANY(event_types)
+      ORDER BY id LIMIT 51 FOR SHARE`;
     if (channels.length > 50)
       throw new ConflictException("通知通道数量超过有界路由限制");
     return this.recordFrozenRoutesTx(
       tx,
       input,
-      channels.map((c) => ({
-        id: c.id,
-        revision: c.revision,
-        generation: c.audienceGeneration,
-        groupId: c.groupId,
-        connectionKey: c.connectionKey,
-        connectionFingerprint: c.connectionFingerprint,
-        includeDetails: c.includeDetails,
-        templateVersion: 1,
-      })),
+      channels.flatMap((c): NotificationFrozenRoute[] => {
+        const rules = normalizeSubscriptionRules(
+          Array.isArray(c.subscriptionRules) && c.subscriptionRules.length
+            ? c.subscriptionRules
+            : [{ eventType, stages: null }],
+        );
+        const rule = matchesSubscriptionRule(rules, eventType, input.stage);
+        if (!rule) return [];
+        const isTemplate = c.receiverMode === "templates";
+        return [
+          {
+            id: c.id,
+            revision: c.revision,
+            generation: c.generation,
+            groupId: c.groupId,
+            connectionKey: c.connectionKey,
+            connectionFingerprint: c.connectionFingerprint,
+            includeDetails: c.includeDetails,
+            templateVersion: 1,
+            content: {
+              formatVersion: isTemplate ? 2 : 1,
+              receiverMode: isTemplate ? "templates" : "legacy",
+              templatePolicy: isTemplate ? { ...template } : null,
+              matchedRule: rule,
+              text: isTemplate
+                ? renderTemplateNotificationMessage(
+                    event,
+                    template,
+                    this.environment?.appOrigin,
+                  )
+                : renderNotificationMessage(event, {
+                    includeDetails: c.includeDetails,
+                    siteUrl: this.environment?.appOrigin,
+                  }),
+              metadataObservedAt: isTemplate
+                ? (input.metadataObservedAt ?? null)
+                : null,
+              metadataOrigin: isTemplate
+                ? (input.metadataOrigin ?? null)
+                : null,
+            },
+          },
+        ];
+      }),
     );
   }
 
@@ -73,7 +127,7 @@ export class NotificationPublisherService {
         ordinal: event.ordinal,
         occurredAt: event.occurredAt,
         snapshot: { ...event.snapshot },
-        routeRefs: routes.map((r) => ({ ...r })),
+        routeRefs: JSON.parse(JSON.stringify(routes)) as Prisma.InputJsonValue,
       },
       skipDuplicates: true,
     });

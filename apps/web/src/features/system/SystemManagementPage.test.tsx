@@ -120,7 +120,7 @@ test("tab arrows wrap and Home/End activate and focus their panels", async () =>
   fireEvent.keyDown(collection, { key: "ArrowLeft" });
   expect(document.activeElement).toBe(notifications);
   expect(notifications.getAttribute("aria-selected")).toBe("true");
-  const panel = screen.getByRole("tabpanel");
+  const panel = screen.getByRole("tabpanel", { name: "推送通知" });
   expect(panel.getAttribute("aria-labelledby")).toBe(notifications.id);
   expect(notifications.getAttribute("aria-controls")).toBe(panel.id);
   fireEvent.keyDown(notifications, { key: "Home" });

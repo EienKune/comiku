@@ -6,6 +6,8 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
+import type { WorkStage } from "../generated/prisma/enums.js";
+import type { Prisma } from "../generated/prisma/client.js";
 import { ENVIRONMENT, type Environment } from "../config/environment.js";
 import { PrismaService } from "../database/prisma.service.js";
 import { NotificationPublisherService } from "./notification-publisher.service.js";
@@ -13,12 +15,13 @@ import { NotificationConnectionRegistry } from "./notification-connections.js";
 import {
   NOTIFICATION_EVENT_KEYS,
   NOTIFICATION_EVENT_TYPES,
-  notificationPreview,
+  notificationPreviewEvent,
   renderNotificationMessage,
 } from "./notification-events.js";
 import type {
   NormalizedNotificationEvent,
   NotificationEventType,
+  NotificationFrozenRoute,
 } from "./notifications.contracts.js";
 import {
   assertNotificationAdministrator,
@@ -26,6 +29,23 @@ import {
   deliveryDto,
   DELIVERY_STATUSES,
 } from "./notification-engine.helpers.js";
+import {
+  assertNotificationEventType,
+  allowedNotificationStages,
+  matchesSubscriptionRule,
+  normalizeSubscriptionRules,
+  normalizeTemplateSettings,
+  notificationEventSupportsStages,
+  readNotificationTemplates,
+  resolveTemplatePolicy,
+  type NotificationTemplateSettings,
+  type NotificationTemplatePolicy,
+  type NotificationSubscriptionRule,
+} from "./notification-template-policy.js";
+import {
+  buildHistoricalReplayText,
+  notificationTemplatePreview,
+} from "./notification-content.js";
 
 export interface NotificationChannelInput {
   name: string;
@@ -34,6 +54,8 @@ export interface NotificationChannelInput {
   enabled: boolean;
   eventTypes: string[];
   includeDetails: boolean;
+  receiverMode?: string;
+  subscriptionRules?: unknown;
 }
 export interface NotificationResolveInput {
   expectedRevision: number;
@@ -65,25 +87,88 @@ export class NotificationsService {
   ) {}
 
   async configuration() {
+    const [channels, templates] = await Promise.all([
+      this.db.notificationChannel.findMany({
+        orderBy: { createdAt: "asc" },
+        take: 50,
+      }),
+      readNotificationTemplates(this.db),
+    ]);
     return {
       enabled: this.registry.enabled,
       configurationError: this.registry.configurationError,
       connections: this.registry.safeConnections(),
       eventTypes: NOTIFICATION_EVENT_TYPES.filter(
         (e) => e.type !== "notification.test",
-      ),
-      channels: (
-        await this.db.notificationChannel.findMany({
-          orderBy: { createdAt: "asc" },
-          take: 50,
-        })
-      ).map(channelDto),
+      ).map((e) => ({
+        ...e,
+        supportsStages: notificationEventSupportsStages(e.type),
+        allowedStages: allowedNotificationStages(e.type),
+      })),
+      channels: channels.map(channelDto),
+      templates: templates.map((t) => ({
+        ...t,
+        referencedGroupCount: channels.filter(
+          (c) =>
+            c.receiverMode === "templates" &&
+            c.eventTypes.includes(t.eventType),
+        ).length,
+      })),
     };
+  }
+
+  async updateTemplate(
+    actorId: string,
+    eventType: string,
+    input: NotificationTemplateSettings & { expectedRevision: number },
+  ) {
+    assertNotificationEventType(eventType);
+    const settings = normalizeTemplateSettings(input);
+    return this.db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('comiku:notification-templates'))`;
+      await assertNotificationAdministrator(tx, actorId);
+      const existing = await tx.notificationTemplate.findUnique({
+        where: { eventType },
+      });
+      const before = resolveTemplatePolicy(eventType, existing);
+      if (before.revision !== input.expectedRevision)
+        throw new ConflictException("消息模板已更新");
+      const changed = Object.entries(settings).some(
+        ([key, value]) =>
+          before[key as keyof NotificationTemplateSettings] !== value,
+      );
+      const saved = changed
+        ? existing
+          ? await tx.notificationTemplate.update({
+              where: { eventType },
+              data: {
+                ...settings,
+                revision: before.revision + 1,
+                contentRevision: before.contentRevision + 1,
+              },
+            })
+          : await tx.notificationTemplate.create({
+              data: { eventType, ...settings, revision: 1, contentRevision: 1 },
+            })
+        : before;
+      const channels = await tx.notificationChannel.findMany({
+        where: { receiverMode: "templates", eventTypes: { has: eventType } },
+        take: 50,
+      });
+      return {
+        ...resolveTemplatePolicy(eventType, saved),
+        referencedGroupCount: channels.length,
+      };
+    });
   }
 
   private channelInput(
     input: NotificationChannelInput,
-    offline?: { connectionKey: string; connectionFingerprint: string },
+    offline?: {
+      connectionKey: string;
+      connectionFingerprint: string;
+      receiverMode?: string;
+    },
   ) {
     const connection =
       this.registry.get(input.connectionKey) ??
@@ -106,6 +191,28 @@ export class NotificationsService {
       )
     )
       throw new BadRequestException("通知通道配置无效");
+    const receiverMode =
+      input.receiverMode ??
+      offline?.receiverMode ??
+      (offline ? "legacy" : "templates");
+    if (!["legacy", "templates"].includes(receiverMode))
+      throw new BadRequestException("通知模式无效");
+    if (
+      offline?.receiverMode === "templates" &&
+      (input.receiverMode !== "templates" ||
+        input.subscriptionRules === undefined)
+    )
+      throw new ConflictException("请刷新后使用事件模板订阅设置");
+    const rules = normalizeSubscriptionRules(
+      input.subscriptionRules ??
+        [...new Set(input.eventTypes)].map((eventType) => ({
+          eventType,
+          stages: null,
+        })),
+      input.eventTypes,
+    );
+    if (input.enabled && !rules.length)
+      throw new BadRequestException("启用群通知前至少选择一个事件");
     return {
       name: input.name.trim(),
       connectionKey: connection.key,
@@ -114,6 +221,8 @@ export class NotificationsService {
       enabled: input.enabled,
       eventTypes: [...new Set(input.eventTypes)].sort(),
       includeDetails: input.includeDetails,
+      receiverMode,
+      subscriptionRules: rules,
     };
   }
 
@@ -152,21 +261,36 @@ export class NotificationsService {
         if (channel.revision !== input.expectedRevision)
           throw new ConflictException("通知通道已更新");
         const data = this.channelInput(input, channel);
+        const oldRules = normalizeSubscriptionRules(
+          Array.isArray(channel.subscriptionRules) &&
+            channel.subscriptionRules.length
+            ? channel.subscriptionRules
+            : channel.eventTypes.map((eventType) => ({
+                eventType,
+                stages: null,
+              })),
+        );
         const policyChanged =
           data.connectionKey !== channel.connectionKey ||
           data.connectionFingerprint !== channel.connectionFingerprint ||
           data.groupId !== channel.groupId ||
           data.enabled !== channel.enabled ||
-          data.includeDetails !== channel.includeDetails ||
-          JSON.stringify(data.eventTypes) !==
-            JSON.stringify([...new Set(channel.eventTypes)].sort());
+          (data.receiverMode === "legacy" &&
+            data.includeDetails !== channel.includeDetails) ||
+          JSON.stringify(data.subscriptionRules) !== JSON.stringify(oldRules);
         if (!policyChanged) {
-          if (data.name === channel.name) return channelDto(channel);
+          if (
+            data.name === channel.name &&
+            data.receiverMode === (channel.receiverMode ?? "legacy")
+          )
+            return channelDto(channel);
           return channelDto(
             await tx.notificationChannel.update({
               where: { id },
               data: {
                 name: data.name,
+                receiverMode: data.receiverMode,
+                subscriptionRules: data.subscriptionRules,
                 revision: { increment: 1 },
               },
             }),
@@ -203,15 +327,40 @@ export class NotificationsService {
       .catch(channelConstraintConflict);
   }
 
-  preview(input: { eventType: string; includeDetails: boolean }) {
+  preview(input: {
+    eventType: string;
+    includeDetails: boolean;
+    template?: NotificationTemplateSettings;
+    stage?: WorkStage;
+    missingMetadata?: boolean;
+  }) {
     if (!NOTIFICATION_EVENT_TYPES.some((e) => e.type === input.eventType))
       throw new BadRequestException("通知事件类型无效");
+    if (
+      input.stage &&
+      !allowedNotificationStages(input.eventType).includes(input.stage)
+    )
+      throw new BadRequestException("该事件不支持所选职责");
     return {
-      text: notificationPreview(
-        input.eventType as NotificationEventType,
-        input.includeDetails,
-        this.environment.appOrigin,
-      ),
+      text: input.template
+        ? notificationTemplatePreview(
+            input.eventType as NotificationEventType,
+            normalizeTemplateSettings(input.template),
+            this.environment.appOrigin,
+            input.stage,
+            input.missingMetadata,
+          )
+        : renderNotificationMessage(
+            notificationPreviewEvent(
+              input.eventType as NotificationEventType,
+              input.stage,
+              input.missingMetadata,
+            ),
+            {
+              includeDetails: input.includeDetails,
+              siteUrl: this.environment.appOrigin,
+            },
+          ),
     };
   }
 
@@ -278,8 +427,17 @@ export class NotificationsService {
     actorId: string,
     channelId: string,
     idempotencyKey: string,
+    options: {
+      eventType?: string;
+      stage?: WorkStage;
+      expectedRevision?: number;
+      expectedTemplateRevision?: number;
+    } = {},
   ) {
     return this.db.$transaction(async (tx) => {
+      const templates = options.eventType
+        ? await readNotificationTemplates(tx, { lock: true })
+        : [];
       await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${channelId}::uuid FOR UPDATE`;
       await assertNotificationAdministrator(tx, actorId);
       const requestKey = `test:${actorId}:${idempotencyKey}`;
@@ -290,25 +448,140 @@ export class NotificationsService {
       if (prior) {
         if (prior.channelId !== channelId)
           throw new ConflictException("测试请求 key 已用于其他通道");
+        const expectedType = options.eventType ?? "notification.test";
+        const priorSnapshot = prior.event.snapshot as {
+          stage?: string;
+          sampleEventType?: string;
+        };
+        if (
+          (priorSnapshot.sampleEventType ?? prior.event.type) !==
+            expectedType ||
+          (priorSnapshot.stage ?? null) !== (options.stage ?? null)
+        )
+          throw new ConflictException("测试请求 key 已用于其他事件或职责");
         return deliveryDto(prior);
       }
       const channel = await tx.notificationChannel.findUnique({
         where: { id: channelId },
       });
       if (!channel) throw new NotFoundException("通知通道不存在");
-      if (!channel.enabled || !this.registry.get(channel.connectionKey))
+      if (
+        !this.registry.enabled ||
+        !channel.enabled ||
+        !this.registry.get(channel.connectionKey)
+      )
         throw new ConflictException("通知通道未启用或连接不可用");
+      if (
+        options.expectedRevision !== undefined &&
+        options.expectedRevision !== channel.revision
+      )
+        throw new ConflictException("通知通道已更新");
+      if (
+        channel.receiverMode === "templates" &&
+        (!options.eventType || options.expectedRevision === undefined)
+      )
+        throw new BadRequestException("请选择已保存的事件并确认群配置版本");
+      let sampleText: string | undefined;
+      let sampleTemplate: NotificationTemplatePolicy | null = null;
+      let sampleRule: NotificationSubscriptionRule | null = null;
+      if (options.eventType) {
+        assertNotificationEventType(options.eventType);
+        if (
+          options.stage &&
+          !allowedNotificationStages(options.eventType).includes(options.stage)
+        )
+          throw new BadRequestException("该事件不支持所选职责");
+        const rules = normalizeSubscriptionRules(
+          Array.isArray(channel.subscriptionRules) &&
+            channel.subscriptionRules.length
+            ? channel.subscriptionRules
+            : channel.eventTypes.map((eventType) => ({
+                eventType,
+                stages: null,
+              })),
+        );
+        sampleRule = matchesSubscriptionRule(
+          rules,
+          options.eventType,
+          options.stage,
+        );
+        if (!sampleRule)
+          throw new BadRequestException("所选事件或职责未被该群订阅");
+        const template = templates.find(
+          (t) => t.eventType === options.eventType,
+        )!;
+        if (
+          channel.receiverMode === "templates" &&
+          options.expectedTemplateRevision !== template.revision
+        )
+          throw new ConflictException("消息模板已更新，请重新确认样例");
+        if (channel.receiverMode === "templates") sampleTemplate = template;
+        sampleText =
+          channel.receiverMode === "templates"
+            ? notificationTemplatePreview(
+                options.eventType,
+                template,
+                this.environment.appOrigin,
+                options.stage,
+              )
+            : renderNotificationMessage(
+                notificationPreviewEvent(options.eventType, options.stage),
+                {
+                  includeDetails: channel.includeDetails,
+                  siteUrl: this.environment.appOrigin,
+                },
+              );
+      }
       const event = await this.publisher.recordTx(tx, {
         eventKey: requestKey,
         type: "notification.test",
         resourceId: randomUUID(),
         aggregateVersion: 0,
         occurredAt: new Date(),
+        ...(options.stage && { stage: options.stage }),
       });
+      const text =
+        sampleText ??
+        renderNotificationMessage(
+          event as unknown as NormalizedNotificationEvent,
+          {
+            includeDetails: channel.includeDetails,
+            siteUrl: this.environment.appOrigin,
+          },
+        );
+      const sampleRoute: NotificationFrozenRoute = {
+        id: channel.id,
+        revision: channel.revision,
+        generation: channel.audienceGeneration,
+        groupId: channel.groupId,
+        connectionKey: channel.connectionKey,
+        connectionFingerprint: channel.connectionFingerprint,
+        includeDetails: channel.includeDetails,
+        templateVersion: 1,
+        content: {
+          formatVersion: sampleTemplate ? 2 : 1,
+          receiverMode: sampleTemplate ? "templates" : "legacy",
+          templatePolicy: sampleTemplate,
+          matchedRule: sampleRule,
+          text,
+          // Synthetic examples never represent observations of current business metadata.
+          metadataObservedAt: null,
+          metadataOrigin: null,
+        },
+      };
       // Test targets exactly the explicitly selected channel, independent of business subscriptions.
       await tx.notificationEvent.update({
         where: { id: event.id },
-        data: { routeRefs: [], routedAt: new Date() },
+        data: {
+          routeRefs: [sampleRoute] as unknown as Prisma.InputJsonValue,
+          routedAt: new Date(),
+          ...(options.eventType && {
+            snapshot: {
+              ...(event.snapshot as Prisma.JsonObject),
+              sampleEventType: options.eventType,
+            },
+          }),
+        },
       });
       const delivery = await tx.notificationDelivery.create({
         data: {
@@ -321,13 +594,7 @@ export class NotificationsService {
           channelRevision: channel.revision,
           requestedBy: actorId,
           requestKey,
-          text: renderNotificationMessage(
-            event as unknown as NormalizedNotificationEvent,
-            {
-              includeDetails: channel.includeDetails,
-              siteUrl: this.environment.appOrigin,
-            },
-          ),
+          text,
         },
         include: { event: true, channel: true },
       });
@@ -406,6 +673,14 @@ export class NotificationsService {
         },
         _max: { replayGeneration: true },
       });
+      let replayText: string;
+      try {
+        replayText = buildHistoricalReplayText(source.text);
+      } catch {
+        throw new ConflictException(
+          "原消息无法在1000字符内安全添加历史补发标记",
+        );
+      }
       await tx.notificationDelivery.update({
         where: { id },
         data: { resolvedAt: new Date(), revision: { increment: 1 } },
@@ -424,14 +699,7 @@ export class NotificationsService {
             connectionFingerprint: source.connectionFingerprint,
             groupId: source.groupId,
             channelRevision: source.channelRevision,
-            text: renderNotificationMessage(
-              source.event as unknown as NormalizedNotificationEvent,
-              {
-                includeDetails: channel.includeDetails,
-                siteUrl: this.environment.appOrigin,
-                historicalReplay: true,
-              },
-            ),
+            text: replayText,
           },
           include: { event: true, channel: true },
         }),

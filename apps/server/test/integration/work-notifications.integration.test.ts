@@ -239,6 +239,7 @@ test(
         enabled: true,
         eventTypes: [...NOTIFICATION_EVENT_KEYS],
         includeDetails: true,
+        receiverMode: "legacy",
       });
       channelId = channel.id;
       // Activate before the fixture's first source event, never replay history.

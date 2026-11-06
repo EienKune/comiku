@@ -15795,6 +15795,122 @@
         ]
       }
     },
+    "/api/notifications/templates/{eventType}": {
+      "patch": {
+        "operationId": "updateNotificationTemplate",
+        "parameters": [
+          {
+            "name": "eventType",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationTemplateUpdateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationTemplateDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
     "/api/notifications/channels": {
       "post": {
         "operationId": "createNotificationChannel",
@@ -23700,11 +23816,70 @@
           },
           "label": {
             "type": "string"
+          },
+          "supportsStages": {
+            "type": "boolean"
+          },
+          "allowedStages": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "translate",
+                "proofread",
+                "typeset",
+                "publish"
+              ]
+            }
           }
         },
         "required": [
           "type",
-          "label"
+          "label",
+          "supportsStages",
+          "allowedStages"
+        ]
+      },
+      "NotificationSubscriptionRuleDto": {
+        "type": "object",
+        "properties": {
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "imported",
+              "stage_joined",
+              "stage_started",
+              "typeset_handoff_started",
+              "stage_left",
+              "stage_assignment_updated",
+              "stage_submitted",
+              "proofreading_skipped",
+              "stage_submission_cancelled",
+              "review_opened",
+              "review_withdrawn",
+              "review_resumed",
+              "archived",
+              "restored",
+              "publish_confirmed"
+            ]
+          },
+          "stages": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "translate",
+                "proofread",
+                "typeset",
+                "publish"
+              ]
+            }
+          }
+        },
+        "required": [
+          "eventType",
+          "stages"
         ]
       },
       "NotificationChannelDto": {
@@ -23735,6 +23910,19 @@
           "includeDetails": {
             "type": "boolean"
           },
+          "receiverMode": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "templates"
+            ]
+          },
+          "subscriptionRules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationSubscriptionRuleDto"
+            }
+          },
           "revision": {
             "type": "number"
           },
@@ -23750,8 +23938,50 @@
           "enabled",
           "eventTypes",
           "includeDetails",
+          "receiverMode",
+          "subscriptionRules",
           "revision",
           "audienceGeneration"
+        ]
+      },
+      "NotificationTemplateDto": {
+        "type": "object",
+        "properties": {
+          "titleEnabled": {
+            "type": "boolean"
+          },
+          "authorEnabled": {
+            "type": "boolean"
+          },
+          "actorEnabled": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string",
+            "description": "At most 120 Unicode code points"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "number"
+          },
+          "contentRevision": {
+            "type": "number"
+          },
+          "referencedGroupCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "titleEnabled",
+          "authorEnabled",
+          "actorEnabled",
+          "note",
+          "eventType",
+          "revision",
+          "contentRevision",
+          "referencedGroupCount"
         ]
       },
       "NotificationConfigurationDto": {
@@ -23781,6 +24011,12 @@
             "items": {
               "$ref": "#/components/schemas/NotificationChannelDto"
             }
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationTemplateDto"
+            }
           }
         },
         "required": [
@@ -23788,7 +24024,37 @@
           "configurationError",
           "connections",
           "eventTypes",
-          "channels"
+          "channels",
+          "templates"
+        ]
+      },
+      "NotificationTemplateUpdateDto": {
+        "type": "object",
+        "properties": {
+          "titleEnabled": {
+            "type": "boolean"
+          },
+          "authorEnabled": {
+            "type": "boolean"
+          },
+          "actorEnabled": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string",
+            "description": "At most 120 Unicode code points"
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "titleEnabled",
+          "authorEnabled",
+          "actorEnabled",
+          "note",
+          "expectedRevision"
         ]
       },
       "NotificationChannelInputDto": {
@@ -23836,6 +24102,19 @@
           },
           "includeDetails": {
             "type": "boolean"
+          },
+          "receiverMode": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "templates"
+            ]
+          },
+          "subscriptionRules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationSubscriptionRuleDto"
+            }
           }
         },
         "required": [
@@ -23893,6 +24172,19 @@
           "includeDetails": {
             "type": "boolean"
           },
+          "receiverMode": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "templates"
+            ]
+          },
+          "subscriptionRules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationSubscriptionRuleDto"
+            }
+          },
           "expectedRevision": {
             "type": "number",
             "minimum": 0
@@ -23906,6 +24198,30 @@
           "eventTypes",
           "includeDetails",
           "expectedRevision"
+        ]
+      },
+      "NotificationTemplateSettingsDto": {
+        "type": "object",
+        "properties": {
+          "titleEnabled": {
+            "type": "boolean"
+          },
+          "authorEnabled": {
+            "type": "boolean"
+          },
+          "actorEnabled": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string",
+            "description": "At most 120 Unicode code points"
+          }
+        },
+        "required": [
+          "titleEnabled",
+          "authorEnabled",
+          "actorEnabled",
+          "note"
         ]
       },
       "NotificationPreviewInputDto": {
@@ -23933,6 +24249,21 @@
           },
           "includeDetails": {
             "type": "boolean"
+          },
+          "template": {
+            "$ref": "#/components/schemas/NotificationTemplateSettingsDto"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "translate",
+              "proofread",
+              "typeset",
+              "publish"
+            ]
+          },
+          "missingMetadata": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -23954,6 +24285,22 @@
       "NotificationDeliveryDto": {
         "type": "object",
         "properties": {
+          "metadataOrigin": {
+            "type": "string",
+            "enum": [
+              "capture_current"
+            ],
+            "nullable": true
+          },
+          "contentRevision": {
+            "type": "number",
+            "nullable": true
+          },
+          "metadataObservedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -24016,6 +24363,9 @@
           }
         },
         "required": [
+          "metadataOrigin",
+          "contentRevision",
+          "metadataObservedAt",
           "id",
           "channelId",
           "channelName",
@@ -24057,6 +24407,43 @@
           "idempotencyKey": {
             "type": "string",
             "format": "uuid"
+          },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "imported",
+              "stage_joined",
+              "stage_started",
+              "typeset_handoff_started",
+              "stage_left",
+              "stage_assignment_updated",
+              "stage_submitted",
+              "proofreading_skipped",
+              "stage_submission_cancelled",
+              "review_opened",
+              "review_withdrawn",
+              "review_resumed",
+              "archived",
+              "restored",
+              "publish_confirmed"
+            ]
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "translate",
+              "proofread",
+              "typeset",
+              "publish"
+            ]
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "expectedTemplateRevision": {
+            "type": "number",
+            "minimum": 0
           }
         },
         "required": [
@@ -24070,7 +24457,40 @@
             "type": "string",
             "format": "uuid"
           },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "imported",
+              "stage_joined",
+              "stage_started",
+              "typeset_handoff_started",
+              "stage_left",
+              "stage_assignment_updated",
+              "stage_submitted",
+              "proofreading_skipped",
+              "stage_submission_cancelled",
+              "review_opened",
+              "review_withdrawn",
+              "review_resumed",
+              "archived",
+              "restored",
+              "publish_confirmed"
+            ]
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "translate",
+              "proofread",
+              "typeset",
+              "publish"
+            ]
+          },
           "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "expectedTemplateRevision": {
             "type": "number",
             "minimum": 0
           },
@@ -24087,7 +24507,6 @@
         },
         "required": [
           "idempotencyKey",
-          "expectedRevision",
           "action"
         ]
       },
