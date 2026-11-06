@@ -23818,6 +23818,8 @@
               "enum": [
                 "imported",
                 "stage_joined",
+                "stage_started",
+                "typeset_handoff_started",
                 "stage_left",
                 "stage_assignment_updated",
                 "stage_submitted",
@@ -23872,6 +23874,8 @@
               "enum": [
                 "imported",
                 "stage_joined",
+                "stage_started",
+                "typeset_handoff_started",
                 "stage_left",
                 "stage_assignment_updated",
                 "stage_submitted",
@@ -23912,6 +23916,8 @@
             "enum": [
               "imported",
               "stage_joined",
+              "stage_started",
+              "typeset_handoff_started",
               "stage_left",
               "stage_assignment_updated",
               "stage_submitted",

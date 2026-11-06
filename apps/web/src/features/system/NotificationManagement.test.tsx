@@ -227,3 +227,133 @@ test("explicit test queues with a stable retry key and says queued instead of re
   expect(first.body.idempotencyKey).toBe(second.body.idempotencyKey);
   expect(screen.queryByText("已读")).toBeNull();
 });
+
+test("shows configuration summary without claiming QQ online and labels delivery events", async () => {
+  setup();
+  expect(await screen.findByRole("heading", { name: "连接配置" })).toBeTruthy();
+  expect(screen.getByText("配置可用")).toBeTruthy();
+  expect(screen.queryByText(/在线/)).toBeNull();
+  expect(screen.getByRole("heading", { name: "群订阅" })).toBeTruthy();
+  expect(await screen.findByText("导入作品")).toBeTruthy();
+  expect(screen.getByText(/核心作品事件/)).toBeTruthy();
+  expect(screen.queryByText(/尚未接入/)).toBeNull();
+});
+
+test("an inactive notification panel issues no reads", async () => {
+  const get = vi.spyOn(client, "GET");
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <NotificationManagement enabled={false} />
+    </QueryClientProvider>,
+  );
+  await act(async () => {});
+  expect(get).not.toHaveBeenCalled();
+});
+
+test("cached inactive notification queries ignore invalidation and resume when activated", async () => {
+  const get = vi.spyOn(client, "GET").mockImplementation((async (
+    path: string,
+  ) => ({
+    data: path.endsWith("configuration")
+      ? {
+          enabled: false,
+          configurationError: null,
+          connections: [],
+          eventTypes: [],
+          channels: [],
+        }
+      : { items: [], nextCursor: null },
+    response: new Response(),
+  })) as never);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const panel = (enabled: boolean) => (
+    <QueryClientProvider client={queryClient}>
+      <NotificationManagement enabled={enabled} />
+    </QueryClientProvider>
+  );
+  const view = render(panel(true));
+  await screen.findByText("暂无投递记录。");
+  expect(get).toHaveBeenCalledTimes(2);
+  view.rerender(panel(false));
+  await act(async () => {
+    await queryClient.invalidateQueries();
+  });
+  expect(get).toHaveBeenCalledTimes(2);
+  view.rerender(panel(true));
+  await waitFor(() => expect(get).toHaveBeenCalledTimes(4));
+});
+
+test("new group starts disabled with no subscriptions and saves only real content settings", async () => {
+  const { post } = setup();
+  fireEvent.click(await screen.findByRole("button", { name: "新增群目标" }));
+  expect(
+    (screen.getByLabelText("启用此群通知") as HTMLInputElement).checked,
+  ).toBe(false);
+  expect((screen.getByLabelText("导入作品") as HTMLInputElement).checked).toBe(
+    false,
+  );
+  expect(screen.getByRole("heading", { name: "消息内容" })).toBeTruthy();
+  expect(screen.queryByRole("textbox", { name: /模板/ })).toBeNull();
+  fireEvent.change(screen.getByLabelText("名称"), {
+    target: { value: "新群" },
+  });
+  fireEvent.change(screen.getByLabelText("群号"), { target: { value: "456" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  await screen.findByText("配置已保存");
+  expect(post).toHaveBeenCalledWith("/api/notifications/channels", {
+    body: {
+      name: "新群",
+      groupId: "456",
+      connectionKey: "bot",
+      enabled: false,
+      eventTypes: [],
+      includeDetails: false,
+    },
+  });
+});
+
+test("a save completed after deactivation does not refetch hidden configuration", async () => {
+  const get = vi.spyOn(client, "GET").mockImplementation((async (
+    path: string,
+  ) => ({
+    data: path.endsWith("configuration")
+      ? {
+          enabled: false,
+          configurationError: null,
+          connections: [{ key: "bot", name: "测试连接", available: true }],
+          eventTypes: [],
+          channels: [],
+        }
+      : { items: [], nextCursor: null },
+    response: new Response(),
+  })) as never);
+  let complete!: (value: never) => void;
+  const post = vi.spyOn(client, "POST").mockReturnValue(
+    new Promise<never>((resolve) => {
+      complete = resolve;
+    }),
+  );
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const panel = (enabled: boolean) => (
+    <QueryClientProvider client={queryClient}>
+      <NotificationManagement enabled={enabled} />
+    </QueryClientProvider>
+  );
+  const view = render(panel(true));
+  fireEvent.click(await screen.findByRole("button", { name: "新增群目标" }));
+  fireEvent.change(screen.getByLabelText("名称"), {
+    target: { value: "新群" },
+  });
+  fireEvent.change(screen.getByLabelText("群号"), { target: { value: "456" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  view.rerender(panel(false));
+  await act(async () => {
+    complete({ data: channel, response: new Response() } as never);
+  });
+  expect(get).toHaveBeenCalledTimes(2);
+});

@@ -1,4 +1,9 @@
-import { Inject, Injectable, type OnModuleInit } from "@nestjs/common";
+import {
+  Inject,
+  Injectable,
+  Optional,
+  type OnModuleInit,
+} from "@nestjs/common";
 import { ENVIRONMENT, type Environment } from "../config/environment.js";
 import { PrismaService } from "../database/prisma.service.js";
 import type { BackgroundJob, Prisma } from "../generated/prisma/client.js";
@@ -6,6 +11,7 @@ import { JobDeferred, JobsService, retryDelay } from "../jobs/jobs.service.js";
 import { NotificationConnectionRegistry } from "./notification-connections.js";
 import { OneBotHttpAdapter } from "./onebot-http.adapter.js";
 import { renderNotificationMessage } from "./notification-events.js";
+import { NotificationWorkEventBridgeService } from "./notification-work-event-bridge.service.js";
 import type {
   NormalizedNotificationEvent,
   NotificationSendResult,
@@ -25,6 +31,9 @@ export class NotificationRuntimeService implements OnModuleInit {
     private readonly registry: NotificationConnectionRegistry,
     @Inject(OneBotHttpAdapter) private readonly adapter: OneBotHttpAdapter,
     @Inject(ENVIRONMENT) private readonly environment: Environment,
+    @Optional()
+    @Inject(NotificationWorkEventBridgeService)
+    private readonly workEventBridge?: NotificationWorkEventBridgeService,
   ) {}
 
   get enabled() {
@@ -44,6 +53,7 @@ export class NotificationRuntimeService implements OnModuleInit {
   /** Bounded durable routing/reconciliation; no request, interval, lease or TTL of its own. */
   async maintain() {
     if (!this.enabled) return;
+    await this.workEventBridge?.maintain();
     const events = await this.db.notificationEvent.findMany({
       where: { routedAt: null },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],

@@ -183,6 +183,11 @@ export class NotificationsService {
             ...data,
             revision: { increment: 1 },
             audienceGeneration: { increment: 1 },
+            sourceAcceptAfter: (
+              await tx.$queryRaw<
+                { now: Date }[]
+              >`SELECT clock_timestamp() AS now`
+            )[0]!.now,
           },
         });
         await tx.notificationDelivery.updateMany({

@@ -20,12 +20,13 @@ function statusTone(status: string) {
   return "neutral" as const;
 }
 
-export function SourceFetchHistory() {
+export function SourceFetchHistory({ enabled = true }: { enabled?: boolean }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["source-fetch-history"],
+    enabled,
     queryFn: async () => unwrap(await client.GET("/api/source-fetch/runs")),
-    refetchInterval: 15_000,
+    refetchInterval: enabled ? 15_000 : false,
   });
   return (
     <Surface className="system-history">

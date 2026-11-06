@@ -1,5 +1,9 @@
 import { useRef, useState } from "react";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
 import {
   Badge,
@@ -38,9 +42,15 @@ function message(error: unknown) {
   return error instanceof Error ? error.message : "请求失败，请重试。";
 }
 
-export function NotificationManagement() {
+export function NotificationManagement({
+  enabled = true,
+}: {
+  enabled?: boolean;
+}) {
+  const queryClient = useQueryClient();
   const configuration = useQuery({
     queryKey: ["notification-configuration"],
+    enabled,
     queryFn: async () =>
       unwrap(await client.GET("/api/notifications/configuration")),
     refetchOnWindowFocus: false,
@@ -53,6 +63,7 @@ export function NotificationManagement() {
   const [status, setStatus] = useState<Delivery["status"] | "">("");
   const deliveries = useInfiniteQuery({
     queryKey: ["notification-deliveries", status],
+    enabled,
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) =>
       unwrap(
@@ -133,7 +144,9 @@ export function NotificationManagement() {
       await unwrap(result);
       setDraft(null);
       setSuccess("配置已保存");
-      void configuration.refetch();
+      void queryClient.invalidateQueries({
+        queryKey: ["notification-configuration"],
+      });
     } catch (caught) {
       setError(message(caught));
     } finally {
@@ -165,7 +178,7 @@ export function NotificationManagement() {
   return (
     <Surface className="notification-management">
       <header className="notification-heading">
-        <h2>群通知</h2>
+        <h2>推送通知</h2>
         <div className="notification-actions">
           <Button
             variant="ghost"
@@ -174,9 +187,6 @@ export function NotificationManagement() {
             onClick={() => void configuration.refetch()}
           >
             刷新配置
-          </Button>
-          <Button size="sm" disabled={!data || saving} onClick={() => edit()}>
-            新增群目标
           </Button>
         </div>
       </header>
@@ -193,8 +203,32 @@ export function NotificationManagement() {
             </p>
           )}
           <p className="notification-boundary">
-            工作台事件尚未接入；当前可维护配置和发送合成测试。
+            核心作品事件启用后异步补账推送，通知失败不影响作品操作；启用前历史不自动补推。
           </p>
+          <section
+            className="notification-connections"
+            aria-labelledby="notification-connections-heading"
+          >
+            <h3 id="notification-connections-heading">连接配置</h3>
+            {data.connections.map((connection) => (
+              <div key={connection.key} className="notification-connection">
+                <strong>{connection.name}</strong>
+                <Badge tone={connection.available ? "neutral" : "warning"}>
+                  {connection.available ? "配置可用" : "配置不可用"}
+                </Badge>
+              </div>
+            ))}
+            {data.connections.length === 0 && <p>暂无连接配置。</p>}
+            <p className="notification-boundary">
+              连接状态仅反映服务端配置，不代表 QQ 登录状态。
+            </p>
+          </section>
+          <header className="notification-heading">
+            <h3>群订阅</h3>
+            <Button size="sm" disabled={saving} onClick={() => edit()}>
+              新增群目标
+            </Button>
+          </header>
           <div className="notification-channels">
             {data.channels.map((channel) => (
               <article key={channel.id} className="notification-channel">
@@ -236,7 +270,11 @@ export function NotificationManagement() {
                           connection.available,
                       )
                     }
-                    onUpdated={() => void deliveries.refetch()}
+                    onUpdated={() =>
+                      void queryClient.invalidateQueries({
+                        queryKey: ["notification-deliveries"],
+                      })
+                    }
                   />
                 </div>
               </article>
@@ -327,43 +365,49 @@ export function NotificationManagement() {
                 </label>
               ))}
             </fieldset>
-            <label className="notification-check">
-              <input
-                type="checkbox"
-                checked={draft.includeDetails}
-                onChange={(event) =>
-                  changeDraft({ includeDetails: event.target.checked })
-                }
-              />
-              包含作者、标题和操作昵称
-            </label>
-            <div className="notification-preview-controls">
-              <SelectField
-                label="预览事件"
-                value={previewType}
-                onValueChange={(value) => {
-                  previewEpoch.current++;
-                  setPreview("");
-                  setPreviewType(value as EventType);
-                }}
-              >
-                {eventTypes.map((event) => (
-                  <option key={event.type} value={event.type}>
-                    {event.label}
-                  </option>
-                ))}
-              </SelectField>
-              <Button
-                type="button"
-                variant="secondary"
-                loading={previewBusy}
-                disabled={!previewType}
-                onClick={() => void showPreview()}
-              >
-                预览内容
-              </Button>
+            <div className="notification-content">
+              <h4>消息内容</h4>
+              <p className="notification-boundary">
+                固定格式包含事件和作品编号；附加信息仅使用事件已留存的内容。
+              </p>
+              <label className="notification-check">
+                <input
+                  type="checkbox"
+                  checked={draft.includeDetails}
+                  onChange={(event) =>
+                    changeDraft({ includeDetails: event.target.checked })
+                  }
+                />
+                包含作者、标题和操作昵称
+              </label>
+              <div className="notification-preview-controls">
+                <SelectField
+                  label="预览事件"
+                  value={previewType}
+                  onValueChange={(value) => {
+                    previewEpoch.current++;
+                    setPreview("");
+                    setPreviewType(value as EventType);
+                  }}
+                >
+                  {eventTypes.map((event) => (
+                    <option key={event.type} value={event.type}>
+                      {event.label}
+                    </option>
+                  ))}
+                </SelectField>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  loading={previewBusy}
+                  disabled={!previewType}
+                  onClick={() => void showPreview()}
+                >
+                  预览内容
+                </Button>
+              </div>
+              {preview && <pre className="notification-preview">{preview}</pre>}
             </div>
-            {preview && <pre className="notification-preview">{preview}</pre>}
             <div className="notification-actions">
               <Button type="submit" loading={saving}>
                 保存
@@ -418,7 +462,15 @@ export function NotificationManagement() {
             <DeliveryRow
               key={delivery.id}
               delivery={delivery}
-              onUpdated={() => void deliveries.refetch()}
+              eventLabel={
+                eventTypes.find((event) => event.type === delivery.eventType)
+                  ?.label ?? delivery.eventType
+              }
+              onUpdated={() =>
+                void queryClient.invalidateQueries({
+                  queryKey: ["notification-deliveries"],
+                })
+              }
             />
           ))}
       </div>
@@ -488,9 +540,11 @@ function TestChannel({
 
 function DeliveryRow({
   delivery,
+  eventLabel,
   onUpdated,
 }: {
   delivery: Delivery;
+  eventLabel: string;
   onUpdated: () => void;
 }) {
   const [confirmed, setConfirmed] = useState(false);
@@ -542,6 +596,7 @@ function DeliveryRow({
         </Badge>
       </div>
       <div className="notification-meta">
+        <span>{eventLabel}</span>
         <time dateTime={delivery.createdAt}>
           {new Date(delivery.createdAt).toLocaleString()}
         </time>

@@ -17,6 +17,8 @@ export const NOTIFICATION_EVENT_TYPES: readonly {
 }[] = Object.freeze([
   { type: "imported", label: "已导入" },
   { type: "stage_joined", label: "已加入阶段" },
+  { type: "stage_started", label: "已开始阶段" },
+  { type: "typeset_handoff_started", label: "已开始嵌字交接" },
   { type: "stage_left", label: "已退出阶段" },
   { type: "stage_assignment_updated", label: "阶段分工已调整" },
   { type: "stage_submitted", label: "阶段已提交" },
@@ -286,21 +288,28 @@ export function notificationPreview(
                         fromWorkflowStatus: WorkflowStatus.pending_proofread,
                         toWorkflowStatus: WorkflowStatus.translating,
                       }
-                    : type === "stage_joined"
+                    : type === "stage_started"
                       ? {
                           stage: WorkStage.translate,
                           fromWorkflowStatus: WorkflowStatus.pending_translate,
                           toWorkflowStatus: WorkflowStatus.translating,
                         }
-                      : type === "stage_left" ||
-                          type === "stage_assignment_updated"
-                        ? { stage: WorkStage.translate }
-                        : type === "imported"
-                          ? {
-                              toWorkflowStatus:
-                                WorkflowStatus.pending_translate,
-                            }
-                          : {};
+                      : type === "typeset_handoff_started"
+                        ? {
+                            stage: WorkStage.typeset,
+                            fromWorkflowStatus: WorkflowStatus.pending_typeset,
+                            toWorkflowStatus: WorkflowStatus.typesetting,
+                          }
+                        : type === "stage_joined" ||
+                            type === "stage_left" ||
+                            type === "stage_assignment_updated"
+                          ? { stage: WorkStage.translate }
+                          : type === "imported"
+                            ? {
+                                toWorkflowStatus:
+                                  WorkflowStatus.pending_translate,
+                              }
+                            : {};
   return renderNotificationMessage(
     normalizeNotificationEvent({
       eventKey: "preview",

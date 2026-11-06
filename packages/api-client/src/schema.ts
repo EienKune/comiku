@@ -3832,7 +3832,7 @@ export interface components {
             connectionKey: string;
             groupId: string;
             enabled: boolean;
-            eventTypes: ("imported" | "stage_joined" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed")[];
+            eventTypes: ("imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed")[];
             includeDetails: boolean;
         };
         NotificationChannelUpdateDto: {
@@ -3840,13 +3840,13 @@ export interface components {
             connectionKey: string;
             groupId: string;
             enabled: boolean;
-            eventTypes: ("imported" | "stage_joined" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed")[];
+            eventTypes: ("imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed")[];
             includeDetails: boolean;
             expectedRevision: number;
         };
         NotificationPreviewInputDto: {
             /** @enum {string} */
-            eventType: "imported" | "stage_joined" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed";
+            eventType: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed";
             includeDetails: boolean;
         };
         NotificationPreviewDto: {

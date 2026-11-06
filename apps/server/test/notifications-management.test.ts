@@ -130,7 +130,7 @@ test("an administrator can disable an existing channel while its manifest connec
     audienceGeneration: 1,
   };
   const tx = {
-    $queryRaw: async () => [],
+    $queryRaw: async () => [{ now: new Date("2026-11-07T00:00:00Z") }],
     user: {
       findUnique: async () => ({
         isActive: true,

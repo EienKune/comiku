@@ -124,7 +124,7 @@ test("event validation rejects invalid DB identifiers and INTEGER overflow befor
 });
 
 test("catalog exposes only approved core events and preview is synthetic", () => {
-  assert.equal(NOTIFICATION_EVENT_TYPES.length, 14);
+  assert.equal(NOTIFICATION_EVENT_TYPES.length, 16);
   assert.ok(
     NOTIFICATION_EVENT_TYPES.some((item) => item.type === "notification.test"),
   );

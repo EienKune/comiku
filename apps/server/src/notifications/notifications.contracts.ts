@@ -9,6 +9,8 @@ export type NotificationWorkEventType = Extract<
   WorkEventAction,
   | "imported"
   | "stage_joined"
+  | "stage_started"
+  | "typeset_handoff_started"
   | "stage_left"
   | "stage_assignment_updated"
   | "stage_submitted"
@@ -81,4 +83,16 @@ export interface NotificationSendResult {
   errorCode?: string;
   providerMessageId?: string;
   sendBoundaryCrossed: boolean;
+}
+
+/** Module-internal immutable routing snapshot. Never accepted by HTTP controllers. */
+export interface NotificationFrozenRoute {
+  id: string;
+  revision: number;
+  generation: number;
+  groupId: string;
+  connectionKey: string;
+  connectionFingerprint: string;
+  includeDetails: boolean;
+  templateVersion: 1;
 }

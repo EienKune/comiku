@@ -1257,6 +1257,7 @@ model WorkEvent {
   idempotencyKey     String?         @map("idempotency_key") @db.Uuid
   detail             Json            @default("{}")
   createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  notificationCapturedAt DateTime? @ignore @map("notification_captured_at") @db.Timestamptz(3)
 
   @@unique([workId, idempotencyKey])
   @@index([workId, createdAt])
@@ -1724,6 +1725,7 @@ model NotificationChannel {
   includeDetails Boolean @default(false) @map("include_details")
   revision Int @default(0)
   audienceGeneration Int @default(1) @map("audience_generation")
+  sourceAcceptAfter DateTime @default(now()) @map("source_accept_after") @db.Timestamptz(3)
   nextSendAt DateTime? @map("next_send_at") @db.Timestamptz(3)
   rateWindowAt DateTime? @map("rate_window_at") @db.Timestamptz(3)
   rateWindowCount Int @default(0) @map("rate_window_count")
@@ -1731,6 +1733,34 @@ model NotificationChannel {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
   deliveries NotificationDelivery[]
   @@map("notification_channels")
+}
+
+model NotificationWorkEventActivation {
+  id String @id @db.VarChar(32)
+  sourceSince DateTime @default(now()) @map("source_since") @db.Timestamptz(3)
+  @@map("notification_work_event_activation")
+}
+
+model NotificationWorkEventReceipt {
+  id String @id @default(uuid()) @db.Uuid
+  sourceEventId String @unique(map: "notification_work_receipt_source_key") @map("source_event_id") @db.Uuid
+  resourceId String @map("resource_id") @db.Uuid
+  resourceOrdinal Int @map("resource_ordinal")
+  inputVersion Int @default(1) @map("input_version")
+  safeInput Json @map("safe_input")
+  payloadHash String? @map("payload_hash") @db.Char(64)
+  routeRefs Json @map("route_refs")
+  status String @default("pending") @db.VarChar(24)
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
+  errorCode String? @map("error_code") @db.VarChar(64)
+  notificationEventId String? @map("notification_event_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@unique([resourceId, resourceOrdinal], map: "notification_work_receipt_resource_ordinal_key")
+  @@index([status, nextAttemptAt, createdAt], map: "notification_work_receipt_due_idx")
+  @@index([resourceId, status, resourceOrdinal], map: "notification_work_receipt_resource_pending_idx")
+  @@map("notification_work_event_receipts")
 }
 
 model NotificationDelivery {

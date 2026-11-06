@@ -5,7 +5,10 @@ import {
   normalizeNotificationEvent,
   notificationPayloadHash,
 } from "./notification-events.js";
-import type { NotificationEventInput } from "./notifications.contracts.js";
+import type {
+  NotificationEventInput,
+  NotificationFrozenRoute,
+} from "./notifications.contracts.js";
 
 @Injectable()
 export class NotificationPublisherService {
@@ -35,6 +38,31 @@ export class NotificationPublisherService {
     });
     if (channels.length > 50)
       throw new ConflictException("通知通道数量超过有界路由限制");
+    return this.recordFrozenRoutesTx(
+      tx,
+      input,
+      channels.map((c) => ({
+        id: c.id,
+        revision: c.revision,
+        generation: c.audienceGeneration,
+        groupId: c.groupId,
+        connectionKey: c.connectionKey,
+        connectionFingerprint: c.connectionFingerprint,
+        includeDetails: c.includeDetails,
+        templateVersion: 1,
+      })),
+    );
+  }
+
+  /** Module-internal: replay the capture-time audience, never re-resolve subscriptions. */
+  async recordFrozenRoutesTx(
+    tx: Prisma.TransactionClient,
+    input: NotificationEventInput,
+    routes: NotificationFrozenRoute[],
+  ) {
+    const event = normalizeNotificationEvent(input);
+    const payloadHash = notificationPayloadHash(input);
+    if (routes.length > 50) throw new Error("notification_routes_invalid");
     await tx.notificationEvent.createMany({
       data: {
         eventKey: event.eventKey,
@@ -45,16 +73,7 @@ export class NotificationPublisherService {
         ordinal: event.ordinal,
         occurredAt: event.occurredAt,
         snapshot: { ...event.snapshot },
-        routeRefs: channels.map((c) => ({
-          id: c.id,
-          revision: c.revision,
-          generation: c.audienceGeneration,
-          groupId: c.groupId,
-          connectionKey: c.connectionKey,
-          connectionFingerprint: c.connectionFingerprint,
-          includeDetails: c.includeDetails,
-          templateVersion: 1,
-        })),
+        routeRefs: routes.map((r) => ({ ...r })),
       },
       skipDuplicates: true,
     });

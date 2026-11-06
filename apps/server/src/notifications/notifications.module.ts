@@ -5,6 +5,7 @@ import { JobsModule } from "../jobs/jobs.module.js";
 import { NotificationConnectionRegistry } from "./notification-connections.js";
 import { NotificationPublisherService } from "./notification-publisher.service.js";
 import { NotificationRuntimeService } from "./notification-runtime.service.js";
+import { NotificationWorkEventBridgeService } from "./notification-work-event-bridge.service.js";
 import { NotificationsController } from "./notifications.controller.js";
 import { NotificationsService } from "./notifications.service.js";
 import { OneBotHttpAdapter } from "./onebot-http.adapter.js";
@@ -44,6 +45,7 @@ class NotificationTransportLifecycle implements OnModuleDestroy {
     OneBotHttpAdapter,
     NotificationTransportLifecycle,
     NotificationPublisherService,
+    NotificationWorkEventBridgeService,
     NotificationsService,
     NotificationRuntimeService,
   ],
