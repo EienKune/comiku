@@ -109,6 +109,7 @@ test("existing current-model results rebuild bounded summaries without new infer
     },
   };
   const db = {
+    $queryRaw: async () => [],
     $transaction: async (callback: (value: typeof tx) => Promise<void>) =>
       callback(tx),
     candidatePost: {
@@ -447,6 +448,7 @@ test("disabling partial analysis leaves same-key re-enable repairable without re
     },
   };
   const db = {
+    $queryRaw: async () => [],
     $transaction: async (callback: (value: typeof tx) => Promise<void>) =>
       callback(tx),
     candidateMediaAnalysis: {

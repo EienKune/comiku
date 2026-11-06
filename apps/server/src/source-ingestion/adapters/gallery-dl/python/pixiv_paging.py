@@ -419,6 +419,7 @@ class PixivPager:
                         or type(body.get("illustType")) is not int or body["illustType"] not in (0, 1, 2)):
                     raise self.error("discovery_incomplete")
                 self.date(body.get("createDate"))
+                self.defer_if_future(item, body["createDate"])
                 work = body
                 self.detail_cache["/illust/" + item] = body
             recent = self.may_be_recent(work["createDate"])
