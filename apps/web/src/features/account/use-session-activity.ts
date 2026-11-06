@@ -12,7 +12,8 @@ export function installSessionActivity(user: Identity) {
   const kinds = ["pointerdown", "keydown", "wheel"] as const;
   const stop = () => {
     stopped = true;
-    for (const kind of kinds) document.removeEventListener(kind, activity);
+    for (const kind of kinds)
+      document.removeEventListener(kind, activity, true);
     pending?.abort();
   };
   const activity = (event: Event) => {
@@ -48,7 +49,7 @@ export function installSessionActivity(user: Identity) {
       });
   };
   for (const kind of kinds)
-    document.addEventListener(kind, activity, { passive: true });
+    document.addEventListener(kind, activity, { passive: true, capture: true });
   return stop;
 }
 export function useSessionActivity(user: Identity | null | undefined) {

@@ -199,6 +199,7 @@ Manual multi-target reconciliation must lock all sibling job rows before the fir
 
 ## Session activity
 
+- Observe trusted visible input during capture so editor gestures that stop bubbling still renew activity; remove listeners with the matching capture flag.
 - Authentication reads never touch idle timestamps. Explicit trusted visible input renews through the protected activity endpoint, with no timer heartbeat. Keep the minimum interval from the auth response through profile cache updates, and do not let a stale activity 401 clear a newer login.
 - Session renewal takes a shared account-administration barrier, then its own session row lock, and samples time afterward. Administration/issuance uses the exclusive barrier; revoked, disabled, idle-expired or absolutely expired sessions cannot revive. Throttle conditional writes even across tabs, without serializing unrelated session renewals. Short idle settings need subsecond intervals and activity-specific rate buckets rather than consuming ordinary business-write limits.
 - PostgreSQL transaction `now()` can predate a wait for the administration lock. Explicitly stamp session creation, last activity and absolute expiry together at actual issuance time; never inherit a transaction-start idle timestamp for a new session.

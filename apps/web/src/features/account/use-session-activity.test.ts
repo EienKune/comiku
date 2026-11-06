@@ -130,3 +130,54 @@ test("same-account profile rerenders preserve the activity request throttle", as
   await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(2));
   hook.unmount();
 });
+
+test("trusted pointer input reaches activity capture even when the editor stops bubbling", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(1000);
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const post = vi.spyOn(client, "POST").mockResolvedValue(ok());
+  queryClient.setQueryData(["me"], user);
+  const add = document.addEventListener.bind(document);
+  const remove = document.removeEventListener.bind(document);
+  let original: EventListener;
+  let wrapped: EventListener;
+  vi.spyOn(document, "addEventListener").mockImplementation(
+    (kind, listener, options) => {
+      if (kind !== "pointerdown") return add(kind, listener, options);
+      original = listener as EventListener;
+      // JSDOM cannot create trusted input. Replace trust only at the listener
+      // boundary, retaining the native event propagation and capture options.
+      wrapped = (event) =>
+        original(
+          new Proxy(event, {
+            get: (target, key) =>
+              key === "isTrusted" ? true : Reflect.get(target, key, target),
+          }),
+        );
+      add(kind, wrapped, options);
+    },
+  );
+  vi.spyOn(document, "removeEventListener").mockImplementation(
+    (kind, listener, options) =>
+      remove(
+        kind,
+        kind === "pointerdown" && listener === original ? wrapped : listener,
+        options,
+      ),
+  );
+  const marker = document.createElement("button");
+  marker.addEventListener("pointerdown", (event) => event.stopPropagation());
+  document.body.append(marker);
+  try {
+    cleanup = installSessionActivity(user);
+    marker.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await vi.waitFor(() => expect(post).toHaveBeenCalledOnce());
+    cleanup();
+    cleanup = undefined;
+    vi.setSystemTime(2000);
+    marker.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    expect(post).toHaveBeenCalledOnce();
+  } finally {
+    marker.remove();
+  }
+});
