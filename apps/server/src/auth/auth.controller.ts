@@ -1,5 +1,6 @@
 import {
   Body,
+  BadRequestException,
   Controller,
   Get,
   HttpCode,
@@ -23,9 +24,9 @@ import {
   ChangePasswordDto,
   LoginDto,
   OkDto,
-  UserDto,
+  AuthUserDto,
 } from "../users/users.dto.js";
-import { SESSION_MS, UsersService } from "../users/users.service.js";
+import { UsersService } from "../users/users.service.js";
 import { SESSION_COOKIE } from "./auth.guard.js";
 import { RateLimit } from "./rate-limit.js";
 import { sessionCookieOptions } from "./cookie.js";
@@ -42,7 +43,7 @@ export class AuthController {
   private cookie(res: Response, token: string) {
     res.cookie(SESSION_COOKIE, token, {
       ...sessionCookieOptions(this.environment),
-      maxAge: SESSION_MS,
+      maxAge: this.environment.authSessionAbsoluteSeconds * 1000,
     });
   }
   @Post("login")
@@ -50,7 +51,7 @@ export class AuthController {
   @Access({ public: true })
   @ApiOperation({ operationId: "login", security: [] })
   @ApiBody({ type: LoginDto })
-  @ApiOkResponse({ type: UserDto })
+  @ApiOkResponse({ type: AuthUserDto })
   async login(
     @Body(bodyValidation(LoginDto)) input: LoginDto,
     @Req() req: AuthRequest,
@@ -65,9 +66,30 @@ export class AuthController {
   @Get("me")
   @Access({ permission: "self", allowPasswordChange: true })
   @ApiOperation({ operationId: "getCurrentUser" })
-  @ApiOkResponse({ type: UserDto })
+  @ApiOkResponse({ type: AuthUserDto })
   me(@Req() req: AuthRequest) {
     return this.users.me(req.actor);
+  }
+
+  @Post("activity")
+  @HttpCode(200)
+  @Access({
+    permission: "self",
+    allowPasswordChange: true,
+    rateClass: "session-activity",
+  })
+  @ApiBody({ schema: { type: "object", additionalProperties: false } })
+  @ApiOperation({ operationId: "renewSessionActivity" })
+  @ApiOkResponse({ type: OkDto })
+  activity(@Body() input: unknown, @Req() req: AuthRequest) {
+    if (
+      !input ||
+      typeof input !== "object" ||
+      Array.isArray(input) ||
+      Object.keys(input).length
+    )
+      throw new BadRequestException("活动请求必须为空对象");
+    return this.users.activity(req.actor);
   }
 
   @Post("logout")
@@ -89,7 +111,7 @@ export class AuthController {
   @Access({ permission: "self", allowPasswordChange: true })
   @ApiOperation({ operationId: "changePassword" })
   @ApiBody({ type: ChangePasswordDto })
-  @ApiOkResponse({ type: UserDto })
+  @ApiOkResponse({ type: AuthUserDto })
   async password(
     @Body(bodyValidation(ChangePasswordDto)) input: ChangePasswordDto,
     @Req() req: AuthRequest,

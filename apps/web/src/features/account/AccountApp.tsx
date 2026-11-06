@@ -1,3 +1,4 @@
+import { useSessionActivity } from "./use-session-activity";
 import { useLayoutEffect, useState, type ComponentType } from "react";
 import {
   Archive,
@@ -113,6 +114,7 @@ function readLayoutPreference() {
 
 export function AccountLayout() {
   const me = useMe();
+  useSessionActivity(me.data);
   const location = useLocation();
   const navigate = useNavigate();
   const action = useAction();

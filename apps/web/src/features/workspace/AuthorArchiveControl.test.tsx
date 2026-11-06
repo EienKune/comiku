@@ -28,12 +28,10 @@ test("deletion requires exact nickname, defaults to cancel and keeps its origina
   HTMLDialogElement.prototype.close = function () {
     this.removeAttribute("open");
   };
-  const remove = vi
-    .spyOn(client, "DELETE")
-    .mockResolvedValue({
-      error: { message: "作者已更新" },
-      response: new Response(null, { status: 409 }),
-    } as never);
+  const remove = vi.spyOn(client, "DELETE").mockResolvedValue({
+    error: { message: "作者已更新" },
+    response: new Response(null, { status: 409 }),
+  } as never);
   const { rerender } = render(
     <MemoryRouter>
       <AuthorArchiveControl author={author} />

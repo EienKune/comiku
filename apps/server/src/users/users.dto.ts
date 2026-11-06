@@ -171,6 +171,14 @@ export class UserDto {
   @ApiProperty({ type: Number }) revision!: number;
   @ApiProperty({ type: String, isArray: true }) permissions!: string[];
 }
+export class AuthUserDto extends UserDto {
+  @ApiProperty({
+    type: Number,
+    minimum: 0.5,
+    description: "真实前台活动请求的最短间隔（秒）；普通读取不续期",
+  })
+  activityIntervalSeconds!: number;
+}
 export class MemberDto {
   @ApiPropertyOptional({
     type: String,

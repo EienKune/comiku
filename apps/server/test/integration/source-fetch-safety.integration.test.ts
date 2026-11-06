@@ -988,7 +988,14 @@ async function actorAdministration(f: Awaited<ReturnType<typeof fixture>>) {
       expiresAt: new Date(Date.now() + 60_000),
     },
   });
-  const users = new UsersService(f.db, null as any);
+  const users = new UsersService(
+    f.db,
+    null as any,
+    parseEnvironment({
+      NODE_ENV: "test",
+      DATABASE_URL: process.env.TEST_DATABASE_URL,
+    }),
+  );
   return () =>
     users.manage({ userId: f.peer.id, sessionId: session.id }, f.actor.id, {
       expectedRevision: 0,

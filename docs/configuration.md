@@ -92,3 +92,9 @@ BA 常驻推理进程可用独立 EnvironmentFile 注入 `PIXAI_MODEL_DIR`、`PI
 Size-limit and forbidden-URL rejections retain controlled media reasons and put the discovery in `needs_attention`; repeating those requests cannot fix the policy. Unsupported-type and empty-body responses also retain specific reasons but remain retryable, since a CDN can transiently return an HTTP-200 error page or empty response. Diagnostics include `limit_bytes` plus `declared_bytes` or `observed_bytes` when available. They never include credentials or raw response bodies. Changing configuration does not silently reopen an existing terminal gap; operators must inspect and explicitly authorize recovery.
 
 Transient post gaps first become eligible after 5 minutes; after the first failed recovery campaign they wait 10 minutes, then 30 minutes between remaining campaigns, up to eight campaigns. Each campaign uses the normal job executor (at most three executions, 5/10-second delays). These are earliest eligibility times, not promises of execution time: platform gates, the shared per-platform queue and maintenance scan can add a delay. Account cooldown (`SOURCE_COOLDOWN_MINUTES`) remains separate.
+
+## 登录期限
+
+`AUTH_SESSION_IDLE_SECONDS`（默认 1800）控制没有实际操作的空闲期限；`AUTH_SESSION_ABSOLUTE_SECONDS`（默认 28800）控制每次登录的固定上限。两项为可安全表示的正整数秒数，空闲期限不能大于绝对期限。私有协作环境可分别设置为 `604800` 和 `2592000`，即空闲 7 天、登录满 30 天重登。
+
+页面可见时的真实点击、键盘或滚轮操作通过同源 `/api/auth/activity` 续空闲期；后台轮询、页面仅保持打开、重新切到前台都不续期。客户端请求与服务端写入分别节流，最短间隔为 300 秒与空闲期限一半的较小值。活动请求不消耗普通业务写入配额，仍有独立的账号和 IP 限流。绝对期限及 Cookie 不随活动延长；登出、撤销会话、禁用账号和改密继续使旧会话失效。新配置不会批量延长旧会话的绝对到期时间，重新登录后使用新上限。
