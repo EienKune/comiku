@@ -1550,6 +1550,47 @@ function AuthorCreateDialog({
                 检查保存结果
               </Button>
             )}
+            {savedAuthorId &&
+              (progress.current.avatar.resultUnknown ||
+                progress.current.evidence.resultUnknown) && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={action.busy}
+                  onClick={() =>
+                    void action.run(async () => {
+                      const latest = await unwrap(
+                        await client.GET("/api/authors/{id}/managed", {
+                          params: { path: { id: savedAuthorId } },
+                        }),
+                      );
+                      const attachments = await unwrap(
+                        await client.GET(
+                          "/api/authors/{id}/authorization-evidence",
+                          { params: { path: { id: savedAuthorId } } },
+                        ),
+                      );
+                      queryClient.setQueryData(
+                        ["managed-author", savedAuthorId],
+                        latest,
+                      );
+                      queryClient.setQueryData(
+                        ["author-evidence", savedAuthorId],
+                        attachments,
+                      );
+                      if (progress.current.avatar.resetUnknown())
+                        setAvatar(null);
+                      if (progress.current.evidence.resetUnknown())
+                        setEvidence([]);
+                      action.setSuccess(
+                        "已核对作者资料，请重新选择需要补传的文件",
+                      );
+                    })
+                  }
+                >
+                  核对后重新选择文件
+                </Button>
+              )}
             <Button type="submit" loading={action.busy}>
               {savedAuthorId ? "继续保存" : "保存作者"}
             </Button>
@@ -1929,6 +1970,37 @@ function AuthorEditForm({
             </Button>
           </div>
         )}
+      {upload.current.resultUnknown && (
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={action.busy}
+          onClick={() =>
+            void action.run(async () => {
+              const latest = await unwrap(
+                await client.GET("/api/authors/{id}/managed", {
+                  params: { path: { id: author.id } },
+                }),
+              );
+              loadSnapshot(latest);
+              queryClient.setQueryData(["managed-author", author.id], latest);
+              const publicSnapshot = await unwrap(
+                await client.GET("/api/authors/{id}", {
+                  params: { path: { id: author.id } },
+                }),
+              );
+              queryClient.setQueryData(["author", author.id], publicSnapshot);
+              queryClient.removeQueries({
+                queryKey: ["author-avatar", author.id],
+              });
+              if (upload.current.resetUnknown()) setAvatar(null);
+              action.setSuccess("已核对最新资料，请重新选择头像");
+            })
+          }
+        >
+          核对后重新选择文件
+        </Button>
+      )}
       <Feedback error={action.error} success={action.success} />
       <Button size="sm" type="submit" loading={action.busy}>
         {detailsSaved ? (avatar ? "继续上传头像" : "确认保存结果") : "保存作者"}
@@ -2075,6 +2147,33 @@ function AuthorEvidencePanel({
             }}
             disabled={action.busy || uploadProgress.current.locked}
           />
+          {uploadProgress.current.resultUnknown && (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={action.busy}
+              onClick={() =>
+                void action.run(async () => {
+                  await unwrap(
+                    await client.GET("/api/authors/{id}/managed", {
+                      params: { path: { id: author.id } },
+                    }),
+                  );
+                  await unwrap(
+                    await client.GET(
+                      "/api/authors/{id}/authorization-evidence",
+                      { params: { path: { id: author.id } } },
+                    ),
+                  );
+                  if (uploadProgress.current.resetUnknown()) setFiles([]);
+                  await onUpdated();
+                  action.setSuccess("已核对现有凭证，请重新选择需要补传的文件");
+                })
+              }
+            >
+              核对后重新选择文件
+            </Button>
+          )}
           <Feedback error={action.error} success={action.success} />
           <Button
             type="submit"

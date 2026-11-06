@@ -159,6 +159,8 @@ export class AuthorsService {
   }
 
   private async assertUploadActor(tx: Prisma.TransactionClient, id: string) {
+    await tx.$queryRaw`SELECT id FROM users WHERE id = ${id}::uuid FOR SHARE`;
+    await tx.$queryRaw`SELECT user_id FROM user_roles WHERE user_id = ${id}::uuid FOR SHARE`;
     if (
       !(await tx.user.count({
         where: {
@@ -1667,6 +1669,8 @@ export class AuthorsService {
     let linked = false;
     try {
       await this.db.$transaction(async (tx) => {
+        if (uploadSessionId)
+          await this.directUploads!.assertAdoptionLeaseTx(tx, uploadSessionId);
         await this.assertUploadActor(tx, actorId);
         const updated = await tx.author.updateMany({
           where: { id: authorId, revision: expectedRevision, deletedAt: null },
@@ -1753,6 +1757,8 @@ export class AuthorsService {
         );
       }
       await this.db.$transaction(async (tx) => {
+        if (uploadSessionId)
+          await this.directUploads!.assertAdoptionLeaseTx(tx, uploadSessionId);
         await this.assertUploadActor(tx, actorId);
         const changed = await tx.author.updateMany({
           where: { id: authorId, revision: expectedRevision, deletedAt: null },

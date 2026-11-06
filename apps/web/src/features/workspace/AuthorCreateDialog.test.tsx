@@ -1846,3 +1846,204 @@ test("a transient managed refetch error preserves dirty fields and the selected 
   expect(notes.value).toBe("dirty notes");
   expect(screen.getByRole("img", { name: "pending-avatar.png" })).toBeTruthy();
 });
+
+for (const purpose of ["author_avatar", "author_evidence"] as const)
+  test(`creation can explicitly leave a missing ${purpose} receipt without recreating the author`, async () => {
+    vi.stubGlobal("crypto", {
+      randomUUID: () => "74d00bc2-61ad-4d0c-873f-e7a6ae9706aa",
+      subtle: { digest: async () => new ArrayBuffer(32) },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 500 })),
+    );
+    let inspectFails = false;
+    vi.spyOn(client, "GET").mockImplementation(async (path) => {
+      if (path === "/api/transfers/uploads/{id}")
+        return {
+          error: { message: "上传会话不存在" },
+          response: new Response(null, { status: 404 }),
+        } as never;
+      if (inspectFails && path === "/api/authors/{id}/managed")
+        throw Error("核对失败");
+      return ok(
+        path === "/api/authors/sources" ||
+          path === "/api/authors/{id}/authorization-evidence"
+          ? []
+          : path === "/api/authors"
+            ? { items: [], total: 0, nextCursor: null }
+            : { id: "author", revision: 1 },
+      );
+    });
+    const post = vi.spyOn(client, "POST").mockImplementation(async (path) =>
+      ok(
+        path === "/api/authors"
+          ? { id: "author", revision: 1 }
+          : {
+              id: "upload",
+              status: "pending",
+              expiresAt: "2099-01-01T00:00:00Z",
+              error: null,
+              files: [
+                {
+                  sourceName: "test.png",
+                  upload: {
+                    url: "https://storage.invalid/file",
+                    headers: {},
+                  },
+                },
+              ],
+            },
+      ),
+    );
+    await openCreate();
+    const file = new File(["image"], "test.png", { type: "image/png" });
+    Object.defineProperty(file, "arrayBuffer", {
+      value: async () => new ArrayBuffer(5),
+    });
+    const label =
+      purpose === "author_avatar" ? "作者头像" : "授权凭证（可多张）";
+    fireEvent.change(screen.getByLabelText(label), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "继续保存" }));
+    const reset = await screen.findByRole("button", {
+      name: "核对后重新选择文件",
+    });
+    expect(screen.getByLabelText(label).hasAttribute("disabled")).toBe(true);
+    inspectFails = true;
+    fireEvent.click(reset);
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("核对失败"),
+    );
+    expect(screen.getByLabelText(label).hasAttribute("disabled")).toBe(true);
+    inspectFails = false;
+    fireEvent.click(reset);
+    await waitFor(() =>
+      expect(screen.getByLabelText(label).hasAttribute("disabled")).toBe(false),
+    );
+    expect(
+      (post.mock.calls as unknown as [string, unknown][]).filter(
+        ([path]) => path === "/api/authors",
+      ),
+    ).toHaveLength(1);
+    expect(
+      (post.mock.calls as unknown as [string, unknown][]).filter(
+        ([path]) => path === "/api/transfers/uploads",
+      ),
+    ).toHaveLength(1);
+    expect(
+      screen.queryByRole("button", { name: "核对后重新选择文件" }),
+    ).toBeNull();
+  });
+
+test("detail missing-avatar receipt refreshes visible saved state and never replays saved metadata", async () => {
+  vi.stubGlobal(
+    "URL",
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => "blob:preview"),
+      revokeObjectURL: vi.fn(),
+    }),
+  );
+  vi.stubGlobal("crypto", {
+    subtle: { digest: async () => new ArrayBuffer(32) },
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 500 })),
+  );
+  let revision = 1,
+    adopted = false;
+  const author = () => ({
+    id: "author",
+    revision,
+    displayName: "合成作者",
+    notes: "",
+    authorizationStatus: "pending",
+    sourceLanguage: "ja",
+    tags: [],
+    externalAccounts: [],
+    avatarAvailable: adopted,
+  });
+  vi.spyOn(client, "GET").mockImplementation(async (path) => {
+    if (path === "/api/transfers/uploads/{id}") {
+      adopted = true;
+      return {
+        error: { message: "不存在" },
+        response: new Response(null, { status: 404 }),
+      } as never;
+    }
+    return ok(
+      path === "/api/authors/{id}" || path === "/api/authors/{id}/managed"
+        ? author()
+        : path === "/api/authors/{id}/avatar/url"
+          ? { url: "https://images.invalid/saved.png" }
+          : [],
+    );
+  });
+  const patch = vi.spyOn(client, "PATCH").mockImplementation(async () => {
+    revision++;
+    return ok(author());
+  });
+  const post = vi.spyOn(client, "POST").mockResolvedValue(
+    ok({
+      id: "upload",
+      status: "pending",
+      expiresAt: "2099-01-01T00:00:00Z",
+      files: [{ upload: { url: "https://storage.invalid/file", headers: {} } }],
+    }),
+  );
+  render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/authors/author"]}>
+        <Routes>
+          <Route
+            element={
+              <Outlet
+                context={{
+                  permissions: [
+                    "authors:read",
+                    "authors:manage",
+                    "authors:sensitive",
+                  ],
+                }}
+              />
+            }
+          >
+            <Route path="/authors/:id" element={<AuthorDetailPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  const picker = await screen.findByLabelText("作者头像");
+  const file = new File(["image"], "avatar.png", { type: "image/png" });
+  Object.defineProperty(file, "arrayBuffer", {
+    value: async () => new ArrayBuffer(5),
+  });
+  fireEvent.change(picker, { target: { files: [file] } });
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await screen.findByRole("alert");
+  fireEvent.click(screen.getByRole("button", { name: "继续上传头像" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "核对后重新选择文件" }),
+  );
+  await waitFor(() => expect(picker.hasAttribute("disabled")).toBe(false));
+  expect(queryClient.getQueryData(["author", "author"])).toMatchObject({
+    avatarAvailable: true,
+  });
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("button", { name: "更换作者头像" })
+        .querySelector("img")
+        ?.getAttribute("src"),
+    ).toBe("https://images.invalid/saved.png"),
+  );
+  fireEvent.change(picker, { target: { files: [file] } });
+  fireEvent.click(screen.getByRole("button", { name: "继续上传头像" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+  expect(patch).toHaveBeenCalledOnce();
+});

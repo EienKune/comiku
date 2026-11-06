@@ -793,6 +793,13 @@ export class TypesettingService {
       let linked = false;
       try {
         linked = await this.db.$transaction(async (tx) => {
+          if (uploadSessionId)
+            await this.directUploads!.assertAdoptionLeaseTx(
+              tx,
+              uploadSessionId,
+            );
+          await tx.$queryRaw`SELECT id FROM users WHERE id = ${actorId}::uuid FOR SHARE`;
+          await tx.$queryRaw`SELECT user_id FROM user_roles WHERE user_id = ${actorId}::uuid FOR SHARE`;
           await tx.$queryRaw(
             Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
           );

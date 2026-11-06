@@ -19,6 +19,23 @@ type Input = Pick<
 export class AuthorImageUpload {
   private session: Session | null = null;
   private uploaded = new Set<number>();
+  private missingResult = false;
+
+  get resultUnknown() {
+    return this.missingResult;
+  }
+
+  resetUnknown() {
+    if (!this.missingResult) return false;
+    this.session = null;
+    this.uploaded.clear();
+    this.missingResult = false;
+    return true;
+  }
+
+  private unknownResult() {
+    return new Error("上传结果暂无法确认，请先核对作者资料后重新选择文件");
+  }
 
   private pendingExpired() {
     return (
@@ -35,12 +52,16 @@ export class AuthorImageUpload {
   }
 
   async upload(input: Input, files: File[]) {
+    if (this.missingResult) throw this.unknownResult();
     if (this.session) {
-      this.session = await unwrap(
-        await client.GET("/api/transfers/uploads/{id}", {
-          params: { path: { id: this.session.id } },
-        }),
-      );
+      const result = await client.GET("/api/transfers/uploads/{id}", {
+        params: { path: { id: this.session.id } },
+      });
+      if (result.response.status === 404) {
+        this.missingResult = true;
+        throw this.unknownResult();
+      }
+      this.session = await unwrap(result);
       if (
         ["failed", "expired"].includes(this.session.status) ||
         this.pendingExpired()
@@ -93,11 +114,14 @@ export class AuthorImageUpload {
     this.session = await pollTransfer(
       this.session,
       async () => {
-        this.session = await unwrap(
-          await client.GET("/api/transfers/uploads/{id}", {
-            params: { path: { id: this.session!.id } },
-          }),
-        );
+        const result = await client.GET("/api/transfers/uploads/{id}", {
+          params: { path: { id: this.session!.id } },
+        });
+        if (result.response.status === 404) {
+          this.missingResult = true;
+          throw this.unknownResult();
+        }
+        this.session = await unwrap(result);
         return this.session;
       },
       ["queued", "processing"],
