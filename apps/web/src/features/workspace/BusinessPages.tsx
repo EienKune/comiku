@@ -1684,12 +1684,24 @@ export function AuthorDetailPage() {
         <ArrowLeft size={16} />
         返回作者
       </Link>
-      <PageState query={query}>
+      <PageState query={{ ...query, isError: query.isError && !query.data }}>
         {(author) => (
           <>
             <SectionHeading title={author.displayName}>
               作者授权与来源账号
             </SectionHeading>
+            {query.isError && (
+              <p className="workspace-muted" role="status">
+                作者资料更新失败，当前编辑已保留。
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void query.refetch()}
+                >
+                  重试作者资料
+                </Button>
+              </p>
+            )}
             {user.permissions.includes("authors:admin") && (
               <div className="workspace-inline-actions">
                 <AuthorArchiveControl author={author} />
