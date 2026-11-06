@@ -36,12 +36,23 @@ test("a source user cannot open technical management or request its history", ()
 });
 
 test("a system administrator can read collection history in the dedicated page", async () => {
-  vi.spyOn(client, "GET").mockResolvedValue({
-    data: [],
+  vi.spyOn(client, "GET").mockImplementation((async (path: string) => ({
+    data: path.endsWith("/configuration")
+      ? {
+          enabled: false,
+          configurationError: null,
+          connections: [],
+          eventTypes: [],
+          channels: [],
+        }
+      : path.endsWith("/deliveries")
+        ? { items: [], nextCursor: null }
+        : [],
     response: new Response(),
-  } as never);
+  })) as never);
   openPage(["system:manage"]);
   expect(screen.getByRole("heading", { name: "系统管理" })).toBeTruthy();
   expect(await screen.findByText("暂无同步记录。")).toBeTruthy();
   expect(screen.getByRole("heading", { name: "图源采集" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "群通知" })).toBeTruthy();
 });

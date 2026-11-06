@@ -1,6 +1,7 @@
 import { useAccount } from "../account/account-context";
 import { SectionHeading } from "../account/forms";
 import { SourceFetchHistory } from "./SourceFetchHistory";
+import { NotificationManagement } from "./NotificationManagement";
 import "./system.css";
 
 export function SystemManagementPage() {
@@ -13,6 +14,7 @@ export function SystemManagementPage() {
     <>
       <SectionHeading title="系统管理" />
       <SourceFetchHistory />
+      <NotificationManagement />
     </>
   );
 }

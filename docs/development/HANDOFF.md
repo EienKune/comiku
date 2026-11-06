@@ -2,6 +2,15 @@
 
 This tracked document records reusable implementation constraints. Business rules live in [architecture](../architecture.md), configuration in [configuration](../configuration.md), and visual rules in [DESIGN](../../DESIGN.md). Keep machine addresses, credentials, real samples, local experiments and deployment session notes outside the public repository.
 
+## Notifications
+
+- The notification foundation exposes a DB-only publisher and consumes its own durable outbox; no business event producer calls it yet. Do not claim automatic workbench notifications from a successful test delivery. Reuse WorkEventAction vocabulary, not timestamp/UUID cursor scans over audit history.
+- Record source identity, payload hash and the destination/configuration snapshot together. Configuration disable/re-enable advances its generation; asynchronous routing must preserve the old target for audit and refuse to send it to the new audience. Idempotent replays retain the first subscription snapshot.
+- Jobs owns leases; Delivery/Attempt owns the external-send boundary. Never let generic job retries resend an unresolved sending attempt. A final expired lease can retire a job without invoking its handler, so bounded reconciliation must settle abandoned sending records as unknown. Unknown and other unresolved intent do not expire automatically.
+- External HTTP runs after the reservation transaction commits. Recheck current channel/version and privileged test/replay actor before reserving; do not hold channel, delivery or work locks across network latency. A shutdown/permission change cannot recall an already in-flight request.
+- OneBot HTTP 200, async status and an absent message_id are not successful delivery receipts. Encode user text as text segments, restrict connection destinations at DNS and dial time, retain HTTPS validation and never follow credential-bearing redirects. Protocol receipt is not member read confirmation.
+- Keep optional configuration isolated from offline OpenAPI export and normal application construction. Disabled notification loops perform no notification polling or bot probes; close adapter pools when the application closes. Test only synthetic endpoints unless a dedicated real destination is explicitly authorized.
+
 ## Author creation
 
 - Submit the base author fields and distinct-platform account identities in one database transaction. A failed account binding must roll back the author, tags and earlier account inserts. Keep provider/profile requests and image transfers outside the transaction; X identities require server-verifiable profile evidence.
