@@ -249,6 +249,7 @@ export class GalleryDlContentSource implements ContentSourceClient {
     "last_7_days",
   ] as const;
   readonly allowedMediaHosts: readonly string[];
+  readonly allowedProfileAvatarHosts: readonly string[];
   private readonly runner: PageRunner;
   private readonly configPath: string;
   constructor(
@@ -260,6 +261,10 @@ export class GalleryDlContentSource implements ContentSourceClient {
     this.adapterKey = `${platform}_gallery_dl`;
     this.allowedMediaHosts =
       platform === "x" ? ["pbs.twimg.com"] : ["i.pximg.net"];
+    this.allowedProfileAvatarHosts =
+      platform === "x"
+        ? ["pbs.twimg.com", "abs.twimg.com"]
+        : ["i.pximg.net", "s.pximg.net"];
     this.runner =
       runner ??
       (async (source, cursor, signal) => {

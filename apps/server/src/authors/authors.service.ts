@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { DirectUploadsService } from "../transfers/direct-uploads.service.js";
 import { ENVIRONMENT, type Environment } from "../config/environment.js";
 import { ProfileProofs } from "./profile-proof.js";
+import {
+  profileAvatarDiagnostic,
+  type ProfileAvatarStage,
+} from "./profile-avatar-diagnostic.js";
 import { sourceDiagnostic } from "../source-ingestion/source-diagnostics.js";
 import {
   BadRequestException,
@@ -1294,14 +1298,29 @@ export class AuthorsService {
     actorId: string,
     url: string | undefined,
     allowedMediaHosts: readonly string[],
+    context: { platform: "x" | "pixiv"; adapter: string },
   ) {
     let avatarFileObjectId: string | null = null,
       avatarUrl: string | null = null;
+    let stage: ProfileAvatarStage = "missing";
+    const logFailure = (error?: unknown) =>
+      console.warn(
+        JSON.stringify({
+          event: "source_profile_avatar_failed",
+          platform: context.platform,
+          adapter: /^[a-z][a-z0-9_-]{0,63}$/.test(context.adapter)
+            ? context.adapter
+            : "unknown",
+          ...profileAvatarDiagnostic(stage, error),
+        }),
+      );
     if (url) {
       try {
+        stage = "download";
         const media = await this.downloader.download(url, [
           ...allowedMediaHosts,
         ]);
+        stage = "store";
         const file = await this.files.store({
           body: media.body,
           contentType: media.contentType,
@@ -1311,11 +1330,13 @@ export class AuthorsService {
           createdById: actorId,
         });
         avatarFileObjectId = file.id;
+        stage = "sign";
         avatarUrl = (await this.files.signedReadUrl(file.id)).url;
-      } catch {
+      } catch (error) {
         /* Optional avatar failure must not erase a verified identity. */
+        logFailure(error);
       }
-    }
+    } else logFailure();
     return { avatarFileObjectId, avatarUrl };
   }
 
@@ -1374,7 +1395,8 @@ export class AuthorsService {
         const avatar = await this.profileAvatar(
           actorId,
           profile.avatarUrl,
-          client.allowedMediaHosts,
+          client.allowedProfileAvatarHosts ?? client.allowedMediaHosts,
+          { platform: "pixiv", adapter: client.adapterKey },
         );
         const identity = {
           externalUserId,
@@ -1483,7 +1505,8 @@ export class AuthorsService {
         const { avatarFileObjectId, avatarUrl } = await this.profileAvatar(
           actorId,
           profile.avatarUrl,
-          client.allowedMediaHosts,
+          client.allowedProfileAvatarHosts ?? client.allowedMediaHosts,
+          { platform: "x", adapter: client.adapterKey },
         );
         const syncedAt = new Date().toISOString();
         const identity = {

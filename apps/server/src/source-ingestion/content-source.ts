@@ -73,6 +73,8 @@ export interface ContentSourceClient {
   readonly supportedFirstSyncModes: readonly FirstSyncMode[];
   readonly available: boolean;
   readonly allowedMediaHosts: readonly string[];
+  /** Optional avatar-only CDN policy; older adapters fall back to media hosts. */
+  readonly allowedProfileAvatarHosts?: readonly string[];
   initialCursor(mode: FirstSyncMode, now: Date): SourceCursor;
   prepareCursor?(
     account: SourceAccountIdentity,
