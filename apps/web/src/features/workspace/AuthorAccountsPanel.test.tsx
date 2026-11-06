@@ -1,5 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -312,7 +313,7 @@ function collectionFixture(
   });
 }
 
-test("configured Pixiv collection stays off by default and saves an explicitly selected first-sync window", async () => {
+test("configured Pixiv collection defaults to enabled and twenty-four hours", async () => {
   collectionFixture();
   const post = vi.spyOn(client, "POST").mockResolvedValue(success(pixiv));
   setup();
@@ -329,10 +330,10 @@ test("configured Pixiv collection stays off by default and saves an explicitly s
   const checkbox = await screen.findByRole("checkbox", {
     name: "启用自动抓取",
   });
-  expect((checkbox as HTMLInputElement).checked).toBe(false);
-  fireEvent.click(checkbox);
-  fireEvent.click(screen.getByRole("combobox", { name: "首次同步范围" }));
-  fireEvent.click(screen.getByRole("option", { name: "最近 24 小时" }));
+  expect((checkbox as HTMLInputElement).checked).toBe(true);
+  expect(
+    screen.getByRole("combobox", { name: "首次同步范围" }).textContent,
+  ).toContain("最近 24 小时");
   fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
   await waitFor(() => expect(post).toHaveBeenCalledOnce());
   expect(post.mock.calls[0][1]).toMatchObject({
@@ -441,6 +442,197 @@ test("an unavailable Pixiv adapter cannot enable collection", async () => {
   expect(screen.queryByRole("checkbox", { name: "启用自动抓取" })).toBeNull();
 });
 
+test.each(["x", "pixiv"] as const)(
+  "paused %s metadata retains its saved window while capabilities fail",
+  async (platform) => {
+    const paused: Account = {
+      ...pixiv,
+      platform,
+      handle: platform === "x" ? "artist" : null,
+      firstSyncMode: "last_7_days",
+    };
+    collectionFixture([paused], new Error("能力读取失败"));
+    const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(paused));
+    setup([paused]);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+    fireEvent.change(screen.getByLabelText("平台显示昵称（可选）"), {
+      target: { value: "renamed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+    await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    expect(patch.mock.calls[0][1]).toMatchObject({
+      body: {
+        displayNameSnapshot: "renamed",
+        fetchEnabled: false,
+        firstSyncMode: "last_7_days",
+      },
+    });
+  },
+);
+
+test("saved paused accounts never re-default after late capabilities", async () => {
+  collectionFixture([pixiv], []);
+  setup([pixiv]);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+  await act(async () => {
+    queryClient.setQueryData(["source-capabilities"], [pixivCapability]);
+  });
+  expect(
+    (
+      (await screen.findByRole("checkbox", {
+        name: "启用自动抓取",
+      })) as HTMLInputElement
+    ).checked,
+  ).toBe(false);
+  expect(
+    screen.getByRole("combobox", { name: "首次同步范围" }).textContent,
+  ).toContain("仅后续内容");
+});
+
+test("new associations wait for late capabilities before saving their defaults", async () => {
+  let release!: (value: never) => void;
+  vi.spyOn(client, "GET").mockImplementation(async (path) =>
+    path === "/api/authors/sources"
+      ? new Promise<never>((resolve) => {
+          release = resolve;
+        })
+      : success([]),
+  );
+  const post = vi.spyOn(client, "POST").mockResolvedValue(success(pixiv));
+  setup();
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "关联 Pixiv" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "关联 Pixiv" }));
+  fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
+    target: { value: "123456" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("仍在读取");
+  expect(post).not.toHaveBeenCalled();
+  await act(async () => {
+    release(success([pixivCapability]));
+  });
+  expect(
+    (
+      (await screen.findByRole("checkbox", {
+        name: "启用自动抓取",
+      })) as HTMLInputElement
+    ).checked,
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+  await waitFor(() => expect(post).toHaveBeenCalledOnce());
+  expect(post.mock.calls[0][1]).toMatchObject({
+    body: { fetchEnabled: true, firstSyncMode: "last_24_hours" },
+  });
+});
+
+test.each(["removed", "failed"] as const)(
+  "an unsubmitted paused association can explicitly switch to information-only after capabilities are %s",
+  async (state) => {
+    let available = true;
+    vi.spyOn(client, "GET").mockImplementation(async (path) => {
+      if (path !== "/api/authors/sources") return success([]);
+      if (!available && state === "failed") throw new Error("能力读取失败");
+      return success(
+        available
+          ? [
+              {
+                ...pixivCapability,
+                supportedFirstSyncModes: [
+                  "none",
+                  "last_24_hours",
+                  "last_7_days",
+                ],
+              },
+            ]
+          : [],
+      );
+    });
+    const post = vi.spyOn(client, "POST").mockResolvedValue(success(pixiv));
+    setup();
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "关联 Pixiv",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "关联 Pixiv" }));
+    fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
+      target: { value: "123456" },
+    });
+    fireEvent.click(
+      await screen.findByRole("checkbox", { name: "启用自动抓取" }),
+    );
+    if (state === "removed") {
+      fireEvent.click(screen.getByRole("combobox", { name: "首次同步范围" }));
+      fireEvent.click(screen.getByRole("option", { name: "最近 7 天" }));
+    }
+    available = false;
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["source-capabilities"],
+      });
+    });
+    const range = screen.getByRole("combobox", {
+      name: "首次同步范围",
+    }) as HTMLButtonElement;
+    await waitFor(() => expect(range.textContent).toContain("当前不可用"));
+    expect(range.textContent).toContain(
+      state === "removed" ? "最近 7 天" : "最近 24 小时",
+    );
+    expect(range.disabled).toBe(false);
+    fireEvent.click(range);
+    fireEvent.click(screen.getByRole("option", { name: "仅后续内容" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+    await waitFor(() => expect(post).toHaveBeenCalledOnce());
+    expect(post.mock.calls[0][1]).toMatchObject({
+      body: { fetchEnabled: false, firstSyncMode: "none" },
+    });
+  },
+);
+
+test("saving an account locks its metadata and collection choices until the request finishes", async () => {
+  collectionFixture([pixiv]);
+  let release!: (value: never) => void;
+  vi.spyOn(client, "PATCH").mockImplementation(
+    () =>
+      new Promise<never>((resolve) => {
+        release = resolve;
+      }),
+  );
+  setup([pixiv]);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+  expect(
+    (screen.getByLabelText("平台显示昵称（可选）") as HTMLInputElement)
+      .disabled,
+  ).toBe(true);
+  expect(
+    (screen.getByLabelText("账号备注（可选）") as HTMLTextAreaElement).disabled,
+  ).toBe(true);
+  expect(
+    (screen.getByRole("checkbox", { name: "启用自动抓取" }) as HTMLInputElement)
+      .disabled,
+  ).toBe(true);
+  expect(
+    (
+      screen.getByRole("combobox", {
+        name: "首次同步范围",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  await act(async () => {
+    release(success(pixiv));
+  });
+});
+
 test("configured Pixiv adapter channels can be enabled from the account list", async () => {
   const account: Account = {
     ...pixiv,
@@ -512,7 +704,7 @@ test("a removed Pixiv channel can still be paused from its persisted account sta
   });
 });
 
-test("Pixiv can explicitly select seven days while retaining the disabled default", async () => {
+test("Pixiv can pause collection and explicitly select seven days", async () => {
   collectionFixture(
     [],
     [
@@ -537,14 +729,14 @@ test("Pixiv can explicitly select seven days while retaining the disabled defaul
   const checkbox = await screen.findByRole("checkbox", {
     name: "启用自动抓取",
   });
-  expect((checkbox as HTMLInputElement).checked).toBe(false);
+  expect((checkbox as HTMLInputElement).checked).toBe(true);
   fireEvent.click(checkbox);
   fireEvent.click(screen.getByRole("combobox", { name: "首次同步范围" }));
   fireEvent.click(screen.getByRole("option", { name: "最近 7 天" }));
   fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
   await waitFor(() => expect(post).toHaveBeenCalledOnce());
   expect(post.mock.calls[0][1]).toMatchObject({
-    body: { firstSyncMode: "last_7_days", fetchEnabled: true },
+    body: { firstSyncMode: "last_7_days", fetchEnabled: false },
   });
 });
 

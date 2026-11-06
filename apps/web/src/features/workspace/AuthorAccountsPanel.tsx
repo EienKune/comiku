@@ -1,19 +1,15 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
-import {
-  Button,
-  Badge,
-  Surface,
-  SelectField,
-  TextField,
-} from "../../components/ui";
+import { Button, Badge, Surface, TextField } from "../../components/ui";
 import { OptionalSection } from "../../components/OptionalSection";
 import { PlatformLinks } from "../../components/PlatformLinks";
 import { useAccount } from "../account/account-context";
 import { client, queryClient, unwrap } from "../account/api";
 import { Feedback } from "../account/forms";
 import { useAction } from "../account/use-action";
+import { useAuthorCollection } from "./author-collection";
+import { AuthorCollectionFields } from "./AuthorCollectionFields";
 import {
   sourceAdapterLabels,
   sourceAdapterHealthLabels,
@@ -23,11 +19,6 @@ type Account = components["schemas"]["ExternalAccountDto"];
 type Summary = components["schemas"]["ExternalAccountSummaryDto"];
 type Profile = components["schemas"]["ResolvedXProfileDto"];
 type Capability = components["schemas"]["SourceCapabilityDto"];
-const firstSyncModeLabels: Record<Account["firstSyncMode"], string> = {
-  none: "仅后续内容",
-  last_24_hours: "最近 24 小时",
-  last_7_days: "最近 7 天",
-};
 
 export function AuthorAccountsPanel({
   authorId,
@@ -327,6 +318,7 @@ export function AuthorAccountsPanel({
           account={editor.account}
           platform={editor.platform}
           capabilities={capabilities.error ? undefined : capabilities.data}
+          capabilityPending={capabilities.isPending}
           capabilityError={capabilities.error}
           onClose={() => setEditor(null)}
           onSaved={async () => {
@@ -358,6 +350,7 @@ function AccountEditor({
   account,
   capabilities,
   capabilityError,
+  capabilityPending,
   onClose,
   onSaved,
 }: {
@@ -366,6 +359,7 @@ function AccountEditor({
   account?: Account;
   capabilities?: Capability[];
   capabilityError: Error | null;
+  capabilityPending: boolean;
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -376,22 +370,8 @@ function AccountEditor({
   const [nickname, setNickname] = useState(account?.displayNameSnapshot ?? "");
   const [notes, setNotes] = useState(account?.notes ?? "");
   const [profile, setProfile] = useState<Profile | null>(null);
-  const collectionModes = [
-    ...new Set(
-      (capabilities ?? [])
-        .filter((item) => item.platform === platform && item.available)
-        .flatMap((item) => item.supportedFirstSyncModes),
-    ),
-  ];
-  const [fetchEnabled, setFetch] = useState(
-    account?.fetchEnabled ?? (platform === "x" && collectionModes.length > 0),
-  );
-  const [firstSyncMode, setMode] = useState<Account["firstSyncMode"]>(
-    account?.firstSyncMode ??
-      (platform === "x" && collectionModes.includes("last_24_hours")
-        ? "last_24_hours"
-        : "none"),
-  );
+  const collection = useAuthorCollection(platform, capabilities, account);
+  const { fetchEnabled, firstSyncMode } = collection.value;
   useEffect(() => {
     const element = dialog.current;
     element?.showModal();
@@ -400,6 +380,8 @@ function AccountEditor({
   async function save(event: FormEvent) {
     event.preventDefault();
     await action.run(async () => {
+      if (!account && capabilityPending)
+        throw new Error("采集设置仍在读取，请稍后保存");
       if (!externalUserId.trim())
         throw new Error("请先同步 X 资料，获取可信平台身份。");
       if (
@@ -410,15 +392,8 @@ function AccountEditor({
         !profile
       )
         throw new Error("请先同步 X 资料后保存账号。");
-      const collectionChanged =
-        (fetchEnabled && !account?.fetchEnabled) ||
-        firstSyncMode !== (account?.firstSyncMode ?? "none");
-      if (
-        collectionChanged &&
-        (fetchEnabled || firstSyncMode !== "none") &&
-        !collectionModes.includes(firstSyncMode)
-      )
-        throw new Error("当前没有支持所选首次同步范围的可用抓取通道");
+      collection.validate();
+      collection.freeze();
       const fields = {
         handle: platform === "x" ? handle : null,
         displayNameSnapshot: nickname.trim() || null,
@@ -486,6 +461,7 @@ function AccountEditor({
           <>
             <TextField
               label="X @账号"
+              disabled={action.busy}
               hint="输入 @ 后的名称，也可粘贴 X 主页地址。"
               required
               value={handle}
@@ -546,6 +522,7 @@ function AccountEditor({
             >
               <TextField
                 label="X 稳定用户 ID"
+                disabled={action.busy}
                 hint="由平台资料同步获取，关联后不可修改。"
                 value={externalUserId}
                 readOnly
@@ -555,6 +532,7 @@ function AccountEditor({
         ) : (
           <TextField
             label="Pixiv 用户 ID"
+            disabled={action.busy}
             hint="主页 https://www.pixiv.net/users/123456 中的 123456；不是登录账号名。"
             placeholder="123456"
             inputMode="numeric"
@@ -569,6 +547,7 @@ function AccountEditor({
         )}
         <TextField
           label="平台显示昵称（可选）"
+          disabled={action.busy}
           hint="仅作为资料快照显示，不用于生成主页链接。"
           value={nickname}
           maxLength={255}
@@ -579,55 +558,19 @@ function AccountEditor({
           <span className="ui-field__control">
             <textarea
               rows={3}
+              disabled={action.busy}
               maxLength={2000}
               value={notes}
               onChange={(event) => setNotes(event.target.value)}
             />
           </span>
         </label>
-        {(collectionModes.length > 0 || account?.fetchEnabled) && (
-          <>
-            <label className="account-checkbox">
-              <input
-                type="checkbox"
-                checked={fetchEnabled}
-                disabled={
-                  !fetchEnabled && !collectionModes.includes(firstSyncMode)
-                }
-                onChange={(event) => setFetch(event.target.checked)}
-              />
-              启用自动抓取
-            </label>
-            <SelectField
-              label="首次同步范围"
-              value={firstSyncMode}
-              disabled={collectionModes.length === 0}
-              onValueChange={(value) =>
-                setMode(value as Account["firstSyncMode"])
-              }
-            >
-              {!collectionModes.includes(firstSyncMode) && (
-                <option value={firstSyncMode} disabled>
-                  {firstSyncModeLabels[firstSyncMode]}
-                  （当前不可用）
-                </option>
-              )}
-              {collectionModes.includes("none") && (
-                <option value="none">{firstSyncModeLabels.none}</option>
-              )}
-              {collectionModes.includes("last_7_days") && (
-                <option value="last_7_days">
-                  {firstSyncModeLabels.last_7_days}
-                </option>
-              )}
-              {collectionModes.includes("last_24_hours") && (
-                <option value="last_24_hours">
-                  {firstSyncModeLabels.last_24_hours}
-                </option>
-              )}
-            </SelectField>
-          </>
-        )}
+        <AuthorCollectionFields
+          value={collection.value}
+          modes={collection.modes}
+          onChange={collection.change}
+          disabled={action.busy}
+        />
         <Feedback
           error={action.error || capabilityError?.message}
           success={action.success}

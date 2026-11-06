@@ -88,6 +88,8 @@ import { deleteTranslationDraft } from "../editor/draft-storage";
 import { TypesetBatchTools } from "./TypesetBatchTools";
 import { ReviewRequestActions } from "./ReviewRequestActions";
 import { AuthorAccountsPanel } from "./AuthorAccountsPanel";
+import { AuthorCollectionFields } from "./AuthorCollectionFields";
+import { useAuthorCollection } from "./author-collection";
 import { AuthorPicker } from "./AuthorPicker";
 import { sourceAdapterLabels } from "./source-labels";
 import {
@@ -1061,6 +1063,13 @@ function AuthorCreateDialog({
   const [xHandle, setXHandle] = useState("");
   const [xProfile, setXProfile] = useState<ResolvedXProfile | null>(null);
   const [pixivUserId, setPixivUserId] = useState("");
+  const capabilities = useQuery({
+    queryKey: ["source-capabilities"],
+    queryFn: async () => unwrap(await client.GET("/api/authors/sources")),
+  });
+  const availableSources = capabilities.error ? undefined : capabilities.data;
+  const xCollection = useAuthorCollection("x", availableSources);
+  const pixivCollection = useAuthorCollection("pixiv", availableSources);
   const [avatar, setAvatar] = useState<File | null>(null);
   const [evidence, setEvidence] = useState<File[]>([]);
   const [preview, setPreview] = useState<AuthorImportPreview | null>(null);
@@ -1187,6 +1196,16 @@ function AuthorCreateDialog({
           }
           if (pixivUserId.trim() && !/^[1-9][0-9]*$/.test(pixivUserId.trim()))
             throw new Error("Pixiv 用户 ID 必须是主页 /users/ 后的数字");
+          if ((xProfile || pixivUserId.trim()) && capabilities.isPending)
+            throw new Error("采集设置仍在读取，请稍后保存");
+          if (xProfile) {
+            xCollection.validate();
+            xCollection.freeze();
+          }
+          if (pixivUserId.trim()) {
+            pixivCollection.validate();
+            pixivCollection.freeze();
+          }
           const accounts: components["schemas"]["CreateExternalAccountDto"][] =
             [];
           if (xProfile)
@@ -1199,16 +1218,14 @@ function AuthorCreateDialog({
               displayNameSnapshot: xProfile.displayName,
               avatarFileObjectId: xProfile.avatarFileObjectId,
               profileProof: xProfile.profileProof,
-              fetchEnabled: true,
-              firstSyncMode: "last_24_hours",
+              ...xCollection.value,
             });
           if (pixivUserId.trim())
             accounts.push({
               ...(pixivNotes.trim() ? { notes: pixivNotes.trim() } : {}),
               platform: "pixiv",
               externalUserId: pixivUserId.trim(),
-              fetchEnabled: false,
-              firstSyncMode: "none",
+              ...pixivCollection.value,
             });
           // Persist only the opaque request ID. Draft text, profile proofs and files stay in memory.
           try {
@@ -1413,6 +1430,15 @@ function AuthorCreateDialog({
               {xProfile.avatarUrl && <img src={xProfile.avatarUrl} alt="" />}
             </p>
           )}
+          {xHandle.trim() && (
+            <AuthorCollectionFields
+              value={xCollection.value}
+              modes={xCollection.modes}
+              onChange={xCollection.change}
+              disabled={fieldsDisabled}
+              prefix="X "
+            />
+          )}
           <TextField
             required
             label="作者昵称"
@@ -1505,7 +1531,7 @@ function AuthorCreateDialog({
             disabled={action.busy || progress.current.evidence.locked}
           />
           <fieldset className="workspace-file-fields">
-            <legend>Pixiv 信息账号（可选，不抓取）</legend>
+            <legend>Pixiv 账号（可选）</legend>
             <TextField
               label="Pixiv 用户 ID"
               disabled={fieldsDisabled}
@@ -1515,6 +1541,15 @@ function AuthorCreateDialog({
               value={pixivUserId}
               onChange={(event) => setPixivUserId(event.target.value)}
             />
+            {pixivUserId.trim() && (
+              <AuthorCollectionFields
+                value={pixivCollection.value}
+                modes={pixivCollection.modes}
+                onChange={pixivCollection.change}
+                disabled={fieldsDisabled}
+                prefix="Pixiv "
+              />
+            )}
             <label className="ui-field">
               <span className="ui-field__label">Pixiv 账号备注（可选）</span>
               <span className="ui-field__control">

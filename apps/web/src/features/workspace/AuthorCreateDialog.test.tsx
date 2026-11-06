@@ -10,6 +10,7 @@ import {
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { client, queryClient } from "../account/api";
+import type { components } from "@comiku/api-client";
 import { AuthorsPage, AuthorDetailPage } from "./BusinessPages";
 
 const ok = (data: unknown) => ({ data, response: new Response() }) as never;
@@ -27,7 +28,7 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
-async function openCreate() {
+async function openCreate(waitForCapabilities = true) {
   HTMLDialogElement.prototype.showModal = function () {
     this.setAttribute("open", "");
   };
@@ -65,14 +66,356 @@ async function openCreate() {
   fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
     target: { value: "123456" },
   });
+  if (waitForCapabilities)
+    await waitFor(() =>
+      expect(queryClient.getQueryState(["source-capabilities"])?.status).toBe(
+        "success",
+      ),
+    );
 }
+
+const configuredSources: components["schemas"]["SourceCapabilityDto"][] = [
+  "x",
+  "pixiv",
+].map((platform) => ({
+  platform,
+  adapterKey: `${platform}_fixture`,
+  priority: 10,
+  metered: false,
+  available: true,
+  supportedFirstSyncModes: ["none", "last_24_hours", "last_7_days"],
+}));
+
+function createCollectionFixture(sources = configuredSources) {
+  vi.spyOn(client, "GET").mockImplementation(async (path) =>
+    ok(
+      path === "/api/authors/sources"
+        ? sources
+        : path === "/api/authors"
+          ? { items: [], total: 0, nextCursor: null }
+          : { author: null },
+    ),
+  );
+  return vi.spyOn(client, "POST").mockImplementation(async (path) =>
+    ok(
+      path === "/api/authors/x-profile/resolve"
+        ? {
+            externalUserId: "777",
+            handle: "artist",
+            displayName: "Artist",
+            profileUrl: "https://x.com/artist",
+            avatarFileObjectId: null,
+            avatarUrl: null,
+            adapterKey: "x_fixture",
+            syncedAt: "2026-11-06T00:00:00Z",
+            profileProof: "synthetic-proof",
+          }
+        : { id: "author", revision: 0, externalAccounts: [] },
+    ),
+  );
+}
+
+test("new X and Pixiv accounts share enabled twenty-four-hour defaults and retain proof and notes", async () => {
+  const post = createCollectionFixture();
+  await openCreate();
+  fireEvent.change(screen.getByLabelText("X @账号"), {
+    target: { value: "artist" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "同步昵称和头像" }));
+  await screen.findByText("@artist");
+  expect(
+    (
+      screen.getByRole("checkbox", {
+        name: "X 启用自动抓取",
+      }) as HTMLInputElement
+    ).checked,
+  ).toBe(true);
+  expect(
+    (
+      screen.getByRole("checkbox", {
+        name: "Pixiv 启用自动抓取",
+      }) as HTMLInputElement
+    ).checked,
+  ).toBe(true);
+  fireEvent.change(screen.getByLabelText("X 账号备注（可选）"), {
+    target: { value: "X note" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+  expect(post.mock.calls[1][1]).toMatchObject({
+    body: {
+      accounts: [
+        {
+          platform: "x",
+          fetchEnabled: true,
+          firstSyncMode: "last_24_hours",
+          profileProof: "synthetic-proof",
+          notes: "X note",
+        },
+        {
+          platform: "pixiv",
+          fetchEnabled: true,
+          firstSyncMode: "last_24_hours",
+        },
+      ],
+    },
+  });
+});
+
+test("new Pixiv can turn collection off and choose seven days", async () => {
+  const post = createCollectionFixture();
+  await openCreate();
+  fireEvent.click(
+    await screen.findByRole("checkbox", { name: "Pixiv 启用自动抓取" }),
+  );
+  fireEvent.click(screen.getByRole("combobox", { name: "Pixiv 首次同步范围" }));
+  fireEvent.click(screen.getByRole("option", { name: "最近 7 天" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledOnce());
+  expect(post.mock.calls[0][1]).toMatchObject({
+    body: {
+      accounts: [
+        {
+          platform: "pixiv",
+          fetchEnabled: false,
+          firstSyncMode: "last_7_days",
+        },
+      ],
+    },
+  });
+});
+
+test("capability refresh does not override a deliberate new-account choice", async () => {
+  const post = createCollectionFixture();
+  await openCreate();
+  fireEvent.click(
+    await screen.findByRole("checkbox", { name: "Pixiv 启用自动抓取" }),
+  );
+  fireEvent.click(screen.getByRole("combobox", { name: "Pixiv 首次同步范围" }));
+  fireEvent.click(screen.getByRole("option", { name: "仅后续内容" }));
+  await act(async () => {
+    queryClient.setQueryData(
+      ["source-capabilities"],
+      configuredSources.map((source) => ({ ...source, priority: 20 })),
+    );
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledOnce());
+  expect(post.mock.calls[0][1]).toMatchObject({
+    body: { accounts: [{ fetchEnabled: false, firstSyncMode: "none" }] },
+  });
+});
+
+test("late capabilities cannot replace a previously submitted information-only intent on retry", async () => {
+  const post = createCollectionFixture([]);
+  post.mockRejectedValueOnce(new TypeError("response lost"));
+  await openCreate();
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await screen.findByRole("alert");
+  await act(async () => {
+    queryClient.setQueryData(["source-capabilities"], configuredSources);
+  });
+  expect(
+    (
+      (await screen.findByRole("checkbox", {
+        name: "Pixiv 启用自动抓取",
+      })) as HTMLInputElement
+    ).checked,
+  ).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+  expect(post.mock.calls[0][1]).toEqual(post.mock.calls[1][1]);
+  expect(post.mock.calls[1][1]).toMatchObject({
+    body: { accounts: [{ fetchEnabled: false, firstSyncMode: "none" }] },
+  });
+});
+
+test("untouched new accounts adopt late capabilities and cannot save before they arrive", async () => {
+  const post = createCollectionFixture();
+  let release!: (value: never) => void;
+  vi.spyOn(client, "GET").mockImplementation(async (path) =>
+    path === "/api/authors/sources"
+      ? new Promise<never>((resolve) => {
+          release = resolve;
+        })
+      : ok({ items: [], total: 0, nextCursor: null }),
+  );
+  await openCreate(false);
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("仍在读取");
+  expect(post).not.toHaveBeenCalled();
+  await act(async () => {
+    release(ok(configuredSources));
+  });
+  expect(
+    (
+      (await screen.findByRole("checkbox", {
+        name: "Pixiv 启用自动抓取",
+      })) as HTMLInputElement
+    ).checked,
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledOnce());
+  expect(post.mock.calls[0][1]).toMatchObject({
+    body: {
+      accounts: [{ fetchEnabled: true, firstSyncMode: "last_24_hours" }],
+    },
+  });
+});
+
+test.each([
+  ["last_7_days", true, true],
+  ["none", true, true],
+  ["last_24_hours", false, false],
+] as const)(
+  "new accounts use supported %s fallback with availability %s",
+  async (mode, available, enabled) => {
+    const post = createCollectionFixture([
+      { ...configuredSources[1], available, supportedFirstSyncModes: [mode] },
+    ]);
+    await openCreate();
+    fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+    await waitFor(() => expect(post).toHaveBeenCalledOnce());
+    expect(post.mock.calls[0][1]).toMatchObject({
+      body: {
+        accounts: [
+          { fetchEnabled: enabled, firstSyncMode: enabled ? mode : "none" },
+        ],
+      },
+    });
+  },
+);
+
+test("a failed capabilities read allows only information binding", async () => {
+  const post = createCollectionFixture();
+  vi.spyOn(client, "GET").mockImplementation(async (path) => {
+    if (path === "/api/authors/sources")
+      throw new Error("capabilities unavailable");
+    return ok({ items: [], total: 0, nextCursor: null });
+  });
+  await openCreate(false);
+  await waitFor(() =>
+    expect(queryClient.getQueryState(["source-capabilities"])?.status).toBe(
+      "error",
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledOnce());
+  expect(post.mock.calls[0][1]).toMatchObject({
+    body: { accounts: [{ fetchEnabled: false, firstSyncMode: "none" }] },
+  });
+});
+
+test("an explicit activation cannot save when its supported window disappears", async () => {
+  const post = createCollectionFixture();
+  await openCreate();
+  fireEvent.click(screen.getByRole("combobox", { name: "Pixiv 首次同步范围" }));
+  fireEvent.click(screen.getByRole("option", { name: "最近 7 天" }));
+  await act(async () => {
+    queryClient.setQueryData(["source-capabilities"], []);
+  });
+  await waitFor(() =>
+    expect(
+      (
+        screen.getByRole("combobox", {
+          name: "Pixiv 首次同步范围",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "没有支持所选首次同步范围",
+  );
+  expect(post).not.toHaveBeenCalled();
+});
+
+test.each(["removed", "failed"] as const)(
+  "an unsubmitted paused draft can explicitly switch to information-only after capabilities are %s",
+  async (state) => {
+    const post = createCollectionFixture();
+    let available = true;
+    vi.spyOn(client, "GET").mockImplementation(async (path) => {
+      if (path !== "/api/authors/sources")
+        return ok({ items: [], total: 0, nextCursor: null });
+      if (!available && state === "failed") throw new Error("能力读取失败");
+      return ok(available ? configuredSources : []);
+    });
+    await openCreate();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Pixiv 启用自动抓取" }),
+    );
+    if (state === "failed") {
+      fireEvent.click(
+        screen.getByRole("combobox", { name: "Pixiv 首次同步范围" }),
+      );
+      fireEvent.click(screen.getByRole("option", { name: "最近 7 天" }));
+    }
+    available = false;
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["source-capabilities"],
+      });
+    });
+    const range = screen.getByRole("combobox", {
+      name: "Pixiv 首次同步范围",
+    }) as HTMLButtonElement;
+    await waitFor(() => expect(range.textContent).toContain("当前不可用"));
+    expect(range.textContent).toContain(
+      state === "failed" ? "最近 7 天" : "最近 24 小时",
+    );
+    expect(range.disabled).toBe(false);
+    fireEvent.click(range);
+    fireEvent.click(screen.getByRole("option", { name: "仅后续内容" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+    await waitFor(() => expect(post).toHaveBeenCalledOnce());
+    expect(post.mock.calls[0][1]).toMatchObject({
+      body: { accounts: [{ fetchEnabled: false, firstSyncMode: "none" }] },
+    });
+  },
+);
+
+test("a submitted paused window is not silently changed when capabilities disappear", async () => {
+  const post = createCollectionFixture();
+  post.mockRejectedValueOnce(new TypeError("response lost"));
+  await openCreate();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Pixiv 启用自动抓取" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Pixiv 首次同步范围" }));
+  fireEvent.click(screen.getByRole("option", { name: "最近 7 天" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await screen.findByRole("alert");
+  await act(async () => {
+    queryClient.setQueryData(["source-capabilities"], []);
+  });
+  await waitFor(() =>
+    expect(
+      screen.getByRole("combobox", { name: "Pixiv 首次同步范围" }).textContent,
+    ).toContain("当前不可用"),
+  );
+  expect(
+    screen.getByRole("combobox", { name: "Pixiv 首次同步范围" }).textContent,
+  ).toContain("最近 7 天");
+  expect(screen.getByRole("button", { name: "检查保存结果" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() =>
+    expect(screen.getByRole("alert").textContent).toContain(
+      "没有支持所选首次同步范围",
+    ),
+  );
+  expect(post).toHaveBeenCalledOnce();
+  expect(post.mock.calls[0][1]).toMatchObject({
+    body: { accounts: [{ fetchEnabled: false, firstSyncMode: "last_7_days" }] },
+  });
+});
 
 test("base information and platform accounts use one atomic author request, and a rejected save keeps fields editable", async () => {
   vi.spyOn(client, "GET").mockImplementation(async (path) =>
     ok(
-      path === "/api/authors"
-        ? { items: [], total: 0, nextCursor: null }
-        : null,
+      path === "/api/authors/sources"
+        ? []
+        : path === "/api/authors"
+          ? { items: [], total: 0, nextCursor: null }
+          : null,
     ),
   );
   let attempts = 0;
@@ -116,13 +459,15 @@ test("a lost initial response recovers the committed author by request ID withou
   let saved = false;
   const get = vi.spyOn(client, "GET").mockImplementation(async (path) =>
     ok(
-      path === "/api/authors"
-        ? { items: [], total: 0, nextCursor: null }
-        : {
-            author: saved
-              ? { id: "author", revision: 0, externalAccounts: [] }
-              : null,
-          },
+      path === "/api/authors/sources"
+        ? []
+        : path === "/api/authors"
+          ? { items: [], total: 0, nextCursor: null }
+          : {
+              author: saved
+                ? { id: "author", revision: 0, externalAccounts: [] }
+                : null,
+            },
     ),
   );
   const post = vi.spyOn(client, "POST").mockImplementation(async () => {
@@ -145,18 +490,20 @@ test("reopening restores only the same actor request result without persisting d
   sessionStorage.setItem("comiku:author-creation:undefined", key);
   const get = vi.spyOn(client, "GET").mockImplementation(async (path) =>
     ok(
-      path === "/api/authors"
-        ? { items: [], total: 0, nextCursor: null }
-        : {
-            author: {
-              id: "author",
-              revision: 0,
-              displayName: "已保存作者",
-              sourceLanguage: "ja",
-              authorizationStatus: "pending",
-              externalAccounts: [],
+      path === "/api/authors/sources"
+        ? []
+        : path === "/api/authors"
+          ? { items: [], total: 0, nextCursor: null }
+          : {
+              author: {
+                id: "author",
+                revision: 0,
+                displayName: "已保存作者",
+                sourceLanguage: "ja",
+                authorizationStatus: "pending",
+                externalAccounts: [],
+              },
             },
-          },
     ),
   );
   const post = vi.spyOn(client, "POST");
@@ -209,11 +556,13 @@ test("completed avatar and account steps survive a lost evidence-finalize respon
     .spyOn(client, "GET")
     .mockImplementation(async (path) =>
       ok(
-        path === "/api/authors"
-          ? { items: [], total: 0, nextCursor: null }
-          : path === "/api/transfers/uploads/{id}"
-            ? session("evidence", "completed")
-            : { id: "author", revision },
+        path === "/api/authors/sources"
+          ? []
+          : path === "/api/authors"
+            ? { items: [], total: 0, nextCursor: null }
+            : path === "/api/transfers/uploads/{id}"
+              ? session("evidence", "completed")
+              : { id: "author", revision },
       ),
     );
   const post = vi
@@ -456,8 +805,12 @@ test("editing retries a failed avatar at the saved revision and then accepts a n
 });
 
 test("an in-flight creation cannot be closed with the close button or Escape", async () => {
-  vi.spyOn(client, "GET").mockResolvedValue(
-    ok({ items: [], total: 0, nextCursor: null }),
+  vi.spyOn(client, "GET").mockImplementation(async (path) =>
+    ok(
+      path === "/api/authors/sources"
+        ? []
+        : { items: [], total: 0, nextCursor: null },
+    ),
   );
   let release!: (value: never) => void;
   vi.spyOn(client, "POST").mockImplementation(
@@ -569,9 +922,11 @@ test.each([false, true])(
 test("author creation includes optional author and account notes in the atomic request", async () => {
   vi.spyOn(client, "GET").mockImplementation(async (path) =>
     ok(
-      path === "/api/authors"
-        ? { items: [], total: 0, nextCursor: null }
-        : null,
+      path === "/api/authors/sources"
+        ? []
+        : path === "/api/authors"
+          ? { items: [], total: 0, nextCursor: null }
+          : null,
     ),
   );
   const post = vi
