@@ -4,6 +4,7 @@ export function useAction() {
   const running = useRef(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const clearError = useCallback(() => setError(""), []);
   const run = useCallback(async (action: () => Promise<void>) => {
     if (running.current) return;
     running.current = true;
@@ -19,5 +20,5 @@ export function useAction() {
       setBusy(false);
     }
   }, []);
-  return { busy, error, success, setSuccess, run };
+  return { busy, error, success, setSuccess, clearError, run };
 }

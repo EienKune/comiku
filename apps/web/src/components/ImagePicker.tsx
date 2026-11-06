@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { ImagePlus, X } from "lucide-react";
 import { Button, IconButton } from "./ui";
 import "./image-picker.css";
@@ -7,14 +7,19 @@ const accept = "image/png,image/jpeg,image/webp";
 const fileKey = (file: File) =>
   `${file.name}:${file.size}:${file.lastModified}`;
 
-function LocalImage({ file }: { file: File }) {
+function LocalImage({ file, fallback }: { file: File; fallback?: ReactNode }) {
   const ref = useRef<HTMLImageElement>(null);
+  const [failedFile, setFailedFile] = useState<File | null>(null);
   useEffect(() => {
     const url = URL.createObjectURL(file);
     if (ref.current) ref.current.src = url;
     return () => URL.revokeObjectURL(url);
   }, [file]);
-  return <img ref={ref} alt={file.name} />;
+  return failedFile === file && fallback ? (
+    fallback
+  ) : (
+    <img ref={ref} alt={file.name} onError={() => setFailedFile(file)} />
+  );
 }
 
 export function ImagePicker({
@@ -25,6 +30,11 @@ export function ImagePicker({
   disabled = false,
   maxFiles = multiple ? 10 : 1,
   maxFileSize = 10 * 1024 * 1024,
+  variant = "default",
+  currentAvatar,
+  avatarField,
+  avatarFallback,
+  selectionStatus = "头像未保存",
 }: {
   label: string;
   files: File[];
@@ -33,13 +43,18 @@ export function ImagePicker({
   disabled?: boolean;
   maxFiles?: number;
   maxFileSize?: number;
+  variant?: "default" | "avatar";
+  currentAvatar?: ReactNode;
+  avatarField?: ReactNode;
+  avatarFallback?: ReactNode;
+  selectionStatus?: string;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const id = useId();
   const [error, setError] = useState("");
   const sizeLimit = `${maxFileSize / 1024 / 1024} MiB`;
   return (
-    <fieldset className="ui-image-picker" disabled={disabled}>
+    <fieldset className={`ui-image-picker ui-image-picker--${variant}`}>
       <legend>{label}</legend>
       <input
         ref={input}
@@ -79,25 +94,76 @@ export function ImagePicker({
           onChange(next);
         }}
       />
-      <div className="ui-image-picker__controls">
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          disabled={disabled}
-          leadingIcon={<ImagePlus size={16} aria-hidden="true" />}
-          aria-label={`${files.length ? (multiple ? "添加" : "更换") : "选择"}${label}`}
-          aria-describedby={`${id}-hint${error ? ` ${id}-error` : ""}`}
-          onClick={() => input.current?.click()}
+      {variant === "avatar" ? (
+        <div
+          className={`ui-image-picker__avatar-row${avatarField ? " ui-image-picker__avatar-row--field" : ""}`}
         >
-          {files.length ? (multiple ? "添加图片" : "更换图片") : "选择图片"}
-        </Button>
-        <small id={`${id}-hint`}>
-          PNG、JPEG、WebP · {multiple ? `最多 ${maxFiles} 张 · ` : ""}每张{" "}
-          {sizeLimit}
+          <button
+            type="button"
+            className="ui-image-picker__avatar-button"
+            disabled={disabled}
+            aria-label={`更换${label}`}
+            aria-describedby={`${id}-hint${error ? ` ${id}-error` : ""}`}
+            title={`更换${label}`}
+            onClick={() => input.current?.click()}
+          >
+            {files[0] ? (
+              <LocalImage
+                key={fileKey(files[0])}
+                file={files[0]}
+                fallback={avatarFallback}
+              />
+            ) : (
+              currentAvatar
+            )}
+          </button>
+          {avatarField}
+          {!!files.length && (
+            <div className="ui-image-picker__avatar-selection">
+              <span role="status">{selectionStatus}</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={disabled}
+                aria-label={`取消选择${label}`}
+                onClick={() => {
+                  if (disabled) return;
+                  setError("");
+                  onChange([]);
+                }}
+              >
+                取消选择
+              </Button>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="ui-image-picker__controls">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={disabled}
+            leadingIcon={<ImagePlus size={16} aria-hidden="true" />}
+            aria-label={`${files.length ? (multiple ? "添加" : "更换") : "选择"}${label}`}
+            aria-describedby={`${id}-hint${error ? ` ${id}-error` : ""}`}
+            onClick={() => input.current?.click()}
+          >
+            {files.length ? (multiple ? "添加图片" : "更换图片") : "选择图片"}
+          </Button>
+          <small id={`${id}-hint`}>
+            PNG、JPEG、WebP · {multiple ? `最多 ${maxFiles} 张 · ` : ""}每张{" "}
+            {sizeLimit}
+          </small>
+        </div>
+      )}
+      {variant === "avatar" && (
+        <small id={`${id}-hint`} className="ui-image-picker__avatar-hint">
+          PNG、JPEG、WebP · 每张 {sizeLimit}
         </small>
-      </div>
-      {!!files.length && (
+      )}
+      {variant !== "avatar" && !!files.length && (
         <ul className="ui-image-picker__files">
           {files.map((file) => (
             <li key={fileKey(file)}>

@@ -76,6 +76,7 @@ interface TextFieldProps extends InputHTMLAttributes<HTMLInputElement> {
   hint?: string;
   error?: string;
   startIcon?: ReactNode;
+  action?: ReactNode;
 }
 
 export function TextField({
@@ -83,6 +84,7 @@ export function TextField({
   hint,
   error,
   startIcon,
+  action,
   className = "",
   id,
   "aria-describedby": describedBy,
@@ -91,6 +93,21 @@ export function TextField({
   const generatedId = useId();
   const inputId = id ?? generatedId;
   const messageId = `${inputId}-message`;
+  const control = (
+    <span className={`ui-field__control ${error ? "is-error" : ""}`}>
+      {startIcon}
+      <input
+        id={inputId}
+        {...props}
+        aria-invalid={error ? true : props["aria-invalid"]}
+        aria-describedby={
+          [describedBy, hint || error ? messageId : undefined]
+            .filter(Boolean)
+            .join(" ") || undefined
+        }
+      />
+    </span>
+  );
   return (
     <div className={`ui-field ${className}`}>
       {label && (
@@ -98,19 +115,14 @@ export function TextField({
           {label}
         </label>
       )}
-      <span className={`ui-field__control ${error ? "is-error" : ""}`}>
-        {startIcon}
-        <input
-          id={inputId}
-          {...props}
-          aria-invalid={error ? true : props["aria-invalid"]}
-          aria-describedby={
-            [describedBy, hint || error ? messageId : undefined]
-              .filter(Boolean)
-              .join(" ") || undefined
-          }
-        />
-      </span>
+      {action ? (
+        <div className="ui-field__input-row">
+          {control}
+          {action}
+        </div>
+      ) : (
+        control
+      )}
       {(hint || error) && (
         <span
           id={messageId}

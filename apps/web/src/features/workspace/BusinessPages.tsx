@@ -17,7 +17,9 @@ import { refreshReviewViews } from "./review-cache";
 import { useCandidateAnalysisRefresh } from "./use-candidate-analysis-refresh";
 import { SourceSyncControl } from "./SourceSyncControl";
 import { MemberAvatar } from "../account/MemberAvatar";
+import { Avatar } from "../../components/Avatar";
 import { ImagePicker } from "../../components/ImagePicker";
+import { ErrorToast } from "../../components/ErrorToast";
 import { AuthorImageUpload } from "./author-image-upload";
 import {
   useCallback,
@@ -986,13 +988,16 @@ function AuthorAvatar({ author }: { author: Author }) {
     author.avatarAvailable,
   );
   return (
-    <span className="workspace-avatar workspace-avatar--large">
-      {query.data?.url && isDisplayableImageUrl(query.data.url) ? (
-        <img src={query.data.url} alt="" loading="lazy" />
-      ) : (
-        author.displayName.slice(0, 1)
-      )}
-    </span>
+    <Avatar
+      className="workspace-avatar workspace-avatar--large"
+      name={author.displayName}
+      src={
+        query.data?.url && isDisplayableImageUrl(query.data.url)
+          ? query.data.url
+          : undefined
+      }
+      loading="lazy"
+    />
   );
 }
 
@@ -1396,6 +1401,7 @@ function AuthorCreateDialog({
         void close();
       }}
     >
+      <ErrorToast message={action.error} onDismiss={action.clearError} />
       <header>
         <div>
           <span>作者目录</span>
@@ -1480,7 +1486,7 @@ function AuthorCreateDialog({
           className="workspace-stacked-form"
           onSubmit={(event) => void create(event)}
         >
-          <fieldset className="workspace-file-fields">
+          <fieldset className="workspace-file-fields workspace-author-platform-fields">
             <legend>平台账号（可选）</legend>
             <div
               className="workspace-tabs"
@@ -1530,61 +1536,58 @@ function AuthorCreateDialog({
               id={`author-profile-panel-${requestId}`}
               aria-labelledby={`author-profile-tab-${profilePlatform}-${requestId}`}
             >
-              <div className="workspace-author-profile-input">
-                {profilePlatform === "x" ? (
-                  <TextField
-                    label="X @账号"
-                    disabled={fieldsDisabled}
-                    value={xHandle}
-                    onChange={(event) => {
-                      xInput.current = event.target.value;
-                      setXHandle(event.target.value);
-                      setXProfile(null);
-                      if (profileSourcePlatform === "x")
-                        setProfileSourcePlatform(null);
-                    }}
-                  />
-                ) : (
-                  <TextField
-                    label="Pixiv 用户 ID"
-                    disabled={fieldsDisabled}
-                    hint="主页 /users/123456 中的数字；不是登录账号名。"
-                    inputMode="numeric"
-                    pattern="[1-9][0-9]*"
-                    value={pixivUserId}
-                    onChange={(event) => {
-                      pixivInput.current = event.target.value;
-                      setPixivUserId(event.target.value);
-                      setPixivProfile(null);
-                      if (profileSourcePlatform === "pixiv")
-                        setProfileSourcePlatform(null);
-                    }}
-                  />
-                )}
-                <Button
-                  type="button"
-                  variant="secondary"
-                  aria-label={
-                    profilePlatform === "pixiv"
-                      ? "同步 Pixiv 昵称和头像"
-                      : undefined
+              <TextField
+                label={profilePlatform === "x" ? "X @账号" : "Pixiv 用户 ID"}
+                disabled={fieldsDisabled}
+                hint={
+                  profilePlatform === "pixiv"
+                    ? "主页 /users/123456 中的数字；不是登录账号名。"
+                    : undefined
+                }
+                inputMode={profilePlatform === "pixiv" ? "numeric" : undefined}
+                pattern={
+                  profilePlatform === "pixiv" ? "[1-9][0-9]*" : undefined
+                }
+                value={profilePlatform === "x" ? xHandle : pixivUserId}
+                onChange={(event) => {
+                  if (profilePlatform === "x") {
+                    xInput.current = event.target.value;
+                    setXHandle(event.target.value);
+                    setXProfile(null);
+                  } else {
+                    pixivInput.current = event.target.value;
+                    setPixivUserId(event.target.value);
+                    setPixivProfile(null);
                   }
-                  loading={action.busy}
-                  disabled={
-                    fieldsDisabled ||
-                    (profilePlatform === "x"
-                      ? !xHandle.trim()
-                      : !/^[1-9][0-9]*$/.test(pixivUserId.trim()))
-                  }
-                  onClick={() =>
-                    void (profilePlatform === "x"
-                      ? syncProfile()
-                      : syncPixivProfile())
-                  }
-                >
-                  同步昵称和头像
-                </Button>
-              </div>
+                  if (profileSourcePlatform === profilePlatform)
+                    setProfileSourcePlatform(null);
+                }}
+                action={
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    aria-label={
+                      profilePlatform === "pixiv"
+                        ? "同步 Pixiv 昵称和头像"
+                        : undefined
+                    }
+                    loading={action.busy}
+                    disabled={
+                      fieldsDisabled ||
+                      (profilePlatform === "x"
+                        ? !xHandle.trim()
+                        : !/^[1-9][0-9]*$/.test(pixivUserId.trim()))
+                    }
+                    onClick={() =>
+                      void (profilePlatform === "x"
+                        ? syncProfile()
+                        : syncPixivProfile())
+                    }
+                  >
+                    同步昵称和头像
+                  </Button>
+                }
+              />
               {activeProfile && (
                 <p className="workspace-profile-sync">
                   <strong>
@@ -1637,18 +1640,34 @@ function AuthorCreateDialog({
               )}
             </div>
           </fieldset>
-          <div className="workspace-author-identity">
-            {authorProfile?.avatarUrl && !avatar && (
-              <img src={authorProfile.avatarUrl} alt="同步的作者头像" />
-            )}
-            <TextField
-              required
-              label="作者昵称"
-              disabled={fieldsDisabled}
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-            />
-          </div>
+          <ImagePicker
+            label="作者头像"
+            variant="avatar"
+            avatarFallback={<Avatar name={displayName} size="lg" />}
+            currentAvatar={
+              <Avatar
+                name={displayName}
+                src={authorProfile?.avatarUrl ?? undefined}
+                size="lg"
+              />
+            }
+            avatarField={
+              <TextField
+                required
+                label="作者昵称"
+                disabled={fieldsDisabled}
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+              />
+            }
+            files={avatar ? [avatar] : []}
+            onChange={(files) => {
+              setAvatar(files[0] ?? null);
+              progress.current.avatar = new AuthorImageUpload();
+            }}
+            maxFileSize={5 * 1024 * 1024}
+            disabled={action.busy || progress.current.avatar.locked}
+          />
           <div className="account-form-row">
             <SelectField
               label="作者母语"
@@ -1700,16 +1719,6 @@ function AuthorCreateDialog({
             </p>
           )}
           <ImagePicker
-            label="手动头像"
-            files={avatar ? [avatar] : []}
-            onChange={(files) => {
-              setAvatar(files[0] ?? null);
-              progress.current.avatar = new AuthorImageUpload();
-            }}
-            maxFileSize={5 * 1024 * 1024}
-            disabled={action.busy || progress.current.avatar.locked}
-          />
-          <ImagePicker
             label="授权凭证（可多张）"
             multiple
             files={evidence}
@@ -1724,7 +1733,7 @@ function AuthorCreateDialog({
               保留了本次保存标识。刷新后可检查保存结果；草稿和图片需重新选择。
             </p>
           )}
-          <Feedback error={action.error} success={action.success} />
+          <Feedback success={action.success} />
           <div className="workspace-dialog-actions">
             {hasPendingRequest && !savedAuthorId && (
               <Button
@@ -1764,6 +1773,28 @@ function AuthorCreateDialog({
         </form>
       )}
     </dialog>
+  );
+}
+
+function AuthorSummary({ author }: { author: Author }) {
+  return (
+    <>
+      <AuthorAvatar author={author} />
+      <dl className="workspace-description">
+        <div>
+          <dt>授权状态</dt>
+          <dd>{authorizationLabels[author.authorizationStatus]}</dd>
+        </div>
+        <div>
+          <dt>作者母语</dt>
+          <dd>{sourceLanguageLabels[author.sourceLanguage]}</dd>
+        </div>
+        <div>
+          <dt>标签</dt>
+          <dd>{author.tags.map((tag) => tag.name).join("、") || "—"}</dd>
+        </div>
+      </dl>
+    </>
   );
 }
 
@@ -1808,23 +1839,8 @@ export function AuthorDetailPage() {
             <div className="workspace-detail-grid">
               <Surface className="workspace-panel">
                 <h2>基本信息</h2>
-                <AuthorAvatar author={author} />
-                <dl className="workspace-description">
-                  <div>
-                    <dt>授权状态</dt>
-                    <dd>{authorizationLabels[author.authorizationStatus]}</dd>
-                  </div>
-                  <div>
-                    <dt>作者母语</dt>
-                    <dd>{sourceLanguageLabels[author.sourceLanguage]}</dd>
-                  </div>
-                  <div>
-                    <dt>标签</dt>
-                    <dd>
-                      {author.tags.map((tag) => tag.name).join("、") || "—"}
-                    </dd>
-                  </div>
-                </dl>
+                {(!user.permissions.includes("authors:manage") ||
+                  !managed.data) && <AuthorSummary author={author} />}
                 {user.permissions.includes("authors:manage") && (
                   <PageState
                     query={{
@@ -1846,7 +1862,11 @@ export function AuthorDetailPage() {
                             </Button>
                           </p>
                         )}
-                        <AuthorEditForm key={snapshot.id} author={snapshot} />
+                        <AuthorEditForm
+                          key={snapshot.id}
+                          author={snapshot}
+                          publicAuthor={author}
+                        />
                       </>
                     )}
                   </PageState>
@@ -1879,8 +1899,10 @@ export function AuthorDetailPage() {
 
 function AuthorEditForm({
   author,
+  publicAuthor,
 }: {
   author: components["schemas"]["ManagedAuthorDto"];
+  publicAuthor: Author;
 }) {
   const action = useAction();
   const [displayName, setDisplayName] = useState(author.displayName);
@@ -2009,19 +2031,36 @@ function AuthorEditForm({
   }
   return (
     <form
-      className="workspace-stacked-form"
+      className="workspace-stacked-form workspace-author-edit-form"
       onSubmit={(event) => void save(event)}
     >
-      <h3>编辑作者</h3>
-      <TextField
-        required
-        label="作者昵称"
-        disabled={fieldsDisabled}
-        value={displayName}
-        onChange={(event) => {
-          setMetadataDirty(true);
-          setDisplayName(event.target.value);
+      <ImagePicker
+        label="作者头像"
+        variant="avatar"
+        avatarFallback={<Avatar name={displayName} size="lg" />}
+        selectionStatus={detailsSaved ? "头像待确认" : "头像未保存"}
+        currentAvatar={
+          <AuthorAvatar author={{ ...publicAuthor, displayName }} />
+        }
+        avatarField={
+          <TextField
+            required
+            label="作者昵称"
+            disabled={fieldsDisabled}
+            value={displayName}
+            onChange={(event) => {
+              setMetadataDirty(true);
+              setDisplayName(event.target.value);
+            }}
+          />
+        }
+        files={avatar ? [avatar] : []}
+        onChange={(files) => {
+          setAvatar(files[0] ?? null);
+          upload.current = new AuthorImageUpload();
         }}
+        maxFileSize={5 * 1024 * 1024}
+        disabled={action.busy || upload.current.locked}
       />
       <SelectField
         label="作者母语"
@@ -2074,16 +2113,6 @@ function AuthorEditForm({
           />
         </span>
       </label>
-      <ImagePicker
-        label="手动头像（可选）"
-        files={avatar ? [avatar] : []}
-        onChange={(files) => {
-          setAvatar(files[0] ?? null);
-          upload.current = new AuthorImageUpload();
-        }}
-        maxFileSize={5 * 1024 * 1024}
-        disabled={action.busy || upload.current.locked}
-      />
       {detailsSaved && (
         <p className="account-success" role="status">
           基础信息已保存。

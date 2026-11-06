@@ -29,6 +29,18 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
+function querySyncedAvatar() {
+  return screen
+    .getByRole("button", { name: "更换作者头像" })
+    .querySelector<HTMLImageElement>(".ui-avatar img");
+}
+
+function getSyncedAvatar() {
+  const image = querySyncedAvatar();
+  if (!image) throw new Error("No synced avatar preview");
+  return image;
+}
+
 async function openCreate(
   waitForCapabilities = true,
   platform: "x" | "pixiv" = "pixiv",
@@ -135,6 +147,43 @@ const pixivProfile: components["schemas"]["ResolvedPixivProfileDto"] = {
   profileProof: "pixiv-proof",
 };
 
+test("creation always offers a local avatar beside the nickname and cancellation restores the synced avatar", async () => {
+  const post = createCollectionFixture();
+  post.mockResolvedValue(ok(pixivProfile));
+  await openCreate();
+  const name = screen.getByLabelText("作者昵称");
+  const trigger = screen.getByRole("button", { name: "更换作者头像" });
+  expect(trigger.textContent).toBe("合");
+  fireEvent.change(name, { target: { value: "" } });
+  expect(trigger.textContent).toBe("?");
+  fireEvent.change(name, { target: { value: "👩🏽‍🎨作者" } });
+  expect(trigger.textContent).toBe("👩🏽‍🎨");
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  await waitFor(() =>
+    expect(trigger.querySelector("img")?.getAttribute("src")).toBe(
+      pixivProfile.avatarUrl,
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("作者头像"), {
+    target: {
+      files: [new File(["avatar"], "local.png", { type: "image/png" })],
+    },
+  });
+  expect(
+    screen.getByRole("img", { name: "local.png" }).getAttribute("src"),
+  ).toBe("blob:preview");
+  expect(post).toHaveBeenCalledOnce();
+  fireEvent.error(screen.getByRole("img", { name: "local.png" }));
+  expect(trigger.textContent).toBe("P");
+  fireEvent.click(screen.getByRole("button", { name: "取消选择作者头像" }));
+  expect(trigger.querySelector("img")?.getAttribute("src")).toBe(
+    pixivProfile.avatarUrl,
+  );
+  expect(post).toHaveBeenCalledOnce();
+});
+
 test("Pixiv explicit profile sync fills a blank author name and saves the verified account snapshot", async () => {
   const post = createCollectionFixture();
   post.mockImplementation(async (path) =>
@@ -152,9 +201,7 @@ test("Pixiv explicit profile sync fills a blank author name and saves the verifi
   fireEvent.click(
     screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
   );
-  expect(
-    await screen.findByRole("img", { name: "同步的作者头像" }),
-  ).toBeTruthy();
+  expect(await waitFor(getSyncedAvatar)).toBeTruthy();
   expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
     "Pixiv Artist",
   );
@@ -194,7 +241,7 @@ test("explicit Pixiv sync adopts the author name and avatar while preserving not
   fireEvent.click(screen.getByRole("checkbox", { name: "Pixiv 启用自动抓取" }));
   fireEvent.click(screen.getByRole("combobox", { name: "Pixiv 首次同步范围" }));
   fireEvent.click(screen.getByRole("option", { name: "最近 7 天" }));
-  fireEvent.change(screen.getByLabelText("手动头像"), {
+  fireEvent.change(screen.getByLabelText("作者头像"), {
     target: {
       files: [new File(["avatar"], "manual-avatar.png", { type: "image/png" })],
     },
@@ -214,7 +261,7 @@ test("explicit Pixiv sync adopts the author name and avatar while preserving not
       .value,
   ).toBe("pixiv note");
   expect(screen.queryByRole("img", { name: "manual-avatar.png" })).toBeNull();
-  expect(screen.getByRole("img", { name: "同步的作者头像" })).toBeTruthy();
+  expect(getSyncedAvatar()).toBeTruthy();
   expect(
     (
       screen.getByRole("checkbox", {
@@ -229,6 +276,46 @@ test("explicit Pixiv sync adopts the author name and avatar while preserving not
     within(screen.getByRole("dialog")).getByText("Pixiv Artist"),
   ).toBeTruthy();
 });
+
+test.each(["x", "pixiv"] as const)(
+  "%s profile errors show a nonblocking notice and keep the creation draft editable",
+  async (platform) => {
+    const post = createCollectionFixture();
+    post.mockResolvedValue(failed("资料暂不可用"));
+    await openCreate(true, platform);
+    if (platform === "x")
+      fireEvent.change(screen.getByLabelText("X @账号"), {
+        target: { value: "artist" },
+      });
+    fireEvent.change(screen.getByLabelText("作者备注（可选）"), {
+      target: { value: "keep my draft" },
+    });
+    const parent = screen.getByRole("dialog");
+    const sync = screen.getByRole("button", {
+      name: platform === "x" ? "同步昵称和头像" : "同步 Pixiv 昵称和头像",
+    });
+    sync.focus();
+    fireEvent.click(sync);
+    const notice = await screen.findByRole("alert");
+    expect(notice.textContent).toContain("资料暂不可用");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(parent.querySelector(".account-feedback .account-error")).toBeNull();
+    expect(screen.getByRole("dialog")).toBe(parent);
+    const notes = screen.getByLabelText("作者备注（可选）");
+    notes.focus();
+    fireEvent.change(notes, { target: { value: "still editable" } });
+    expect(
+      (screen.getByLabelText("作者备注（可选）") as HTMLTextAreaElement).value,
+    ).toBe("still editable");
+    expect(document.activeElement).toBe(notes);
+    fireEvent.click(sync);
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "资料暂不可用",
+    );
+    expect(screen.getByRole("dialog")).toBe(parent);
+  },
+);
 
 test("a Pixiv profile failure leaves manual creation editable and sends no implicit profile retry", async () => {
   const post = createCollectionFixture();
@@ -354,18 +441,18 @@ test("platform tabs preserve both drafts and only explicit sync adopts an author
   expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
     "Pixiv Artist",
   );
-  expect(
-    screen.getByRole("img", { name: "同步的作者头像" }).getAttribute("src"),
-  ).toBe("https://storage.invalid/pixiv-avatar");
+  expect(getSyncedAvatar().getAttribute("src")).toBe(
+    "https://storage.invalid/pixiv-avatar",
+  );
   expect(post).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByRole("button", { name: "同步昵称和头像" }));
   await screen.findByText("@artist");
   expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
     "Artist",
   );
-  expect(
-    screen.getByRole("img", { name: "同步的作者头像" }).getAttribute("src"),
-  ).toBe("https://storage.invalid/pixiv-avatar");
+  expect(getSyncedAvatar().getAttribute("src")).toBe(
+    "https://storage.invalid/pixiv-avatar",
+  );
   fireEvent.click(screen.getByRole("tab", { name: "Pixiv" }));
   expect(
     (screen.getByLabelText("Pixiv 用户 ID") as HTMLInputElement).value,
@@ -453,9 +540,7 @@ test.each(["x", "pixiv"] as const)(
     fireEvent.click(
       screen.getByRole("tab", { name: lastPlatform === "x" ? "Pixiv" : "X" }),
     );
-    expect(
-      screen.getByRole("img", { name: "同步的作者头像" }).getAttribute("src"),
-    ).toBe(
+    expect(getSyncedAvatar().getAttribute("src")).toBe(
       lastPlatform === "x"
         ? "https://storage.invalid/x-avatar"
         : "https://storage.invalid/pixiv-avatar",
@@ -479,7 +564,7 @@ test("manual name and avatar edits after sync override the selected author profi
   fireEvent.change(screen.getByLabelText("作者昵称"), {
     target: { value: "manual after sync" },
   });
-  fireEvent.change(screen.getByLabelText("手动头像"), {
+  fireEvent.change(screen.getByLabelText("作者头像"), {
     target: {
       files: [new File(["avatar"], "after-sync.png", { type: "image/png" })],
     },
@@ -488,7 +573,7 @@ test("manual name and avatar edits after sync override the selected author profi
     "manual after sync",
   );
   expect(screen.getByRole("img", { name: "after-sync.png" })).toBeTruthy();
-  expect(screen.queryByRole("img", { name: "同步的作者头像" })).toBeNull();
+  expect(querySyncedAvatar()).toBeNull();
 });
 
 test("a synced nickname without an avatar preserves the user's manual avatar choice", async () => {
@@ -497,7 +582,7 @@ test("a synced nickname without an avatar preserves the user's manual avatar cho
     ok({ ...pixivProfile, avatarUrl: null, avatarFileObjectId: null }),
   );
   await openCreate(true, "pixiv");
-  fireEvent.change(screen.getByLabelText("手动头像"), {
+  fireEvent.change(screen.getByLabelText("作者头像"), {
     target: {
       files: [new File(["avatar"], "keep-manual.png", { type: "image/png" })],
     },
@@ -510,7 +595,11 @@ test("a synced nickname without an avatar preserves the user's manual avatar cho
     "Pixiv Artist",
   );
   expect(screen.getByRole("img", { name: "keep-manual.png" })).toBeTruthy();
-  expect(screen.getByRole("status").textContent).toContain("保留当前头像");
+  expect(
+    screen
+      .getByText("昵称已同步，头像暂不可用，保留当前头像")
+      .getAttribute("role"),
+  ).toBe("status");
 });
 
 test("a later same-ID sync without an avatar retains the previously verified avatar and proof", async () => {
@@ -535,7 +624,7 @@ test("a later same-ID sync without an avatar retains the previously verified ava
   fireEvent.click(
     screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
   );
-  await screen.findByRole("img", { name: "同步的作者头像" });
+  await waitFor(getSyncedAvatar);
   fireEvent.click(
     screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
   );
@@ -544,9 +633,9 @@ test("a later same-ID sync without an avatar retains the previously verified ava
       "New nickname",
     ),
   );
-  expect(
-    screen.getByRole("img", { name: "同步的作者头像" }).getAttribute("src"),
-  ).toBe("https://storage.invalid/pixiv-avatar");
+  expect(getSyncedAvatar().getAttribute("src")).toBe(
+    "https://storage.invalid/pixiv-avatar",
+  );
   fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
   await waitFor(() => expect(post).toHaveBeenCalledTimes(3));
   expect(post.mock.calls[2][1]).toMatchObject({
@@ -589,7 +678,7 @@ test("a fresh null-avatar sync replaces expired previous evidence and clears its
   fireEvent.click(
     screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
   );
-  await screen.findByRole("img", { name: "同步的作者头像" });
+  await waitFor(getSyncedAvatar);
   fireEvent.click(
     screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
   );
@@ -598,7 +687,7 @@ test("a fresh null-avatar sync replaces expired previous evidence and clears its
       "Fresh nickname",
     ),
   );
-  expect(screen.queryByRole("img", { name: "同步的作者头像" })).toBeNull();
+  expect(querySyncedAvatar()).toBeNull();
   expect(screen.getByRole("status").textContent).not.toContain("保留当前头像");
   fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
   await waitFor(() => expect(post).toHaveBeenCalledTimes(3));
@@ -642,14 +731,14 @@ test("an X rename with no avatar saves the new handle and proof instead of retai
     target: { value: "artist" },
   });
   fireEvent.click(screen.getByRole("button", { name: "同步昵称和头像" }));
-  await screen.findByRole("img", { name: "同步的作者头像" });
+  await waitFor(getSyncedAvatar);
   fireEvent.click(screen.getByRole("button", { name: "同步昵称和头像" }));
   await waitFor(() =>
     expect((screen.getByLabelText("X @账号") as HTMLInputElement).value).toBe(
       "renamed",
     ),
   );
-  expect(screen.queryByRole("img", { name: "同步的作者头像" })).toBeNull();
+  expect(querySyncedAvatar()).toBeNull();
   expect(screen.getByRole("status").textContent).not.toContain("保留当前头像");
   fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
   await waitFor(() => expect(post).toHaveBeenCalledTimes(3));
@@ -1149,7 +1238,7 @@ test("completed avatar and account steps survive a lost evidence-finalize respon
       return ok(session("avatar", "completed"));
     });
   await openCreate();
-  for (const label of ["手动头像", "授权凭证（可多张）"]) {
+  for (const label of ["作者头像", "授权凭证（可多张）"]) {
     const file = new File(["image"], "test.png", { type: "image/png" });
     Object.defineProperty(file, "arrayBuffer", {
       value: async () => new ArrayBuffer(5),
@@ -1309,7 +1398,10 @@ test("editing retries a failed avatar at the saved revision and then accepts a n
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  const picker = await screen.findByLabelText("手动头像（可选）");
+  const picker = await screen.findByLabelText("作者头像");
+  expect(screen.queryByRole("heading", { name: "编辑作者" })).toBeNull();
+  expect(document.querySelector(".workspace-description")).toBeNull();
+  expect(screen.getByRole("button", { name: "更换作者头像" })).toBeTruthy();
   fireEvent.change(screen.getByLabelText("作者备注（可选）"), {
     target: { value: "saved note" },
   });
@@ -1317,6 +1409,14 @@ test("editing retries a failed avatar at the saved revision and then accepts a n
   Object.defineProperty(file, "arrayBuffer", {
     value: async () => new ArrayBuffer(6),
   });
+  fireEvent.change(picker, { target: { files: [file] } });
+  expect(patch).not.toHaveBeenCalled();
+  expect(post).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "取消选择作者头像" }));
+  expect(screen.queryByRole("img", { name: "avatar.png" })).toBeNull();
+  expect(
+    (screen.getByLabelText("作者备注（可选）") as HTMLTextAreaElement).value,
+  ).toBe("saved note");
   fireEvent.change(picker, { target: { files: [file] } });
   fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
   expect((await screen.findByRole("alert")).textContent).toContain(
@@ -1327,6 +1427,17 @@ test("editing retries a failed avatar at the saved revision and then accepts a n
   });
   expect(screen.getByLabelText("作者昵称").hasAttribute("disabled")).toBe(true);
   expect(screen.getByRole("img", { name: "avatar.png" })).toBeTruthy();
+  expect(screen.getByText("头像待确认")).toBeTruthy();
+  expect(
+    screen
+      .getByRole("button", { name: "更换作者头像" })
+      .hasAttribute("disabled"),
+  ).toBe(true);
+  expect(
+    screen
+      .getByRole("button", { name: "取消选择作者头像" })
+      .hasAttribute("disabled"),
+  ).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: /继续.*头像/ }));
   await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
   expect(patch).toHaveBeenCalledTimes(1);
@@ -1350,7 +1461,7 @@ test("editing retries a failed avatar at the saved revision and then accepts a n
   Object.defineProperty(second, "arrayBuffer", {
     value: async () => new ArrayBuffer(6),
   });
-  fireEvent.change(screen.getByLabelText("手动头像（可选）"), {
+  fireEvent.change(screen.getByLabelText("作者头像"), {
     target: { files: [second] },
   });
   fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
@@ -1362,6 +1473,58 @@ test("editing retries a failed avatar at the saved revision and then accepts a n
     ),
   ).toHaveLength(2);
 });
+
+test.each([false, true])(
+  "author summary remains read-only when the manager form is unavailable (manage=%s)",
+  async (manage) => {
+    const author = {
+      id: "author",
+      revision: 1,
+      displayName: "合成作者",
+      authorizationStatus: "pending",
+      sourceLanguage: "ja",
+      tags: [{ name: "合成标签" }],
+      externalAccounts: [],
+      avatarAvailable: false,
+    };
+    vi.spyOn(client, "GET").mockImplementation(async (path) => {
+      if (path === "/api/authors/{id}/managed")
+        throw new Error("管理资料读取失败");
+      return ok(path === "/api/authors/{id}" ? author : []);
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/authors/author"]}>
+          <Routes>
+            <Route
+              element={
+                <Outlet
+                  context={{
+                    permissions: [
+                      "authors:read",
+                      ...(manage ? ["authors:manage"] : []),
+                    ],
+                  }}
+                />
+              }
+            >
+              <Route path="/authors/:id" element={<AuthorDetailPage />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("合成标签")).toBeTruthy();
+    if (manage)
+      expect(await screen.findByRole("alert")).toHaveProperty(
+        "textContent",
+        "管理资料读取失败",
+      );
+    expect(screen.queryByRole("button", { name: "更换作者头像" })).toBeNull();
+    expect(screen.queryByLabelText("作者头像")).toBeNull();
+    expect(screen.getByText("合")).toBeTruthy();
+  },
+);
 
 test("an in-flight creation cannot be closed with the close button or Escape", async () => {
   vi.spyOn(client, "GET").mockImplementation(async (path) =>
@@ -1654,7 +1817,7 @@ test("a transient managed refetch error preserves dirty fields and the selected 
   fireEvent.change(screen.getByLabelText("作者昵称"), {
     target: { value: "dirty name" },
   });
-  fireEvent.change(screen.getByLabelText("手动头像（可选）"), {
+  fireEvent.change(screen.getByLabelText("作者头像"), {
     target: {
       files: [
         new File(["avatar"], "pending-avatar.png", { type: "image/png" }),

@@ -1,0 +1,25 @@
+.ui-error-toast {
+  position: fixed;
+  inset: max(var(--space-5), env(safe-area-inset-top)) 0 auto;
+  margin: 0 auto;
+  width: max-content;
+  max-width: min(32rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 3rem);
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-status-danger-bg);
+  color: var(--color-status-danger-text);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ui-error-toast > svg {
+  flex: none;
+  margin-top: 2px;
+}

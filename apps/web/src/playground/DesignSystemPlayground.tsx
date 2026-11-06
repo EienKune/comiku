@@ -1,5 +1,6 @@
 import { Avatar } from "../components/Avatar";
 import { ImagePicker } from "../components/ImagePicker";
+import { ErrorToast } from "../components/ErrorToast";
 import { useEffect, useRef, useState } from "react";
 import { OptionalSection } from "../components/OptionalSection";
 import { PlatformLinks } from "../components/PlatformLinks";
@@ -74,6 +75,7 @@ const colorTokens = [
 ];
 
 function ImagePickerDemo() {
+  const [name, setName] = useState("合成作者");
   const [avatar, setAvatar] = useState<File[]>([]);
   const [evidence, setEvidence] = useState<File[]>([]);
   const [disabled, setDisabled] = useState(false);
@@ -134,6 +136,17 @@ function ImagePickerDemo() {
       <div className="field-grid">
         <ImagePicker
           label="示例头像"
+          variant="avatar"
+          currentAvatar={<Avatar name={name} size="lg" />}
+          avatarFallback={<Avatar name={name} size="lg" />}
+          avatarField={
+            <TextField
+              label="作者昵称"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              disabled={disabled}
+            />
+          }
           files={avatar}
           onChange={setAvatar}
           maxFileSize={5 * 1024 * 1024}
@@ -148,6 +161,45 @@ function ImagePickerDemo() {
         />
       </div>
     </Surface>
+  );
+}
+
+function AuthorProfileFieldsDemo() {
+  const [syncedPlatform, setSyncedPlatform] = useState<string | null>(null);
+  return (
+    <>
+      <div className="field-grid">
+        <TextField
+          label="X @账号"
+          placeholder="@comiku_demo"
+          action={
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setSyncedPlatform("X")}
+            >
+              同步昵称和头像
+            </Button>
+          }
+        />
+        <TextField
+          label="Pixiv 用户 ID"
+          placeholder="123456"
+          hint="主页 /users/123456 中的数字，不是登录账号名。"
+          inputMode="numeric"
+          action={
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setSyncedPlatform("Pixiv")}
+            >
+              同步昵称和头像
+            </Button>
+          }
+        />
+      </div>
+      {syncedPlatform && <p role="status">{syncedPlatform} 示例资料已同步</p>}
+    </>
   );
 }
 
@@ -208,6 +260,7 @@ export function DesignSystemPlayground() {
   );
   const [activeTab, setActiveTab] = useState("candidate");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
   const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -729,6 +782,16 @@ export function DesignSystemPlayground() {
                   <Button variant="ghost" onClick={showToast}>
                     显示轻提示
                   </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() =>
+                      setErrorMessage(
+                        "资料暂不可用，请稍后重试。当前输入已保留。",
+                      )
+                    }
+                  >
+                    显示错误轻提示
+                  </Button>
                 </div>
               </Surface>
             </div>
@@ -767,19 +830,7 @@ export function DesignSystemPlayground() {
                 ]}
               />
               <h3>平台身份表单</h3>
-              <div className="playground-row">
-                <TextField
-                  label="X @账号"
-                  placeholder="@comiku_demo"
-                  hint="同步资料后获取稳定用户 ID，不把 @名称当作 ID。"
-                />
-                <TextField
-                  label="Pixiv 用户 ID"
-                  placeholder="123456"
-                  hint="主页 /users/123456 中的数字，不是登录账号名。"
-                  inputMode="numeric"
-                />
-              </div>
+              <AuthorProfileFieldsDemo />
             </Surface>
             <div className="pattern-block">
               <div className="subsection-heading">
@@ -1278,6 +1329,10 @@ export function DesignSystemPlayground() {
         </dialog>
       )}
 
+      <ErrorToast
+        message={errorMessage}
+        onDismiss={() => setErrorMessage("")}
+      />
       <div
         className={`toast ${toastVisible ? "is-visible" : ""}`}
         role="status"
