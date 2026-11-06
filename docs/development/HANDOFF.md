@@ -212,3 +212,11 @@ Manual multi-target reconciliation must lock all sibling job rows before the fir
 
 - Keep returned checksum metadata headers in the presigned request's signed headers (`unhoistableHeaders`), and explicitly sign the returned content type. Hoisting checksum metadata into query parameters while also sending the header can fail R2 signature validation; removing the header may instead lose the stored metadata and break adoption. This metadata binds the declaration only: worker content hashing and media inspection remain mandatory. CORS preflight success alone does not verify a signed PUT, HEAD metadata or subsequent signed read.
 - Workspace build, typecheck and test scripts each generate Prisma code. Run those generation steps sequentially in one checkout; concurrent generation can race on the same output directory. Independent checks that only read generated code may run in parallel.
+
+## Bounded collection and analysis recovery
+
+Terminal analysis maintenance must match failed jobs to queued analyses before applying its batch limit. A paused historical queue must not hide newer exhausted incremental jobs. Keep the per-row scope/job/candidate fences after selection; the isolated PostgreSQL regression covers more than one full batch of paused history.
+
+Pixiv directory fallback details must pass the same future-window deferral as batch metadata. A future item written into a successful baseline can disappear permanently when its ID falls outside the bounded recheck prefix. Test a second window, including an initially empty `none` window, rather than only asserting the first page.
+
+Pixiv profile resolution uses the native App API without enumerating works, but still needs the same rate-limit wait guard as collection. Native 300-second throttling sleeps must become `rate_limited` before the bounded profile subprocess times out; retain ordinary request pacing. Native mocked-429 tests must exercise `user_detail` rather than replacing `_call` and bypassing its wait path.
