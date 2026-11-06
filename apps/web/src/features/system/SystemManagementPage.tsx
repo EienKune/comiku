@@ -1,6 +1,7 @@
 import { useAccount } from "../account/account-context";
 import { SectionHeading } from "../account/forms";
 import { SourceFetchHistory } from "./SourceFetchHistory";
+import { SourceConnections } from "./SourceConnections";
 import "./system.css";
 
 export function SystemManagementPage() {
@@ -12,6 +13,7 @@ export function SystemManagementPage() {
   return (
     <>
       <SectionHeading title="系统管理" />
+      <SourceConnections />
       <SourceFetchHistory />
     </>
   );

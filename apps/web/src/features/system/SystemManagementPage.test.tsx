@@ -45,3 +45,29 @@ test("a system administrator can read collection history in the dedicated page",
   expect(await screen.findByText("暂无同步记录。")).toBeTruthy();
   expect(screen.getByRole("heading", { name: "图源采集" })).toBeTruthy();
 });
+
+test("connections show only platform availability and expose no second collection switch", async () => {
+  vi.spyOn(client, "GET").mockImplementation(
+    async (path) =>
+      ({
+        data:
+          path === "/api/authors/sources"
+            ? [
+                {
+                  platform: "x",
+                  adapterKey: "x_gallery_dl",
+                  available: true,
+                  priority: 1,
+                  metered: false,
+                  supportedFirstSyncModes: ["none"],
+                },
+              ]
+            : [],
+        response: new Response(),
+      }) as never,
+  );
+  openPage(["system:manage"]);
+  expect(await screen.findByText("可用")).toBeTruthy();
+  expect(screen.getByText("未配置")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /启用|停用/ })).toBeNull();
+});

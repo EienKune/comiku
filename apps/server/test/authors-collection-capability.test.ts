@@ -124,20 +124,26 @@ function fixture(
       }: {
         where: {
           externalAccountId: string;
-          adapterKey: string;
-          revision: number;
+          adapterKey: string | { in: string[] };
+          revision?: number;
+          enabled?: boolean;
         };
         data: Record<string, unknown>;
       }) => {
-        const state = row?.adapterStates.find(
-          (state) =>
-            row?.id === where.externalAccountId &&
-            state.adapterKey === where.adapterKey &&
-            state.revision === where.revision,
-        );
-        if (!state) return { count: 0 };
-        Object.assign(state, data, { revision: where.revision + 1 });
-        return { count: 1 };
+        const states =
+          row?.adapterStates.filter(
+            (state) =>
+              row?.id === where.externalAccountId &&
+              (typeof where.adapterKey === "string"
+                ? state.adapterKey === where.adapterKey
+                : where.adapterKey.in.includes(String(state.adapterKey))) &&
+              (where.revision === undefined ||
+                state.revision === where.revision) &&
+              (where.enabled === undefined || state.enabled === where.enabled),
+          ) ?? [];
+        for (const state of states)
+          Object.assign(state, data, { revision: Number(state.revision) + 1 });
+        return { count: states.length };
       },
       findUnique: async ({
         where,
@@ -359,6 +365,23 @@ test("unavailable Pixiv account maintenance still checks the account binding and
   );
 });
 
+test("an existing paused X account can choose no initial backfill without a runtime", async () => {
+  const service = fixture([], {
+    platform: "x",
+    externalUserId: "42",
+    handle: "artist",
+    fetchEnabled: false,
+    firstSyncMode: "last_24_hours",
+  });
+  const saved = await service.updateAccount("author", "account", {
+    fetchEnabled: false,
+    firstSyncMode: "none",
+    expectedRevision: 2,
+  });
+  assert.equal(saved.fetchEnabled, false);
+  assert.equal(saved.firstSyncMode, "none");
+});
+
 test("a persisted Pixiv adapter state can be paused after its adapter is removed", async () => {
   const service = fixture([], input);
   const result = await service.updateAdapterState(
@@ -451,4 +474,43 @@ test("daily account DTO omits retired channel switches and their check timestamp
   );
   assert.equal(result.adapterStates[0].enabled, false);
   assert.equal(result.lastCheckedAt, null);
+});
+
+test("reactivating a restored account enables its internal permission without resetting recovery state", async () => {
+  const recovery = {
+    cursorJson: { page: 4 },
+    discoveryCheckpointJson: { last: "opaque" },
+    nextAttemptAt: new Date("2099-01-01"),
+    fetchLeaseId: "retained",
+    lastErrorMessage: "retained",
+  };
+  const service = fixture(
+    [adapter()],
+    { fetchEnabled: false, firstSyncMode: "none" },
+    [
+      {
+        adapterKey: "pixiv_fixture",
+        enabled: false,
+        health: "disabled",
+        revision: 3,
+        consecutiveFailures: 2,
+        ...recovery,
+      },
+    ],
+  );
+  const saved = await service.updateAccount("author", "account", {
+    fetchEnabled: true,
+    firstSyncMode: "none",
+    expectedRevision: 2,
+  });
+  assert.equal(saved.adapterStates[0].enabled, true);
+  assert.equal(saved.adapterStates[0].revision, 4);
+  assert.equal(
+    saved.adapterStates[0].lastErrorMessage,
+    recovery.lastErrorMessage,
+  );
+  assert.equal(
+    saved.adapterStates[0].nextAttemptAt,
+    new Date(recovery.nextAttemptAt).toISOString(),
+  );
 });

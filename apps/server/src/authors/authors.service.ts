@@ -352,7 +352,11 @@ export class AuthorsService {
     fetchEnabled = true,
   ) {
     const normalized = normalizePlatform(platform);
-    if (normalized === "pixiv" && !fetchEnabled && firstSyncMode === "none") {
+    if (
+      ["x", "pixiv"].includes(normalized) &&
+      !fetchEnabled &&
+      firstSyncMode === "none"
+    ) {
       return normalized;
     }
     let clients;
@@ -1038,12 +1042,20 @@ export class AuthorsService {
       throw new ConflictException(
         "平台用户 ID 不可修改；不同 ID 属于新账号，请通过新建入口关联。",
       );
-    const wantedHandle =
-      input.handle === undefined ? observed.handle : input.handle;
+    const wantedHandle = this.identity(
+      observed.platform,
+      observed.externalUserId,
+      input.handle === undefined ? observed.handle : input.handle,
+    ).handle;
+    const observedHandle = this.identity(
+      observed.platform,
+      observed.externalUserId,
+      observed.handle,
+    ).handle;
     const xIdentityChange =
       observed.platform === "x" &&
       ((wantedHandle?.toLowerCase() ?? null) !==
-        (observed.handle?.toLowerCase() ?? null) ||
+        (observedHandle?.toLowerCase() ?? null) ||
         (input.fetchEnabled && !observed.fetchEnabled) ||
         input.avatarFileObjectId != null);
     const prepared =
@@ -1063,6 +1075,7 @@ export class AuthorsService {
         : null;
     input = {
       ...input,
+      ...(input.handle !== undefined ? { handle: wantedHandle } : {}),
       profileSyncAdapter: prepared?.profileSyncAdapter,
       profileSyncedAt: prepared?.profileSyncedAt,
       ...(prepared
@@ -1140,6 +1153,21 @@ export class AuthorsService {
         });
         if (!result.count)
           throw new ConflictException("平台账号已更新，请刷新后重试");
+        if (input.fetchEnabled && !current.fetchEnabled) {
+          const activeKeys = this.sources
+            .forPlatform(current.platform)
+            .filter((source) => source.available)
+            .map((source) => source.adapterKey);
+          if (activeKeys.length)
+            await tx.sourceAdapterState.updateMany({
+              where: {
+                externalAccountId: id,
+                adapterKey: { in: activeKeys },
+                enabled: false,
+              },
+              data: { enabled: true, revision: { increment: 1 } },
+            });
+        }
         return this.account(
           await tx.authorExternalAccount.findUniqueOrThrow({
             where: { id },
