@@ -1,0 +1,52 @@
+import { Inject, Module, type OnModuleDestroy } from "@nestjs/common";
+import { ENVIRONMENT, type Environment } from "../config/environment.js";
+import { DatabaseModule } from "../database/database.module.js";
+import { JobsModule } from "../jobs/jobs.module.js";
+import { NotificationConnectionRegistry } from "./notification-connections.js";
+import { NotificationPublisherService } from "./notification-publisher.service.js";
+import { NotificationRuntimeService } from "./notification-runtime.service.js";
+import { NotificationsController } from "./notifications.controller.js";
+import { NotificationsService } from "./notifications.service.js";
+import { OneBotHttpAdapter } from "./onebot-http.adapter.js";
+
+// Explicit environment injection keeps offline OpenAPI exports and synthetic
+// application construction independent from the machine's private bot config.
+export const notificationConnectionProvider = {
+  provide: NotificationConnectionRegistry,
+  inject: [ENVIRONMENT],
+  useFactory: (environment: Environment) =>
+    new NotificationConnectionRegistry({
+      env: environment.notifications
+        ? {
+            ...process.env,
+            NOTIFICATIONS_ENABLED: String(environment.notifications.enabled),
+            NOTIFICATION_CONNECTIONS_FILE:
+              environment.notifications.connectionsFile,
+          }
+        : {},
+    }),
+};
+
+class NotificationTransportLifecycle implements OnModuleDestroy {
+  constructor(
+    @Inject(OneBotHttpAdapter) private readonly adapter: OneBotHttpAdapter,
+  ) {}
+  onModuleDestroy() {
+    this.adapter.close();
+  }
+}
+
+@Module({
+  imports: [DatabaseModule, JobsModule],
+  controllers: [NotificationsController],
+  providers: [
+    notificationConnectionProvider,
+    OneBotHttpAdapter,
+    NotificationTransportLifecycle,
+    NotificationPublisherService,
+    NotificationsService,
+    NotificationRuntimeService,
+  ],
+  exports: [NotificationPublisherService, NotificationRuntimeService],
+})
+export class NotificationsModule {}

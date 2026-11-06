@@ -1693,3 +1693,96 @@ model ImageAnalysisWorkIntent {
   @@index([modelKey, purpose, createdAt])
   @@map("image_analysis_work_intents")
 }
+
+model NotificationEvent {
+  id String @id @default(uuid()) @db.Uuid
+  eventKey String @unique @map("event_key") @db.VarChar(255)
+  payloadHash String @map("payload_hash") @db.Char(64)
+  type String @db.VarChar(64)
+  resourceId String @map("resource_id") @db.Uuid
+  aggregateVersion Int @map("aggregate_version")
+  ordinal Int @default(0)
+  occurredAt DateTime @map("occurred_at") @db.Timestamptz(3)
+  snapshot Json
+  routeRefs Json @map("route_refs")
+  routedAt DateTime? @map("routed_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  deliveries NotificationDelivery[]
+  @@index([routedAt, createdAt])
+  @@index([resourceId, aggregateVersion, ordinal])
+  @@map("notification_events")
+}
+
+model NotificationChannel {
+  id String @id @default(uuid()) @db.Uuid
+  name String @db.VarChar(100)
+  connectionKey String @map("connection_key") @db.VarChar(64)
+  connectionFingerprint String @map("connection_fingerprint") @db.Char(64)
+  groupId String @unique @map("group_id") @db.VarChar(64)
+  enabled Boolean @default(false)
+  eventTypes String[] @map("event_types")
+  includeDetails Boolean @default(false) @map("include_details")
+  revision Int @default(0)
+  audienceGeneration Int @default(1) @map("audience_generation")
+  nextSendAt DateTime? @map("next_send_at") @db.Timestamptz(3)
+  rateWindowAt DateTime? @map("rate_window_at") @db.Timestamptz(3)
+  rateWindowCount Int @default(0) @map("rate_window_count")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deliveries NotificationDelivery[]
+  @@map("notification_channels")
+}
+
+model NotificationDelivery {
+  id String @id @default(uuid()) @db.Uuid
+  eventId String @map("event_id") @db.Uuid
+  event NotificationEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  channelId String @map("channel_id") @db.Uuid
+  channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Restrict)
+  audienceGeneration Int @map("audience_generation")
+  replayGeneration Int @default(0) @map("replay_generation")
+  sourceDeliveryId String? @map("source_delivery_id") @db.Uuid
+  requestKey String? @unique @map("request_key") @db.VarChar(255)
+  requestedBy String? @map("requested_by") @db.Uuid
+  resolutionKey String? @unique @map("resolution_key") @db.VarChar(255)
+  connectionKey String @map("connection_key") @db.VarChar(64)
+  connectionFingerprint String @map("connection_fingerprint") @db.Char(64)
+  groupId String @map("group_id") @db.VarChar(64)
+  channelRevision Int @map("channel_revision")
+  text String @db.Text
+  status String @default("pending") @db.VarChar(24)
+  attempts Int @default(0)
+  revision Int @default(0)
+  errorCode String? @map("error_code") @db.VarChar(64)
+  providerMessageId String? @map("provider_message_id") @db.VarChar(128)
+  nextAttemptAt DateTime? @map("next_attempt_at") @db.Timestamptz(3)
+  resolvedAt DateTime? @map("resolved_at") @db.Timestamptz(3)
+  jobId String? @unique @map("job_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  attemptRecords NotificationAttempt[]
+  @@unique([eventId, channelId, audienceGeneration, replayGeneration])
+  @@index([status, nextAttemptAt, createdAt])
+  @@index([channelId, status, resolvedAt])
+  @@index([createdAt, id])
+  @@index([status, createdAt, id])
+  @@map("notification_deliveries")
+}
+
+model NotificationAttempt {
+  id String @id @default(uuid()) @db.Uuid
+  deliveryId String @map("delivery_id") @db.Uuid
+  delivery NotificationDelivery @relation(fields: [deliveryId], references: [id], onDelete: Restrict)
+  number Int
+  jobId String @map("job_id") @db.Uuid
+  leaseId String @map("lease_id") @db.Uuid
+  sendBoundaryCrossed Boolean @default(false) @map("send_boundary_crossed")
+  status String @default("sending") @db.VarChar(24)
+  errorCode String? @map("error_code") @db.VarChar(64)
+  providerMessageId String? @map("provider_message_id") @db.VarChar(128)
+  startedAt DateTime @default(now()) @map("started_at") @db.Timestamptz(3)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  @@unique([deliveryId, number])
+  @@index([jobId, status])
+  @@map("notification_attempts")
+}
