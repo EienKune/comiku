@@ -5010,6 +5010,113 @@
         ]
       }
     },
+    "/api/authors/pixiv-profile/resolve": {
+      "post": {
+        "operationId": "resolvePixivProfile",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolvePixivProfileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolvedPixivProfileDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "authors"
+        ]
+      }
+    },
     "/api/authors/creation-requests/{idempotencyKey}": {
       "get": {
         "operationId": "getAuthorCreationResult",
@@ -17602,6 +17709,78 @@
           "syncedAt"
         ]
       },
+      "ResolvePixivProfileDto": {
+        "type": "object",
+        "properties": {
+          "externalUserId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,19}$",
+            "maxLength": 20
+          },
+          "authorId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "accountId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "externalUserId"
+        ]
+      },
+      "ResolvedPixivProfileDto": {
+        "type": "object",
+        "properties": {
+          "profileProof": {
+            "type": "string"
+          },
+          "externalUserId": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              null
+            ]
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "profileUrl": {
+            "type": "string"
+          },
+          "avatarFileObjectId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "adapterKey": {
+            "type": "string"
+          },
+          "syncedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "profileProof",
+          "externalUserId",
+          "handle",
+          "displayName",
+          "profileUrl",
+          "avatarFileObjectId",
+          "avatarUrl",
+          "adapterKey",
+          "syncedAt"
+        ]
+      },
       "CreateAuthorAccountDto": {
         "type": "object",
         "properties": {
@@ -17613,7 +17792,7 @@
           "profileProof": {
             "type": "string",
             "maxLength": 4096,
-            "description": "X 资料解析返回的短时身份凭证"
+            "description": "平台资料解析返回的短时身份凭证，绑定平台与稳定用户 ID"
           },
           "platform": {
             "type": "string",
@@ -17675,6 +17854,14 @@
       "CreateAuthorDto": {
         "type": "object",
         "properties": {
+          "profileSourcePlatform": {
+            "type": "string",
+            "enum": [
+              "x",
+              "pixiv"
+            ],
+            "description": "使用该平台经验证的账号头像作为作者头像；仅用于创建意图"
+          },
           "notes": {
             "type": "string",
             "nullable": true,
@@ -17859,7 +18046,7 @@
           "profileProof": {
             "type": "string",
             "maxLength": 4096,
-            "description": "X 资料解析返回的短时身份凭证"
+            "description": "平台资料解析返回的短时身份凭证，绑定平台与稳定用户 ID"
           },
           "platform": {
             "type": "string",
@@ -17929,7 +18116,7 @@
           "profileProof": {
             "type": "string",
             "maxLength": 4096,
-            "description": "X 身份变更或重新启用采集时的短时身份凭证"
+            "description": "平台资料同步凭证；X 身份变更或重新启用采集时必须提供"
           },
           "externalUserId": {
             "type": "string",

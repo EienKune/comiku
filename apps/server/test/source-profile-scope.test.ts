@@ -2,14 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SourcePlatformStates } from "../src/source-ingestion/source-platform-state.js";
 import { SourceResponseError } from "../src/source-ingestion/source-response.js";
-function fixture() {
+function fixture(platform = "x") {
+  const scopes: string[] = [];
+  let job: Record<string, unknown> | undefined;
   let inside = false,
     reserved = false,
     busy = false,
     lostLease = false,
     generation = "fixture";
   let state = {
-    platform: "x",
+    platform,
     credentialGeneration: "fixture",
     status: "unverified",
     cooldownUntil: null as Date | null,
@@ -25,7 +27,8 @@ function fixture() {
     },
     backgroundJob: {
       count: async () => (busy ? 1 : 0),
-      create: async () => {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        job = data;
         reserved = true;
       },
       updateMany: async () => ({ count: lostLease ? 0 : 1 }),
@@ -53,13 +56,19 @@ function fixture() {
   };
   const args = [
     db,
-    { lockScope: async () => {} },
+    {
+      lockScope: async (_tx: unknown, _lane: string, scope: string) => {
+        scopes.push(scope);
+      },
+    },
     {},
   ] as unknown as ConstructorParameters<typeof SourcePlatformStates>;
   const states = new SourcePlatformStates(...args);
   states.fingerprint = async () => generation;
   return {
     states,
+    scopes,
+    job: () => job,
     state: () => state,
     inside: () => inside,
     reserved: () => reserved,
@@ -142,4 +151,54 @@ test("profile lease loss and credential generation changes do not certify a heal
   );
   assert.equal(contacted, false);
   assert.equal(changed.state().status, "unverified");
+});
+
+test("Pixiv profile reserves only its platform and records its platform payload", async () => {
+  const f = fixture("pixiv");
+  await f.states.profileNetwork("actor", async () => "ok", "pixiv");
+  assert.equal(f.job()?.executionScope, "source:pixiv");
+  assert.equal((f.job()?.payload as { platform: string }).platform, "pixiv");
+  assert.deepEqual(f.scopes, ["source:pixiv", "global", "source:pixiv"]);
+  assert.equal(f.state().status, "healthy");
+});
+test("Pixiv busy and auth pause prevent network before callback", async () => {
+  const busy = fixture("pixiv");
+  busy.setBusy();
+  let called = false;
+  await assert.rejects(
+    busy.states.profileNetwork(
+      "actor",
+      async () => {
+        called = true;
+      },
+      "pixiv",
+    ),
+    /等待/,
+  );
+  assert.equal(called, false);
+  const paused = fixture("pixiv");
+  await assert.rejects(
+    paused.states.profileNetwork(
+      "actor",
+      async () => {
+        throw new SourceResponseError("authentication", {
+          scope: "credential",
+          reason: "auth_failed",
+        });
+      },
+      "pixiv",
+    ),
+  );
+  assert.equal(paused.state().status, "auth_paused");
+  await assert.rejects(
+    paused.states.profileNetwork(
+      "actor",
+      async () => {
+        called = true;
+      },
+      "pixiv",
+    ),
+    /暂停/,
+  );
+  assert.equal(called, false);
 });

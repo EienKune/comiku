@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { ConflictException, ForbiddenException } from "@nestjs/common";
+import { ProfileProofs } from "../../src/authors/profile-proof.js";
 import { AuthorsService } from "../../src/authors/authors.service.js";
 import { PrismaService } from "../../src/database/prisma.service.js";
 import {
@@ -21,6 +22,7 @@ test("author creation atomically binds accounts and actor-scoped retries recover
     parseEnvironment({ NODE_ENV: "test", DATABASE_URL: testUrl }),
   );
   const prefix = `creation_${randomUUID()}`;
+  const avatarIds: string[] = [];
   const source = await db.user.create({
     data: {
       username: prefix,
@@ -192,6 +194,107 @@ test("author creation atomically binds accounts and actor-scoped retries recover
       /每个平台/,
     );
     assert.equal(await db.author.count({ where: { displayName: prefix } }), 3);
+    // Both accounts are saved, but the explicitly selected trusted Pixiv avatar
+    // becomes the author's own avatar ahead of the normal X-account fallback.
+    const proofs = new ProfileProofs();
+    const chosenAccounts = [];
+    for (const platform of ["x", "pixiv"] as const) {
+      const file = await db.fileObject.create({
+        data: {
+          objectKey: `${prefix}/${platform}.png`,
+          bucketScope: "private",
+          kind: "source_profile_avatar",
+          contentType: "image/png",
+          size: 1n,
+          checksum: "a".repeat(64),
+        },
+      });
+      avatarIds.push(file.id);
+      const externalUserId = BigInt(
+        `0x${randomUUID().replaceAll("-", "").slice(0, 15)}`,
+      ).toString();
+      const handle = platform === "x" ? "selected" : null;
+      chosenAccounts.push({
+        platform,
+        externalUserId,
+        handle,
+        avatarFileObjectId: file.id,
+        profileProof: proofs.issue(
+          {
+            platform,
+            externalUserId,
+            handle,
+            avatarFileObjectId: file.id,
+            adapterKey: `${platform}_fixture`,
+            syncedAt: new Date().toISOString(),
+          },
+          source.id,
+        ),
+        fetchEnabled: false,
+        firstSyncMode: "none" as const,
+      });
+    }
+    const chosenInput = {
+      ...uniqueInput,
+      displayName: `${prefix}_selected`,
+      idempotencyKey: randomUUID(),
+      accounts: chosenAccounts,
+      profileSourcePlatform: "pixiv" as const,
+    };
+    const beforeChosen = await db.author.count({
+      where: { displayName: { startsWith: prefix } },
+    });
+    for (const invalidAccounts of [
+      [],
+      [
+        {
+          ...chosenAccounts[1]!,
+          profileProof: undefined,
+          avatarFileObjectId: null,
+        },
+      ],
+      [{ ...chosenAccounts[1]!, avatarFileObjectId: avatarIds[0] }],
+    ]) {
+      await assert.rejects(
+        service.create(
+          {
+            ...chosenInput,
+            idempotencyKey: randomUUID(),
+            accounts: invalidAccounts,
+          },
+          source.id,
+        ),
+      );
+      assert.equal(
+        await db.author.count({
+          where: { displayName: { startsWith: prefix } },
+        }),
+        beforeChosen,
+      );
+    }
+    const chosen = await service.create(chosenInput, source.id);
+    assert.equal(chosen.externalAccounts.length, 2);
+    assert.equal(chosen.displayName, chosenInput.displayName);
+    assert.equal(
+      (await db.author.findUniqueOrThrow({ where: { id: chosen.id } }))
+        .avatarFileObjectId,
+      avatarIds[1],
+    );
+    const replay = await service.create(
+      {
+        ...chosenInput,
+        accounts: chosenAccounts.map((account) => ({
+          ...account,
+          profileProof: "expired-transport-proof",
+        })),
+      },
+      source.id,
+    );
+    assert.equal(replay.id, chosen.id);
+    await assert.rejects(
+      service.create({ ...chosenInput, profileSourcePlatform: "x" }, source.id),
+      ConflictException,
+    );
     await db.userRole.deleteMany({ where: { userId: source.id } });
     await assert.rejects(
       service.create(uniqueInput, source.id),
@@ -218,6 +321,7 @@ test("author creation atomically binds accounts and actor-scoped retries recover
       where: { authorId: { in: ids } },
     });
     await db.author.deleteMany({ where: { id: { in: ids } } });
+    await db.fileObject.deleteMany({ where: { id: { in: avatarIds } } });
     await db.userRole.deleteMany({
       where: { userId: { in: [source.id, other.id] } },
     });

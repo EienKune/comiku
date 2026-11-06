@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
@@ -28,7 +29,10 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
-async function openCreate(waitForCapabilities = true) {
+async function openCreate(
+  waitForCapabilities = true,
+  platform: "x" | "pixiv" = "pixiv",
+) {
   HTMLDialogElement.prototype.showModal = function () {
     this.setAttribute("open", "");
   };
@@ -63,9 +67,13 @@ async function openCreate(waitForCapabilities = true) {
   fireEvent.change(screen.getByLabelText("作者昵称"), {
     target: { value: "合成作者" },
   });
-  fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
-    target: { value: "123456" },
-  });
+  fireEvent.click(screen.getByRole("tab", { name: "Pixiv" }));
+  const pixivId = screen.queryByLabelText("Pixiv 用户 ID");
+  if (pixivId)
+    fireEvent.change(pixivId, {
+      target: { value: "123456" },
+    });
+  if (platform === "x") fireEvent.click(screen.getByRole("tab", { name: "X" }));
   if (waitForCapabilities)
     await waitFor(() =>
       expect(queryClient.getQueryState(["source-capabilities"])?.status).toBe(
@@ -115,9 +123,558 @@ function createCollectionFixture(sources = configuredSources) {
   );
 }
 
+const pixivProfile: components["schemas"]["ResolvedPixivProfileDto"] = {
+  externalUserId: "123456",
+  handle: null,
+  displayName: "Pixiv Artist",
+  profileUrl: "https://www.pixiv.net/users/123456",
+  avatarFileObjectId: "pixiv-avatar",
+  avatarUrl: "https://storage.invalid/pixiv-avatar",
+  adapterKey: "pixiv_fixture",
+  syncedAt: new Date().toISOString(),
+  profileProof: "pixiv-proof",
+};
+
+test("Pixiv explicit profile sync fills a blank author name and saves the verified account snapshot", async () => {
+  const post = createCollectionFixture();
+  post.mockImplementation(async (path) =>
+    ok(
+      path === "/api/authors/pixiv-profile/resolve"
+        ? pixivProfile
+        : { id: "author", externalAccounts: [] },
+    ),
+  );
+  await openCreate(true, "pixiv");
+  fireEvent.change(screen.getByLabelText("作者昵称"), {
+    target: { value: "" },
+  });
+  expect(post).not.toHaveBeenCalled();
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  expect(
+    await screen.findByRole("img", { name: "同步的作者头像" }),
+  ).toBeTruthy();
+  expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
+    "Pixiv Artist",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+  expect(post.mock.calls[0]).toEqual([
+    "/api/authors/pixiv-profile/resolve",
+    { body: { externalUserId: "123456" } },
+  ]);
+  expect(post.mock.calls[1][1]).toMatchObject({
+    body: {
+      displayName: "Pixiv Artist",
+      profileSourcePlatform: "pixiv",
+      accounts: [
+        {
+          platform: "pixiv",
+          externalUserId: "123456",
+          displayNameSnapshot: "Pixiv Artist",
+          avatarFileObjectId: "pixiv-avatar",
+          profileProof: "pixiv-proof",
+        },
+      ],
+    },
+  });
+});
+
+test("explicit Pixiv sync adopts the author name and avatar while preserving notes and collection choice", async () => {
+  const post = createCollectionFixture();
+  post.mockResolvedValue(ok(pixivProfile));
+  await openCreate(true, "pixiv");
+  fireEvent.change(screen.getByLabelText("作者备注（可选）"), {
+    target: { value: "author note" },
+  });
+  fireEvent.change(screen.getByLabelText("Pixiv 账号备注（可选）"), {
+    target: { value: "pixiv note" },
+  });
+  fireEvent.click(screen.getByRole("checkbox", { name: "Pixiv 启用自动抓取" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Pixiv 首次同步范围" }));
+  fireEvent.click(screen.getByRole("option", { name: "最近 7 天" }));
+  fireEvent.change(screen.getByLabelText("手动头像"), {
+    target: {
+      files: [new File(["avatar"], "manual-avatar.png", { type: "image/png" })],
+    },
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  await screen.findByText("Pixiv Artist");
+  expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
+    "Pixiv Artist",
+  );
+  expect(
+    (screen.getByLabelText("作者备注（可选）") as HTMLTextAreaElement).value,
+  ).toBe("author note");
+  expect(
+    (screen.getByLabelText("Pixiv 账号备注（可选）") as HTMLTextAreaElement)
+      .value,
+  ).toBe("pixiv note");
+  expect(screen.queryByRole("img", { name: "manual-avatar.png" })).toBeNull();
+  expect(screen.getByRole("img", { name: "同步的作者头像" })).toBeTruthy();
+  expect(
+    (
+      screen.getByRole("checkbox", {
+        name: "Pixiv 启用自动抓取",
+      }) as HTMLInputElement
+    ).checked,
+  ).toBe(false);
+  expect(
+    screen.getByRole("combobox", { name: "Pixiv 首次同步范围" }).textContent,
+  ).toContain("最近 7 天");
+  expect(
+    within(screen.getByRole("dialog")).getByText("Pixiv Artist"),
+  ).toBeTruthy();
+});
+
+test("a Pixiv profile failure leaves manual creation editable and sends no implicit profile retry", async () => {
+  const post = createCollectionFixture();
+  post.mockImplementation(async (path) =>
+    path === "/api/authors/pixiv-profile/resolve"
+      ? failed("资料暂不可用")
+      : ok({ id: "author", externalAccounts: [] }),
+  );
+  await openCreate(true, "pixiv");
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "资料暂不可用",
+  );
+  expect(
+    (screen.getByLabelText("Pixiv 用户 ID") as HTMLInputElement).disabled,
+  ).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+  expect(post.mock.calls[1][1]).toMatchObject({
+    body: { accounts: [{ externalUserId: "123456" }] },
+  });
+  expect(post.mock.calls[1][1]).not.toHaveProperty(
+    "body.accounts.0.profileProof",
+  );
+  expect(post.mock.calls[1][1]).not.toHaveProperty(
+    "body.profileSourcePlatform",
+  );
+});
+
+test.each(["changed-input", "wrong-result"])(
+  "Pixiv create rejects %s profile results",
+  async (scenario) => {
+    const post = createCollectionFixture();
+    let release!: (value: never) => void;
+    post.mockImplementation(async (path) =>
+      path === "/api/authors/pixiv-profile/resolve"
+        ? new Promise<never>((resolve) => {
+            release = resolve;
+          })
+        : ok({ id: "author", externalAccounts: [] }),
+    );
+    await openCreate(true, "pixiv");
+    fireEvent.click(
+      screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+    );
+    expect(
+      (screen.getByLabelText("Pixiv 用户 ID") as HTMLInputElement).disabled,
+    ).toBe(true);
+    if (scenario === "changed-input")
+      fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
+        target: { value: "654321" },
+      });
+    await act(async () => {
+      release(
+        ok({
+          ...pixivProfile,
+          ...(scenario === "wrong-result" ? { externalUserId: "999999" } : {}),
+        }),
+      );
+    });
+    await screen.findByRole("alert");
+    expect(screen.queryByText("Pixiv Artist")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(post.mock.calls[1][1]).not.toHaveProperty(
+      "body.accounts.0.profileProof",
+    );
+  },
+);
+
+test("editing a newly resolved Pixiv ID clears its preview and proof before manual save", async () => {
+  const post = createCollectionFixture();
+  post.mockImplementation(async (path) =>
+    ok(
+      path === "/api/authors/pixiv-profile/resolve"
+        ? { ...pixivProfile, avatarUrl: null, avatarFileObjectId: null }
+        : { id: "author", externalAccounts: [] },
+    ),
+  );
+  await openCreate(true, "pixiv");
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  await screen.findByText("Pixiv Artist");
+  expect(screen.queryByRole("img", { name: "同步的 Pixiv 头像" })).toBeNull();
+  fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
+    target: { value: "654321" },
+  });
+  expect(screen.queryByText("Pixiv Artist")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+  expect(post.mock.calls[1][1]).toMatchObject({
+    body: { accounts: [{ externalUserId: "654321" }] },
+  });
+  expect(post.mock.calls[1][1]).not.toHaveProperty(
+    "body.accounts.0.profileProof",
+  );
+});
+
+test("platform tabs preserve both drafts and only explicit sync adopts an author profile", async () => {
+  const post = createCollectionFixture();
+  const xSync = post.getMockImplementation()!;
+  post.mockImplementation(async (...args) =>
+    args[0] === "/api/authors/pixiv-profile/resolve"
+      ? ok(pixivProfile)
+      : xSync(...args),
+  );
+  await openCreate(true, "pixiv");
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  await screen.findByText("Pixiv Artist");
+  fireEvent.click(screen.getByRole("tab", { name: "X" }));
+  expect(
+    screen.queryByRole("checkbox", { name: "Pixiv 启用自动抓取" }),
+  ).toBeNull();
+  expect(screen.queryByLabelText("Pixiv 账号备注（可选）")).toBeNull();
+  fireEvent.change(screen.getByLabelText("X @账号"), {
+    target: { value: "artist" },
+  });
+  expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
+    "Pixiv Artist",
+  );
+  expect(
+    screen.getByRole("img", { name: "同步的作者头像" }).getAttribute("src"),
+  ).toBe("https://storage.invalid/pixiv-avatar");
+  expect(post).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole("button", { name: "同步昵称和头像" }));
+  await screen.findByText("@artist");
+  expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
+    "Artist",
+  );
+  expect(
+    screen.getByRole("img", { name: "同步的作者头像" }).getAttribute("src"),
+  ).toBe("https://storage.invalid/pixiv-avatar");
+  fireEvent.click(screen.getByRole("tab", { name: "Pixiv" }));
+  expect(
+    (screen.getByLabelText("Pixiv 用户 ID") as HTMLInputElement).value,
+  ).toBe("123456");
+  expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
+    "Artist",
+  );
+  fireEvent.change(screen.getByLabelText("作者昵称"), {
+    target: { value: "manual after sync" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(3));
+  expect(post.mock.calls[2][1]).toMatchObject({
+    body: {
+      displayName: "manual after sync",
+      profileSourcePlatform: "pixiv",
+      accounts: [
+        { platform: "x", profileProof: "synthetic-proof" },
+        { platform: "pixiv", profileProof: "pixiv-proof" },
+      ],
+    },
+  });
+});
+
+test("manual author creation needs no platform account or profile request", async () => {
+  const post = createCollectionFixture();
+  await openCreate(true, "pixiv");
+  fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
+    target: { value: "" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledOnce());
+  expect(post.mock.calls[0][0]).toBe("/api/authors");
+  expect(post.mock.calls[0][1]).toMatchObject({
+    body: { displayName: "合成作者", accounts: [] },
+  });
+  expect(post.mock.calls[0][1]).not.toHaveProperty(
+    "body.profileSourcePlatform",
+  );
+});
+
+test.each(["x", "pixiv"] as const)(
+  "the last successful %s avatar sync is saved independently of the active tab",
+  async (lastPlatform) => {
+    const post = createCollectionFixture();
+    post.mockImplementation(async (path) =>
+      ok(
+        path === "/api/authors/x-profile/resolve"
+          ? {
+              externalUserId: "777",
+              handle: "artist",
+              displayName: "X Artist",
+              profileUrl: "https://x.com/artist",
+              avatarFileObjectId: "x-avatar",
+              avatarUrl: "https://storage.invalid/x-avatar",
+              adapterKey: "x_fixture",
+              syncedAt: "2026-11-06T00:00:00Z",
+              profileProof: "x-proof",
+            }
+          : path === "/api/authors/pixiv-profile/resolve"
+            ? pixivProfile
+            : { id: "author", externalAccounts: [] },
+      ),
+    );
+    await openCreate(true, "x");
+    fireEvent.change(screen.getByLabelText("X @账号"), {
+      target: { value: "artist" },
+    });
+    const order = lastPlatform === "x" ? ["pixiv", "x"] : ["x", "pixiv"];
+    for (const platform of order) {
+      fireEvent.click(
+        screen.getByRole("tab", { name: platform === "x" ? "X" : "Pixiv" }),
+      );
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: platform === "x" ? "同步昵称和头像" : "同步 Pixiv 昵称和头像",
+        }),
+      );
+      await waitFor(() =>
+        expect(
+          (screen.getByLabelText("作者昵称") as HTMLInputElement).value,
+        ).toBe(platform === "x" ? "X Artist" : "Pixiv Artist"),
+      );
+    }
+    fireEvent.click(
+      screen.getByRole("tab", { name: lastPlatform === "x" ? "Pixiv" : "X" }),
+    );
+    expect(
+      screen.getByRole("img", { name: "同步的作者头像" }).getAttribute("src"),
+    ).toBe(
+      lastPlatform === "x"
+        ? "https://storage.invalid/x-avatar"
+        : "https://storage.invalid/pixiv-avatar",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(3));
+    expect(post.mock.calls[2][1]).toMatchObject({
+      body: { profileSourcePlatform: lastPlatform },
+    });
+  },
+);
+
+test("manual name and avatar edits after sync override the selected author profile", async () => {
+  const post = createCollectionFixture();
+  post.mockResolvedValue(ok(pixivProfile));
+  await openCreate(true, "pixiv");
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  await screen.findByText("Pixiv Artist");
+  fireEvent.change(screen.getByLabelText("作者昵称"), {
+    target: { value: "manual after sync" },
+  });
+  fireEvent.change(screen.getByLabelText("手动头像"), {
+    target: {
+      files: [new File(["avatar"], "after-sync.png", { type: "image/png" })],
+    },
+  });
+  expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
+    "manual after sync",
+  );
+  expect(screen.getByRole("img", { name: "after-sync.png" })).toBeTruthy();
+  expect(screen.queryByRole("img", { name: "同步的作者头像" })).toBeNull();
+});
+
+test("a synced nickname without an avatar preserves the user's manual avatar choice", async () => {
+  const post = createCollectionFixture();
+  post.mockResolvedValue(
+    ok({ ...pixivProfile, avatarUrl: null, avatarFileObjectId: null }),
+  );
+  await openCreate(true, "pixiv");
+  fireEvent.change(screen.getByLabelText("手动头像"), {
+    target: {
+      files: [new File(["avatar"], "keep-manual.png", { type: "image/png" })],
+    },
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  await screen.findByText("Pixiv Artist");
+  expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
+    "Pixiv Artist",
+  );
+  expect(screen.getByRole("img", { name: "keep-manual.png" })).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toContain("保留当前头像");
+});
+
+test("a later same-ID sync without an avatar retains the previously verified avatar and proof", async () => {
+  const post = createCollectionFixture();
+  let syncCount = 0;
+  post.mockImplementation(async (path) =>
+    ok(
+      path === "/api/authors/pixiv-profile/resolve"
+        ? ++syncCount === 1
+          ? pixivProfile
+          : {
+              ...pixivProfile,
+              displayName: "New nickname",
+              avatarFileObjectId: null,
+              avatarUrl: null,
+              profileProof: "new-null-proof",
+            }
+        : { id: "author", externalAccounts: [] },
+    ),
+  );
+  await openCreate(true, "pixiv");
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  await screen.findByRole("img", { name: "同步的作者头像" });
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  await waitFor(() =>
+    expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
+      "New nickname",
+    ),
+  );
+  expect(
+    screen.getByRole("img", { name: "同步的作者头像" }).getAttribute("src"),
+  ).toBe("https://storage.invalid/pixiv-avatar");
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(3));
+  expect(post.mock.calls[2][1]).toMatchObject({
+    body: {
+      displayName: "New nickname",
+      profileSourcePlatform: "pixiv",
+      accounts: [
+        {
+          displayNameSnapshot: "New nickname",
+          avatarFileObjectId: "pixiv-avatar",
+          profileProof: "pixiv-proof",
+        },
+      ],
+    },
+  });
+});
+
+test("a fresh null-avatar sync replaces expired previous evidence and clears its author avatar choice", async () => {
+  const post = createCollectionFixture();
+  let syncCount = 0;
+  post.mockImplementation(async (path) =>
+    ok(
+      path === "/api/authors/pixiv-profile/resolve"
+        ? ++syncCount === 1
+          ? {
+              ...pixivProfile,
+              syncedAt: new Date(Date.now() - 600_001).toISOString(),
+            }
+          : {
+              ...pixivProfile,
+              displayName: "Fresh nickname",
+              avatarFileObjectId: null,
+              avatarUrl: null,
+              profileProof: "fresh-proof",
+            }
+        : { id: "author", externalAccounts: [] },
+    ),
+  );
+  await openCreate(true, "pixiv");
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  await screen.findByRole("img", { name: "同步的作者头像" });
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  await waitFor(() =>
+    expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
+      "Fresh nickname",
+    ),
+  );
+  expect(screen.queryByRole("img", { name: "同步的作者头像" })).toBeNull();
+  expect(screen.getByRole("status").textContent).not.toContain("保留当前头像");
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(3));
+  expect(post.mock.calls[2][1]).not.toHaveProperty(
+    "body.profileSourcePlatform",
+  );
+  expect(post.mock.calls[2][1]).toMatchObject({
+    body: {
+      accounts: [{ avatarFileObjectId: null, profileProof: "fresh-proof" }],
+    },
+  });
+});
+
+test("an X rename with no avatar saves the new handle and proof instead of retaining old-handle evidence", async () => {
+  const post = createCollectionFixture();
+  let syncCount = 0;
+  post.mockImplementation(async (path) =>
+    ok(
+      path === "/api/authors/x-profile/resolve"
+        ? {
+            externalUserId: "777",
+            handle: ++syncCount === 1 ? "artist" : "renamed",
+            displayName: syncCount === 1 ? "Old name" : "New name",
+            profileUrl:
+              syncCount === 1
+                ? "https://x.com/artist"
+                : "https://x.com/renamed",
+            avatarFileObjectId: syncCount === 1 ? "x-avatar" : null,
+            avatarUrl:
+              syncCount === 1 ? "https://storage.invalid/x-avatar" : null,
+            adapterKey: "x_fixture",
+            syncedAt: new Date().toISOString(),
+            profileProof:
+              syncCount === 1 ? "old-handle-proof" : "new-handle-proof",
+          }
+        : { id: "author", externalAccounts: [] },
+    ),
+  );
+  await openCreate(true, "x");
+  fireEvent.change(screen.getByLabelText("X @账号"), {
+    target: { value: "artist" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "同步昵称和头像" }));
+  await screen.findByRole("img", { name: "同步的作者头像" });
+  fireEvent.click(screen.getByRole("button", { name: "同步昵称和头像" }));
+  await waitFor(() =>
+    expect((screen.getByLabelText("X @账号") as HTMLInputElement).value).toBe(
+      "renamed",
+    ),
+  );
+  expect(screen.queryByRole("img", { name: "同步的作者头像" })).toBeNull();
+  expect(screen.getByRole("status").textContent).not.toContain("保留当前头像");
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(3));
+  expect(post.mock.calls[2][1]).toMatchObject({
+    body: {
+      accounts: [
+        {
+          platform: "x",
+          handle: "renamed",
+          displayNameSnapshot: "New name",
+          avatarFileObjectId: null,
+          profileProof: "new-handle-proof",
+        },
+        { platform: "pixiv" },
+      ],
+    },
+  });
+  expect(post.mock.calls[2][1]).not.toHaveProperty(
+    "body.profileSourcePlatform",
+  );
+});
+
 test("new X and Pixiv accounts share enabled twenty-four-hour defaults and retain proof and notes", async () => {
   const post = createCollectionFixture();
-  await openCreate();
+  await openCreate(true, "x");
   fireEvent.change(screen.getByLabelText("X @账号"), {
     target: { value: "artist" },
   });
@@ -130,6 +687,10 @@ test("new X and Pixiv accounts share enabled twenty-four-hour defaults and retai
       }) as HTMLInputElement
     ).checked,
   ).toBe(true);
+  fireEvent.change(screen.getByLabelText("X 账号备注（可选）"), {
+    target: { value: "X note" },
+  });
+  fireEvent.click(screen.getByRole("tab", { name: "Pixiv" }));
   expect(
     (
       screen.getByRole("checkbox", {
@@ -137,9 +698,7 @@ test("new X and Pixiv accounts share enabled twenty-four-hour defaults and retai
       }) as HTMLInputElement
     ).checked,
   ).toBe(true);
-  fireEvent.change(screen.getByLabelText("X 账号备注（可选）"), {
-    target: { value: "X note" },
-  });
+  expect(screen.queryByRole("checkbox", { name: "X 启用自动抓取" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
   await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
   expect(post.mock.calls[1][1]).toMatchObject({

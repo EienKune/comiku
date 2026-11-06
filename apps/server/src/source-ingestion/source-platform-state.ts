@@ -326,12 +326,16 @@ export class SourcePlatformStates {
     if (deferred) throw deferred;
   }
   /** Short interactive metadata call shares the worker's durable platform scope. */
-  async profileNetwork<T>(actorId: string, run: () => Promise<T>): Promise<T> {
-    const platform = "x",
+  async profileNetwork<T>(
+    actorId: string,
+    run: () => Promise<T>,
+    platform: "x" | "pixiv" = "x",
+  ): Promise<T> {
+    const label = platform === "x" ? "X" : "Pixiv",
       leaseId = randomUUID(),
       id = randomUUID();
     const generation = await this.fingerprint(platform);
-    if (!generation) throw new ConflictException("X 资料同步配置不可用");
+    if (!generation) throw new ConflictException(`${label} 资料同步配置不可用`);
     await this.db.$transaction(async (tx) => {
       await this.jobs.lockScope(tx, "network", `source:${platform}`);
       await this.jobs.lockScope(tx, "network", "global");
@@ -348,7 +352,9 @@ export class SourcePlatformStates {
         })) ||
         !(await this.drained(tx, platform, now))
       )
-        throw new ConflictException("X 同步正在运行，请等待后再同步资料");
+        throw new ConflictException(
+          `${label} 同步正在运行，请等待后再同步资料`,
+        );
       let state = await tx.sourcePlatformState.findUnique({
         where: { platform },
       });
@@ -363,7 +369,7 @@ export class SourcePlatformStates {
       }
       if (this.denial(state, generation, now))
         throw new ConflictException(
-          "X 资料同步已暂停或处于冷却，请等待管理员恢复",
+          `${label} 资料同步已暂停或处于冷却，请等待管理员恢复`,
         );
       await tx.backgroundJob.create({
         data: {
@@ -415,10 +421,13 @@ export class SourcePlatformStates {
     });
     if (failed) {
       if (failure instanceof JobDeferred)
-        throw new ConflictException("X 资料同步配置已变化或不可用，请稍后重试");
+        throw new ConflictException(
+          `${label} 资料同步配置已变化或不可用，请稍后重试`,
+        );
       throw failure;
     }
-    if (!finished) throw new ConflictException("X 资料同步已过期，请重试");
+    if (!finished)
+      throw new ConflictException(`${label} 资料同步已过期，请重试`);
     return result as T;
   }
   async outcome(

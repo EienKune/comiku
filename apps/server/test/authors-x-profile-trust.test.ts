@@ -5,6 +5,9 @@ import { AuthorsService } from "../src/authors/authors.service.js";
 import { ContentSourceRegistry } from "../src/source-ingestion/source-registry.js";
 function fixture(
   options: {
+    platform?: "x" | "pixiv";
+    returnedId?: string;
+    boundUnavailable?: boolean;
     avatarFileObjectId?: string;
     avatarDownloadSucceeds?: boolean;
     conflictOnWrite?: boolean;
@@ -12,7 +15,7 @@ function fixture(
 ) {
   const registry = new ContentSourceRegistry();
   registry.register({
-    platform: "x",
+    platform: options.platform ?? "x",
     adapterKey: "x_fixture",
     available: true,
     priority: 1,
@@ -22,7 +25,7 @@ function fixture(
     initialCursor: () => ({}),
     fetchPage: async () => ({ items: [], complete: true }),
     checkAccount: async (a) => ({
-      externalUserId: a.externalUserId,
+      externalUserId: options.returnedId ?? a.externalUserId,
       handle: "latest",
       avatarUrl: "https://pbs.twimg.com/profile_images/42/a.jpg",
     }),
@@ -35,11 +38,12 @@ function fixture(
   let current = {
     id: "account",
     authorId: "author",
-    platform: "x",
+    platform: options.platform ?? "x",
     externalUserId: "42",
     handle: "old",
     revision: 0,
     metadataJson: {},
+    notes: "retained private note",
     fetchEnabled: false,
     firstSyncMode: "none",
     deletedAt: null,
@@ -59,7 +63,10 @@ function fixture(
         where,
       }: {
         where: { externalUserId?: string; id?: string };
-      }) => (where.externalUserId || !where.id ? null : current),
+      }) =>
+        where.externalUserId || !where.id || options.boundUnavailable
+          ? null
+          : current,
       findUniqueOrThrow: async () => current,
       create: async ({ data }: { data: Record<string, unknown> }) =>
         (current = { ...current, ...data, adapterStates: [] }),
@@ -71,10 +78,19 @@ function fixture(
     },
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
   };
+  const scopes: string[] = [];
+  let networkCalls = 0;
   const sourceFetch = {
     platforms: {
-      profileNetwork: async (_actor: string, fn: () => Promise<unknown>) =>
-        fn(),
+      profileNetwork: async (
+        _actor: string,
+        fn: () => Promise<unknown>,
+        platform = "x",
+      ) => {
+        scopes.push(platform);
+        networkCalls++;
+        return fn();
+      },
     },
   };
   const args = [
@@ -94,7 +110,12 @@ function fixture(
     sourceFetch,
   ] as unknown as ConstructorParameters<typeof AuthorsService>;
   const service = new AuthorsService(...args);
-  return { service, row: () => current };
+  return {
+    service,
+    row: () => current,
+    scopes,
+    networkCalls: () => networkCalls,
+  };
 }
 test("new X binding rejects naked client identity and timestamps", async () => {
   const { service } = fixture();
@@ -334,4 +355,152 @@ test("avatar retention cannot bypass a lost account revision CAS", async () => {
   assert.equal(row().avatarFileObjectId, "trusted-avatar");
   assert.equal(row().revision, 0);
   assert.equal(row().handle, "old");
+});
+
+test("Pixiv manual metadata remains compatible but naked avatar and cross-platform evidence are rejected", async () => {
+  const f = fixture({ platform: "pixiv" });
+  await f.service.createAccount(
+    "author",
+    {
+      platform: "pixiv",
+      externalUserId: "42",
+      profileSyncAdapter: "forged",
+      profileSyncedAt: new Date().toISOString(),
+      fetchEnabled: false,
+      firstSyncMode: "none",
+    },
+    "actor",
+  );
+  assert.equal(
+    (f.row().metadataJson as Record<string, unknown>).profileSyncAdapter,
+    undefined,
+  );
+  await assert.rejects(
+    f.service.createAccount(
+      "author",
+      {
+        platform: "pixiv",
+        externalUserId: "42",
+        avatarFileObjectId: "new-avatar",
+        fetchEnabled: false,
+        firstSyncMode: "none",
+      },
+      "actor",
+    ),
+    /凭证/,
+  );
+  const x = fixture();
+  const profile = await x.service.resolveXProfile("actor", "artist", "author");
+  await assert.rejects(
+    f.service.createAccount(
+      "author",
+      {
+        platform: "pixiv",
+        externalUserId: "42",
+        profileProof: profile.profileProof,
+        fetchEnabled: false,
+        firstSyncMode: "none",
+      },
+      "actor",
+    ),
+    /凭证/,
+  );
+});
+test("Pixiv sync uses its own scope and preserves notes, settings and failed optional avatar", async () => {
+  const f = fixture({
+    platform: "pixiv",
+    avatarFileObjectId: "trusted-avatar",
+  });
+  const profile = await f.service.resolvePixivProfile(
+    "actor",
+    "42",
+    "author",
+    "account",
+  );
+  assert.equal(profile.handle, null);
+  assert.equal(profile.profileUrl, "https://www.pixiv.net/users/42");
+  assert.deepEqual(f.scopes, ["pixiv"]);
+  await f.service.updateAccount(
+    "author",
+    "account",
+    {
+      externalUserId: "42",
+      profileProof: profile.profileProof,
+      avatarFileObjectId: null,
+      displayNameSnapshot: profile.displayName,
+      fetchEnabled: false,
+      firstSyncMode: "none",
+      expectedRevision: 0,
+    },
+    "actor",
+  );
+  assert.equal(f.row().avatarFileObjectId, "trusted-avatar");
+  assert.equal(f.row().notes, "retained private note");
+  assert.equal(f.row().firstSyncMode, "none");
+  assert.equal(f.row().fetchEnabled, false);
+  assert.equal(
+    (f.row().metadataJson as Record<string, unknown>).profileSyncAdapter,
+    "x_fixture",
+  );
+});
+test("Pixiv numeric mismatch rejects before network and returned mismatch never yields proof", async () => {
+  const f = fixture({ platform: "pixiv" });
+  await assert.rejects(
+    f.service.resolvePixivProfile("actor", "43", "author", "account"),
+    /身份|ID/,
+  );
+  assert.equal(f.networkCalls(), 0);
+  const bad = fixture({ platform: "pixiv", returnedId: "43" });
+  await assert.rejects(
+    bad.service.resolvePixivProfile("actor", "42"),
+    /身份|绑定/,
+  );
+});
+test("Pixiv successful avatar adoption still obeys account revision CAS", async () => {
+  for (const conflictOnWrite of [false, true]) {
+    const f = fixture({
+      platform: "pixiv",
+      avatarFileObjectId: "trusted-avatar",
+      avatarDownloadSucceeds: true,
+      conflictOnWrite,
+    });
+    const p = await f.service.resolvePixivProfile(
+      "actor",
+      "42",
+      "author",
+      "account",
+    );
+    const save = f.service.updateAccount(
+      "author",
+      "account",
+      {
+        profileProof: p.profileProof,
+        avatarFileObjectId: p.avatarFileObjectId,
+        fetchEnabled: false,
+        firstSyncMode: "none",
+        expectedRevision: 0,
+      },
+      "actor",
+    );
+    if (conflictOnWrite) {
+      await assert.rejects(save, /已更新/);
+      assert.equal(f.row().avatarFileObjectId, "trusted-avatar");
+    } else {
+      await save;
+      assert.equal(f.row().avatarFileObjectId, "new-avatar");
+    }
+  }
+});
+
+test("Pixiv resolution rejects unscoped, missing and archived bindings before network", async () => {
+  const f = fixture({ platform: "pixiv", boundUnavailable: true });
+  await assert.rejects(
+    f.service.resolvePixivProfile("actor", "42", "author", "account"),
+    /不存在/,
+  );
+  await assert.rejects(
+    f.service.resolvePixivProfile("actor", "42", undefined, "account"),
+    /不存在/,
+  );
+  assert.equal(f.networkCalls(), 0);
 });

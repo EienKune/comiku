@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { DirectUploadsService } from "../transfers/direct-uploads.service.js";
 import { ENVIRONMENT, type Environment } from "../config/environment.js";
-import { XProfileProofs } from "./x-profile-proof.js";
+import { ProfileProofs } from "./profile-proof.js";
 import { sourceDiagnostic } from "../source-ingestion/source-diagnostics.js";
 import {
   BadRequestException,
@@ -48,6 +48,7 @@ import type {
   ExternalAccountSummaryDto,
   ManagedAuthorDto,
   ResolvedXProfileDto,
+  ResolvedPixivProfileDto,
   SourceCapabilityDto,
   TagDto,
   UpdateAuthorDto,
@@ -175,7 +176,7 @@ export class AuthorsService {
   ) {}
 
   private get profileProofs() {
-    return new XProfileProofs(this.environment?.authorProfileProofSecret);
+    return new ProfileProofs(this.environment?.authorProfileProofSecret);
   }
 
   /** Validate offline before entering author/account write transactions. */
@@ -184,7 +185,14 @@ export class AuthorsService {
     actorId?: string,
     authorId?: string,
   ): Promise<CreateExternalAccountDto> {
-    if (normalizePlatform(input.platform) !== "x")
+    const platform = normalizePlatform(input.platform);
+    if (
+      platform !== "x" &&
+      !(
+        platform === "pixiv" &&
+        (input.profileProof || input.avatarFileObjectId != null)
+      )
+    )
       return {
         ...input,
         profileSyncAdapter: undefined,
@@ -192,18 +200,20 @@ export class AuthorsService {
       };
     const proof = this.profileProofs.verify(
       input.profileProof,
+      platform as "x" | "pixiv",
       actorId,
       authorId,
     );
     if (
       proof.externalUserId !== input.externalUserId.trim() ||
-      !input.handle ||
-      proof.handle.toLowerCase() !==
-        this.normalizeXHandle(input.handle).toLowerCase() ||
+      (platform === "x" &&
+        (!input.handle ||
+          proof.handle!.toLowerCase() !==
+            this.normalizeXHandle(input.handle).toLowerCase())) ||
       (input.avatarFileObjectId !== undefined &&
         input.avatarFileObjectId !== proof.avatarFileObjectId)
     )
-      throw new ConflictException("X 资料凭证与账号不一致，请重新同步");
+      throw new ConflictException("平台资料凭证与账号不一致，请重新同步");
     return {
       ...input,
       externalUserId: proof.externalUserId,
@@ -539,6 +549,9 @@ export class AuthorsService {
                 : 0,
           ),
           accounts,
+          ...(input.profileSourcePlatform !== undefined
+            ? { profileSourcePlatform: input.profileSourcePlatform }
+            : {}),
           ...(input.notes?.trim() ? { notes: input.notes.trim() } : {}),
         }),
       )
@@ -572,6 +585,11 @@ export class AuthorsService {
         .size !== accounts.length
     )
       throw new BadRequestException("同一作者每个平台只能关联一个有效账号");
+    if (
+      input.profileSourcePlatform !== undefined &&
+      !["x", "pixiv"].includes(input.profileSourcePlatform)
+    )
+      throw new BadRequestException("作者资料来源平台无效");
     const payloadHash = this.creationPayloadHash(input);
     // Replaying a committed request must work even after its original profile proof expires.
     if (actorId && input.idempotencyKey) {
@@ -597,6 +615,19 @@ export class AuthorsService {
     const prepared = await Promise.all(
       accounts.map((account) => this.prepareAccountIdentity(account, actorId)),
     );
+    const profileSource =
+      input.profileSourcePlatform === undefined
+        ? undefined
+        : prepared.find(
+            (account) =>
+              normalizePlatform(account.platform) ===
+              input.profileSourcePlatform,
+          );
+    if (
+      input.profileSourcePlatform !== undefined &&
+      (!profileSource || !profileSource.profileProof)
+    )
+      throw new BadRequestException("作者资料来源需要对应平台的已验证账号资料");
     // Profile proof verification and any future provider work must finish before this transaction.
     return this.withConflict(() =>
       this.db.$transaction(async (tx) => {
@@ -630,10 +661,18 @@ export class AuthorsService {
           if (request.author) return this.managed(request.author);
           requestId = request.id;
         }
+        if (profileSource)
+          await this.validateProfileAvatar(
+            profileSource.avatarFileObjectId,
+            tx,
+          );
         const author = await tx.author.create({
           data: {
             displayName: input.displayName.trim(),
             notes: input.notes?.trim() || null,
+            ...(profileSource
+              ? { avatarFileObjectId: profileSource.avatarFileObjectId ?? null }
+              : {}),
             sourceLanguage: input.sourceLanguage,
             authorizationStatus: input.authorizationStatus,
             tags: {
@@ -1002,11 +1041,13 @@ export class AuthorsService {
         (input.fetchEnabled && !observed.fetchEnabled) ||
         input.avatarFileObjectId != null);
     const prepared =
-      observed.platform === "x" && (xIdentityChange || input.profileProof)
+      (observed.platform === "x" && (xIdentityChange || input.profileProof)) ||
+      (observed.platform === "pixiv" &&
+        (input.profileProof || input.avatarFileObjectId != null))
         ? await this.prepareAccountIdentity(
             {
               ...input,
-              platform: "x",
+              platform: observed.platform,
               externalUserId: observed.externalUserId,
               handle: wantedHandle,
             },
@@ -1249,6 +1290,134 @@ export class AuthorsService {
     return value;
   }
 
+  private async profileAvatar(
+    actorId: string,
+    url: string | undefined,
+    allowedMediaHosts: readonly string[],
+  ) {
+    let avatarFileObjectId: string | null = null,
+      avatarUrl: string | null = null;
+    if (url) {
+      try {
+        const media = await this.downloader.download(url, [
+          ...allowedMediaHosts,
+        ]);
+        const file = await this.files.store({
+          body: media.body,
+          contentType: media.contentType,
+          bucketScope: "private",
+          kind: "source_profile_avatar",
+          sourceName: url,
+          createdById: actorId,
+        });
+        avatarFileObjectId = file.id;
+        avatarUrl = (await this.files.signedReadUrl(file.id)).url;
+      } catch {
+        /* Optional avatar failure must not erase a verified identity. */
+      }
+    }
+    return { avatarFileObjectId, avatarUrl };
+  }
+
+  async resolvePixivProfile(
+    actorId: string,
+    inputId: string,
+    authorId?: string,
+    accountId?: string,
+  ): Promise<ResolvedPixivProfileDto> {
+    const externalUserId = inputId.trim();
+    if (!/^[1-9][0-9]{0,19}$/.test(externalUserId))
+      throw new BadRequestException("请输入有效的 Pixiv 数字 ID");
+    const bound =
+      accountId && authorId
+        ? await this.db.authorExternalAccount.findFirst({
+            where: {
+              id: accountId,
+              authorId,
+              platform: "pixiv",
+              deletedAt: null,
+              author: { deletedAt: null },
+            },
+          })
+        : null;
+    if (accountId && !bound) throw new NotFoundException("平台账号不存在");
+    if (bound && bound.externalUserId !== externalUserId)
+      throw new ConflictException("Pixiv ID 与绑定身份不一致");
+    const available = this.sources
+      .forPlatform("pixiv")
+      .filter((client) => client.available);
+    let failed = false;
+    for (const client of available) {
+      try {
+        const profile = await this.sourceFetch.platforms.profileNetwork(
+          actorId,
+          async () => {
+            if (client.metered)
+              await this.sourceFetch.consumeMeteredBudget(client.adapterKey);
+            const resolved = await client.checkAccount({ externalUserId });
+            if (resolved.externalUserId !== externalUserId)
+              throw new ConflictException(
+                "Pixiv 资料与绑定身份不一致，请核实账号",
+              );
+            return resolved;
+          },
+          "pixiv",
+        );
+        const conflict = await this.db.authorExternalAccount.findFirst({
+          where: { platform: "pixiv", externalUserId, deletedAt: null },
+          include: { author: { select: { id: true, displayName: true } } },
+        });
+        if (conflict && conflict.author.id !== authorId)
+          throw new ConflictException(
+            `该 Pixiv 账号已绑定作者“${conflict.author.displayName}”`,
+          );
+        const avatar = await this.profileAvatar(
+          actorId,
+          profile.avatarUrl,
+          client.allowedMediaHosts,
+        );
+        const identity = {
+          externalUserId,
+          handle: null,
+          avatarFileObjectId: avatar.avatarFileObjectId,
+          adapterKey: client.adapterKey,
+          syncedAt: new Date().toISOString(),
+        };
+        return {
+          ...identity,
+          displayName:
+            profile.displayName?.trim().slice(0, 255) || externalUserId,
+          profileUrl: `https://www.pixiv.net/users/${externalUserId}`,
+          avatarUrl: avatar.avatarUrl,
+          profileProof: this.profileProofs.issue(
+            { ...identity, platform: "pixiv" },
+            actorId,
+            authorId,
+          ),
+        };
+      } catch (error) {
+        if (
+          error instanceof ConflictException ||
+          error instanceof NotFoundException
+        )
+          throw error;
+        failed = true;
+        console.warn(
+          JSON.stringify({
+            event: "source_profile_failed",
+            adapterKey: client.adapterKey,
+            ...sourceDiagnostic(error),
+          }),
+        );
+      }
+    }
+    if (failed)
+      throw new ServiceUnavailableException(
+        "无法同步 Pixiv 资料，请稍后重试或联系管理员检查图源",
+      );
+    throw new BadRequestException("Pixiv 资料同步通道尚未配置");
+  }
+
   async resolveXProfile(
     actorId: string,
     inputHandle: string,
@@ -1311,28 +1480,11 @@ export class AuthorsService {
           throw new ConflictException(
             `该 X 账号已绑定作者“${conflict.author.displayName}”`,
           );
-        let avatarFileObjectId: string | null = null,
-          avatarUrl: string | null = null;
-        if (profile.avatarUrl) {
-          try {
-            const media = await this.downloader.download(
-              profile.avatarUrl,
-              client.allowedMediaHosts,
-            );
-            const file = await this.files.store({
-              body: media.body,
-              contentType: media.contentType,
-              bucketScope: "private",
-              kind: "source_profile_avatar",
-              sourceName: profile.avatarUrl,
-              createdById: actorId,
-            });
-            avatarFileObjectId = file.id;
-            avatarUrl = (await this.files.signedReadUrl(file.id)).url;
-          } catch {
-            /* Optional avatar failure must not erase a verified identity. */
-          }
-        }
+        const { avatarFileObjectId, avatarUrl } = await this.profileAvatar(
+          actorId,
+          profile.avatarUrl,
+          client.allowedMediaHosts,
+        );
         const syncedAt = new Date().toISOString();
         const identity = {
           externalUserId: profile.externalUserId,
@@ -1347,7 +1499,11 @@ export class AuthorsService {
             profile.displayName?.trim().slice(0, 255) || normalizedHandle,
           profileUrl: `https://x.com/${normalizedHandle}`,
           avatarUrl,
-          profileProof: this.profileProofs.issue(identity, actorId, authorId),
+          profileProof: this.profileProofs.issue(
+            { ...identity, platform: "x" },
+            actorId,
+            authorId,
+          ),
         };
       } catch (error) {
         if (

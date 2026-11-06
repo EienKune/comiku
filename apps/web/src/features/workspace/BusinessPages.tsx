@@ -89,9 +89,14 @@ import { TypesetBatchTools } from "./TypesetBatchTools";
 import { ReviewRequestActions } from "./ReviewRequestActions";
 import { AuthorAccountsPanel } from "./AuthorAccountsPanel";
 import { AuthorCollectionFields } from "./AuthorCollectionFields";
+import {
+  canPreserveProfileAvatar,
+  hasFreshProfileAvatar,
+  preserveProfileAvatar,
+  type ProfileAvatarSnapshot,
+} from "./profile-avatar";
 import { useAuthorCollection } from "./author-collection";
 import { AuthorPicker } from "./AuthorPicker";
-import { sourceAdapterLabels } from "./source-labels";
 import {
   canHandleStage,
   workingTabs,
@@ -1061,8 +1066,17 @@ function AuthorCreateDialog({
   const [xNotes, setXNotes] = useState("");
   const [pixivNotes, setPixivNotes] = useState("");
   const [xHandle, setXHandle] = useState("");
+  const xInput = useRef("");
   const [xProfile, setXProfile] = useState<ResolvedXProfile | null>(null);
+  const [profilePlatform, setProfilePlatform] = useState<"x" | "pixiv">("x");
+  const [profileSourcePlatform, setProfileSourcePlatform] = useState<
+    "x" | "pixiv" | null
+  >(null);
   const [pixivUserId, setPixivUserId] = useState("");
+  const pixivInput = useRef("");
+  const [pixivProfile, setPixivProfile] = useState<
+    components["schemas"]["ResolvedPixivProfileDto"] | null
+  >(null);
   const capabilities = useQuery({
     queryKey: ["source-capabilities"],
     queryFn: async () => unwrap(await client.GET("/api/authors/sources")),
@@ -1080,6 +1094,36 @@ function AuthorCreateDialog({
     evidence: new AuthorImageUpload(),
   });
   const fieldsDisabled = action.busy || restoring || Boolean(savedAuthorId);
+  const authorProfile =
+    profileSourcePlatform === "x"
+      ? xProfile
+      : profileSourcePlatform === "pixiv"
+        ? pixivProfile
+        : null;
+  const activeProfile = profilePlatform === "x" ? xProfile : pixivProfile;
+  function adoptProfile(
+    platform: "x" | "pixiv",
+    profile: ProfileAvatarSnapshot,
+  ) {
+    setDisplayName(profile.displayName);
+    if (profile.avatarFileObjectId) {
+      setProfileSourcePlatform(platform);
+      setAvatar(null);
+      progress.current.avatar = new AuthorImageUpload();
+      action.setSuccess("昵称和头像已同步，保存后生效");
+    } else {
+      const retainedAvatar =
+        hasFreshProfileAvatar(authorProfile) &&
+        (profileSourcePlatform !== platform ||
+          canPreserveProfileAvatar(authorProfile, profile));
+      if (!retainedAvatar) setProfileSourcePlatform(null);
+      action.setSuccess(
+        avatar || retainedAvatar
+          ? "昵称已同步，头像暂不可用，保留当前头像"
+          : "昵称已同步，头像暂不可用",
+      );
+    }
+  }
   function clearRequest() {
     try {
       sessionStorage.removeItem(requestStorageKey);
@@ -1124,17 +1168,40 @@ function AuthorCreateDialog({
 
   async function syncProfile() {
     await action.run(async () => {
+      const requestedHandle = xHandle;
       const profile = await unwrap(
         await client.POST("/api/authors/x-profile/resolve", {
           body: { handle: xHandle },
         }),
       );
-      setXProfile(profile);
+      if (xInput.current !== requestedHandle)
+        throw new Error("X 账号已变化，请重新同步。");
+      setXProfile((current) => preserveProfileAvatar(current, profile));
       setXHandle(profile.handle);
-      if (!displayName.trim()) setDisplayName(profile.displayName);
-      action.setSuccess(
-        `已通过 ${sourceAdapterLabels[profile.adapterKey] ?? profile.adapterKey} 同步`,
+      xInput.current = profile.handle;
+      adoptProfile("x", profile);
+    });
+  }
+
+  async function syncPixivProfile() {
+    await action.run(async () => {
+      const requestedId = pixivUserId.trim();
+      if (!/^[1-9][0-9]*$/.test(requestedId))
+        throw new Error("Pixiv 用户 ID 必须是主页 /users/ 后的数字");
+      const profile = await unwrap(
+        await client.POST("/api/authors/pixiv-profile/resolve", {
+          body: { externalUserId: requestedId },
+        }),
       );
+      if (
+        pixivInput.current.trim() !== requestedId ||
+        profile.externalUserId !== requestedId
+      )
+        throw new Error("Pixiv 用户 ID 已变化或同步结果不匹配，请重新同步。");
+      setPixivProfile((current) =>
+        preserveProfileAvatar(current, { ...profile, handle: null }),
+      );
+      adoptProfile("pixiv", { ...profile, handle: null });
     });
   }
 
@@ -1225,6 +1292,13 @@ function AuthorCreateDialog({
               ...(pixivNotes.trim() ? { notes: pixivNotes.trim() } : {}),
               platform: "pixiv",
               externalUserId: pixivUserId.trim(),
+              ...(pixivProfile?.externalUserId === pixivUserId.trim()
+                ? {
+                    displayNameSnapshot: pixivProfile.displayName,
+                    avatarFileObjectId: pixivProfile.avatarFileObjectId,
+                    profileProof: pixivProfile.profileProof,
+                  }
+                : {}),
               ...pixivCollection.value,
             });
           // Persist only the opaque request ID. Draft text, profile proofs and files stay in memory.
@@ -1240,6 +1314,9 @@ function AuthorCreateDialog({
             result = await client.POST("/api/authors", {
               body: {
                 displayName,
+                ...(profileSourcePlatform && authorProfile?.avatarFileObjectId
+                  ? { profileSourcePlatform }
+                  : {}),
                 ...(notes.trim() ? { notes: notes.trim() } : {}),
                 sourceLanguage,
                 authorizationStatus: status,
@@ -1403,49 +1480,175 @@ function AuthorCreateDialog({
           className="workspace-stacked-form"
           onSubmit={(event) => void create(event)}
         >
-          <div className="account-form-row">
-            <TextField
-              label="X @账号"
-              disabled={fieldsDisabled}
-              value={xHandle}
-              onChange={(event) => {
-                setXHandle(event.target.value);
-                setXProfile(null);
-              }}
-            />
-            <Button
-              type="button"
-              variant="secondary"
-              loading={action.busy}
-              disabled={fieldsDisabled || !xHandle.trim()}
-              onClick={() => void syncProfile()}
+          <fieldset className="workspace-file-fields">
+            <legend>平台账号（可选）</legend>
+            <div
+              className="workspace-tabs"
+              role="tablist"
+              aria-label="资料同步平台"
             >
-              同步昵称和头像
-            </Button>
-          </div>
-          {xProfile && (
-            <p className="workspace-profile-sync">
-              <strong>@{xProfile.handle}</strong>
-              <span>{xProfile.displayName}</span>
-              {xProfile.avatarUrl && <img src={xProfile.avatarUrl} alt="" />}
-            </p>
-          )}
-          {xHandle.trim() && (
-            <AuthorCollectionFields
-              value={xCollection.value}
-              modes={xCollection.modes}
-              onChange={xCollection.change}
+              {(["x", "pixiv"] as const).map((platform) => (
+                <button
+                  key={platform}
+                  id={`author-profile-tab-${platform}-${requestId}`}
+                  type="button"
+                  role="tab"
+                  aria-controls={`author-profile-panel-${requestId}`}
+                  aria-selected={profilePlatform === platform}
+                  tabIndex={profilePlatform === platform ? 0 : -1}
+                  className={profilePlatform === platform ? "is-active" : ""}
+                  disabled={fieldsDisabled}
+                  onClick={() => setProfilePlatform(platform)}
+                  onKeyDown={(event) => {
+                    if (
+                      !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
+                        event.key,
+                      )
+                    )
+                      return;
+                    event.preventDefault();
+                    const next =
+                      event.key === "Home"
+                        ? "x"
+                        : event.key === "End"
+                          ? "pixiv"
+                          : profilePlatform === "x"
+                            ? "pixiv"
+                            : "x";
+                    setProfilePlatform(next);
+                    document
+                      .getElementById(`author-profile-tab-${next}-${requestId}`)
+                      ?.focus();
+                  }}
+                >
+                  {platform === "x" ? "X" : "Pixiv"}
+                </button>
+              ))}
+            </div>
+            <div
+              role="tabpanel"
+              id={`author-profile-panel-${requestId}`}
+              aria-labelledby={`author-profile-tab-${profilePlatform}-${requestId}`}
+            >
+              <div className="workspace-author-profile-input">
+                {profilePlatform === "x" ? (
+                  <TextField
+                    label="X @账号"
+                    disabled={fieldsDisabled}
+                    value={xHandle}
+                    onChange={(event) => {
+                      xInput.current = event.target.value;
+                      setXHandle(event.target.value);
+                      setXProfile(null);
+                      if (profileSourcePlatform === "x")
+                        setProfileSourcePlatform(null);
+                    }}
+                  />
+                ) : (
+                  <TextField
+                    label="Pixiv 用户 ID"
+                    disabled={fieldsDisabled}
+                    hint="主页 /users/123456 中的数字；不是登录账号名。"
+                    inputMode="numeric"
+                    pattern="[1-9][0-9]*"
+                    value={pixivUserId}
+                    onChange={(event) => {
+                      pixivInput.current = event.target.value;
+                      setPixivUserId(event.target.value);
+                      setPixivProfile(null);
+                      if (profileSourcePlatform === "pixiv")
+                        setProfileSourcePlatform(null);
+                    }}
+                  />
+                )}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  aria-label={
+                    profilePlatform === "pixiv"
+                      ? "同步 Pixiv 昵称和头像"
+                      : undefined
+                  }
+                  loading={action.busy}
+                  disabled={
+                    fieldsDisabled ||
+                    (profilePlatform === "x"
+                      ? !xHandle.trim()
+                      : !/^[1-9][0-9]*$/.test(pixivUserId.trim()))
+                  }
+                  onClick={() =>
+                    void (profilePlatform === "x"
+                      ? syncProfile()
+                      : syncPixivProfile())
+                  }
+                >
+                  同步昵称和头像
+                </Button>
+              </div>
+              {activeProfile && (
+                <p className="workspace-profile-sync">
+                  <strong>
+                    {profilePlatform === "x"
+                      ? `@${activeProfile.handle}`
+                      : activeProfile.externalUserId}
+                  </strong>
+                  <span>{activeProfile.displayName}</span>
+                </p>
+              )}
+              {(profilePlatform === "x"
+                ? xHandle.trim()
+                : pixivUserId.trim()) && (
+                <>
+                  <AuthorCollectionFields
+                    value={
+                      (profilePlatform === "x" ? xCollection : pixivCollection)
+                        .value
+                    }
+                    modes={
+                      (profilePlatform === "x" ? xCollection : pixivCollection)
+                        .modes
+                    }
+                    onChange={
+                      (profilePlatform === "x" ? xCollection : pixivCollection)
+                        .change
+                    }
+                    disabled={fieldsDisabled}
+                    prefix={profilePlatform === "x" ? "X " : "Pixiv "}
+                  />
+                  <label className="ui-field">
+                    <span className="ui-field__label">
+                      {profilePlatform === "x" ? "X" : "Pixiv"} 账号备注（可选）
+                    </span>
+                    <span className="ui-field__control">
+                      <textarea
+                        rows={3}
+                        maxLength={2000}
+                        disabled={fieldsDisabled}
+                        value={profilePlatform === "x" ? xNotes : pixivNotes}
+                        onChange={(event) =>
+                          (profilePlatform === "x" ? setXNotes : setPixivNotes)(
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </span>
+                  </label>
+                </>
+              )}
+            </div>
+          </fieldset>
+          <div className="workspace-author-identity">
+            {authorProfile?.avatarUrl && !avatar && (
+              <img src={authorProfile.avatarUrl} alt="同步的作者头像" />
+            )}
+            <TextField
+              required
+              label="作者昵称"
               disabled={fieldsDisabled}
-              prefix="X "
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
             />
-          )}
-          <TextField
-            required
-            label="作者昵称"
-            disabled={fieldsDisabled}
-            value={displayName}
-            onChange={(event) => setDisplayName(event.target.value)}
-          />
+          </div>
           <div className="account-form-row">
             <SelectField
               label="作者母语"
@@ -1490,20 +1693,6 @@ function AuthorCreateDialog({
               />
             </span>
           </label>
-          {xHandle.trim() && (
-            <label className="ui-field">
-              <span className="ui-field__label">X 账号备注（可选）</span>
-              <span className="ui-field__control">
-                <textarea
-                  rows={3}
-                  maxLength={2000}
-                  disabled={fieldsDisabled}
-                  value={xNotes}
-                  onChange={(event) => setXNotes(event.target.value)}
-                />
-              </span>
-            </label>
-          )}
           {savedAuthorId && (
             <p className="account-success" role="status">
               作者已保存。 账号已保存；头像和授权凭证可稍后在详情中补传。
@@ -1530,39 +1719,6 @@ function AuthorCreateDialog({
             }}
             disabled={action.busy || progress.current.evidence.locked}
           />
-          <fieldset className="workspace-file-fields">
-            <legend>Pixiv 账号（可选）</legend>
-            <TextField
-              label="Pixiv 用户 ID"
-              disabled={fieldsDisabled}
-              hint="主页 /users/123456 中的数字；不是登录账号名。不需要单独填写主页。"
-              inputMode="numeric"
-              pattern="[1-9][0-9]*"
-              value={pixivUserId}
-              onChange={(event) => setPixivUserId(event.target.value)}
-            />
-            {pixivUserId.trim() && (
-              <AuthorCollectionFields
-                value={pixivCollection.value}
-                modes={pixivCollection.modes}
-                onChange={pixivCollection.change}
-                disabled={fieldsDisabled}
-                prefix="Pixiv "
-              />
-            )}
-            <label className="ui-field">
-              <span className="ui-field__label">Pixiv 账号备注（可选）</span>
-              <span className="ui-field__control">
-                <textarea
-                  rows={3}
-                  maxLength={2000}
-                  disabled={fieldsDisabled}
-                  value={pixivNotes}
-                  onChange={(event) => setPixivNotes(event.target.value)}
-                />
-              </span>
-            </label>
-          </fieldset>
           {hasPendingRequest && !savedAuthorId && (
             <p role="status">
               保留了本次保存标识。刷新后可检查保存结果；草稿和图片需重新选择。

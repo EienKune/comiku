@@ -6,6 +6,7 @@ import {
   IsBoolean,
   IsEnum,
   IsInt,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -17,6 +18,7 @@ import {
   Min,
   MinLength,
   ValidateNested,
+  ValidateIf,
 } from "class-validator";
 import { ApiProperty, ApiPropertyOptional, OmitType } from "@nestjs/swagger";
 import {
@@ -30,6 +32,14 @@ const trimmed = ({ value }: { value: unknown }) =>
   typeof value === "string" ? value.trim() : value;
 
 export class CreateAuthorDto {
+  @ApiPropertyOptional({
+    enum: ["x", "pixiv"],
+    description: "使用该平台经验证的账号头像作为作者头像；仅用于创建意图",
+  })
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsIn(["x", "pixiv"])
+  profileSourcePlatform?: "x" | "pixiv";
+
   @ApiPropertyOptional({ type: String, nullable: true, maxLength: 2000 })
   @IsOptional()
   @Transform(trimmed)
@@ -129,6 +139,7 @@ export class AuthorQueryDto {
 export class UpdateAuthorDto extends OmitType(CreateAuthorDto, [
   "idempotencyKey",
   "accounts",
+  "profileSourcePlatform",
 ] as const) {
   @ApiProperty({ type: Number, minimum: 0 })
   @IsInt()
@@ -154,7 +165,7 @@ export class CreateExternalAccountDto {
   @ApiPropertyOptional({
     type: String,
     maxLength: 4096,
-    description: "X 资料解析返回的短时身份凭证",
+    description: "平台资料解析返回的短时身份凭证，绑定平台与稳定用户 ID",
   })
   @IsOptional()
   @IsString()
@@ -229,7 +240,7 @@ export class UpdateExternalAccountDto {
   @ApiPropertyOptional({
     type: String,
     maxLength: 4096,
-    description: "X 身份变更或重新启用采集时的短时身份凭证",
+    description: "平台资料同步凭证；X 身份变更或重新启用采集时必须提供",
   })
   @IsOptional()
   @IsString()
@@ -441,6 +452,35 @@ export class ResolvedXProfileDto {
   @ApiProperty({ type: String }) profileProof!: string;
   @ApiProperty({ type: String }) externalUserId!: string;
   @ApiProperty({ type: String }) handle!: string;
+  @ApiProperty({ type: String }) displayName!: string;
+  @ApiProperty({ type: String }) profileUrl!: string;
+  @ApiProperty({ type: String, nullable: true, format: "uuid" })
+  avatarFileObjectId!: string | null;
+  @ApiProperty({ type: String, nullable: true }) avatarUrl!: string | null;
+  @ApiProperty({ type: String }) adapterKey!: string;
+  @ApiProperty({ type: String, format: "date-time" }) syncedAt!: string;
+}
+
+export class ResolvePixivProfileDto {
+  @ApiProperty({ type: String, pattern: "^[1-9][0-9]{0,19}$", maxLength: 20 })
+  @Transform(trimmed)
+  @IsString()
+  @Matches(/^[1-9][0-9]{0,19}$/)
+  externalUserId!: string;
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  @IsOptional()
+  @IsUUID()
+  authorId?: string;
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  @IsOptional()
+  @IsUUID()
+  accountId?: string;
+}
+
+export class ResolvedPixivProfileDto {
+  @ApiProperty({ type: String }) profileProof!: string;
+  @ApiProperty({ type: String }) externalUserId!: string;
+  @ApiProperty({ type: String, nullable: true, enum: [null] }) handle!: null;
   @ApiProperty({ type: String }) displayName!: string;
   @ApiProperty({ type: String }) profileUrl!: string;
   @ApiProperty({ type: String, nullable: true, format: "uuid" })

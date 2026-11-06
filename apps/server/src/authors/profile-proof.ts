@@ -1,9 +1,10 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { BadRequestException } from "@nestjs/common";
 
-export interface VerifiedXProfile {
+export interface VerifiedProfile {
   externalUserId: string;
-  handle: string;
+  platform: "x" | "pixiv";
+  handle: string | null;
   avatarFileObjectId: string | null;
   adapterKey: string;
   syncedAt: string;
@@ -11,17 +12,17 @@ export interface VerifiedXProfile {
 const processKey = randomBytes(32).toString("base64url");
 
 /** Short-lived server evidence, never a client supplied synchronization timestamp. */
-export class XProfileProofs {
+export class ProfileProofs {
   constructor(private readonly secret = processKey) {}
   issue(
-    profile: VerifiedXProfile,
+    profile: VerifiedProfile,
     actorId: string,
     authorId?: string,
     now = Date.now(),
   ): string {
     const payload = Buffer.from(
       JSON.stringify({
-        v: 1,
+        v: 2,
         ...profile,
         actorId,
         authorId: authorId ?? null,
@@ -33,13 +34,14 @@ export class XProfileProofs {
   }
   verify(
     proof: string | null | undefined,
+    platform: "x" | "pixiv",
     actorId?: string,
     authorId?: string,
     now = Date.now(),
-  ): VerifiedXProfile {
+  ): VerifiedProfile {
     const bad = (): never => {
       throw new BadRequestException(
-        "请重新同步 X 资料后保存，身份凭证无效或已过期",
+        "请重新同步平台资料后保存，身份凭证无效或已过期",
       );
     };
     if (!proof || proof.length > 4096 || !actorId) return bad();
@@ -54,7 +56,10 @@ export class XProfileProofs {
         Buffer.from(payload, "base64url").toString("utf8"),
       );
       if (
-        value.v !== 1 ||
+        !(
+          (value.v === 2 && value.platform === platform) ||
+          (value.v === 1 && platform === "x")
+        ) ||
         value.actorId !== actorId ||
         value.authorId !== (authorId ?? null) ||
         !Number.isSafeInteger(value.issuedAt) ||
@@ -63,8 +68,10 @@ export class XProfileProofs {
         value.expiresAt <= now ||
         typeof value.externalUserId !== "string" ||
         !/^[1-9][0-9]{0,19}$/.test(value.externalUserId) ||
-        typeof value.handle !== "string" ||
-        !/^[A-Za-z0-9_]{1,15}$/.test(value.handle) ||
+        (platform === "x"
+          ? typeof value.handle !== "string" ||
+            !/^[A-Za-z0-9_]{1,15}$/.test(value.handle)
+          : value.handle !== null) ||
         typeof value.adapterKey !== "string" ||
         !Number.isFinite(Date.parse(value.syncedAt)) ||
         (value.avatarFileObjectId !== null &&
@@ -72,6 +79,7 @@ export class XProfileProofs {
       )
         return bad();
       return {
+        platform,
         externalUserId: value.externalUserId,
         handle: value.handle,
         avatarFileObjectId: value.avatarFileObjectId,

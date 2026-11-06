@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { XProfileProofs } from "../src/authors/x-profile-proof.js";
+import { ProfileProofs } from "../src/authors/profile-proof.js";
 const profile = {
+  platform: "x" as const,
   externalUserId: "42",
   handle: "artist",
   avatarFileObjectId: null,
@@ -9,10 +10,10 @@ const profile = {
   syncedAt: "2026-11-05T00:00:00.000Z",
 };
 test("profile proof rejects tampering, replay by another actor or author, and expiry", () => {
-  const proofs = new XProfileProofs("synthetic-server-secret");
+  const proofs = new ProfileProofs("synthetic-server-secret");
   const token = proofs.issue(profile, "actor", "author", 1000);
   assert.equal(
-    proofs.verify(token, "actor", "author", 1001).externalUserId,
+    proofs.verify(token, "x", "actor", "author", 1001).externalUserId,
     "42",
   );
   for (const [actor, author, now] of [
@@ -20,11 +21,12 @@ test("profile proof rejects tampering, replay by another actor or author, and ex
     ["actor", "other", 1001],
     ["actor", "author", 601001],
   ] as const)
-    assert.throws(() => proofs.verify(token, actor, author, now));
-  assert.throws(() => proofs.verify(token + "a", "actor", "author", 1001));
+    assert.throws(() => proofs.verify(token, "x", actor, author, now));
+  assert.throws(() => proofs.verify(token + "a", "x", "actor", "author", 1001));
   assert.throws(() =>
-    new XProfileProofs("different-secret").verify(
+    new ProfileProofs("different-secret").verify(
       token,
+      "x",
       "actor",
       "author",
       1001,

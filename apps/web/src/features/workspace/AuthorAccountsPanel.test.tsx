@@ -75,6 +75,266 @@ const pixiv: Account = {
   deletedAt: null,
 };
 
+const resolvedPixiv: components["schemas"]["ResolvedPixivProfileDto"] = {
+  externalUserId: "123456",
+  handle: null,
+  displayName: "同步昵称",
+  profileUrl: "https://www.pixiv.net/users/123456",
+  avatarFileObjectId: "avatar",
+  avatarUrl: "https://storage.invalid/avatar",
+  adapterKey: "pixiv_fixture",
+  syncedAt: "2026-11-06T00:00:00Z",
+  profileProof: "pixiv-proof",
+};
+
+test.each([true, false])(
+  "bound Pixiv sync previews avatar=%s and saves proof without replacing identity or collection settings",
+  async (avatarAvailable) => {
+    const saved = {
+      ...pixiv,
+      notes: "keep note",
+      fetchEnabled: false,
+      firstSyncMode: "last_7_days" as const,
+    };
+    collectionFixture([saved]);
+    const post = vi.spyOn(client, "POST").mockResolvedValue(
+      success({
+        ...resolvedPixiv,
+        ...(!avatarAvailable
+          ? { avatarUrl: null, avatarFileObjectId: null }
+          : {}),
+      }),
+    );
+    const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(saved));
+    setup([saved]);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+    fireEvent.change(screen.getByLabelText("账号备注（可选）"), {
+      target: { value: "edited note" },
+    });
+    expect(post).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("平台显示昵称（可选）") as HTMLInputElement)
+          .value,
+      ).toBe("同步昵称"),
+    );
+    expect(
+      Boolean(screen.queryByRole("img", { name: "同步的 Pixiv 头像" })),
+    ).toBe(avatarAvailable);
+    expect(
+      (screen.getByLabelText("Pixiv 用户 ID") as HTMLInputElement).readOnly,
+    ).toBe(true);
+    expect(
+      (screen.getByLabelText("Pixiv 用户 ID") as HTMLInputElement).value,
+    ).toBe("123456");
+    expect(post.mock.calls[0]).toEqual([
+      "/api/authors/pixiv-profile/resolve",
+      {
+        body: {
+          authorId: "author",
+          accountId: "pixiv",
+          externalUserId: "123456",
+        },
+      },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+    await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    expect(patch.mock.calls[0][1]).toMatchObject({
+      body: {
+        displayNameSnapshot: "同步昵称",
+        notes: "edited note",
+        fetchEnabled: false,
+        firstSyncMode: "last_7_days",
+        avatarFileObjectId: avatarAvailable ? "avatar" : null,
+        profileProof: "pixiv-proof",
+        expectedRevision: 2,
+      },
+    });
+    expect(patch.mock.calls[0][1]).not.toHaveProperty("body.externalUserId");
+  },
+);
+
+test("bound Pixiv rejects another profile identity and still permits metadata maintenance", async () => {
+  collectionFixture([pixiv]);
+  vi.spyOn(client, "POST").mockResolvedValue(
+    success({ ...resolvedPixiv, externalUserId: "999999" }),
+  );
+  const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(pixiv));
+  setup([pixiv]);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  await screen.findByRole("alert");
+  expect(
+    (screen.getByLabelText("Pixiv 用户 ID") as HTMLInputElement).value,
+  ).toBe("123456");
+  expect(
+    (screen.getByLabelText("平台显示昵称（可选）") as HTMLInputElement).value,
+  ).toBe("昵称");
+  fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+  await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+  expect(patch.mock.calls[0][1]).not.toHaveProperty("body.profileProof");
+});
+
+test.each(["changed-input", "cleared-proof"])(
+  "new Pixiv binding keeps edited identity free of an old %s profile",
+  async (scenario) => {
+    collectionFixture([]);
+    let release!: (value: never) => void;
+    const post = vi.spyOn(client, "POST").mockImplementation(async (path) =>
+      path === "/api/authors/pixiv-profile/resolve"
+        ? new Promise<never>((resolve) => {
+            release = resolve;
+          })
+        : success(pixiv),
+    );
+    setup();
+    const bind = await screen.findByRole("button", { name: "关联 Pixiv" });
+    await waitFor(() =>
+      expect((bind as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(bind);
+    fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
+      target: { value: "123456" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+    );
+    if (scenario === "changed-input")
+      fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
+        target: { value: "654321" },
+      });
+    await act(async () => {
+      release(success(resolvedPixiv));
+    });
+    if (scenario === "changed-input") await screen.findByRole("alert");
+    else {
+      await screen.findByRole("img", { name: "同步的 Pixiv 头像" });
+      fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
+        target: { value: "654321" },
+      });
+    }
+    expect(screen.queryByRole("img", { name: "同步的 Pixiv 头像" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(post.mock.calls[1][1]).toMatchObject({
+      body: { platform: "pixiv", externalUserId: "654321" },
+    });
+    expect(post.mock.calls[1][1]).not.toHaveProperty("body.profileProof");
+  },
+);
+
+test("new Pixiv binding saves its resolved profile and deliberate collection settings", async () => {
+  collectionFixture([]);
+  const post = vi
+    .spyOn(client, "POST")
+    .mockImplementation(async (path) =>
+      success(
+        path === "/api/authors/pixiv-profile/resolve" ? resolvedPixiv : pixiv,
+      ),
+    );
+  setup();
+  const bind = await screen.findByRole("button", { name: "关联 Pixiv" });
+  await waitFor(() => expect((bind as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(bind);
+  const id = screen.getByLabelText("Pixiv 用户 ID") as HTMLInputElement;
+  expect(id.readOnly).toBe(false);
+  fireEvent.change(id, { target: { value: "123456" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: "启用自动抓取" }));
+  fireEvent.change(screen.getByLabelText("账号备注（可选）"), {
+    target: { value: "binding note" },
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+  );
+  await screen.findByRole("img", { name: "同步的 Pixiv 头像" });
+  fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+  expect(post.mock.calls[0][1]).toEqual({
+    body: { authorId: "author", externalUserId: "123456" },
+  });
+  expect(post.mock.calls[1][1]).toMatchObject({
+    body: {
+      platform: "pixiv",
+      externalUserId: "123456",
+      displayNameSnapshot: "同步昵称",
+      avatarFileObjectId: "avatar",
+      profileProof: "pixiv-proof",
+      notes: "binding note",
+      fetchEnabled: false,
+      firstSyncMode: "last_24_hours",
+    },
+  });
+});
+
+test.each([true, false])(
+  "new Pixiv binding retains a previous avatar on a null refresh only when evidence is fresh=%s",
+  async (fresh) => {
+    collectionFixture([]);
+    let syncCount = 0;
+    const post = vi.spyOn(client, "POST").mockImplementation(async (path) =>
+      success(
+        path === "/api/authors/pixiv-profile/resolve"
+          ? ++syncCount === 1
+            ? {
+                ...resolvedPixiv,
+                syncedAt: new Date(
+                  Date.now() - (fresh ? 0 : 600_001),
+                ).toISOString(),
+              }
+            : {
+                ...resolvedPixiv,
+                displayName: "Latest nickname",
+                avatarFileObjectId: null,
+                avatarUrl: null,
+                profileProof: "fresh-null-proof",
+                syncedAt: new Date().toISOString(),
+              }
+          : pixiv,
+      ),
+    );
+    setup();
+    const bind = await screen.findByRole("button", { name: "关联 Pixiv" });
+    await waitFor(() =>
+      expect((bind as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(bind);
+    fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
+      target: { value: "123456" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+    );
+    await screen.findByRole("img", { name: "同步的 Pixiv 头像" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "同步 Pixiv 昵称和头像" }),
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("平台显示昵称（可选）") as HTMLInputElement)
+          .value,
+      ).toBe("Latest nickname"),
+    );
+    expect(
+      Boolean(screen.queryByRole("img", { name: "同步的 Pixiv 头像" })),
+    ).toBe(fresh);
+    fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(3));
+    expect(post.mock.calls[2][1]).toMatchObject({
+      body: {
+        externalUserId: "123456",
+        displayNameSnapshot: "Latest nickname",
+        avatarFileObjectId: fresh ? "avatar" : null,
+        profileProof: fresh ? "pixiv-proof" : "fresh-null-proof",
+      },
+    });
+  },
+);
+
 test("unavailable persisted seven-day mode keeps its actual label", async () => {
   const saved = {
     ...pixiv,

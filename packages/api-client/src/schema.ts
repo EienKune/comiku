@@ -674,6 +674,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/authors/pixiv-profile/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["resolvePixivProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/authors/creation-requests/{idempotencyKey}": {
         parameters: {
             query?: never;
@@ -2448,9 +2464,30 @@ export interface components {
             /** Format: date-time */
             syncedAt: string;
         };
+        ResolvePixivProfileDto: {
+            externalUserId: string;
+            /** Format: uuid */
+            authorId?: string;
+            /** Format: uuid */
+            accountId?: string;
+        };
+        ResolvedPixivProfileDto: {
+            profileProof: string;
+            externalUserId: string;
+            /** @enum {string|null} */
+            handle: null;
+            displayName: string;
+            profileUrl: string;
+            /** Format: uuid */
+            avatarFileObjectId: string | null;
+            avatarUrl: string | null;
+            adapterKey: string;
+            /** Format: date-time */
+            syncedAt: string;
+        };
         CreateAuthorAccountDto: {
             notes?: string | null;
-            /** @description X 资料解析返回的短时身份凭证 */
+            /** @description 平台资料解析返回的短时身份凭证，绑定平台与稳定用户 ID */
             profileProof?: string;
             platform: string;
             externalUserId: string;
@@ -2466,6 +2503,11 @@ export interface components {
             firstSyncMode: components["schemas"]["FirstSyncMode"];
         };
         CreateAuthorDto: {
+            /**
+             * @description 使用该平台经验证的账号头像作为作者头像；仅用于创建意图
+             * @enum {string}
+             */
+            profileSourcePlatform?: "x" | "pixiv";
             notes?: string | null;
             displayName: string;
             sourceLanguage: components["schemas"]["SourceLanguage"];
@@ -2507,7 +2549,7 @@ export interface components {
         };
         CreateExternalAccountDto: {
             notes?: string | null;
-            /** @description X 资料解析返回的短时身份凭证 */
+            /** @description 平台资料解析返回的短时身份凭证，绑定平台与稳定用户 ID */
             profileProof?: string;
             platform: string;
             externalUserId: string;
@@ -2524,7 +2566,7 @@ export interface components {
         };
         UpdateExternalAccountDto: {
             notes?: string | null;
-            /** @description X 身份变更或重新启用采集时的短时身份凭证 */
+            /** @description 平台资料同步凭证；X 身份变更或重新启用采集时必须提供 */
             profileProof?: string;
             /** @description 稳定平台用户 ID 不可修改；兼容旧客户端传入相同 ID，不同 ID 返回 409。新账号使用新建入口关联。 */
             externalUserId?: string;
@@ -7582,6 +7624,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResolvedXProfileDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    resolvePixivProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolvePixivProfileDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolvedPixivProfileDto"];
                 };
             };
             /** @description 请求字段无效 */

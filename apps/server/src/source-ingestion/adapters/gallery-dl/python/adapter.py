@@ -13,6 +13,7 @@ from urllib.parse import urlsplit, parse_qsl, unquote
 
 from gallery_dl import config, version
 from gallery_dl.extractor import twitter, pixiv
+from gallery_dl.extractor.common import Extractor
 from gallery_dl.util import NullResponse
 from pixiv_paging import PixivPager
 from pixiv_caption import plain_caption
@@ -1002,10 +1003,11 @@ def collect_post(source, post_id):
 
 def collect_profile(source):
     """Native info metadata only; never enumerate a user's timeline."""
-    if version.__version__ != "1.32.11" or source.get("platform") != "x":
+    platform = source.get("platform")
+    if version.__version__ != "1.32.11" or platform not in ("x", "pixiv"):
         raise AdapterError("runtime_unavailable")
     remote_id, handle = source.get("remote_id"), source.get("handle")
-    if remote_id is not None:
+    if remote_id is not None or platform == "pixiv":
         if not isinstance(remote_id, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", remote_id):
             raise AdapterError("source_unresolved")
         target = "id:" + remote_id
@@ -1015,6 +1017,30 @@ def collect_profile(source):
         target = handle
     ext = None
     try:
+        if platform == "pixiv":
+            # Dispatching items() would enumerate artworks. The native App API
+            # shares this initialized extractor's configuration and credentials.
+            ext = pixiv.PixivUserExtractor.from_url("https://www.pixiv.net/users/" + remote_id)
+            # Dispatch.initialize is a no-op; native profile items also invokes
+            # the base initializer explicitly before constructing PixivAppAPI.
+            Extractor.initialize(ext)
+            response = pixiv.PixivAppAPI(ext).user_detail(remote_id)
+            if not isinstance(response, dict) or "error" in response or not isinstance(response.get("user"), dict):
+                raise AdapterError("source_unresolved")
+            data = response["user"]
+            uid = data.get("id")
+            if type(uid) not in (str, int) or not re.fullmatch(r"[1-9][0-9]{0,19}", str(uid)):
+                raise AdapterError("source_unresolved")
+            uid = str(uid)
+            if uid != remote_id:
+                raise AdapterError("source_identity_conflict")
+            name, images = data.get("name"), data.get("profile_image_urls")
+            avatar = images.get("medium") if isinstance(images, dict) else None
+            return {"version": 1, "platform": "pixiv", "profile": {
+                "external_user_id": uid,
+                "display_name": name.strip() if isinstance(name, str) and name.strip() else uid,
+                "avatar_url": avatar if isinstance(avatar, str) else None,
+            }}
         config.set(("extractor", "twitter"), "metadata-user", False)
         config.set(("extractor", "twitter"), "transform", True)
         config.set(("extractor", "twitter"), "ratelimit", "abort")

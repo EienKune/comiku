@@ -10,6 +10,7 @@ import { Feedback } from "../account/forms";
 import { useAction } from "../account/use-action";
 import { useAuthorCollection } from "./author-collection";
 import { AuthorCollectionFields } from "./AuthorCollectionFields";
+import { preserveProfileAvatar } from "./profile-avatar";
 import {
   sourceAdapterLabels,
   sourceAdapterHealthLabels,
@@ -17,7 +18,9 @@ import {
 
 type Account = components["schemas"]["ExternalAccountDto"];
 type Summary = components["schemas"]["ExternalAccountSummaryDto"];
-type Profile = components["schemas"]["ResolvedXProfileDto"];
+type Profile =
+  | components["schemas"]["ResolvedXProfileDto"]
+  | components["schemas"]["ResolvedPixivProfileDto"];
 type Capability = components["schemas"]["SourceCapabilityDto"];
 
 export function AuthorAccountsPanel({
@@ -367,6 +370,7 @@ function AccountEditor({
   const action = useAction();
   const [handle, setHandle] = useState(account?.handle ?? "");
   const [externalUserId, setId] = useState(account?.externalUserId ?? "");
+  const pixivInput = useRef(account?.externalUserId ?? "");
   const [nickname, setNickname] = useState(account?.displayNameSnapshot ?? "");
   const [notes, setNotes] = useState(account?.notes ?? "");
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -382,6 +386,8 @@ function AccountEditor({
     await action.run(async () => {
       if (!account && capabilityPending)
         throw new Error("采集设置仍在读取，请稍后保存");
+      if (platform === "pixiv" && !/^[1-9][0-9]*$/.test(externalUserId.trim()))
+        throw new Error("Pixiv 用户 ID 必须是主页 /users/ 后的数字");
       if (!externalUserId.trim())
         throw new Error("请先同步 X 资料，获取可信平台身份。");
       if (
@@ -400,7 +406,8 @@ function AccountEditor({
         notes: notes.trim() || null,
         fetchEnabled,
         firstSyncMode,
-        ...(profile
+        ...(profile &&
+        (platform === "x" || profile.externalUserId === externalUserId.trim())
           ? {
               avatarFileObjectId: profile.avatarFileObjectId,
               profileSyncAdapter: profile.adapterKey,
@@ -497,7 +504,9 @@ function AccountEditor({
                     throw new Error(
                       "同步结果属于不同的 X 账号，请通过新建入口关联新账号。",
                     );
-                  setProfile(result);
+                  setProfile((current) =>
+                    preserveProfileAvatar(current, result),
+                  );
                   setHandle(result.handle);
                   setId(result.externalUserId);
                   setNickname(result.displayName);
@@ -530,20 +539,72 @@ function AccountEditor({
             </OptionalSection>
           </>
         ) : (
-          <TextField
-            label="Pixiv 用户 ID"
-            disabled={action.busy}
-            hint="主页 https://www.pixiv.net/users/123456 中的 123456；不是登录账号名。"
-            placeholder="123456"
-            inputMode="numeric"
-            pattern="[1-9][0-9]*"
-            required
-            value={externalUserId}
-            readOnly={Boolean(account)}
-            onChange={(event) => {
-              setId(event.target.value);
-            }}
-          />
+          <>
+            <TextField
+              label="Pixiv 用户 ID"
+              disabled={action.busy}
+              hint="主页 https://www.pixiv.net/users/123456 中的 123456；不是登录账号名。"
+              placeholder="123456"
+              inputMode="numeric"
+              pattern="[1-9][0-9]*"
+              required
+              value={externalUserId}
+              readOnly={Boolean(account)}
+              onChange={(event) => {
+                pixivInput.current = event.target.value;
+                setId(event.target.value);
+                setProfile(null);
+              }}
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              aria-label="同步 Pixiv 昵称和头像"
+              loading={action.busy}
+              disabled={
+                action.busy || !/^[1-9][0-9]*$/.test(externalUserId.trim())
+              }
+              onClick={() =>
+                void action.run(async () => {
+                  const requestedId = externalUserId.trim();
+                  const result = await unwrap(
+                    await client.POST("/api/authors/pixiv-profile/resolve", {
+                      body: {
+                        externalUserId: requestedId,
+                        authorId,
+                        ...(account ? { accountId: account.id } : {}),
+                      },
+                    }),
+                  );
+                  if (
+                    pixivInput.current.trim() !== requestedId ||
+                    result.externalUserId !== requestedId ||
+                    (account &&
+                      result.externalUserId !== account.externalUserId)
+                  )
+                    throw new Error(
+                      "Pixiv 用户 ID 已变化或同步结果不匹配，请重新同步。",
+                    );
+                  setProfile((current) =>
+                    preserveProfileAvatar(current, { ...result, handle: null }),
+                  );
+                  setNickname(result.displayName);
+                  action.setSuccess("Pixiv 昵称和头像已同步，保存后生效");
+                })
+              }
+            >
+              同步昵称和头像
+            </Button>
+            {profile && (
+              <p className="workspace-profile-sync">
+                <strong>{profile.externalUserId}</strong>
+                <span>{profile.displayName}</span>
+                {profile.avatarUrl && (
+                  <img src={profile.avatarUrl} alt="同步的 Pixiv 头像" />
+                )}
+              </p>
+            )}
+          </>
         )}
         <TextField
           label="平台显示昵称（可选）"

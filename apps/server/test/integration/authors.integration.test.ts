@@ -11,7 +11,7 @@ import { PrismaService } from "../../src/database/prisma.service.js";
 import { AuthorsService } from "../../src/authors/authors.service.js";
 import { ContentSourceRegistry } from "../../src/source-ingestion/source-registry.js";
 import { hashPassword } from "../../src/users/password.js";
-import { XProfileProofs } from "../../src/authors/x-profile-proof.js";
+import { ProfileProofs } from "../../src/authors/profile-proof.js";
 
 loadRootEnvironment();
 const testUrl = process.env.TEST_DATABASE_URL;
@@ -194,7 +194,7 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
     const xIdentity = BigInt(
       `0x${randomUUID().replaceAll("-", "").slice(0, 15)}`,
     ).toString();
-    const profileProofs = new XProfileProofs();
+    const profileProofs = new ProfileProofs();
     // Substitute server-issued evidence in this HTTP lifecycle fixture. Real
     // native resolution and proof trust boundaries have their own synthetic tests.
     const profileProof = (
@@ -204,6 +204,7 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
     ) =>
       profileProofs.issue(
         {
+          platform: "x",
           externalUserId,
           handle,
           avatarFileObjectId: null,

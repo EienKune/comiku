@@ -51,6 +51,8 @@ import {
   ManagedAuthorDto,
   ReorderAuthorEvidenceDto,
   ResolvedXProfileDto,
+  ResolvedPixivProfileDto,
+  ResolvePixivProfileDto,
   ResolveXProfileDto,
   RevisionDto,
   SourceCapabilityDto,
@@ -200,6 +202,24 @@ export class AuthorsController {
     return this.authors.resolveXProfile(
       request.actor.userId,
       input.handle,
+      input.authorId,
+      input.accountId,
+    );
+  }
+
+  @Post("pixiv-profile/resolve")
+  @HttpCode(200)
+  @Access({ permission: "authors:manage" })
+  @ApiOperation({ operationId: "resolvePixivProfile" })
+  @ApiBody({ type: ResolvePixivProfileDto })
+  @ApiOkResponse({ type: ResolvedPixivProfileDto })
+  resolvePixivProfile(
+    @Req() request: AuthRequest,
+    @Body(bodyValidation(ResolvePixivProfileDto)) input: ResolvePixivProfileDto,
+  ) {
+    return this.authors.resolvePixivProfile(
+      request.actor.userId,
+      input.externalUserId,
       input.authorId,
       input.accountId,
     );
