@@ -1021,7 +1021,9 @@ export class AuthorsService {
       ...(prepared
         ? {
             handle: prepared.handle,
-            avatarFileObjectId: prepared.avatarFileObjectId,
+            // Optional profile-avatar failure must preserve the observed account avatar.
+            avatarFileObjectId:
+              prepared.avatarFileObjectId ?? observed.avatarFileObjectId,
           }
         : {}),
     };
