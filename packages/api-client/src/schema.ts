@@ -738,6 +738,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/authors/{id}/managed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getManagedAuthor"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/authors/{id}/authorization-evidence": {
         parameters: {
             query?: never;
@@ -2308,6 +2324,7 @@ export interface components {
             profileUrl: string | null;
             displayNameSnapshot: string | null;
             avatarAvailable: boolean;
+            notes?: string | null;
             /** Format: uuid */
             authorId: string;
             fetchEnabled: boolean;
@@ -2336,6 +2353,7 @@ export interface components {
             updatedAt: string;
             /** Format: date-time */
             deletedAt: string | null;
+            notes?: string | null;
         };
         SourceCapabilityDto: {
             platform: string;
@@ -2431,6 +2449,7 @@ export interface components {
             syncedAt: string;
         };
         CreateAuthorAccountDto: {
+            notes?: string | null;
             /** @description X 资料解析返回的短时身份凭证 */
             profileProof?: string;
             platform: string;
@@ -2447,6 +2466,7 @@ export interface components {
             firstSyncMode: components["schemas"]["FirstSyncMode"];
         };
         CreateAuthorDto: {
+            notes?: string | null;
             displayName: string;
             sourceLanguage: components["schemas"]["SourceLanguage"];
             authorizationStatus: components["schemas"]["AuthorizationStatus"];
@@ -2478,6 +2498,7 @@ export interface components {
             evidenceIds: string[];
         };
         UpdateAuthorDto: {
+            notes?: string | null;
             displayName: string;
             sourceLanguage: components["schemas"]["SourceLanguage"];
             authorizationStatus: components["schemas"]["AuthorizationStatus"];
@@ -2485,6 +2506,7 @@ export interface components {
             expectedRevision: number;
         };
         CreateExternalAccountDto: {
+            notes?: string | null;
             /** @description X 资料解析返回的短时身份凭证 */
             profileProof?: string;
             platform: string;
@@ -2501,6 +2523,7 @@ export interface components {
             firstSyncMode: components["schemas"]["FirstSyncMode"];
         };
         UpdateExternalAccountDto: {
+            notes?: string | null;
             /** @description X 身份变更或重新启用采集时的短时身份凭证 */
             profileProof?: string;
             /** @description 稳定平台用户 ID 不可修改；兼容旧客户端传入相同 ID，不同 ID 返回 409。新账号使用新建入口关联。 */
@@ -8075,6 +8098,90 @@ export interface operations {
                 };
             };
         };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedAuthorDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    getManagedAuthor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: unknown;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             200: {
                 headers: {

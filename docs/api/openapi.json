@@ -5698,6 +5698,112 @@
         ]
       }
     },
+    "/api/authors/{id}/managed": {
+      "get": {
+        "operationId": "getManagedAuthor",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedAuthorDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "authors"
+        ]
+      }
+    },
     "/api/authors/{id}/authorization-evidence": {
       "get": {
         "operationId": "listAuthorAuthorizationEvidence",
@@ -16996,6 +17102,11 @@
           "avatarAvailable": {
             "type": "boolean"
           },
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2000
+          },
           "authorId": {
             "type": "string",
             "format": "uuid"
@@ -17105,6 +17216,11 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2000
           }
         },
         "required": [
@@ -17489,6 +17605,11 @@
       "CreateAuthorAccountDto": {
         "type": "object",
         "properties": {
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2000
+          },
           "profileProof": {
             "type": "string",
             "maxLength": 4096,
@@ -17554,6 +17675,11 @@
       "CreateAuthorDto": {
         "type": "object",
         "properties": {
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2000
+          },
           "displayName": {
             "type": "string",
             "minLength": 1,
@@ -17678,6 +17804,11 @@
       "UpdateAuthorDto": {
         "type": "object",
         "properties": {
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2000
+          },
           "displayName": {
             "type": "string",
             "minLength": 1,
@@ -17720,6 +17851,11 @@
       "CreateExternalAccountDto": {
         "type": "object",
         "properties": {
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2000
+          },
           "profileProof": {
             "type": "string",
             "maxLength": 4096,
@@ -17785,6 +17921,11 @@
       "UpdateExternalAccountDto": {
         "type": "object",
         "properties": {
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 2000
+          },
           "profileProof": {
             "type": "string",
             "maxLength": 4096,

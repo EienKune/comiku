@@ -1055,6 +1055,9 @@ function AuthorCreateDialog({
   const [status, setStatus] =
     useState<components["schemas"]["AuthorizationStatus"]>("pending");
   const [tags, setTags] = useState("");
+  const [notes, setNotes] = useState("");
+  const [xNotes, setXNotes] = useState("");
+  const [pixivNotes, setPixivNotes] = useState("");
   const [xHandle, setXHandle] = useState("");
   const [xProfile, setXProfile] = useState<ResolvedXProfile | null>(null);
   const [pixivUserId, setPixivUserId] = useState("");
@@ -1085,6 +1088,7 @@ function AuthorCreateDialog({
     if (!author) return null;
     progress.current.authorId = author.id;
     setSavedAuthorId(author.id);
+    setNotes(author.notes ?? "");
     if (author.displayName) setDisplayName(author.displayName);
     if (author.sourceLanguage) setSourceLanguage(author.sourceLanguage);
     if (author.authorizationStatus) setStatus(author.authorizationStatus);
@@ -1187,6 +1191,7 @@ function AuthorCreateDialog({
             [];
           if (xProfile)
             accounts.push({
+              ...(xNotes.trim() ? { notes: xNotes.trim() } : {}),
               platform: "x",
               externalUserId: xProfile.externalUserId,
               handle: xProfile.handle,
@@ -1199,6 +1204,7 @@ function AuthorCreateDialog({
             });
           if (pixivUserId.trim())
             accounts.push({
+              ...(pixivNotes.trim() ? { notes: pixivNotes.trim() } : {}),
               platform: "pixiv",
               externalUserId: pixivUserId.trim(),
               fetchEnabled: false,
@@ -1217,6 +1223,7 @@ function AuthorCreateDialog({
             result = await client.POST("/api/authors", {
               body: {
                 displayName,
+                ...(notes.trim() ? { notes: notes.trim() } : {}),
                 sourceLanguage,
                 authorizationStatus: status,
                 tagNames: tags
@@ -1445,6 +1452,32 @@ function AuthorCreateDialog({
             value={tags}
             onChange={(event) => setTags(event.target.value)}
           />
+          <label className="ui-field">
+            <span className="ui-field__label">作者备注（可选）</span>
+            <span className="ui-field__control">
+              <textarea
+                rows={3}
+                maxLength={2000}
+                disabled={fieldsDisabled}
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)}
+              />
+            </span>
+          </label>
+          {xHandle.trim() && (
+            <label className="ui-field">
+              <span className="ui-field__label">X 账号备注（可选）</span>
+              <span className="ui-field__control">
+                <textarea
+                  rows={3}
+                  maxLength={2000}
+                  disabled={fieldsDisabled}
+                  value={xNotes}
+                  onChange={(event) => setXNotes(event.target.value)}
+                />
+              </span>
+            </label>
+          )}
           {savedAuthorId && (
             <p className="account-success" role="status">
               作者已保存。 账号已保存；头像和授权凭证可稍后在详情中补传。
@@ -1482,6 +1515,18 @@ function AuthorCreateDialog({
               value={pixivUserId}
               onChange={(event) => setPixivUserId(event.target.value)}
             />
+            <label className="ui-field">
+              <span className="ui-field__label">Pixiv 账号备注（可选）</span>
+              <span className="ui-field__control">
+                <textarea
+                  rows={3}
+                  maxLength={2000}
+                  disabled={fieldsDisabled}
+                  value={pixivNotes}
+                  onChange={(event) => setPixivNotes(event.target.value)}
+                />
+              </span>
+            </label>
           </fieldset>
           {hasPendingRequest && !savedAuthorId && (
             <p role="status">
@@ -1537,6 +1582,16 @@ export function AuthorDetailPage() {
   const query = useApiQuery(["author", id], async () =>
     unwrap(await client.GET("/api/authors/{id}", { params: { path: { id } } })),
   );
+  const managed = useApiQuery(
+    ["managed-author", id],
+    async () =>
+      unwrap(
+        await client.GET("/api/authors/{id}/managed", {
+          params: { path: { id } },
+        }),
+      ),
+    user.permissions.includes("authors:manage"),
+  );
   const evidence = useApiQuery(
     ["author-evidence", id],
     async () =>
@@ -1580,7 +1635,30 @@ export function AuthorDetailPage() {
                   </div>
                 </dl>
                 {user.permissions.includes("authors:manage") && (
-                  <AuthorEditForm key={author.id} author={author} />
+                  <PageState
+                    query={{
+                      ...managed,
+                      isError: managed.isError && !managed.data,
+                    }}
+                  >
+                    {(snapshot) => (
+                      <>
+                        {managed.isError && (
+                          <p className="workspace-muted" role="status">
+                            管理资料更新失败，当前编辑已保留。
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => void managed.refetch()}
+                            >
+                              重试读取
+                            </Button>
+                          </p>
+                        )}
+                        <AuthorEditForm key={snapshot.id} author={snapshot} />
+                      </>
+                    )}
+                  </PageState>
                 )}
               </Surface>
               <AuthorAccountsPanel
@@ -1592,7 +1670,11 @@ export function AuthorDetailPage() {
                   author={author}
                   items={evidence.data ?? []}
                   onUpdated={async () => {
-                    await Promise.all([query.refetch(), evidence.refetch()]);
+                    await Promise.all([
+                      query.refetch(),
+                      managed.refetch(),
+                      evidence.refetch(),
+                    ]);
                   }}
                 />
               )}
@@ -1604,7 +1686,11 @@ export function AuthorDetailPage() {
   );
 }
 
-function AuthorEditForm({ author }: { author: Author }) {
+function AuthorEditForm({
+  author,
+}: {
+  author: components["schemas"]["ManagedAuthorDto"];
+}) {
   const action = useAction();
   const [displayName, setDisplayName] = useState(author.displayName);
   const [status, setStatus] = useState(author.authorizationStatus);
@@ -1612,6 +1698,7 @@ function AuthorEditForm({ author }: { author: Author }) {
   const [tags, setTags] = useState(
     author.tags.map((tag) => tag.name).join("，"),
   );
+  const [notes, setNotes] = useState(author.notes ?? "");
   const [avatar, setAvatar] = useState<File | null>(null);
   const saved = useRef(false);
   const [baselineRevision, setBaselineRevision] = useState(author.revision);
@@ -1619,14 +1706,18 @@ function AuthorEditForm({ author }: { author: Author }) {
   const [metadataDirty, setMetadataDirty] = useState(false);
   const upload = useRef(new AuthorImageUpload());
   const fieldsDisabled = action.busy || detailsSaved;
-  const loadSnapshot = useCallback((snapshot: Author) => {
-    setBaselineRevision(snapshot.revision);
-    setDisplayName(snapshot.displayName);
-    setStatus(snapshot.authorizationStatus);
-    setSourceLanguage(snapshot.sourceLanguage);
-    setTags(snapshot.tags.map((tag) => tag.name).join("，"));
-    setMetadataDirty(false);
-  }, []);
+  const loadSnapshot = useCallback(
+    (snapshot: components["schemas"]["ManagedAuthorDto"]) => {
+      setBaselineRevision(snapshot.revision);
+      setDisplayName(snapshot.displayName);
+      setNotes(snapshot.notes ?? "");
+      setStatus(snapshot.authorizationStatus);
+      setSourceLanguage(snapshot.sourceLanguage);
+      setTags(snapshot.tags.map((tag) => tag.name).join("，"));
+      setMetadataDirty(false);
+    },
+    [],
+  );
   useEffect(() => {
     if (
       !metadataDirty &&
@@ -1646,12 +1737,12 @@ function AuthorEditForm({ author }: { author: Author }) {
   async function loadLatest() {
     await action.run(async () => {
       const latest = await unwrap(
-        await client.GET("/api/authors/{id}", {
+        await client.GET("/api/authors/{id}/managed", {
           params: { path: { id: author.id } },
         }),
       );
       loadSnapshot(latest);
-      queryClient.setQueryData(["author", author.id], latest);
+      queryClient.setQueryData(["managed-author", author.id], latest);
       action.setSuccess("已加载最新资料，可继续编辑");
     });
   }
@@ -1666,6 +1757,7 @@ function AuthorEditForm({ author }: { author: Author }) {
               params: { path: { id: author.id } },
               body: {
                 displayName,
+                notes: notes.trim() || null,
                 sourceLanguage,
                 authorizationStatus: status,
                 tagNames: tags
@@ -1682,7 +1774,7 @@ function AuthorEditForm({ author }: { author: Author }) {
         if (avatar) {
           step = "头像上传";
           const current = await unwrap(
-            await client.GET("/api/authors/{id}", {
+            await client.GET("/api/authors/{id}/managed", {
               params: { path: { id: author.id } },
             }),
           );
@@ -1699,11 +1791,14 @@ function AuthorEditForm({ author }: { author: Author }) {
         }
         step = "读取保存结果";
         const refreshed = await unwrap(
-          await client.GET("/api/authors/{id}", {
+          await client.GET("/api/authors/{id}/managed", {
             params: { path: { id: author.id } },
           }),
         );
         loadSnapshot(refreshed);
+        await queryClient.invalidateQueries({
+          queryKey: ["managed-author", author.id],
+        });
         await queryClient.invalidateQueries({
           queryKey: ["author", author.id],
         });
@@ -1773,6 +1868,21 @@ function AuthorEditForm({ author }: { author: Author }) {
           setTags(event.target.value);
         }}
       />
+      <label className="ui-field">
+        <span className="ui-field__label">作者备注（可选）</span>
+        <span className="ui-field__control">
+          <textarea
+            rows={3}
+            maxLength={2000}
+            disabled={fieldsDisabled}
+            value={notes}
+            onChange={(event) => {
+              setMetadataDirty(true);
+              setNotes(event.target.value);
+            }}
+          />
+        </span>
+      </label>
       <ImagePicker
         label="手动头像（可选）"
         files={avatar ? [avatar] : []}

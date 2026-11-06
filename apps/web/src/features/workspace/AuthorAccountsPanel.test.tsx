@@ -603,3 +603,30 @@ test("new X identity cannot be entered as an unverified stable ID", async () => 
     (screen.getByLabelText("X 稳定用户 ID") as HTMLInputElement).readOnly,
   ).toBe(true);
 });
+
+test("management account notes render as text and save edited or cleared notes", async () => {
+  const saved = { ...pixiv, notes: "<b>private account</b>" };
+  vi.spyOn(client, "GET").mockImplementation(async (path) =>
+    success(
+      path === "/api/authors/sources" || String(path).endsWith("archived")
+        ? []
+        : [saved],
+    ),
+  );
+  const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(saved));
+  setup([saved]);
+  expect(
+    (await screen.findByText("<b>private account</b>")).querySelector("b"),
+  ).toBeNull();
+  fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+  const notes = screen.getByLabelText(
+    "账号备注（可选）",
+  ) as HTMLTextAreaElement;
+  expect(notes.value).toBe(saved.notes);
+  fireEvent.change(notes, { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+  await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+  expect(patch.mock.calls[0][1]).toMatchObject({
+    body: { notes: null, expectedRevision: 2 },
+  });
+});

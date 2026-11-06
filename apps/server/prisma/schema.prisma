@@ -177,6 +177,7 @@ model FileObject {
 }
 
 model Author {
+  notes                  String? @db.Text
   creationRequests AuthorCreationRequest[]
   id                  String                  @id @default(uuid()) @db.Uuid
   displayName         String                  @map("display_name") @db.VarChar(100)
@@ -235,6 +236,7 @@ model AuthorAuthorizationEvidence {
 }
 
 model AuthorExternalAccount {
+  notes                  String? @db.Text
   id                  String               @id @default(uuid()) @db.Uuid
   authorId            String               @map("author_id") @db.Uuid
   author              Author               @relation(fields: [authorId], references: [id], onDelete: Restrict)

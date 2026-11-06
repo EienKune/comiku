@@ -73,6 +73,7 @@ export function AuthorAccountsPanel({
     await Promise.all(
       [
         "author",
+        "managed-author",
         "authors",
         "author-accounts",
         "author-archived-accounts",
@@ -126,6 +127,9 @@ export function AuthorAccountsPanel({
                   <small>
                     {account.displayNameSnapshot || "未设置显示昵称"}
                   </small>
+                  {managed?.notes && (
+                    <p className="workspace-management-note">{managed.notes}</p>
+                  )}
                   {hasCollection && managed && (
                     <small>
                       {managed.fetchEnabled
@@ -274,6 +278,11 @@ export function AuthorAccountsPanel({
                             : `Pixiv · ${account.externalUserId}`}
                         </strong>
                         <small>已解绑；原有候选及作品来源保留</small>
+                        {account.notes && (
+                          <p className="workspace-management-note">
+                            {account.notes}
+                          </p>
+                        )}
                       </div>
                       <Button
                         size="sm"
@@ -365,6 +374,7 @@ function AccountEditor({
   const [handle, setHandle] = useState(account?.handle ?? "");
   const [externalUserId, setId] = useState(account?.externalUserId ?? "");
   const [nickname, setNickname] = useState(account?.displayNameSnapshot ?? "");
+  const [notes, setNotes] = useState(account?.notes ?? "");
   const [profile, setProfile] = useState<Profile | null>(null);
   const collectionModes = [
     ...new Set(
@@ -412,6 +422,7 @@ function AccountEditor({
       const fields = {
         handle: platform === "x" ? handle : null,
         displayNameSnapshot: nickname.trim() || null,
+        notes: notes.trim() || null,
         fetchEnabled,
         firstSyncMode,
         ...(profile
@@ -563,6 +574,17 @@ function AccountEditor({
           maxLength={255}
           onChange={(event) => setNickname(event.target.value)}
         />
+        <label className="ui-field">
+          <span className="ui-field__label">账号备注（可选）</span>
+          <span className="ui-field__control">
+            <textarea
+              rows={3}
+              maxLength={2000}
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+            />
+          </span>
+        </label>
         {(collectionModes.length > 0 || account?.fetchEnabled) && (
           <>
             <label className="account-checkbox">

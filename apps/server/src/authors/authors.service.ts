@@ -221,6 +221,7 @@ export class AuthorsService {
     return {
       id: account.id,
       authorId: account.authorId,
+      notes: account.notes ?? null,
       platform: account.platform,
       externalUserId: account.externalUserId,
       handle: account.handle,
@@ -309,6 +310,7 @@ export class AuthorsService {
   private managed(author: AuthorWithDetails): ManagedAuthorDto {
     return {
       ...this.author(author),
+      notes: author.notes ?? null,
       externalAccounts: author.externalAccounts.map((account) =>
         this.account(account),
       ),
@@ -462,6 +464,15 @@ export class AuthorsService {
     return this.author(author);
   }
 
+  async getManaged(id: string): Promise<ManagedAuthorDto> {
+    const author = await this.db.author.findFirst({
+      where: { id, deletedAt: null },
+      include: authorDetails,
+    });
+    if (!author) throw new NotFoundException("作者不存在");
+    return this.managed(author);
+  }
+
   private async assertCreateActor(
     tx: Prisma.TransactionClient,
     actorId: string,
@@ -500,6 +511,7 @@ export class AuthorsService {
         return {
           platform,
           ...identity,
+          ...(account.notes?.trim() ? { notes: account.notes.trim() } : {}),
           displayNameSnapshot: account.displayNameSnapshot?.trim() || null,
           avatarFileObjectId: account.avatarFileObjectId || null,
           fetchEnabled: account.fetchEnabled,
@@ -527,6 +539,7 @@ export class AuthorsService {
                 : 0,
           ),
           accounts,
+          ...(input.notes?.trim() ? { notes: input.notes.trim() } : {}),
         }),
       )
       .digest("hex");
@@ -620,6 +633,7 @@ export class AuthorsService {
         const author = await tx.author.create({
           data: {
             displayName: input.displayName.trim(),
+            notes: input.notes?.trim() || null,
             sourceLanguage: input.sourceLanguage,
             authorizationStatus: input.authorizationStatus,
             tags: {
@@ -663,6 +677,9 @@ export class AuthorsService {
           where: { id, revision: input.expectedRevision, deletedAt: null },
           data: {
             displayName: input.displayName,
+            ...(input.notes !== undefined
+              ? { notes: input.notes?.trim() || null }
+              : {}),
             sourceLanguage: input.sourceLanguage,
             authorizationStatus: input.authorizationStatus,
             revision: { increment: 1 },
@@ -795,6 +812,7 @@ export class AuthorsService {
       platform,
       ...this.identity(platform, input.externalUserId, input.handle),
       displayNameSnapshot: input.displayNameSnapshot?.trim() || null,
+      notes: input.notes?.trim() || null,
       avatarFileObjectId: input.avatarFileObjectId || null,
       fetchEnabled: input.fetchEnabled,
       firstSyncMode: input.firstSyncMode,
@@ -1047,6 +1065,9 @@ export class AuthorsService {
           },
           data: {
             ...identity,
+            ...(input.notes !== undefined
+              ? { notes: input.notes?.trim() || null }
+              : {}),
             displayNameSnapshot:
               input.displayNameSnapshot === undefined
                 ? current.displayNameSnapshot

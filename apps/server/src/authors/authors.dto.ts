@@ -30,6 +30,13 @@ const trimmed = ({ value }: { value: unknown }) =>
   typeof value === "string" ? value.trim() : value;
 
 export class CreateAuthorDto {
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 2000 })
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @MaxLength(2000)
+  notes?: string | null;
+
   @ApiProperty({ type: String, minLength: 1, maxLength: 100 })
   @Transform(trimmed)
   @IsString()
@@ -137,6 +144,13 @@ export class RevisionDto {
 }
 
 export class CreateExternalAccountDto {
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 2000 })
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @MaxLength(2000)
+  notes?: string | null;
+
   @ApiPropertyOptional({
     type: String,
     maxLength: 4096,
@@ -205,6 +219,13 @@ export class CreateExternalAccountDto {
 export class CreateAuthorAccountDto extends CreateExternalAccountDto {}
 
 export class UpdateExternalAccountDto {
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 2000 })
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @MaxLength(2000)
+  notes?: string | null;
+
   @ApiPropertyOptional({
     type: String,
     maxLength: 4096,
@@ -339,6 +360,8 @@ export class UpdateSourceAdapterStateDto {
 }
 
 export class ExternalAccountDto extends ExternalAccountSummaryDto {
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 2000 })
+  notes?: string | null;
   @ApiProperty({ type: String, format: "uuid" }) authorId!: string;
   @ApiProperty({ type: Boolean }) fetchEnabled!: boolean;
   @ApiProperty({ enum: FirstSyncMode, enumName: "FirstSyncMode" })
@@ -378,6 +401,8 @@ export class AuthorPageDto {
 }
 
 export class ManagedAuthorDto extends AuthorDto {
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 2000 })
+  notes?: string | null;
   @ApiProperty({ type: ExternalAccountDto, isArray: true })
   declare externalAccounts: ExternalAccountDto[];
 }

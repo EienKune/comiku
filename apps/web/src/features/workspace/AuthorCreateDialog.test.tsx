@@ -315,6 +315,7 @@ test("editing retries a failed avatar at the saved revision and then accepts a n
     id: "author",
     revision,
     displayName: "合成作者",
+    notes: "original note",
     authorizationStatus: "pending",
     sourceLanguage: "ja",
     tags: [],
@@ -322,12 +323,16 @@ test("editing retries a failed avatar at the saved revision and then accepts a n
     avatarAvailable: false,
   });
   vi.spyOn(client, "GET").mockImplementation(async (path) => {
-    if (path === "/api/authors/{id}" && completed && !readFailed) {
+    if (
+      (path === "/api/authors/{id}" || path === "/api/authors/{id}/managed") &&
+      completed &&
+      !readFailed
+    ) {
       readFailed = true;
       throw new Error("回读中断");
     }
     return ok(
-      path === "/api/authors/{id}"
+      path === "/api/authors/{id}" || path === "/api/authors/{id}/managed"
         ? author()
         : path === "/api/transfers/uploads/{id}"
           ? {
@@ -397,6 +402,9 @@ test("editing retries a failed avatar at the saved revision and then accepts a n
     </QueryClientProvider>,
   );
   const picker = await screen.findByLabelText("手动头像（可选）");
+  fireEvent.change(screen.getByLabelText("作者备注（可选）"), {
+    target: { value: "saved note" },
+  });
   const file = new File(["avatar"], "avatar.png", { type: "image/png" });
   Object.defineProperty(file, "arrayBuffer", {
     value: async () => new ArrayBuffer(6),
@@ -407,13 +415,19 @@ test("editing retries a failed avatar at the saved revision and then accepts a n
     "信息已保存",
   );
   await act(async () => {
-    queryClient.setQueryData(["author", "author"], author());
+    queryClient.setQueryData(["managed-author", "author"], author());
   });
   expect(screen.getByLabelText("作者昵称").hasAttribute("disabled")).toBe(true);
   expect(screen.getByRole("img", { name: "avatar.png" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /继续.*头像/ }));
   await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
   expect(patch).toHaveBeenCalledTimes(1);
+  expect(patch.mock.calls[0][1]).toMatchObject({
+    body: { notes: "saved note", expectedRevision: 1 },
+  });
+  expect(
+    (screen.getByLabelText("作者备注（可选）") as HTMLTextAreaElement).value,
+  ).toBe("saved note");
   expect(
     (post.mock.calls as unknown as [string, unknown][]).filter(
       ([path]) => path === "/api/transfers/uploads",
@@ -472,6 +486,7 @@ test.each([false, true])(
       id: "author",
       revision: 1,
       displayName: "原作者",
+      notes: "original note",
       authorizationStatus: "pending",
       sourceLanguage: "ja",
       tags: [],
@@ -482,10 +497,15 @@ test.each([false, true])(
       ...original,
       revision: 3,
       displayName: "其他操作保存的昵称",
+      notes: "newer note",
     };
     let current = original;
     vi.spyOn(client, "GET").mockImplementation(async (path) =>
-      ok(path === "/api/authors/{id}" ? current : []),
+      ok(
+        path === "/api/authors/{id}" || path === "/api/authors/{id}/managed"
+          ? current
+          : [],
+      ),
     );
     const patch = vi
       .spyOn(client, "PATCH")
@@ -516,7 +536,7 @@ test.each([false, true])(
     if (dirty) fireEvent.change(name, { target: { value: "未保存的昵称" } });
     current = latest;
     await act(async () => {
-      queryClient.setQueryData(["author", "author"], latest);
+      queryClient.setQueryData(["managed-author", "author"], latest);
     });
     if (dirty) {
       expect(name.value).toBe("未保存的昵称");
@@ -532,6 +552,9 @@ test.each([false, true])(
       fireEvent.click(screen.getByRole("button", { name: "加载最新资料" }));
     }
     await waitFor(() => expect(name.value).toBe("其他操作保存的昵称"));
+    expect(
+      (screen.getByLabelText("作者备注（可选）") as HTMLTextAreaElement).value,
+    ).toBe("newer note");
     fireEvent.change(name, { target: { value: "继续编辑" } });
     fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
     await waitFor(() => expect(patch).toHaveBeenCalledTimes(dirty ? 2 : 1));
@@ -542,3 +565,207 @@ test.each([false, true])(
     expect(calls.at(-1)![1].body.expectedRevision).toBe(3);
   },
 );
+
+test("author creation includes optional author and account notes in the atomic request", async () => {
+  vi.spyOn(client, "GET").mockImplementation(async (path) =>
+    ok(
+      path === "/api/authors"
+        ? { items: [], total: 0, nextCursor: null }
+        : null,
+    ),
+  );
+  const post = vi
+    .spyOn(client, "POST")
+    .mockResolvedValue(ok({ id: "author", revision: 0, externalAccounts: [] }));
+  await openCreate();
+  fireEvent.change(screen.getByLabelText("作者备注（可选）"), {
+    target: { value: "author internal" },
+  });
+  fireEvent.change(screen.getByLabelText("Pixiv 账号备注（可选）"), {
+    target: { value: "account internal" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(post).toHaveBeenCalledOnce());
+  expect(post.mock.calls[0][1]).toMatchObject({
+    body: {
+      notes: "author internal",
+      accounts: [{ notes: "account internal" }],
+    },
+  });
+});
+
+test("public detail never requests or renders management notes", async () => {
+  const author = {
+    id: "author",
+    revision: 1,
+    displayName: "Public artist",
+    authorizationStatus: "pending",
+    sourceLanguage: "ja",
+    tags: [],
+    externalAccounts: [],
+    avatarAvailable: false,
+  };
+  const get = vi.spyOn(client, "GET").mockResolvedValue(ok(author));
+  render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/authors/author"]}>
+        <Routes>
+          <Route
+            element={<Outlet context={{ permissions: ["authors:read"] }} />}
+          >
+            <Route path="/authors/:id" element={<AuthorDetailPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await screen.findByText("Public artist");
+  expect(
+    (get.mock.calls as unknown as [string, unknown][]).some(([path]) =>
+      String(path).includes("managed"),
+    ),
+  ).toBe(false);
+  expect(screen.queryByLabelText("作者备注（可选）")).toBeNull();
+});
+
+test("dirty author notes survive background refresh until explicit latest load", async () => {
+  const original = {
+    id: "author",
+    revision: 1,
+    displayName: "Artist",
+    authorizationStatus: "pending",
+    sourceLanguage: "ja",
+    tags: [],
+    externalAccounts: [],
+    avatarAvailable: false,
+    notes: "saved notes",
+  };
+  let current = original;
+  vi.spyOn(client, "GET").mockImplementation(async (path) =>
+    ok(
+      path === "/api/authors/{id}" || path === "/api/authors/{id}/managed"
+        ? current
+        : [],
+    ),
+  );
+  const patch = vi
+    .spyOn(client, "PATCH")
+    .mockResolvedValue(failed("作者版本已变化"));
+  render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/authors/author"]}>
+        <Routes>
+          <Route
+            element={
+              <Outlet
+                context={{ permissions: ["authors:read", "authors:manage"] }}
+              />
+            }
+          >
+            <Route path="/authors/:id" element={<AuthorDetailPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  const notes = (await screen.findByLabelText(
+    "作者备注（可选）",
+  )) as HTMLTextAreaElement;
+  expect(notes.value).toBe("saved notes");
+  fireEvent.change(notes, { target: { value: "dirty notes" } });
+  current = { ...original, revision: 2, notes: "other manager notes" };
+  await act(async () => {
+    queryClient.setQueryData(["managed-author", "author"], current);
+  });
+  expect(notes.value).toBe("dirty notes");
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+  expect(patch.mock.calls[0][1]).toMatchObject({
+    body: { notes: "dirty notes", expectedRevision: 1 },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "加载最新资料" }));
+  await waitFor(() => expect(notes.value).toBe("other manager notes"));
+});
+
+test("a transient managed refetch error preserves dirty fields and the selected avatar", async () => {
+  const original = {
+    id: "author",
+    revision: 1,
+    displayName: "Artist",
+    authorizationStatus: "pending",
+    sourceLanguage: "ja",
+    tags: [],
+    externalAccounts: [],
+    avatarAvailable: false,
+    notes: "saved notes",
+  };
+  let failManaged = false;
+  vi.stubGlobal(
+    "URL",
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => "blob:preview"),
+      revokeObjectURL: vi.fn(),
+    }),
+  );
+  vi.spyOn(client, "GET").mockImplementation(async (path) => {
+    if (path === "/api/authors/{id}/managed" && failManaged)
+      throw new Error("temporary managed read failure");
+    return ok(
+      path === "/api/authors/{id}" || path === "/api/authors/{id}/managed"
+        ? original
+        : [],
+    );
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/authors/author"]}>
+        <Routes>
+          <Route
+            element={
+              <Outlet
+                context={{ permissions: ["authors:read", "authors:manage"] }}
+              />
+            }
+          >
+            <Route path="/authors/:id" element={<AuthorDetailPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  const notes = (await screen.findByLabelText(
+    "作者备注（可选）",
+  )) as HTMLTextAreaElement;
+  fireEvent.change(notes, { target: { value: "dirty notes" } });
+  fireEvent.change(screen.getByLabelText("作者昵称"), {
+    target: { value: "dirty name" },
+  });
+  fireEvent.change(screen.getByLabelText("手动头像（可选）"), {
+    target: {
+      files: [
+        new File(["avatar"], "pending-avatar.png", { type: "image/png" }),
+      ],
+    },
+  });
+  failManaged = true;
+  await act(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: ["managed-author", "author"],
+    });
+  });
+  expect(screen.getByLabelText("作者备注（可选）")).toBe(notes);
+  expect(notes.value).toBe("dirty notes");
+  expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
+    "dirty name",
+  );
+  expect(screen.getByRole("img", { name: "pending-avatar.png" })).toBeTruthy();
+  expect(await screen.findByText(/管理资料更新失败/)).toBeTruthy();
+  failManaged = false;
+  fireEvent.click(screen.getByRole("button", { name: "重试读取" }));
+  await waitFor(() =>
+    expect(screen.queryByText(/管理资料更新失败/)).toBeNull(),
+  );
+  expect(screen.getByLabelText("作者备注（可选）")).toBe(notes);
+  expect(notes.value).toBe("dirty notes");
+  expect(screen.getByRole("img", { name: "pending-avatar.png" })).toBeTruthy();
+});

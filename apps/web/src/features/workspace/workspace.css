@@ -2390,3 +2390,9 @@
 .workspace-revision-panel .workspace-inline-actions {
   flex-wrap: wrap;
 }
+
+.workspace-management-note {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-block: var(--space-2);
+}

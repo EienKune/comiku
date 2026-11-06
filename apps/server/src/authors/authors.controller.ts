@@ -296,6 +296,15 @@ export class AuthorsController {
     );
   }
 
+  @Get(":id/managed")
+  @Access({ permission: "authors:manage" })
+  @ApiOperation({ operationId: "getManagedAuthor" })
+  @ApiParam({ name: "id", format: "uuid" })
+  @ApiOkResponse({ type: ManagedAuthorDto })
+  managed(@Param("id", ParseUUIDPipe) id: string) {
+    return this.authors.getManaged(id);
+  }
+
   @Get(":id/authorization-evidence")
   @Access({ permission: "authors:sensitive" })
   @ApiOperation({ operationId: "listAuthorAuthorizationEvidence" })
