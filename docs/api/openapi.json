@@ -188,6 +188,112 @@
         ]
       }
     },
+    "/api/candidates/{id}/classification-scores": {
+      "get": {
+        "operationId": "getCandidateClassificationScores",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateClassificationScoresDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "candidates"
+        ]
+      }
+    },
     "/api/candidates/{id}/analysis-retry": {
       "post": {
         "operationId": "retryCandidateAnalysis",
@@ -2960,6 +3066,212 @@
         "summary": "",
         "tags": [
           "accounts"
+        ]
+      }
+    },
+    "/api/source-fetch/platforms": {
+      "get": {
+        "operationId": "listSourcePlatforms",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SourcePlatformStateDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-fetch"
+        ]
+      }
+    },
+    "/api/source-fetch/platforms/{platform}/recheck": {
+      "post": {
+        "operationId": "recheckSourcePlatform",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcePlatformRecheckDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-fetch"
         ]
       }
     },
@@ -6942,8 +7254,17 @@
             }
           },
           {
+            "description": "Opaque v2 cursor; legacy cursors are rejected",
             "required": false,
             "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "required": false,
+            "name": "reviewSessionId",
             "in": "query",
             "schema": {
               "format": "uuid",
@@ -6969,6 +7290,210 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CandidatePageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "candidates"
+        ]
+      }
+    },
+    "/api/candidates/review-sessions": {
+      "post": {
+        "operationId": "createCandidateReviewSession",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCandidateReviewSessionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateReviewSessionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "candidates"
+        ]
+      }
+    },
+    "/api/candidates/review-policy": {
+      "get": {
+        "operationId": "getCandidateReviewPolicy",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateReviewPolicyDto"
                 }
               }
             }
@@ -7290,122 +7815,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CandidateTagGroupDto"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "请求字段无效",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDto"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "登录失效",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDto"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "权限、来源或改密限制",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDto"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "资源不存在",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDto"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "数据冲突",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDto"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "请求频率限制",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDto"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "服务器错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorDto"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "cookie": []
-          }
-        ],
-        "summary": "",
-        "tags": [
-          "candidates"
-        ]
-      }
-    },
-    "/api/candidates/{id}/classification": {
-      "patch": {
-        "operationId": "setCandidateClassification",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetCandidateClassificationDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CandidateDto"
                 }
               }
             }
@@ -14985,6 +15394,100 @@
           "service"
         ]
       },
+      "CandidateClassificationTagDto": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "neutral",
+              "info",
+              "success",
+              "warning",
+              "danger"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "text",
+          "tone"
+        ]
+      },
+      "CandidateClassificationImageDto": {
+        "type": "object",
+        "properties": {
+          "mediaId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "index": {
+            "type": "number",
+            "minimum": 1
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "pending",
+              "failed",
+              "unavailable"
+            ]
+          },
+          "scores": {
+            "nullable": true,
+            "description": "Probabilities aligned with columns; null when unusable.",
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "winner": {
+            "type": "number",
+            "nullable": true,
+            "description": "Zero-based winning column; null when unusable."
+          }
+        },
+        "required": [
+          "mediaId",
+          "index",
+          "state",
+          "scores",
+          "winner"
+        ]
+      },
+      "CandidateClassificationScoresDto": {
+        "type": "object",
+        "properties": {
+          "modelKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandidateClassificationTagDto"
+            }
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandidateClassificationImageDto"
+            }
+          }
+        },
+        "required": [
+          "modelKey",
+          "columns",
+          "images"
+        ]
+      },
       "RetryAnalysisDto": {
         "type": "object",
         "properties": {
@@ -15734,6 +16237,55 @@
           "currentPassword"
         ]
       },
+      "SourcePlatformStateDto": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "credentialGeneration": {
+            "type": "string"
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "cooldownUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "revision": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "platform",
+          "status",
+          "credentialGeneration",
+          "errorCode",
+          "cooldownUntil",
+          "revision"
+        ]
+      },
+      "SourcePlatformRecheckDto": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "platform",
+          "status"
+        ]
+      },
       "SourceFetchTrigger": {
         "type": "string",
         "enum": [
@@ -15754,6 +16306,19 @@
       "SourceFetchProgressSnapshotDto": {
         "type": "object",
         "properties": {
+          "targetCount": {
+            "type": "number"
+          },
+          "completedTargets": {
+            "type": "number"
+          },
+          "waitingTargets": {
+            "type": "number"
+          },
+          "waitingReason": {
+            "type": "string",
+            "nullable": true
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -15948,6 +16513,19 @@
       "SourceFetchRunDto": {
         "type": "object",
         "properties": {
+          "targetCount": {
+            "type": "number"
+          },
+          "completedTargets": {
+            "type": "number"
+          },
+          "waitingTargets": {
+            "type": "number"
+          },
+          "waitingReason": {
+            "type": "string",
+            "nullable": true
+          },
           "attempts": {
             "type": "number"
           },
@@ -16222,7 +16800,8 @@
         "type": "string",
         "enum": [
           "none",
-          "last_24_hours"
+          "last_24_hours",
+          "last_7_days"
         ]
       },
       "SourceAdapterStateDto": {
@@ -17251,45 +17830,40 @@
           "discarded"
         ]
       },
-      "CandidateClassificationTagDto": {
+      "CandidateTagRuleMatchDto": {
         "type": "object",
         "properties": {
-          "label": {
+          "normalizedValue": {
             "type": "string"
           },
-          "text": {
+          "displayValue": {
             "type": "string"
           },
-          "tone": {
+          "groupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "groupName": {
+            "type": "string"
+          },
+          "groupRevision": {
+            "type": "number"
+          },
+          "direction": {
             "type": "string",
             "enum": [
-              "neutral",
-              "info",
-              "success",
-              "warning",
-              "danger"
+              "priority",
+              "deprioritize"
             ]
           }
         },
         "required": [
-          "label",
-          "text",
-          "tone"
-        ]
-      },
-      "CandidateTagDisposition": {
-        "type": "string",
-        "enum": [
-          "valid",
-          "neutral",
-          "blocked"
-        ]
-      },
-      "CandidateVisualClass": {
-        "type": "string",
-        "enum": [
-          "manga",
-          "photo"
+          "normalizedValue",
+          "displayValue",
+          "groupId",
+          "groupName",
+          "groupRevision",
+          "direction"
         ]
       },
       "ReferencedPostType": {
@@ -17336,22 +17910,42 @@
       "CandidateDto": {
         "type": "object",
         "properties": {
+          "canRetryAnalysis": {
+            "type": "boolean"
+          },
           "classificationTags": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/CandidateClassificationTagDto"
             }
           },
-          "reviewPriority": {
+          "triageGroup": {
             "type": "string",
             "enum": [
-              "high",
-              "medium",
-              "low",
-              "unprocessed",
-              "queued",
-              "failed"
+              "priority",
+              "uncertain",
+              "low_priority"
             ]
+          },
+          "triageReasons": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "rule_conflict",
+                "priority_tag",
+                "priority_model",
+                "deprioritize_tag",
+                "all_images_low",
+                "insufficient_evidence"
+              ]
+            }
+          },
+          "tagRuleMatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandidateTagRuleMatchDto"
+            }
           },
           "id": {
             "type": "string",
@@ -17392,32 +17986,6 @@
             "items": {
               "type": "string"
             }
-          },
-          "tagDisposition": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/CandidateTagDisposition"
-              }
-            ]
-          },
-          "visualClass": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/CandidateVisualClass"
-              }
-            ]
-          },
-          "visualClassSource": {
-            "type": "string",
-            "enum": [
-              "human",
-              "model",
-              "default"
-            ]
-          },
-          "classificationRevision": {
-            "type": "number",
-            "nullable": true
           },
           "externalPostId": {
             "type": "string"
@@ -17478,6 +18046,9 @@
           }
         },
         "required": [
+          "triageGroup",
+          "triageReasons",
+          "tagRuleMatches",
           "id",
           "authorId",
           "authorName",
@@ -17487,10 +18058,6 @@
           "sourceLanguage",
           "sourceAdapters",
           "hashtags",
-          "tagDisposition",
-          "visualClass",
-          "visualClassSource",
-          "classificationRevision",
           "externalPostId",
           "externalPostUrl",
           "text",
@@ -17523,7 +18090,6 @@
           },
           "nextCursor": {
             "type": "string",
-            "format": "uuid",
             "nullable": true
           }
         },
@@ -17531,6 +18097,172 @@
           "items",
           "total",
           "nextCursor"
+        ]
+      },
+      "CreateCandidateReviewSessionDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CandidateStatus"
+              }
+            ]
+          },
+          "authorId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "search": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "sourceLanguage": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceLanguage"
+              }
+            ]
+          },
+          "triageGroup": {
+            "type": "string",
+            "enum": [
+              "priority",
+              "uncertain",
+              "low_priority"
+            ]
+          },
+          "fetchedAfter": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fetchedBefore": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque v2 cursor; legacy cursors are rejected"
+          },
+          "reviewSessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 24
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "replaceSessionId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "idempotencyKey"
+        ]
+      },
+      "CandidateReviewCountsDto": {
+        "type": "object",
+        "properties": {
+          "priority": {
+            "type": "number"
+          },
+          "uncertain": {
+            "type": "number"
+          },
+          "low_priority": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "priority",
+          "uncertain",
+          "low_priority"
+        ]
+      },
+      "CandidateReviewSessionDto": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/CandidateReviewCountsDto"
+          }
+        },
+        "required": [
+          "sessionId",
+          "expiresAt",
+          "counts"
+        ]
+      },
+      "CandidateReviewPolicyClassDto": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "neutral",
+              "info",
+              "success",
+              "warning",
+              "danger"
+            ]
+          },
+          "triageGroup": {
+            "type": "string",
+            "enum": [
+              "priority",
+              "uncertain",
+              "low_priority"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "text",
+          "tone",
+          "triageGroup"
+        ]
+      },
+      "CandidateReviewPolicyDto": {
+        "type": "object",
+        "properties": {
+          "modelKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "policyKey": {
+            "type": "string"
+          },
+          "classes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandidateReviewPolicyClassDto"
+            }
+          }
+        },
+        "required": [
+          "modelKey",
+          "policyKey",
+          "classes"
         ]
       },
       "CandidateTagGroupKind": {
@@ -17650,27 +18382,6 @@
           "kind",
           "enabled",
           "aliases",
-          "expectedRevision"
-        ]
-      },
-      "SetCandidateClassificationDto": {
-        "type": "object",
-        "properties": {
-          "label": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/CandidateVisualClass"
-              }
-            ]
-          },
-          "expectedRevision": {
-            "type": "number",
-            "minimum": 0,
-            "nullable": true
-          }
-        },
-        "required": [
-          "label",
           "expectedRevision"
         ]
       },

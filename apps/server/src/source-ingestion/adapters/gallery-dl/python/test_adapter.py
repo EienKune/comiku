@@ -74,7 +74,8 @@ class AdapterTests(unittest.TestCase):
         response.reason = "Not Found" if status == 404 else "fixture"
         response._content = body.encode("utf-8")
         response.url = "https://x.com/graphql/fixture/UserTweetsAndReplies?cursor=private-cursor&auth_token=fixture-secret-token"
-        response.headers.update({"Content-Type": "text/html", "CF-Ray": "fixture-ray", "X-Request-Id": "fixture-request", "X-Rate-Limit-Remaining": "10", "Set-Cookie": "auth_token=fixture-secret-token", "Location": "https://private.invalid/?token=fixture-secret-token"})
+        # Independent opaque IDs: these must survive while cookie/token canaries do not.
+        response.headers.update({"Content-Type": "text/html", "CF-Ray": "cf-a7d3b9e2", "X-Request-Id": "req-9c5e7a1b", "X-Rate-Limit-Remaining": "10", "Set-Cookie": "auth_token=fixture-secret-token", "Location": "https://private.invalid/?token=fixture-secret-token"})
         return response
 
     def test_failed_native_http_keeps_bounded_response_before_abort_discards_it(self):
@@ -93,8 +94,8 @@ class AdapterTests(unittest.TestCase):
             self.assertLessEqual(len(excerpt), 4200)
             self.assertEqual(body, excerpt) if len(body) <= 4096 else self.assertIn("truncated", excerpt)
             headers = json.loads(detail.get("http_response_headers", "{}"))
-            self.assertEqual("fixture-ray", headers.get("cf-ray"))
-            self.assertEqual("fixture-request", headers.get("x-request-id"))
+            self.assertEqual("cf-a7d3b9e2", headers.get("cf-ray"))
+            self.assertEqual("req-9c5e7a1b", headers.get("x-request-id"))
             self.assertNotIn("set-cookie", headers)
             self.assertNotIn("location", headers)
             raw = json.dumps(detail)

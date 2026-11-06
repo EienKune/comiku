@@ -284,6 +284,27 @@ class PixivPagingTests(unittest.TestCase):
         self.assertEqual([], [post_id for page in pages for post_id in directory_ids(page)])
         self.assertEqual(set(upstream.catalog_ids), set(pages[-1]["checkpoint"]["ids"]))
 
+    def test_missing_metadata_future_is_revisited_in_next_window(self):
+        for empty_window in (False, True):
+            with self.subTest(empty_window=empty_window):
+                self.source = {"platform": "pixiv", "remote_id": "42",
+                               "cutoff": UNTIL if empty_window else CUTOFF,
+                               "until": UNTIL}
+                upstream = PixivUpstream(self, [[]],
+                                         [ajax_work(post_id, OLD) for post_id in range(100, 130)]
+                                         + [ajax_work(10, UNTIL)])
+                del upstream.briefs["10"]
+                with upstream.installed():
+                    first = self.collect_all(upstream)
+                    checkpoint = first[-1]["checkpoint"]
+                    self.assertNotIn("10", checkpoint["ids"],
+                                     "future detail entered the completed baseline")
+                    self.source.update(cutoff=UNTIL, until="2026-10-06T00:00:00Z",
+                                       checkpoint=checkpoint)
+                    second = self.collect_all(upstream)
+                self.assertEqual(["10", "10"], upstream.detail_ids)
+                self.assertEqual(["10"], [item for page in second for item in directory_ids(page)])
+
     def test_upper_exclusive_window_skips_future_app_and_ajax_native_detail(self):
         self.source["until"] = UNTIL
         future_app = app_work(900, UNTIL)
@@ -545,11 +566,12 @@ class PixivPagingTests(unittest.TestCase):
         with upstream.installed():
             self.assert_scan_fails(upstream, "cursor_invalid")
 
-    def test_missing_metadata_entry_cannot_complete_union(self):
+    def test_missing_metadata_entry_is_resolved_from_native_detail(self):
         upstream = PixivUpstream(self, [[]], [ajax_work(100), ajax_work(200)])
         del upstream.briefs["100"]
         with upstream.installed():
-            self.assert_scan_fails(upstream, "discovery_incomplete")
+            pages = self.collect_all(upstream)
+        self.assertEqual({"100", "200"}, {item for page in pages for item in directory_ids(page)})
 
     def test_metadata_identity_author_type_and_date_must_be_known(self):
         mutations = (
@@ -825,6 +847,28 @@ class PixivPagingTests(unittest.TestCase):
             self.assert_scan_fails(upstream, "discovery_incomplete")
         self.assertEqual([], native_entries,
                          "pageCount must be rejected before native list allocation")
+
+    def test_existing_app_and_ajax_captions_are_plain_without_extra_enrichment(self):
+        for option in ("comments", "captions"):
+            config.set(("extractor", "pixiv"), option, True)
+        app = app_work(500)
+        app["title"] = "App title"
+        app["caption"] = 'First &amp; second<br><a href="https://example.invalid">Link label</a> &lt;student&gt;'
+        empty = app_work(501)
+        empty["caption"] = ""
+        ajax = ajax_work(100)
+        ajax["illustComment"] = '<p>AJAX &amp; entity</p><a href="/jump.php?https%3A%2F%2Fexample.invalid">Link text</a> &lt;student&gt;'
+        upstream = PixivUpstream(self, [[app, empty]], [ajax])
+        with upstream.installed():
+            pages = self.collect_all(upstream)
+        records = {str(record[-1]["id"]): record[-1] for page in pages for record in page["records"] if record[0] == 2}
+        self.assertEqual("First & second\nLink label <student>", records["500"]["description"])
+        self.assertEqual("AJAX & entity\nLink text <student>", records["100"]["description"])
+        self.assertEqual("", records["501"]["description"])
+        self.assertEqual(["100"], upstream.detail_ids,
+                         "empty App caption must not fetch extra detail")
+        # AJAX fixture rejects every unexpected endpoint, including comments.
+        self.assertEqual(0, upstream.user_detail_calls)
 
     def test_optional_metadata_enrichment_cannot_expand_collection_work(self):
         for option in ("metadata", "metadata-bookmark", "comments", "captions"):

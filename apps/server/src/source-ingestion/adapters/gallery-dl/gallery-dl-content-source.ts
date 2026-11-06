@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FirstSyncMode } from "../../../generated/prisma/client.js";
 import type {
@@ -11,8 +11,112 @@ import type {
   SourceCursor,
   SourcePage,
   SourceScanContext,
+  SourceDiscoveryFailure,
+  SourcePostResult,
 } from "../../content-source.js";
 import { jsonObject, SourceResponseError } from "../../source-response.js";
+import {
+  sanitizeSourceDiagnostic,
+  type SourceFailureScope,
+} from "../../source-diagnostics.js";
+
+/** Trusted local configuration is read only to suppress secrets, never returned or logged. */
+async function diagnosticSecrets(configPath: string): Promise<string[]> {
+  const secrets = [configPath];
+  const boundedRead = async (path: string) => {
+    if ((await stat(path)).size > 1024 * 1024)
+      throw new Error("Configuration exceeds diagnostic read limit");
+    return readFile(path, "utf8");
+  };
+  try {
+    const visit = async (value: unknown, depth = 0): Promise<void> => {
+      if (depth > 12 || !value || typeof value !== "object") return;
+      for (const [key, entry] of Object.entries(value)) {
+        if (key === "cookies" && typeof entry === "string") {
+          secrets.push(entry);
+          try {
+            const content = await boundedRead(
+              resolve(dirname(configPath), entry),
+            );
+            for (const line of content.split(/\r?\n/)) {
+              const fields = line.split("\t");
+              if (fields.length >= 7) secrets.push(fields[6]);
+            }
+          } catch {
+            /* Missing cookies are diagnosed by the bridge, without their path. */
+          }
+        } else if (
+          /token|secret|password|authorization|cookie|api.?key/i.test(key)
+        ) {
+          if (typeof entry === "string") secrets.push(entry);
+          else if (entry && typeof entry === "object")
+            for (const secret of Object.values(entry))
+              if (typeof secret === "string") secrets.push(secret);
+        } else await visit(entry, depth + 1);
+      }
+    };
+    await visit(JSON.parse(await boundedRead(configPath)));
+  } catch {
+    /* Diagnostics must never replace the original failure. */
+  }
+  return secrets;
+}
+
+/** Process boundary accepts only primitive native fields; never serializes an exception. */
+export function galleryProcessResult(
+  error: unknown,
+  stdout: string,
+  stderr: string,
+  duration: number,
+  secrets: readonly string[] = [],
+): Record<string, unknown> {
+  const own =
+    error && typeof error === "object"
+      ? Object.getOwnPropertyDescriptors(error)
+      : {};
+  const field = (key: string): unknown => own[key]?.value;
+  const code = field("code");
+  const killed = field("killed") === true;
+  const reason =
+    code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+      ? "process_output_limit"
+      : killed
+        ? "process_timeout"
+        : typeof code === "string"
+          ? "process_start"
+          : "process_exit";
+  const diagnostic = sanitizeSourceDiagnostic(
+    {
+      stage: "runner",
+      stderr,
+      duration,
+      exitCode: typeof code === "number" ? code : undefined,
+      signal: field("signal"),
+      killed,
+      timeout: reason === "process_timeout",
+    },
+    secrets,
+  );
+  if (error)
+    throw new SourceResponseError("temporary_failure", {
+      reason,
+      scope: "transport",
+      diagnostic,
+    });
+  try {
+    const parsed = jsonObject(JSON.parse(stdout));
+    if (!parsed) throw new Error("Invalid shape");
+    if (parsed.diagnostic)
+      parsed.diagnostic = sanitizeSourceDiagnostic(parsed.diagnostic, secrets);
+    return parsed;
+  } catch {
+    throw new SourceResponseError("invalid_response", {
+      reason: "invalid_json",
+      scope: "protocol",
+      diagnostic,
+    });
+  }
+}
 
 export interface GalleryDlConfig {
   python: string;
@@ -21,6 +125,7 @@ export interface GalleryDlConfig {
 type PageRunner = (
   source: Record<string, unknown>,
   cursor: unknown,
+  signal?: AbortSignal,
 ) => Promise<Record<string, unknown>>;
 const invalid = (): never => {
   throw new SourceResponseError("invalid_response");
@@ -50,26 +155,113 @@ function discoveryCheckpoint(value: unknown, sourceId: string) {
   return { version: 1, sourceId, ids: data.ids as string[] };
 }
 
+/** Nonempty failure IDs require exact complete enumeration proof, never a relaxed guard. */
+export function discoveryFailures(
+  page: Record<string, unknown>,
+  sourceId: string,
+  platform: string,
+): SourceDiscoveryFailure[] {
+  const failed = page.failed_ids;
+  if (!Array.isArray(failed)) return invalid();
+  if (
+    !failed.length &&
+    page.enumeration_proof === undefined &&
+    page.discovery_failures === undefined
+  )
+    return [];
+  const proof = jsonObject(page.enumeration_proof);
+  const entries = page.discovery_failures;
+  const validIds = (value: unknown): value is string[] =>
+    Array.isArray(value) &&
+    value.length <= 1000 &&
+    value.every((v) => typeof v === "string" && /^[1-9][0-9]{0,19}$/.test(v)) &&
+    new Set(value).size === value.length;
+  if (
+    !proof ||
+    proof.source_id !== sourceId ||
+    proof.complete !== true ||
+    !["author_catalog", "author_timeline"].includes(String(proof.kind)) ||
+    !validIds(proof.ids) ||
+    !validIds(proof.resolved_ids) ||
+    !validIds(failed) ||
+    !Array.isArray(entries) ||
+    entries.length !== failed.length
+  )
+    return invalid();
+  const failures: SourceDiscoveryFailure[] = [];
+  for (const value of entries) {
+    const entry = jsonObject(value),
+      evidence = jsonObject(entry?.evidence);
+    if (
+      !entry ||
+      typeof entry.external_post_id !== "string" ||
+      !failed.includes(entry.external_post_id) ||
+      entry.failure_code !== "metadata_unavailable" ||
+      evidence?.source_id !== sourceId ||
+      evidence?.kind !== proof.kind ||
+      Object.keys(entry).sort().join(",") !==
+        "evidence,external_post_id,failure_code" ||
+      Object.keys(evidence).sort().join(",") !== "kind,source_id"
+    )
+      return invalid();
+    failures.push({
+      externalPostId: entry.external_post_id,
+      failureCode: "metadata_unavailable",
+      evidence: {
+        kind: proof.kind as "author_catalog" | "author_timeline",
+        sourceId,
+      },
+    });
+  }
+  const all = [...proof.resolved_ids, ...failed];
+  if (
+    new Set(failures.map((f) => f.externalPostId)).size !== failed.length ||
+    new Set(all).size !== all.length ||
+    all.length !== proof.ids.length ||
+    all.some((id) => !(proof.ids as string[]).includes(id))
+  )
+    return invalid();
+  if (!Array.isArray(page.records)) return invalid();
+  for (const record of page.records) {
+    if (!Array.isArray(record)) return invalid();
+    const data = jsonObject(record.at(-1));
+    if (
+      !data ||
+      !proof.resolved_ids.includes(
+        String(platform === "x" ? data.tweet_id : data.id),
+      )
+    )
+      return invalid();
+  }
+  return failures;
+}
+
 /** gallery-dl owns platform protocols. Comiku owns coverage, identity and persistence. */
 export class GalleryDlContentSource implements ContentSourceClient {
   readonly adapterKey: string;
   readonly priority = 5;
   readonly metered = false;
   readonly available = true;
-  readonly supportedFirstSyncModes = ["none", "last_24_hours"] as const;
+  readonly supportedFirstSyncModes = [
+    "none",
+    "last_24_hours",
+    "last_7_days",
+  ] as const;
   readonly allowedMediaHosts: readonly string[];
   private readonly runner: PageRunner;
+  private readonly configPath: string;
   constructor(
     readonly platform: "x" | "pixiv",
     config: GalleryDlConfig,
     runner?: PageRunner,
   ) {
+    this.configPath = config.configPath;
     this.adapterKey = `${platform}_gallery_dl`;
     this.allowedMediaHosts =
       platform === "x" ? ["pbs.twimg.com"] : ["i.pximg.net"];
     this.runner =
       runner ??
-      (async (source, cursor) => {
+      (async (source, cursor, signal) => {
         const directory = await mkdtemp(join(tmpdir(), "comiku-gallery-"));
         try {
           const request = join(directory, "request.json");
@@ -86,28 +278,37 @@ export class GalleryDlContentSource implements ContentSourceClient {
           const bridge = fileURLToPath(
             new URL("./python/adapter.py", import.meta.url),
           );
+          const secrets = [
+            ...(await diagnosticSecrets(config.configPath)),
+            directory,
+            request,
+          ];
+          const started = Date.now();
           return await new Promise<Record<string, unknown>>(
             (resolve, reject) => {
               execFile(
                 config.python,
                 [bridge, request],
                 {
+                  signal,
                   timeout: 120_000,
                   maxBuffer: 16 * 1024 * 1024,
                   windowsHide: true,
                   encoding: "utf8",
                 },
-                (error, stdout) => {
-                  if (error) {
-                    reject(new SourceResponseError("temporary_failure"));
-                    return;
-                  }
+                (error, stdout, stderr) => {
                   try {
-                    const parsed = jsonObject(JSON.parse(stdout));
-                    if (!parsed) invalid();
-                    resolve(parsed!);
-                  } catch {
-                    reject(new SourceResponseError("invalid_response"));
+                    resolve(
+                      galleryProcessResult(
+                        error,
+                        stdout,
+                        stderr,
+                        Date.now() - started,
+                        secrets,
+                      ),
+                    );
+                  } catch (failure) {
+                    reject(failure);
                   }
                 },
               );
@@ -121,7 +322,12 @@ export class GalleryDlContentSource implements ContentSourceClient {
   initialCursor(mode: FirstSyncMode, now: Date): SourceCursor {
     return {
       startTime: new Date(
-        now.getTime() - (mode === "last_24_hours" ? 86_400_000 : 0),
+        now.getTime() -
+          (mode === "last_7_days"
+            ? 604_800_000
+            : mode === "last_24_hours"
+              ? 86_400_000
+              : 0),
       ).toISOString(),
     };
   }
@@ -195,7 +401,109 @@ export class GalleryDlContentSource implements ContentSourceClient {
       page.error === "cursor_invalid"
     )
       page = await this.runner(source, null);
+    return this.decodePage(account, cursor, page);
+  }
+  async fetchPost(
+    account: SourceAccountIdentity,
+    postId: string,
+    signal?: AbortSignal,
+  ): Promise<SourcePostResult> {
+    if (
+      !/^[1-9][0-9]{0,19}$/.test(postId) ||
+      !/^[1-9][0-9]{0,19}$/.test(account.externalUserId)
+    )
+      return invalid();
+    signal?.throwIfAborted();
+    const page = await this.runner(
+      {
+        mode: "post",
+        platform: this.platform,
+        remote_id: account.externalUserId,
+        post_id: postId,
+      },
+      null,
+      signal,
+    );
+    signal?.throwIfAborted();
+    if (!page.error && page.post_status === "excluded") {
+      const verified = jsonObject(page.verified);
+      if (
+        page.version !== 1 ||
+        page.platform !== this.platform ||
+        page.source_id !== account.externalUserId ||
+        page.post_id !== postId ||
+        !["foreign", "unsupported"].includes(String(page.reason)) ||
+        !verified ||
+        typeof verified.source_id !== "string" ||
+        !/^[1-9][0-9]{0,19}$/.test(verified.source_id) ||
+        typeof verified.published_at !== "string" ||
+        !Number.isFinite(Date.parse(verified.published_at)) ||
+        ![
+          "post",
+          "reply",
+          "quote",
+          "repost",
+          "illust",
+          "manga",
+          "ugoira",
+        ].includes(String(verified.type)) ||
+        (page.reason === "foreign") ===
+          (verified.source_id === account.externalUserId)
+      )
+        return invalid();
+      return {
+        kind: "excluded",
+        postId,
+        reason: page.reason as "foreign" | "unsupported",
+        verified: {
+          sourceId: verified.source_id,
+          publishedAt: verified.published_at,
+          type: String(verified.type),
+        },
+      };
+    }
+    const decoded = await this.decodePage(
+      account,
+      { startTime: "0001-01-01T00:00:00.000Z" },
+      page,
+    );
+    if (
+      page.post_status !== "ready" ||
+      page.post_id !== postId ||
+      decoded.discoveryFailures?.length ||
+      decoded.items.length !== 1 ||
+      decoded.items[0].externalContentId !== postId ||
+      !decoded.items[0].ownMedia.length
+    )
+      return invalid();
+    return { kind: "ready", item: decoded.items[0] };
+  }
+  private async decodePage(
+    account: SourceAccountIdentity,
+    cursor: SourceCursor,
+    page: Record<string, unknown>,
+  ): Promise<SourcePage> {
     if (page.error) {
+      const reason =
+        typeof page.error === "string" &&
+        /^[a-z][a-z0-9_]{0,63}$/.test(page.error)
+          ? page.error
+          : "connector_failed";
+      const scope: SourceFailureScope = [
+        "auth_failed",
+        "challenge_required",
+        "rate_limited",
+      ].includes(reason)
+        ? "credential"
+        : ["source_forbidden", "not_found", "source_not_found"].includes(reason)
+          ? "source"
+          : reason === "post_not_found"
+            ? "post"
+            : reason === "network_error"
+              ? "transport"
+              : reason === "runtime_unavailable"
+                ? "configuration"
+                : "protocol";
       throw new SourceResponseError(
         ["auth_failed", "source_forbidden", "challenge_required"].includes(
           String(page.error),
@@ -206,6 +514,14 @@ export class GalleryDlContentSource implements ContentSourceClient {
             : page.error === "network_error"
               ? "temporary_failure"
               : "invalid_response",
+        {
+          reason,
+          scope,
+          diagnostic: sanitizeSourceDiagnostic(
+            page.diagnostic,
+            await diagnosticSecrets(this.configPath),
+          ),
+        },
       );
     }
     if (
@@ -214,13 +530,17 @@ export class GalleryDlContentSource implements ContentSourceClient {
       page.source_id !== account.externalUserId ||
       page.page_complete !== true ||
       !Array.isArray(page.failed_ids) ||
-      page.failed_ids.length ||
       !Array.isArray(page.records) ||
       typeof page.terminal !== "boolean" ||
       typeof page.boundary !== "boolean" ||
       typeof page.neutral !== "boolean"
     )
       invalid();
+    const failures = discoveryFailures(
+      page,
+      account.externalUserId,
+      this.platform,
+    );
     const checkpoint =
       page.checkpoint === undefined
         ? undefined
@@ -337,12 +657,24 @@ export class GalleryDlContentSource implements ContentSourceClient {
         post = {
           externalContentId: postId,
           type: reply !== "0" ? "reply" : quote !== "0" ? "quote" : "post",
+          title:
+            this.platform === "pixiv" && typeof data.title === "string"
+              ? data.title
+              : undefined,
+          description:
+            this.platform === "pixiv" && typeof data.description === "string"
+              ? data.description
+              : undefined,
           text:
-            typeof data.content === "string"
-              ? data.content
-              : typeof data.title === "string"
-                ? data.title
-                : undefined,
+            this.platform === "pixiv" &&
+            typeof data.description === "string" &&
+            data.description.trim()
+              ? data.description
+              : typeof data.content === "string"
+                ? data.content
+                : typeof data.title === "string"
+                  ? data.title
+                  : undefined,
           permalink:
             this.platform === "x"
               ? `https://x.com/i/web/status/${postId}`
@@ -363,7 +695,21 @@ export class GalleryDlContentSource implements ContentSourceClient {
               typeof tag === "string" ? tag : jsonObject(tag)?.name,
             )
             .filter((tag): tag is string => typeof tag === "string"),
-          rawJson: { adapter: this.adapterKey, postId },
+          rawJson: {
+            adapter: this.adapterKey,
+            postId,
+            ...(this.platform === "pixiv"
+              ? {
+                  ...(typeof data.title === "string" && data.title.trim()
+                    ? { title: data.title }
+                    : {}),
+                  ...(typeof data.description === "string" &&
+                  data.description.trim()
+                    ? { description: data.description }
+                    : {}),
+                }
+              : {}),
+          },
         };
         grouped.set(postId, post);
       }
@@ -404,6 +750,7 @@ export class GalleryDlContentSource implements ContentSourceClient {
     const boundaryReached =
       this.platform === "x" ? oldBatches >= 2 : page.boundary === true;
     return {
+      discoveryFailures: failures,
       items: [...grouped.values()].filter(
         (item) =>
           cursor.endTime === undefined ||

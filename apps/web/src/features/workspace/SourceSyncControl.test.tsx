@@ -639,3 +639,23 @@ test("a status popover near a narrow viewport edge stays within its margins", as
   expect(Number.parseFloat(tooltip.style.top) + 170).toBeLessThanOrEqual(552);
   expect(post).not.toHaveBeenCalled();
 });
+
+test("waiting platform summary exposes progress without a request spinner or new badges", async () => {
+  const active = snapshot({
+    status: "queued",
+    targetCount: 2,
+    completedTargets: 1,
+    waitingTargets: 1,
+    waitingReason: "credential_unavailable",
+  });
+  vi.spyOn(client, "GET").mockResolvedValue(
+    response({ active, lastManual: null }) as never,
+  );
+  mount();
+  await waitFor(() => expect(syncButton().hasAttribute("disabled")).toBe(true));
+  fireEvent.focus(inspectTarget());
+  await screen.findByText(/等待凭据复验/);
+  expect(screen.getByText(/账号 1\/2/)).toBeTruthy();
+  expect(syncButton().querySelector("svg.ui-spin")).toBeNull();
+  expect(document.querySelector(".ui-badge")).toBeNull();
+});

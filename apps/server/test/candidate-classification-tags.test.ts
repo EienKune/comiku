@@ -72,7 +72,7 @@ test("invalid label presentation fails activation without accepting foreign clas
   }
 });
 
-test("the post displays one highest-ranking image category, independently of winning confidence", () => {
+test("the post displays its highest-priority category while ranking remains independent", () => {
   const service = analysis();
   const predictions = [
     { label: "other", confidence: 0.9, score: 0.1 },
@@ -100,7 +100,7 @@ test("the post displays one highest-ranking image category, independently of win
     { label: "ba_art", confidence: 0.38, score: 0.38 },
     { label: "other", confidence: 0.55, score: 0.4 },
   ];
-  assert.deepEqual(service.classificationTags(mixed), [expected[2]]);
+  assert.deepEqual(service.classificationTags(mixed), [expected[0]]);
   assert.equal(
     service.promotesReview(mixed),
     true,
@@ -142,7 +142,7 @@ test("malformed prediction caches never create classification tags", () => {
   }
 });
 
-test("candidate tags require current complete results and do not depend on review group or manual classification", async () => {
+test("candidate tags require valid current results even when sibling work is incomplete and do not depend on review group", async () => {
   const model = activateImageAnalysisAdapter(adapter());
   const row = {
     id: "synthetic-candidate",
@@ -151,13 +151,11 @@ test("candidate tags require current complete results and do not depend on revie
     authorExternalAccount: null,
     analysisModelKey: model.modelKey,
     analysisState: "succeeded",
+    analysisSummaryVersion: 1,
     analysisScore: 0.8,
     analysisPredictions: [{ label: "ba_related", confidence: 0.8, score: 0.2 }],
-    classificationDecision: { label: "photo", revision: 2 },
-    classificationSuggestions: [],
     sourceObservations: [],
     hashtags: [],
-    tagDisposition: "blocked",
     status: "imported",
     media: [],
     work: null,
@@ -165,6 +163,7 @@ test("candidate tags require current complete results and do not depend on revie
     fetchedAt: new Date(0),
   };
   const db = {
+    $queryRaw: async () => [],
     candidatePost: { findUnique: async () => row },
   } as unknown as PrismaService;
   const service = new CandidatesService(
@@ -175,12 +174,13 @@ test("candidate tags require current complete results and do not depend on revie
   );
   const dto = await service.get(row.id);
   assert.deepEqual(dto.classificationTags, [expected[1]]);
-  assert.equal(dto.visualClass, "photo");
-  assert.equal(dto.classificationRevision, 2);
-  assert.equal(dto.tagDisposition, "blocked");
-  for (const state of ["queued", "failed", "unprocessed"]) {
+  for (const key of ["visualClass", "classificationRevision", "tagDisposition"])
+    assert.equal(key in dto, false);
+  for (const state of ["queued", "failed"]) {
     row.analysisState = state;
-    assert.deepEqual((await service.get(row.id)).classificationTags, []);
+    assert.deepEqual((await service.get(row.id)).classificationTags, [
+      expected[1],
+    ]);
   }
   row.analysisState = "succeeded";
   row.analysisModelKey = "old-model";
@@ -202,4 +202,17 @@ test("candidate tags require current complete results and do not depend on revie
     ).classificationTags,
     [],
   );
+});
+
+test("related outranks other for a mixed post even when its ranking score is lower", () => {
+  const service = analysis();
+  const related = { label: "ba_related", confidence: 0.96, score: 0.038 };
+  const other = { label: "other", confidence: 0.86, score: 0.042 };
+  for (const entries of [
+    [related, other],
+    [other, related],
+  ])
+    assert.deepEqual(service.classificationTags(entries), [expected[1]]);
+  assert.equal(service.promotesReview([related, other]), false);
+  assert.deepEqual(service.classificationTags([other]), [expected[2]]);
 });

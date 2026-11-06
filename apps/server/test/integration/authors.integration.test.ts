@@ -9,6 +9,7 @@ import {
 } from "../../src/config/environment.js";
 import { PrismaService } from "../../src/database/prisma.service.js";
 import { AuthorsService } from "../../src/authors/authors.service.js";
+import { ContentSourceRegistry } from "../../src/source-ingestion/source-registry.js";
 import { hashPassword } from "../../src/users/password.js";
 
 loadRootEnvironment();
@@ -25,6 +26,27 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
   const app = await createApplication(
     parseEnvironment({ NODE_ENV: "test", DATABASE_URL: testUrl }),
   );
+  // X CRUD with collection enabled requires a declared source capability.
+  // Supply a synthetic gallery capability explicitly; lifecycle tests never
+  // execute collection or depend on the retired clients' implicit placeholders.
+  app.get(ContentSourceRegistry).register({
+    platform: "x",
+    adapterKey: "x_gallery_dl",
+    priority: 1,
+    available: true,
+    metered: false,
+    supportedFirstSyncModes: ["none", "last_24_hours"],
+    allowedMediaHosts: [],
+    initialCursor: () => ({}),
+    checkAccount: async () => {
+      throw new Error(
+        "Author lifecycle fixture must not resolve source profiles",
+      );
+    },
+    fetchPage: async () => {
+      throw new Error("Author lifecycle fixture must not fetch source pages");
+    },
+  });
   const db = app.get(PrismaService);
   const authors = app.get(AuthorsService);
   const prefix = `authors_${randomUUID().slice(0, 8)}`;
@@ -182,7 +204,7 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       firstSyncMode: "last_24_hours",
     });
     assert.equal(account.status, 201);
-    assert.equal(account.data.providerAvailable, false);
+    assert.equal(account.data.providerAvailable, true);
     const managedAccounts = await request<
       { id: string; externalUserId: string; fetchEnabled: boolean }[]
     >(source, "GET", `/api/authors/${authorId}/accounts`);
@@ -252,6 +274,8 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       id: string;
       revision: number;
       adapterStates: unknown[];
+      providerAvailable: boolean;
+      fetchEnabled: boolean;
       profileUrl: string;
       handle: string | null;
     }>(source, "POST", `/api/authors/${authorId}/accounts`, {
@@ -264,6 +288,28 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
     });
     assert.equal(pixiv.status, 201);
     assert.deepEqual(pixiv.data.adapterStates, []);
+    assert.equal(pixiv.data.providerAvailable, false);
+    assert.equal(pixiv.data.fetchEnabled, false);
+    const unavailableActivation = await request(
+      source,
+      "PATCH",
+      `/api/authors/${authorId}/accounts/${pixiv.data.id}`,
+      {
+        fetchEnabled: true,
+        firstSyncMode: "last_24_hours",
+        expectedRevision: pixiv.data.revision,
+      },
+    );
+    assert.equal(unavailableActivation.status, 400);
+    const stillPaused = await request<
+      { id: string; revision: number; fetchEnabled: boolean }[]
+    >(source, "GET", `/api/authors/${authorId}/accounts`);
+    assert.equal(stillPaused.status, 200);
+    const pausedPixiv = stillPaused.data.find(
+      (item) => item.id === pixiv.data.id,
+    );
+    assert.equal(pausedPixiv?.fetchEnabled, false);
+    assert.equal(pausedPixiv?.revision, pixiv.data.revision);
     assert.equal(pixiv.data.handle, null);
     assert.equal(
       pixiv.data.profileUrl,

@@ -1189,26 +1189,26 @@ test("renders the scoped business audit feed with readable event context", async
 
 test.each([
   {
-    tagDisposition: "valid",
+    matched: true,
     label: "ba_art",
     text: "BA 漫画／插画",
     tone: "success",
   },
   {
-    tagDisposition: "neutral",
+    matched: false,
     label: "ba_related",
     text: "BA 相关",
     tone: "info",
   },
   {
-    tagDisposition: "neutral",
+    matched: false,
     label: "other",
     text: "非 BA 内容",
     tone: "neutral",
   },
 ] as const)(
   "candidate filters preserve tag evidence and display classifier category $label",
-  async ({ tagDisposition, label, text, tone }) => {
+  async ({ matched, label, text, tone }) => {
     const user: CurrentUser = {
       canSkipProofreading: false,
       id: "00000000-0000-4000-8000-000000000001",
@@ -1231,12 +1231,22 @@ test.each([
       sourceLanguage: "ja",
       sourceAdapters: ["x_web_session"],
       hashtags: ["BlueArchive"],
-      tagDisposition,
+      triageGroup: "priority",
+      triageReasons: ["priority_tag"],
+      tagRuleMatches: matched
+        ? [
+            {
+              normalizedValue: "bluearchive",
+              displayValue: "BlueArchive",
+              groupId: "rule",
+              groupName: "目标作品",
+              groupRevision: 0,
+              direction: "priority",
+            },
+          ]
+        : [],
       classificationTags: [{ label, text, tone }],
-      reviewPriority: "low",
-      visualClass: "manga",
-      visualClassSource: "default",
-      classificationRevision: null,
+      canRetryAnalysis: true,
       externalPostId: "123",
       externalPostUrl: "https://x.com/artist/status/123",
       text: "测试候选",
@@ -1264,23 +1274,26 @@ test.each([
       return {
         data: {
           items:
-            options?.params?.query?.triageGroup === "valid_manga"
+            options?.params?.query?.triageGroup === "priority"
               ? [candidate]
               : [],
-          total: options?.params?.query?.triageGroup === "valid_manga" ? 1 : 0,
+          total: options?.params?.query?.triageGroup === "priority" ? 1 : 0,
           nextCursor: null,
         },
         response: new Response(null, { status: 200 }),
       };
     }) as never);
-    const patch = vi.spyOn(client, "PATCH").mockResolvedValue({
+    vi.spyOn(client, "POST").mockResolvedValue({
       data: {
-        ...candidate,
-        visualClass: "photo",
-        visualClassSource: "human",
-        classificationRevision: 0,
+        sessionId: crypto.randomUUID(),
+        expiresAt: new Date(Date.now() + 1800000).toISOString(),
+        counts: {
+          priority: 1,
+          uncertain: 0,
+          low_priority: 0,
+        },
       },
-      response: new Response(null, { status: 200 }),
+      response: new Response(null, { status: 201 }),
     } as never);
 
     render(
@@ -1300,13 +1313,16 @@ test.each([
     );
 
     expect(await screen.findByText("测试候选")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重试识别" })).toBeTruthy();
     expect(screen.queryByText("同步记录")).toBeNull();
     expect(screen.queryByText(/来源抓取已排队|正在抓取：/)).toBeNull();
     expect(screen.getByRole("button", { name: "同步图源" })).toBeTruthy();
-    expect(screen.getByText("#BlueArchive")).toBeTruthy();
-    expect(
-      screen.getByText(tagDisposition === "valid" ? "有效标签" : "普通标签"),
-    ).toBeTruthy();
+    if (!matched) expect(screen.getByText("#BlueArchive")).toBeTruthy();
+    expect(screen.queryByText("有效标签")).toBeNull();
+    if (matched)
+      expect(
+        screen.getByRole("button", { name: "↑ #BlueArchive" }),
+      ).toBeTruthy();
     expect(screen.getByText(text).className).toContain(`ui-badge--${tone}`);
     for (const removed of [
       "模型命中",
@@ -1333,19 +1349,11 @@ test.each([
     );
 
     expect(await screen.findByText("测试候选")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "标记为照片" }));
-    await waitFor(() =>
-      expect(patch).toHaveBeenCalledWith(
-        "/api/candidates/{id}/classification",
-        expect.objectContaining({
-          body: { label: "photo", expectedRevision: null },
-        }),
-      ),
-    );
+    expect(screen.queryByRole("button", { name: "标记为照片" })).toBeNull();
   },
 );
 
-test("queued analysis refreshes all candidate groups and settles a cross-group completion race", async () => {
+test("queued analysis rehydrates cards without replacing snapshot membership", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const cache = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
@@ -1374,10 +1382,9 @@ test("queued analysis refreshes all candidate groups and settles a cross-group c
     sourceLanguage: "ja",
     sourceAdapters: [],
     hashtags: [],
-    tagDisposition: "neutral",
-    visualClass: "manga",
-    visualClassSource: "default",
-    classificationRevision: null,
+    triageGroup: "uncertain",
+    triageReasons: ["insufficient_evidence"],
+    tagRuleMatches: [],
     externalPostId: "fixture",
     externalPostUrl: "https://example.invalid/fixture",
     text: "分组刷新候选",
@@ -1404,15 +1411,12 @@ test("queued analysis refreshes all candidate groups and settles a cross-group c
     const group = options?.params?.query?.triageGroup;
     // The first destination refresh observes the old state; the source refresh
     // then sees completion. A final coordinated refresh must fill the destination.
-    if (phase === "finishing" && group === "neutral_manga") phase = "done";
-    const show =
-      (phase === "queued" && group === "neutral_manga") ||
-      (phase === "done" && group === "valid_manga");
+    if (phase === "finishing" && group === "uncertain") phase = "done";
+    const show = group === "uncertain";
     const items = show
       ? [
           {
             ...candidate,
-            reviewPriority: phase === "queued" ? "queued" : "high",
             classificationTags:
               phase === "queued"
                 ? []
@@ -1421,10 +1425,27 @@ test("queued analysis refreshes all candidate groups and settles a cross-group c
         ]
       : [];
     return {
-      data: { items, total: items.length, nextCursor: null },
+      data: {
+        items,
+        total: items.length,
+        nextCursor: null,
+        analysisPending: phase === "queued",
+      },
       response: new Response(null, { status: 200 }),
     };
   }) as never);
+  const sessions = vi.spyOn(client, "POST").mockResolvedValue({
+    data: {
+      sessionId: crypto.randomUUID(),
+      expiresAt: new Date(Date.now() + 1800000).toISOString(),
+      counts: {
+        priority: 0,
+        uncertain: 1,
+        low_priority: 0,
+      },
+    },
+    response: new Response(null, { status: 201 }),
+  } as never);
   try {
     const mounted = render(
       <QueryClientProvider client={cache}>
@@ -1455,6 +1476,7 @@ test("queued analysis refreshes all candidate groups and settles a cross-group c
     });
     await waitFor(() => expect(screen.getByText("BA 漫画／插画")).toBeTruthy());
     expect(screen.getAllByText("分组刷新候选")).toHaveLength(1);
+    expect(sessions).toHaveBeenCalledTimes(1);
     const settled = calls;
     mounted.unmount();
     await act(async () => {
@@ -1491,10 +1513,9 @@ test("manual source upload uses a signed session before finalizing candidates", 
     sourceLanguage: "ja",
     sourceAdapters: ["manual"],
     hashtags: [],
-    tagDisposition: "neutral",
-    visualClass: "manga",
-    visualClassSource: "default",
-    classificationRevision: null,
+    triageGroup: "uncertain",
+    triageReasons: ["insufficient_evidence"],
+    tagRuleMatches: [],
     externalPostId: "manual-1",
     externalPostUrl: null,
     text: null,
@@ -1545,58 +1566,68 @@ test("manual source upload uses a signed session before finalizing candidates", 
   });
   const post = vi.spyOn(client, "POST").mockImplementation(async (path) => {
     const data =
-      path === "/api/candidates/upload-sessions"
+      path === "/api/candidates/review-sessions"
         ? {
-            id: "00000000-0000-4000-8000-000000000030",
-            status: "pending",
-            expiresAt: "2026-09-12T00:00:00.000Z",
-            items: [
-              {
-                id: "00000000-0000-4000-8000-000000000031",
-                sourceName: "page.png",
-                status: "pending",
-                upload: {
-                  url: "https://upload.example.test/item",
-                  method: "PUT",
-                  headers: {
-                    "Content-Type": "image/png",
-                    "x-amz-meta-sha256": "fixture",
-                  },
-                  expiresAt: "2026-09-11T00:15:00.000Z",
-                },
-                message: null,
-                warnings: [],
-                candidate: null,
-              },
-            ],
+            sessionId: crypto.randomUUID(),
+            expiresAt: new Date(Date.now() + 1800000).toISOString(),
+            counts: {
+              priority: 0,
+              uncertain: 0,
+              low_priority: 0,
+            },
           }
-        : path === "/api/candidates/upload-sessions/{id}/finalize"
+        : path === "/api/candidates/upload-sessions"
           ? {
               id: "00000000-0000-4000-8000-000000000030",
-              status: "completed",
+              status: "pending",
               expiresAt: "2026-09-12T00:00:00.000Z",
               items: [
                 {
                   id: "00000000-0000-4000-8000-000000000031",
                   sourceName: "page.png",
-                  status: "created",
-                  upload: null,
+                  status: "pending",
+                  upload: {
+                    url: "https://upload.example.test/item",
+                    method: "PUT",
+                    headers: {
+                      "Content-Type": "image/png",
+                      "x-amz-meta-sha256": "fixture",
+                    },
+                    expiresAt: "2026-09-11T00:15:00.000Z",
+                  },
                   message: null,
                   warnings: [],
-                  candidate: manualCandidate,
+                  candidate: null,
                 },
               ],
             }
-          : {
-              results: [
-                {
-                  id: manualCandidate.id,
-                  outcome: "succeeded",
-                  message: null,
-                  workId: "00000000-0000-4000-8000-000000000050",
-                },
-              ],
-            };
+          : path === "/api/candidates/upload-sessions/{id}/finalize"
+            ? {
+                id: "00000000-0000-4000-8000-000000000030",
+                status: "completed",
+                expiresAt: "2026-09-12T00:00:00.000Z",
+                items: [
+                  {
+                    id: "00000000-0000-4000-8000-000000000031",
+                    sourceName: "page.png",
+                    status: "created",
+                    upload: null,
+                    message: null,
+                    warnings: [],
+                    candidate: manualCandidate,
+                  },
+                ],
+              }
+            : {
+                results: [
+                  {
+                    id: manualCandidate.id,
+                    outcome: "succeeded",
+                    message: null,
+                    workId: "00000000-0000-4000-8000-000000000050",
+                  },
+                ],
+              };
     return {
       data,
       response: new Response(null, {

@@ -13,7 +13,10 @@ const db = new PrismaClient({
 });
 try {
   const [jobs, oldestQueued, recentRuns] = await Promise.all([
-    db.backgroundJob.groupBy({ by: ["lane", "status"], _count: true }),
+    db.backgroundJob.groupBy({
+      by: ["lane", "executionScope", "queueName", "status"],
+      _count: true,
+    }),
     db.backgroundJob.findFirst({
       where: { status: "queued" },
       orderBy: { createdAt: "asc" },

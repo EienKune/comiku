@@ -9,12 +9,13 @@ import logging
 import re
 import sys
 import traceback
-from urllib.parse import urlsplit, parse_qsl
+from urllib.parse import urlsplit, parse_qsl, unquote
 
 from gallery_dl import config, version
 from gallery_dl.extractor import twitter, pixiv
 from gallery_dl.util import NullResponse
 from pixiv_paging import PixivPager
+from pixiv_caption import plain_caption
 
 
 class AdapterError(Exception):
@@ -70,14 +71,63 @@ diagnostic_secrets = []
 
 def private_text(value, limit, tail=False):
     value = str(value)
+    if len(value) > 262144 or len(diagnostic_secrets) > 128 or any(len(secret) > 1024 for secret in diagnostic_secrets) or sum(map(len, diagnostic_secrets)) > 65536:
+        return "[diagnostic omitted]"
+    def endpoint(match):
+        try:
+            parsed = urlsplit(match[0])
+            return parsed.scheme + "://" + (parsed.hostname or "") + parsed.path
+        except ValueError:
+            return "[url removed]"
+    for _ in range(3):
+        value = re.sub(r'''https?://[^\s"'<>]+''', endpoint, value)
+        previous = value
+        ambiguous = False
+        def part(text):
+            nonlocal ambiguous
+            if re.search(r'''[\s"'<>]''', text):
+                ambiguous = True
+            return text
+        value = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: part(chr(int(m[1], 16))), value)
+        value = re.sub(r'\\([\\"/])', lambda m: part(m[1]), value)
+        value = re.sub(r"(?:%[0-9a-fA-F]{2})+", lambda m: part(unquote(m[0])), value)
+        if ambiguous:
+            return "[diagnostic omitted]"
+        if value == previous:
+            break
+        if _ == 2:
+            return "[diagnostic omitted]"
+    value = re.sub(r'''https?://[^\s"'<>]+''', endpoint, value)
+    # Match sensitive keys before credential-fragment removal can erase those keys.
+    sensitive = r'''(?i)(["']?\b(?:authorization|proxy-authorization|cookie|set-cookie|[\w-]{0,64}(?:token|secret|password|signature|api[_-]?key)[\w-]{0,64})["']?\s*[:=]\s*)[^\r\n]*'''
+    if re.search(r"[\r\n]", value) and re.search(sensitive, value):
+        return "[diagnostic omitted]"
+    value = re.sub(sensitive, r"\1[credential removed]", value)
     for secret in sorted(diagnostic_secrets, key=len, reverse=True):
+        if not secret:
+            continue
+        value = value.replace(secret, "[credential removed]")
         if len(secret) >= 4:
-            value = value.replace(secret, "[credential removed]")
-    value = re.sub(r"(?im)(\b(?:cookie|authorization|set-cookie)\s*[:=]\s*)[^\r\n]+", r"\1[credential removed]", value)
-    value = re.sub(r"(https?://[^\s?\"'<>]+)\?[^\s\"'<>]+", r"\1?[query removed]", value)
+            fragments = {re.escape(secret[i:i + 4]) for i in range(len(secret) - 3)}
+            value = re.sub("(?:" + "|".join(sorted(fragments)) + ")+", "[credential removed]", value)
     if len(value) <= limit:
         return value
     return ("[truncated] " + value[-limit:]) if tail else (value[:limit] + " [truncated]")
+
+
+def previous_diagnostic_text(diagnostic):
+    """Re-sanitize selected scalar context, then serialize without decoding JSON."""
+    safe = {}
+    if not isinstance(diagnostic, dict):
+        return "{}"
+    for key in ("stage", "guard", "exception_type", "runtime_version", "message", "http_status", "http_method", "http_endpoint", "response_excerpt", "traceback"):
+        value = diagnostic.get(key)
+        if not isinstance(value, (str, int, bool)):
+            continue
+        candidate = dict(safe, **{key: private_text(value, 2048)})
+        if len(json.dumps(candidate, ensure_ascii=True).encode("ascii")) <= 8192:
+            safe = candidate
+    return json.dumps(safe, ensure_ascii=True)
 
 
 def configure_diagnostics():
@@ -85,6 +135,8 @@ def configure_diagnostics():
     if token:
         diagnostic_secrets.append(str(token))
     cookies = config.get(("extractor", "twitter"), "cookies")
+    if isinstance(cookies, dict):
+        diagnostic_secrets.extend(str(value) for value in cookies.values())
     if isinstance(cookies, str):
         with open(cookies, encoding="utf-8") as file:
             for line in file:
@@ -108,7 +160,7 @@ diagnostic_handler = DiagnosticHandler()
 
 
 def safe_diagnostic(exc, stage):
-    """Private bounded details. The Go logging boundary removes credentials."""
+    """Private bounded details. The TypeScript boundary applies another allowlist."""
     diagnostic = {"stage": stage, "exception_type": type(exc).__name__, "runtime_version": version.__version__,
                   "message": private_text(exc, 8192),
                   "traceback": private_text("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)), 16384, tail=True)}
@@ -146,6 +198,33 @@ def http_failure_diagnostic(response, url, method):
             "http_response_bytes": str(len(response.content)),
             "http_response_headers": json.dumps(headers, ensure_ascii=False),
             "http_response_excerpt": private_text(response.text, 4096)}
+
+
+def attach_http_diagnostic(ext, exc):
+    detail = getattr(ext, "_collection_http_failure", None)
+    if detail:
+        exc._collection_http_diagnostic = detail
+    return exc
+
+
+def install_x_http_checks(ext):
+    """Share one passive HTTP boundary for timeline and internal post calls."""
+    native_request = ext.request
+    ext._collection_http_failure = None
+    def checked_request(*args, **kwargs):
+        ext._collection_http_failure = None
+        response = native_request(*args, **kwargs)
+        # Native fatal=None returns a synthetic {}; it is transport failure,
+        # never evidence that an account/post is absent.
+        if isinstance(response, NullResponse):
+            raise AdapterError("network_error", guard="transport_null_response", detail={"transport_reason": response.reason})
+        if response.status_code >= 400:
+            try:
+                ext._collection_http_failure = http_failure_diagnostic(response, args[0] if args else kwargs.get("url", ""), kwargs.get("method", "GET"))
+            except Exception:
+                ext._collection_http_failure = {"http_diagnostic_error": "response_capture_failed"}
+        return response
+    ext.request = checked_request
 
 
 def parse_cutoff(value):
@@ -223,6 +302,52 @@ def empty_x_repeat(data, cursor, source_id, user):
     return pages == 1 and bottom == 1 and top <= 1
 
 
+def install_pixiv_ajax_checks(ext):
+    """Native AJAX suppresses errors. Preserve explicit HTTP failures across that boundary."""
+    native_request, native_ajax = ext.request, ext._request_ajax
+    failure = [None]
+    active_endpoint = [None]
+    def request(*args, **kwargs):
+        response = native_request(*args, **kwargs)
+        code = getattr(response, "status_code", 0)
+        if code == 404:
+            url = urlsplit(args[0] if args else kwargs.get("url", ""))
+            endpoint = active_endpoint[0]
+            metadata_leaf = (isinstance(endpoint, str) and re.fullmatch(r"/illust/[0-9]+", endpoint)
+                and url.scheme == "https" and url.netloc == urlsplit(ext.root).netloc
+                and url.path == "/ajax" + endpoint and not url.query
+                and kwargs.get("method", "GET").upper() == "GET")
+            if not metadata_leaf:
+                # Preserve native CDN fallback semantics; never certify a media
+                # HEAD response as a missing single-post metadata leaf.
+                raise ext.exc.HttpError("HTTP 404")
+        reason = ("network_error" if isinstance(response, NullResponse) else
+                  "auth_failed" if code == 401 else "source_forbidden" if code == 403 else
+                  "rate_limited" if code == 429 else "post_not_found" if code == 404 else None)
+        if reason:
+            failure[0] = AdapterError(reason)
+            raise failure[0]
+        return response
+    def ajax(endpoint):
+        failure[0] = None
+        active_endpoint[0] = endpoint
+        try:
+            result = native_ajax(endpoint)
+        except Exception:
+            if failure[0]:
+                raise failure[0]
+            raise
+        finally:
+            active_endpoint[0] = None
+        if failure[0]:
+            error = failure[0]
+            if str(error) == "post_not_found" and not re.fullmatch(r"/illust/[0-9]+", endpoint):
+                error = AdapterError("source_not_found")
+            raise error
+        return result
+    ext.request, ext._request_ajax = request, ajax
+
+
 def collect(source, cursor):
     if version.__version__ != "1.32.11":
         raise AdapterError("runtime_unavailable")
@@ -291,10 +416,7 @@ def collect(source, cursor):
             coverage["unknown_date"] += 1
 
     def with_http_diagnostic(exc):
-        detail = getattr(ext, "_collection_http_failure", None)
-        if detail:
-            exc._collection_http_diagnostic = detail
-        return exc
+        return attach_http_diagnostic(ext, exc)
 
     def incomplete(exc, preserve_diagnostic=False):
         result.pop("checkpoint", None)
@@ -305,7 +427,7 @@ def collect(source, cursor):
         if not preserve_diagnostic or not previous_diagnostic:
             result["diagnostic"] = safe_diagnostic(with_http_diagnostic(exc), "validation")
             if previous_diagnostic:
-                result["diagnostic"]["previous_diagnostic"] = private_text(json.dumps(previous_diagnostic), 8192)
+                result["diagnostic"]["previous_diagnostic"] = previous_diagnostic_text(previous_diagnostic)
         result["diagnostic"].update({
             "cutoff": cutoff.isoformat() if cutoff else "",
             "coverage": json.dumps(coverage, sort_keys=True),
@@ -319,24 +441,7 @@ def collect(source, cursor):
         return exc
 
     def install_x_checks(ext):
-        native_request = ext.request
-        ext._collection_http_failure = None
-        def checked_request(*args, **kwargs):
-            ext._collection_http_failure = None
-            response = native_request(*args, **kwargs)
-            # Native fatal=None converts exhausted transport errors into an
-            # empty synthetic response; its {} must not become NotFoundError.
-            if isinstance(response, NullResponse):
-                raise AdapterError("network_error", guard="transport_null_response", detail={"transport_reason": response.reason})
-            if response.status_code >= 400:
-                try:
-                    ext._collection_http_failure = http_failure_diagnostic(response, args[0] if args else kwargs.get("url", ""), kwargs.get("method", "GET"))
-                except Exception:
-                    # Instrumentation must not replace the native failure or
-                    # change successful parsing/retry semantics.
-                    ext._collection_http_failure = {"http_diagnostic_error": "response_capture_failed"}
-            return response
-        ext.request = checked_request
+        install_x_http_checks(ext)
         call = ext.api._call
         def checked_call(*args, **kwargs):
             nonlocal response_cursor, native_checked, all_old
@@ -554,6 +659,8 @@ def collect(source, cursor):
     else:
         raise AdapterError("source_unresolved")
     ext.initialize()
+    if not is_x:
+        install_pixiv_ajax_checks(ext)
     pager = None
     if is_x:
         install_x_checks(ext)
@@ -696,22 +803,35 @@ def collect(source, cursor):
                     if expected_photos != converted_photos:
                         raise ValueError("native conversion omitted source photos")
                 # Native text-only X posts have no media and no records.
+                if not is_x:
+                    for record in records:
+                        metadata = record[-1]
+                        metadata["description"] = plain_caption(metadata.get("caption"))
+                        # The bridge exposes plain source fields, never caption HTML.
+                        metadata.pop("caption", None)
                 encoded = json.dumps(records, default=str)
                 byte_count += len(encoded.encode("utf-8"))
                 if byte_count > 12 * 1024 * 1024 or len(result["records"]) + len(records) > 10000:
                     raise AdapterError("limit_reached")
                 result["records"].extend(records)
                 handled_ids.add(post_id)
-            except AdapterError:
-                raise
             except Exception as exc:
+                reason = str(exc) if isinstance(exc, AdapterError) else safe_error(exc)
+                if reason in ("auth_failed", "challenge_required", "rate_limited", "source_forbidden", "network_error"):
+                    raise AdapterError(reason) from None
+                confirmed = reason == "post_not_found" and (sanity_placeholder or owner == source_id)
+                if isinstance(exc, AdapterError) and not confirmed:
+                    raise
                 result["diagnostic"] = safe_diagnostic(with_http_diagnostic(exc), "conversion")
-                if safe_error(exc) == "rate_limited":
-                    raise AdapterError("rate_limited") from None
                 result["failed_ids"].append(post_id)
+                if confirmed:
+                    kind = "author_catalog" if pager is not None and pager.phase == "sanity" else "author_timeline"
+                    result.setdefault("discovery_failures", []).append({"external_post_id":post_id,
+                        "failure_code":"metadata_unavailable", "evidence":{"kind":kind,"source_id":source_id}})
             finally:
                 setattr(ext, slot, original)
-        if result["failed_ids"] and pager is not None:
+        if (result["failed_ids"] and pager is not None and
+                set(result["failed_ids"]) != {entry["external_post_id"] for entry in result.get("discovery_failures", [])}):
             raise AdapterError("discovery_incomplete")
         if pager is None:
             result["terminal"] = True
@@ -746,8 +866,138 @@ def collect(source, cursor):
     result["boundary"] = bool(is_x and target_count and all_old and not result["failed_ids"] and not result["order_anomaly"])
     result["neutral"] = bool(is_x and not target_count and all_old
                              and not result["failed_ids"] and not result["order_anomaly"])
+    if result.get("discovery_failures"):
+        if set(result["failed_ids"]) != {entry["external_post_id"] for entry in result["discovery_failures"]}:
+            raise incomplete(AdapterError("discovery_incomplete"))
+        catalog = pager is not None and pager.phase == "sanity"
+        ids = pager.enumerated_ids if catalog else list(observed_ids)
+        resolved = (handled_ids | (pager.excluded_ids if catalog else set())) & set(ids)
+        if set(ids) != resolved | set(result["failed_ids"]) or resolved & set(result["failed_ids"]):
+            raise incomplete(AdapterError("discovery_incomplete"))
+        result["enumeration_proof"] = {"kind":"author_catalog" if catalog else "author_timeline",
+            "source_id":source_id,"complete":True,"ids":ids,"resolved_ids":sorted(resolved)}
     result["page_complete"] = True
     return result
+
+
+def collect_post(source, post_id):
+    """Internal bounded single-post refresh; never accepts an arbitrary upstream URL."""
+    source_id, platform = source.get("remote_id"), source.get("platform")
+    if (version.__version__ != "1.32.11" or platform not in ("x", "pixiv")
+            or not isinstance(source_id, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", source_id)
+            or not isinstance(post_id, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", post_id)):
+        raise AdapterError("source_unresolved")
+    result = {"version":1,"platform":platform,"source_id":source_id,"post_id":post_id,
+              "records":[],"failed_ids":[],"page_complete":True,"terminal":True,
+              "boundary":False,"neutral":False,"next":None}
+    ext = None
+    def date(value):
+        if not isinstance(value,str):
+            raise AdapterError("discovery_incomplete")
+        try:
+            parsed=datetime.datetime.fromisoformat(value.replace("Z","+00:00"))
+            if parsed.tzinfo is None:
+                raise ValueError("timezone missing")
+            return parsed.astimezone(datetime.timezone.utc).isoformat()
+        except (ValueError,OverflowError):
+            raise AdapterError("discovery_incomplete") from None
+    def excluded(owner, published, kind, reason):
+        return dict(result,post_status="excluded",reason=reason,
+                    verified={"source_id":owner,"published_at":published,"type":kind})
+    try:
+        if platform == "pixiv":
+            ext=pixiv.PixivWorkExtractor.from_url("https://www.pixiv.net/artworks/"+post_id)
+            ext.initialize()
+            install_pixiv_ajax_checks(ext)
+            ext.meta_user=ext.meta_bookmark=ext.meta_comments=ext.meta_captions=False
+            ext.load_ugoira=False
+            ext.sanity_workaround=True
+            ext.metadata=lambda:{}
+            ext._sanitize_ajax_caption=lambda caption:caption or ""
+            body=ext._request_ajax("/illust/"+post_id)
+            if (not isinstance(body,dict) or str(body.get("id"))!=post_id
+                    or not re.fullmatch(r"[1-9][0-9]{0,19}",str(body.get("userId","")))
+                    or type(body.get("illustType")) is not int or body["illustType"] not in (0,1,2)
+                    or type(body.get("pageCount")) is not int or not 1<=body["pageCount"]<=1000):
+                raise AdapterError("discovery_incomplete")
+            owner=str(body["userId"])
+            published=date(body.get("createDate"))
+            kind=("illust","manga","ugoira")[body["illustType"]]
+            if owner!=source_id:
+                return excluded(owner,published,kind,"foreign")
+            if kind=="ugoira":
+                return excluded(owner,published,kind,"unsupported")
+            expected=body["pageCount"]
+            # Disable URL guessing/HEAD fallback; a complete original manifest is required.
+            if not isinstance(body.get("urls"),dict) or not body["urls"].get("original"):
+                raise AdapterError("discovery_incomplete")
+            original_extract=ext._extract_ajax
+            def extract(work, supplied):
+                files=original_extract(work,supplied)
+                work["type"]=kind
+                return files
+            ext._extract_ajax=extract
+            ext._request_ajax=lambda endpoint:body if endpoint=="/illust/"+post_id else None
+            raw=ext._make_work(int(post_id),ext.limit_url,{"id":1})
+            ext.works=lambda:iter((raw,))
+        else:
+            for key,value in (("conversations",False),("expand",False),("quoted",False),("replies",True),("articles",False),("cards",False),("twitpic",False)):
+                config.set(("extractor","twitter"),key,value)
+            ext=twitter.TwitterTweetExtractor.from_url("https://x.com/i/web/status/"+post_id)
+            ext.initialize()
+            install_x_http_checks(ext)
+            ext.metadata=lambda:{}
+            ext.login()
+            raw=ext.api.tweet_result_by_rest_id(post_id)
+            legacy=raw.get("legacy") if isinstance(raw,dict) else None
+            user=raw.get("core",{}).get("user_results",{}).get("result",{}) if isinstance(raw,dict) else {}
+            if (not isinstance(legacy,dict) or str(raw.get("rest_id"))!=post_id
+                    or str(legacy.get("id_str"))!=post_id
+                    or str(user.get("rest_id"))!=str(legacy.get("user_id_str"))
+                    or not re.fullmatch(r"[1-9][0-9]{0,19}",str(user.get("rest_id","")))):
+                raise AdapterError("discovery_incomplete")
+            owner=str(user["rest_id"])
+            try:
+                published=datetime.datetime.strptime(legacy["created_at"],"%a %b %d %H:%M:%S %z %Y").isoformat()
+            except (ValueError,TypeError,KeyError):
+                raise AdapterError("discovery_incomplete") from None
+            kind="repost" if "retweeted_status_id_str" in legacy else "reply" if legacy.get("in_reply_to_status_id_str") else "quote" if legacy.get("quoted_status_id_str") else "post"
+            if owner!=source_id:
+                return excluded(owner,published,kind,"foreign")
+            photos=legacy.get("extended_entities",{}).get("media",[])
+            if not isinstance(photos,list):
+                raise AdapterError("discovery_incomplete")
+            expected=sum(photo.get("type")=="photo" for photo in photos if isinstance(photo,dict))
+            if kind=="repost" or expected==0:
+                return excluded(owner,published,kind,"unsupported")
+            if expected>1000:
+                raise AdapterError("limit_reached")
+            ext._assign_user(user)
+            ext.tweets=lambda:iter((raw,))
+        records=[]
+        for message,url,metadata in ext.items():
+            data={k:v for k,v in metadata.items() if not k.startswith("_")}
+            if platform=="pixiv":
+                data["description"]=plain_caption(data.pop("caption",None))
+            if message==2:
+                records.append([2,data])
+            elif message==3:
+                records.append([3,url,data])
+            else:
+                raise AdapterError("discovery_incomplete")
+        images=[r for r in records if r[0]==3 and (platform=="pixiv" or r[-1].get("type")=="photo")]
+        if len(images)!=expected or not expected or len(json.dumps(records,default=str).encode("utf-8"))>12*1024*1024:
+            raise AdapterError("discovery_incomplete")
+        result.update(post_status="ready",records=records)
+        return result
+    except Exception as exc:
+        # Preserve the original exception and captured native HTTP response
+        # before converting to a bounded, fail-closed protocol error.
+        error = exc if isinstance(exc, AdapterError) else AdapterError(safe_error(exc))
+        result.update(error=str(error), page_complete=False, terminal=False,
+                      diagnostic=safe_diagnostic(attach_http_diagnostic(ext, exc), "fetch_post"))
+        error.result = result
+        raise error from None
 
 
 def stringify_ids(value):
@@ -774,7 +1024,14 @@ def main():
         config.set(("extractor",), "retries", 1)
         config.set(("extractor",), "timeout", 20)
         config.set(("extractor",), "sleep-request", 0)
-        result = collect(request["source"], request.get("cursor"))
+        source = request["source"]
+        mode = source.get("mode", "page")
+        if mode == "post":
+            result = collect_post(source, source.get("post_id"))
+        elif mode == "page":
+            result = collect(source, request.get("cursor"))
+        else:
+            raise AdapterError("source_unresolved")
     except AdapterError as exc:
         result = exc.result if exc.result is not None else {"error": str(exc), "diagnostic": safe_diagnostic(exc, "startup_validation")}
     except Exception as exc:

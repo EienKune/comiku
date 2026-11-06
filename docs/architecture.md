@@ -26,13 +26,15 @@ API 处理认证、权限、短事务和任务登记；独立 worker 通过 Post
 
 X 两通道共用来源契约，游标、水位和健康按账号/适配器独立保存。错误响应不能被当作空页，失败不越过安全水位；官方回退受预算约束。可选 gallery-dl adapter 提供 X/Pixiv 作品抓取，其 Python 桥和固定依赖与 TS adapter 放在同一目录。作者管理根据可用 adapter 能力开放 Pixiv 采集；未配置时仍可只保存资料和主页。各实现的目录、构建资源和运行记录见[采集 adapter 说明](adapters/source-ingestion.md)。
 
-候选池通过只读 `GET /api/source-fetch/progress` 发现团队当前采集批次和最近手动批次，要求 `candidates:manage`。当前批次可由手动或定时触发；历史摘要只取最近手动批次。摘要仅含状态、时间、页数、新候选和原图计数，不含账号明细、游标或上游响应。手动同步受理接口仅返回批次 ID 和状态，等价复用也不返回技术详情；完整历史列表与单批次详情均要求 `system:manage`。查询最多聚合两个批次，使用触发方式/状态与开始时间索引；读取不会登记或修复任务。页面重开和回到前台时重新读取，前台活动批次每 2 秒、空闲每 15 秒查询，后台暂停轮询。只有明确点击同步按钮才登记任务，等价活动范围复用、重叠不同范围拒绝；查看状态不触发采集。同步结束后刷新候选。
+候选池通过只读 `GET /api/source-fetch/progress` 发现团队当前采集批次和最近手动批次，要求 `candidates:manage`。当前批次可由手动或定时触发；历史摘要只取最近手动批次。摘要仅含状态、时间、页数、新候选和原图计数，不含账号明细、游标或上游响应。手动同步受理接口仅返回批次 ID 和状态，等价复用也不返回技术详情；完整历史列表与单批次详情均要求 `system:manage`。查询最多聚合两个批次，使用触发方式/状态与开始时间索引；读取不会登记或修复任务。页面重开和回到前台时重新读取，前台活动批次每 2 秒、空闲每 15 秒查询，后台暂停轮询。只有明确点击同步按钮才登记任务，等价活动范围复用、重叠不同范围拒绝；查看状态不触发采集。同步结束后更新当前审核会话内的卡片；点击“刷新列表”才纳入新候选与新排序。
 
-图片识别由独立的持久 heavy 任务执行，依赖通用 `ImageAnalysisAdapter`；各 adapter 声明自己的类别集合，支持二分类及多分类，并输出独立排序分数。公开 example 使用 `comic/comic_related/other`，BA adapter 保留原生 `ba_art/ba_related/other`（BA 漫画／插画、BA 相关、其他），默认不启用识别。BA 实现与可选推理代码公开，权重、分类头和凭据由部署者单独提供，详见[接口说明](adapters/image-analysis.md)。逐图结果保存完整模型/预处理/类别身份和原图摘要，失败可重试，识别不改变人工审核状态。
+图片识别由独立的持久 analysis/global 单槽任务执行，incremental 与 historical 队列按 3:1 公平调度，heavy 保留导出和缩略图，依赖通用 `ImageAnalysisAdapter`；各 adapter 声明自己的类别集合，支持二分类及多分类，并输出独立排序分数。公开 example 使用 `comic/comic_related/other`，BA adapter 保留原生 `ba_art/ba_related/other`（BA 漫画／插画、BA 相关、其他），默认不启用识别。BA 实现与可选推理代码公开，权重、分类头和凭据由部署者单独提供，详见[接口说明](adapters/image-analysis.md)。逐图结果保存完整模型/预处理/类别身份和原图摘要，失败可重试，识别不改变人工审核状态。
 
 手动上传的独立图片各为一个候选组；每个 ZIP 为一个组，目录只做有限两层处理，拒绝嵌套压缩包和越界路径。明确数字尾号按数字排序，否则沿输入顺序，图源可调整页序。可选择直接入库或进入候选；直接入库仍经过可追溯候选和文件校验。
 
-候选保留有效标签漫画/插画、普通漫画/插画、黑名单标签漫画/插画、照片分组；组内先按已完成识别的排序分数，再按时间。优先组接受配置的有效标签或当前完整模型结果满足 adapter 的审核策略；BA 策略为至少一张图的获胜类别是 `ba_art`，不另设置信度门槛。模型提升不会伪造原帖标签或修改人工审核，人工／既有照片分类与黑名单优先；没有 BA 漫画／插画获胜图的候选仍留原分组。帖子分类标签只展示最高排序分图片的获胜类别；分区检查所有图片，不只检查这一张代表图。当前 BA 排序分是 ba_art 概率，帖子取逐图最高分。分类置信度与排序分数分别使用；模型未启用时不伪造分类，失败也不会伪造 `other` 结果。列表的可选 `analysisPending` 摘要覆盖当前筛选范围的全部分组与分页，只统计当前模型仍可识别的候选；未启用模型、作者已删除或没有有效媒体时不持续轮询。页面据此在前台协调刷新各组，避免尚未排队或分页外的候选完成识别后仍显示旧分组。
+候选待处理内容按优先审核、待判断、低优先级三个自动区域展示。正向线索是启用优先标签或任一当前有效图片的获胜类别命中 adapter 优先类别；正向线索与降级标签同时出现时进入待判断且区内先展示，否则正向进入优先、有降级进入低优先。没有标签命中且所有图片都具有当前模型、当前有效文件 SHA 对应的合法成功低类结果时，进入低优先；其余包括识别失败、缺失、未知类别和模型未启用均进入待判断。一张正向图即足够，其他失败图片不抹除它。所有区域的入库、忽略权限和 revision 校验相同。向前清理迁移删除已退役的人工 manga/photo 分类、旧建议及单值标签缓存；升级前按正常流程备份数据库。当前模型结果、逐图分数与分类标签，以及人工候选/Work 审核状态继续保留。gray 仅保留历史记录，不提供新增或自动降级行为。
+
+区内按合法图片最高排序分、时间和 ID 排序，不取均值；无分数不伪造零分。模型代表标签仍是最高排序分图片的类别，显示名称来自 adapter，与分区证据相互独立。BA 映射 ba_art 优先、ba_related 待判断、other 低优先。规则保存只影响下一次显式刷新建立的会话，不下载、不重推理；当前会话同时冻结分区、原帖标签和匹配原因，卡片业务状态与模型分数继续实时读取。详见[稳定审核会话](candidate-review-sessions.md)。
 
 作品入库生成稳定数字编号，舍弃后也不回收。作品标题和发布正文可以后续填写；原帖配文只作为参考，不自动填入发布正文。
 
@@ -75,3 +77,9 @@ X 两通道共用来源契约，游标、水位和健康按账号/适配器独�
 列表优先使用后台生成的长边最多 800px、质量 82 WebP 缩略图，只缩小不放大，原图小或收益不足时复用原件。大图按需读取原图，翻校及导出保留原字节。大图支持缩放平移，普通卡片图片以外区域进入作品详情。
 
 原图、缩略图、头像、凭证和成图继承所属资源权限。预签名 URL 短期有效，知晓对象 key 不等于拥有读取权限。删除和清理按引用与恢复窗口执行，不统一删除历史对象。数据库备份不包含图片正文，恢复需要同时确保对象仍存在。
+
+### Source discovery and compensation
+
+A complete source page registers verified posts and explicitly proven metadata gaps before its durable cursor advances. `SourceDiscoveryPost` keeps original account identity and window; `SourceDiscoveryMedia` retains successfully stored files through formal references. Only complete, verified, nonempty static manifests become candidates. The shared account discovery watermark therefore describes enumeration coverage, while terminal partial batch status reports unresolved ingestion gaps.
+
+`source_post_recover` jobs use the platform's existing `network/source:<platform>` scope and `recovery` queue. Each persistent campaign has an idempotent key, at most three job executions, and one business outcome; eight failed campaigns stop at `needs_attention`, with five-minute, ten-minute and then thirty-minute spacing. Current permissions, source identity, management revisions, credential generation and job/source epochs fence recovery writes. Recovery preserves original scan history and successful files, refreshes temporary URLs internally, and exposes only a bounded administrator diagnostic projection through the compiled operations command.
