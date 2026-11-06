@@ -1687,6 +1687,12 @@ test("manual source upload uses a signed session before finalizing candidates", 
   fireEvent.change(await screen.findByLabelText("图片或 ZIP"), {
     target: { files: [file] },
   });
+  expect(
+    screen
+      .getByRole("button", { name: "上传并预览图组" })
+      .hasAttribute("disabled"),
+  ).toBe(true);
+  fireEvent.click(await screen.findByRole("option", { name: "授权作者" }));
   await waitFor(() =>
     expect(
       (

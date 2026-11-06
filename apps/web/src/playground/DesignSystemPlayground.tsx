@@ -77,6 +77,7 @@ const colorTokens = [
 function ImagePickerDemo() {
   const [name, setName] = useState("合成作者");
   const [avatar, setAvatar] = useState<File[]>([]);
+  const [sources, setSources] = useState<File[]>([]);
   const [evidence, setEvidence] = useState<File[]>([]);
   const [disabled, setDisabled] = useState(false);
   function showSamples() {
@@ -157,6 +158,16 @@ function ImagePickerDemo() {
           files={evidence}
           onChange={setEvidence}
           multiple
+          disabled={disabled}
+        />
+        <ImagePicker
+          label="示例图源文件"
+          formats="source"
+          files={sources}
+          onChange={setSources}
+          multiple
+          maxFiles={20}
+          maxFileSize={25 * 1024 * 1024}
           disabled={disabled}
         />
       </div>

@@ -1,3 +1,8 @@
+import { AuthorEvidenceRemovalDialog } from "./AuthorEvidenceRemovalDialog";
+import {
+  ManualUploadCheckpoints,
+  type ManualCandidateDraft,
+} from "./manual-upload-checkpoints";
 import { AuthorTagPicker } from "./AuthorTagPicker";
 import { authorTagInput, type AuthorTagChoice } from "./author-tag-selection";
 import { CandidateCard } from "./CandidateCard";
@@ -1716,7 +1721,10 @@ export function AuthorDetailPage() {
               {user.permissions.includes("authors:sensitive") && (
                 <AuthorEvidencePanel
                   author={author}
-                  items={evidence.data ?? []}
+                  items={evidence.data}
+                  loading={evidence.isPending}
+                  readError={evidence.isError ? evidence.error.message : ""}
+                  onRetry={() => void evidence.refetch()}
                   onUpdated={async () => {
                     await Promise.all([
                       query.refetch(),
@@ -2011,14 +2019,26 @@ function AuthorEditForm({
 
 function AuthorEvidencePanel({
   author,
-  items,
+  items: loadedItems,
+  loading,
+  readError,
+  onRetry,
   onUpdated,
 }: {
   author: Author;
-  items: components["schemas"]["AuthorEvidenceDto"][];
+  items?: components["schemas"]["AuthorEvidenceDto"][];
+  loading: boolean;
+  readError: string;
+  onRetry: () => void;
   onUpdated: () => Promise<unknown>;
 }) {
   const action = useAction();
+  const items = loadedItems ?? [];
+  const unavailable = !loadedItems || Boolean(readError);
+  const [removing, setRemoving] = useState<{
+    id: string;
+    expectedRevision: number;
+  } | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const uploadProgress = useRef(new AuthorImageUpload());
   async function upload(event: FormEvent<HTMLFormElement>) {
@@ -2069,10 +2089,21 @@ function AuthorEvidencePanel({
       <details>
         <summary>
           <span>授权凭证</span>
-          <Badge tone={items.length ? "success" : "warning"}>
-            {items.length ? `${items.length} 张` : "待补充"}
-          </Badge>
+          {loadedItems && (
+            <Badge tone={items.length ? "success" : "warning"}>
+              {items.length ? `${items.length} 张` : "待补充"}
+            </Badge>
+          )}
         </summary>
+        {readError && (
+          <p className="account-error" role="alert">
+            凭证读取失败：{readError}
+            <Button type="button" size="sm" variant="ghost" onClick={onRetry}>
+              重试读取
+            </Button>
+          </p>
+        )}
+        {loading && !loadedItems && <p role="status">正在读取凭证…</p>}
         {items.length ? (
           <div className="workspace-evidence-grid">
             {items.map((item, index) => (
@@ -2084,7 +2115,7 @@ function AuthorEvidencePanel({
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={action.busy || index === 0}
+                      disabled={action.busy || unavailable || index === 0}
                       onClick={() => void move(index, -1)}
                     >
                       <ArrowUp size={14} />
@@ -2093,7 +2124,9 @@ function AuthorEvidencePanel({
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={action.busy || index === items.length - 1}
+                      disabled={
+                        action.busy || unavailable || index === items.length - 1
+                      }
                       onClick={() => void move(index, 1)}
                     >
                       <ArrowDown size={14} />
@@ -2102,24 +2135,14 @@ function AuthorEvidencePanel({
                     <Button
                       size="sm"
                       variant="danger"
-                      disabled={action.busy}
-                      onClick={() =>
-                        void action.run(async () => {
-                          await unwrap(
-                            await client.DELETE(
-                              "/api/authors/{id}/authorization-evidence/{evidenceId}",
-                              {
-                                params: {
-                                  path: { id: author.id, evidenceId: item.id },
-                                },
-                                body: { expectedRevision: author.revision },
-                              },
-                            ),
-                          );
-                          await onUpdated();
-                          action.setSuccess("授权凭证已移除");
-                        })
-                      }
+                      disabled={action.busy || unavailable}
+                      onClick={() => {
+                        action.clearError();
+                        setRemoving({
+                          id: item.id,
+                          expectedRevision: author.revision,
+                        });
+                      }}
                     >
                       移除
                     </Button>
@@ -2128,10 +2151,35 @@ function AuthorEvidencePanel({
               </figure>
             ))}
           </div>
-        ) : (
+        ) : loadedItems && !readError ? (
           <p className="workspace-muted">
             有效授权尚未附凭证，不阻塞维护，但建议尽快补充。
           </p>
+        ) : null}
+        {removing && (
+          <AuthorEvidenceRemovalDialog
+            busy={action.busy}
+            error={action.error}
+            onCancel={() => setRemoving(null)}
+            onConfirm={() =>
+              void action.run(async () => {
+                await unwrap(
+                  await client.DELETE(
+                    "/api/authors/{id}/authorization-evidence/{evidenceId}",
+                    {
+                      params: {
+                        path: { id: author.id, evidenceId: removing.id },
+                      },
+                      body: { expectedRevision: removing.expectedRevision },
+                    },
+                  ),
+                );
+                setRemoving(null);
+                await onUpdated();
+                action.setSuccess("授权凭证已移除");
+              })
+            }
+          />
         )}
         <form
           className="workspace-stacked-form"
@@ -2145,13 +2193,15 @@ function AuthorEvidencePanel({
               setFiles(next);
               uploadProgress.current = new AuthorImageUpload();
             }}
-            disabled={action.busy || uploadProgress.current.locked}
+            disabled={
+              action.busy || unavailable || uploadProgress.current.locked
+            }
           />
           {uploadProgress.current.resultUnknown && (
             <Button
               type="button"
               variant="secondary"
-              disabled={action.busy}
+              disabled={action.busy || unavailable}
               onClick={() =>
                 void action.run(async () => {
                   await unwrap(
@@ -2178,7 +2228,7 @@ function AuthorEvidencePanel({
           <Button
             type="submit"
             size="sm"
-            disabled={!files.length}
+            disabled={!files.length || unavailable}
             loading={action.busy}
           >
             上传凭证
@@ -2351,18 +2401,10 @@ function ManualCandidateUpload({
   const [completed, setCompleted] = useState<CandidateUploadSession | null>(
     null,
   );
-  const [drafts, setDrafts] = useState<
-    Record<
-      string,
-      {
-        authorId: string;
-        text: string;
-        sourceUrl: string;
-        media: Candidate["media"];
-        originalMediaIds: string[];
-      }
-    >
-  >({});
+  const checkpoints = useRef(new ManualUploadCheckpoints());
+  const [drafts, setDrafts] = useState<Record<string, ManualCandidateDraft>>(
+    {},
+  );
   const [recoverableSessionId, setRecoverableSessionId] = useState(
     storedCandidateUploadSessionId,
   );
@@ -2391,9 +2433,6 @@ function ManualCandidateUpload({
                     text: item.candidate.text ?? "",
                     sourceUrl: item.candidate.externalPostUrl ?? "",
                     media: item.candidate.media,
-                    originalMediaIds: item.candidate.media.map(
-                      (media) => media.id,
-                    ),
                   },
                 ],
               ]
@@ -2570,63 +2609,13 @@ function ManualCandidateUpload({
   async function confirmUpload() {
     if (!completed) return;
     await action.run(async () => {
-      const candidates: Candidate[] = [];
-      for (const item of completed.items) {
-        if (!item.candidate) continue;
-        const draft = drafts[item.candidate.id];
-        if (!draft) continue;
-        let current = item.candidate;
-        const mediaIds = draft.media.map((media) => media.id);
-        if (
-          mediaIds.some((id, index) => id !== draft.originalMediaIds[index])
-        ) {
-          current = await unwrap(
-            await client.POST("/api/candidates/{id}/media-order", {
-              params: { path: { id: current.id } },
-              body: { expectedRevision: current.revision, mediaIds },
-            }),
-          );
-        }
-        if (
-          draft.authorId !== current.authorId ||
-          draft.text.trim() !== (current.text ?? "") ||
-          draft.sourceUrl.trim() !== (current.externalPostUrl ?? "")
-        ) {
-          current = await unwrap(
-            await client.PATCH("/api/candidates/{id}/manual-metadata", {
-              params: { path: { id: current.id } },
-              body: {
-                authorId: draft.authorId,
-                text: draft.text.trim() || null,
-                sourceUrl: draft.sourceUrl.trim() || null,
-                expectedRevision: current.revision,
-              },
-            }),
-          );
-        }
-        candidates.push(current);
-      }
-      if (destination === "direct" && candidates.length) {
-        const result = await unwrap(
-          await client.POST("/api/candidates/actions", {
-            body: {
-              action: "import",
-              items: candidates.map((candidate) => ({
-                id: candidate.id,
-                expectedRevision: candidate.revision,
-              })),
-            },
-          }),
-        );
-        const failures = result.results.filter(
-          (item) => !["succeeded", "unchanged"].includes(item.outcome),
-        );
-        if (failures.length) {
-          throw new Error(
-            `${failures.length} 个图组未能直接入库，请在候选池检查`,
-          );
-        }
-      }
+      await checkpoints.current.confirm(
+        completed.items.flatMap((item) =>
+          item.candidate ? [item.candidate] : [],
+        ),
+        drafts,
+        destination,
+      );
       await onUploaded();
       onClose();
     });
@@ -2671,13 +2660,20 @@ function ManualCandidateUpload({
                 <div className="workspace-upload-preview-fields">
                   <AuthorPicker
                     value={draft.authorId}
-                    disabled={action.busy}
+                    disabled={
+                      action.busy ||
+                      checkpoints.current.isImported(candidate.id)
+                    }
                     onValueChange={(value) =>
                       updateDraft(candidate.id, { authorId: value })
                     }
                   />
                   <TextField
                     label="原帖配文（可选）"
+                    disabled={
+                      action.busy ||
+                      checkpoints.current.isImported(candidate.id)
+                    }
                     value={draft.text}
                     maxLength={4000}
                     onChange={(event) =>
@@ -2687,6 +2683,10 @@ function ManualCandidateUpload({
                   <TextField
                     label="来源链接（可选）"
                     type="url"
+                    disabled={
+                      action.busy ||
+                      checkpoints.current.isImported(candidate.id)
+                    }
                     value={draft.sourceUrl}
                     onChange={(event) =>
                       updateDraft(candidate.id, {
@@ -2707,7 +2707,11 @@ function ManualCandidateUpload({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        disabled={index === 0}
+                        disabled={
+                          action.busy ||
+                          checkpoints.current.isImported(candidate.id) ||
+                          index === 0
+                        }
                         onClick={() => movePreview(candidate.id, index, -1)}
                       >
                         前移
@@ -2716,7 +2720,11 @@ function ManualCandidateUpload({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        disabled={index === draft.media.length - 1}
+                        disabled={
+                          action.busy ||
+                          checkpoints.current.isImported(candidate.id) ||
+                          index === draft.media.length - 1
+                        }
                         onClick={() => movePreview(candidate.id, index, 1)}
                       >
                         后移
@@ -2729,6 +2737,7 @@ function ManualCandidateUpload({
           })}
           <SelectField
             label="完成后"
+            disabled={action.busy}
             value={destination}
             onValueChange={(value) =>
               setDestination(value as "direct" | "candidate")
@@ -2742,10 +2751,11 @@ function ManualCandidateUpload({
             <Button
               loading={action.busy}
               disabled={
-                !completed.items.some((item) => item.candidate) ||
-                completed.items.some(
-                  (item) =>
-                    item.candidate && !drafts[item.candidate.id]?.authorId,
+                !checkpoints.current.canConfirm(
+                  completed.items.flatMap((item) =>
+                    item.candidate ? [item.candidate] : [],
+                  ),
+                  drafts,
                 )
               }
               onClick={() => void confirmUpload()}
@@ -2766,7 +2776,6 @@ function ManualCandidateUpload({
           <AuthorPicker
             value={authorId}
             onValueChange={setAuthorId}
-            autoSelectFirst
             disabled={action.busy}
           />
           <TextField
@@ -2781,22 +2790,16 @@ function ManualCandidateUpload({
             value={sourceUrl}
             onChange={(event) => setSourceUrl(event.target.value)}
           />
-          <label className="workspace-file-field">
-            <span>图片或 ZIP</span>
-            <input
-              type="file"
-              aria-label="图片或 ZIP"
-              accept=".zip,image/png,image/jpeg,image/webp,image/gif"
-              multiple
-              required
-              onChange={(event) =>
-                setFiles(Array.from(event.currentTarget.files ?? []))
-              }
-            />
-            <small>
-              最多 20 个文件，每个不超过 25 MiB；单个 ZIP 最多 100 张图片。
-            </small>
-          </label>
+          <ImagePicker
+            label="图片或 ZIP"
+            formats="source"
+            files={files}
+            onChange={setFiles}
+            multiple
+            maxFiles={20}
+            maxFileSize={25 * 1024 * 1024}
+            disabled={action.busy}
+          />
           <Feedback error={action.error} success={action.success} />
           {progress && <p className="workspace-muted">{progress}</p>}
           {recoverableSessionId && !progress && (
