@@ -1,5 +1,5 @@
 import { permissionsFor, type Permission } from "../common/access.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { ConflictException } from "@nestjs/common";
@@ -10,7 +10,11 @@ import type {
   Prisma,
   SourcePlatformState,
 } from "../generated/prisma/client.js";
-import { JobDeferred, type JobsService } from "../jobs/jobs.service.js";
+import {
+  JOB_LEASE_MS,
+  JobDeferred,
+  type JobsService,
+} from "../jobs/jobs.service.js";
 import { jsonObject, SourceResponseError } from "./source-response.js";
 
 /** Hash bounded local material on every claim/network boundary; never expose material. */
@@ -158,7 +162,12 @@ export class SourcePlatformStates {
       where: {
         id: excludeJobId ? { not: excludeJobId } : undefined,
         kind: {
-          in: ["source_fetch", "source_account_fetch", "source_post_recover"],
+          in: [
+            "source_fetch",
+            "source_account_fetch",
+            "source_post_recover",
+            "source_profile_resolve",
+          ],
         },
         status: "running",
         leaseUntil: { gt: now },
@@ -316,28 +325,150 @@ export class SourcePlatformStates {
     const deferred = this.denial(state, actual === generation ? actual : null);
     if (deferred) throw deferred;
   }
+  /** One interactive metadata call may overlap the platform's one collection job. */
+  async profileNetwork<T>(
+    actorId: string,
+    run: () => Promise<T>,
+    platform: "x" | "pixiv" = "x",
+  ): Promise<T> {
+    const label = platform === "x" ? "X" : "Pixiv",
+      leaseId = randomUUID(),
+      id = randomUUID();
+    const generation = await this.fingerprint(platform);
+    if (!generation) throw new ConflictException(`${label} 资料同步配置不可用`);
+    await this.db.$transaction(async (tx) => {
+      await this.jobs.lockScope(tx, "network", `source:${platform}`);
+      await this.jobs.lockScope(tx, "network", "global");
+      await this.actor(tx, actorId, "authors:manage");
+      const now = new Date();
+      if (
+        await tx.backgroundJob.count({
+          where: {
+            lane: "network",
+            status: "running",
+            leaseUntil: { gt: now },
+            OR: [
+              { executionScope: "global" },
+              {
+                executionScope: `source:${platform}`,
+                kind: "source_profile_resolve",
+              },
+            ],
+          },
+        })
+      )
+        throw new ConflictException(`${label} 资料同步正在运行，请稍后再试`);
+      let state = await tx.sourcePlatformState.findUnique({
+        where: { platform },
+      });
+      if (!state) {
+        if (!(await this.drained(tx, platform, now)))
+          throw new ConflictException(`${label} 同步状态尚未就绪，请稍后再试`);
+        await tx.sourcePlatformState.createMany({
+          data: { platform, credentialGeneration: generation },
+          skipDuplicates: true,
+        });
+        state = await tx.sourcePlatformState.findUnique({
+          where: { platform },
+        });
+      }
+      if (this.denial(state, generation, now))
+        throw new ConflictException(
+          `${label} 资料同步已暂停或处于冷却，请等待管理员恢复`,
+        );
+      await tx.backgroundJob.create({
+        data: {
+          id,
+          resourceId: id,
+          kind: "source_profile_resolve",
+          actorId,
+          idempotencyKey: `source-profile:${id}`,
+          lane: "network",
+          executionScope: `source:${platform}`,
+          status: "running",
+          leaseId,
+          leaseUntil: new Date(now.getTime() + JOB_LEASE_MS),
+          startedAt: now,
+          attempts: 1,
+          payload: { platform, credentialGeneration: generation },
+        },
+      });
+    });
+    let failure: unknown,
+      failed = false,
+      result: T | undefined;
+    try {
+      await this.beforeNetwork(platform, generation);
+      result = await run();
+    } catch (error) {
+      failed = true;
+      failure = error;
+    }
+    const finished = await this.db.$transaction(async (tx) => {
+      await this.jobs.lockScope(tx, "network", `source:${platform}`);
+      const changed = await tx.backgroundJob.updateMany({
+        where: {
+          id,
+          status: "running",
+          leaseId,
+          leaseUntil: { gt: new Date() },
+        },
+        data: {
+          status: failed ? "failed" : "succeeded",
+          completedAt: new Date(),
+          leaseId: null,
+          leaseUntil: null,
+        },
+      });
+      if (changed.count && (!failed || failure instanceof SourceResponseError))
+        await this.outcome(tx, platform, generation, failure);
+      return changed.count;
+    });
+    if (failed) {
+      if (failure instanceof JobDeferred)
+        throw new ConflictException(
+          `${label} 资料同步配置已变化或不可用，请稍后重试`,
+        );
+      throw failure;
+    }
+    if (!finished)
+      throw new ConflictException(`${label} 资料同步已过期，请重试`);
+    return result as T;
+  }
   async outcome(
     tx: Prisma.TransactionClient,
     platform: string,
     generation: string,
     error?: unknown,
   ) {
+    const now = new Date();
+    const failure = error === undefined ? null : platformFailure(error, now);
+    if (error !== undefined && !failure) return;
+    // Collection and interactive requests can complete in either order. Merge
+    // their evidence under the platform row lock, never under a new scope lock.
+    await this.lock(tx, platform);
     const state = await tx.sourcePlatformState.findUnique({
       where: { platform },
     });
     if (!state || state.credentialGeneration !== generation) return;
-    const failure =
-      error === undefined ? null : platformFailure(error, new Date());
-    if (error !== undefined && !failure) return;
+    if (
+      !failure &&
+      (state.status === "auth_paused" ||
+        (state.cooldownUntil && state.cooldownUntil > now))
+    )
+      return;
     await tx.sourcePlatformState.updateMany({
       where: { platform, credentialGeneration: generation },
       data: failure
         ? {
             ...failure,
+            ...(state.status === "auth_paused"
+              ? { status: state.status, errorCode: state.errorCode }
+              : {}),
             cooldownUntil:
-              failure.cooldownUntil &&
               state.cooldownUntil &&
-              state.cooldownUntil > failure.cooldownUntil
+              (!failure.cooldownUntil ||
+                state.cooldownUntil > failure.cooldownUntil)
                 ? state.cooldownUntil
                 : failure.cooldownUntil,
             revision: { increment: 1 },

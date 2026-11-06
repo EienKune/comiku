@@ -674,6 +674,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/authors/pixiv-profile/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["resolvePixivProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/authors/creation-requests/{idempotencyKey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAuthorCreationResult"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/authors/{id}": {
         parameters: {
             query?: never;
@@ -716,6 +748,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["uploadAuthorAvatar"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/authors/{id}/managed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getManagedAuthor"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2227,6 +2275,8 @@ export interface components {
         /** @enum {string} */
         AuthorizationStatus: "pending" | "authorized" | "expired" | "revoked";
         /** @enum {string} */
+        AuthorAccountFilter: "linked" | "enabled" | "disabled" | "unlinked";
+        /** @enum {string} */
         SourceLanguage: "ja" | "ko" | "en";
         TagDto: {
             /** Format: uuid */
@@ -2243,6 +2293,7 @@ export interface components {
             profileUrl: string | null;
             displayNameSnapshot: string | null;
             avatarAvailable: boolean;
+            fetchEnabled: boolean;
         };
         AuthorDto: {
             /** Format: uuid */
@@ -2292,9 +2343,10 @@ export interface components {
             profileUrl: string | null;
             displayNameSnapshot: string | null;
             avatarAvailable: boolean;
+            fetchEnabled: boolean;
+            notes?: string | null;
             /** Format: uuid */
             authorId: string;
-            fetchEnabled: boolean;
             firstSyncMode: components["schemas"]["FirstSyncMode"];
             providerAvailable: boolean;
             revision: number;
@@ -2320,6 +2372,7 @@ export interface components {
             updatedAt: string;
             /** Format: date-time */
             deletedAt: string | null;
+            notes?: string | null;
         };
         SourceCapabilityDto: {
             platform: string;
@@ -2391,12 +2444,18 @@ export interface components {
         ResolveXProfileDto: {
             /**
              * Format: uuid
+             * @description 刷新已绑定账号时优先按该账号不可变数字 ID 查询
+             */
+            accountId?: string;
+            /**
+             * Format: uuid
              * @description 编辑当前作者时允许同步其已绑定 X 账号
              */
             authorId?: string;
             handle: string;
         };
         ResolvedXProfileDto: {
+            profileProof: string;
             externalUserId: string;
             handle: string;
             displayName: string;
@@ -2408,11 +2467,64 @@ export interface components {
             /** Format: date-time */
             syncedAt: string;
         };
+        ResolvePixivProfileDto: {
+            externalUserId: string;
+            /** Format: uuid */
+            authorId?: string;
+            /** Format: uuid */
+            accountId?: string;
+        };
+        ResolvedPixivProfileDto: {
+            profileProof: string;
+            externalUserId: string;
+            /** @enum {string|null} */
+            handle: null;
+            displayName: string;
+            profileUrl: string;
+            /** Format: uuid */
+            avatarFileObjectId: string | null;
+            avatarUrl: string | null;
+            adapterKey: string;
+            /** Format: date-time */
+            syncedAt: string;
+        };
+        CreateAuthorAccountDto: {
+            notes?: string | null;
+            /** @description 平台资料解析返回的短时身份凭证，绑定平台与稳定用户 ID */
+            profileProof?: string;
+            platform: string;
+            externalUserId: string;
+            handle?: string | null;
+            profileUrl?: string | null;
+            displayNameSnapshot?: string | null;
+            /** Format: uuid */
+            avatarFileObjectId?: string | null;
+            profileSyncAdapter?: string | null;
+            /** Format: date-time */
+            profileSyncedAt?: string | null;
+            fetchEnabled: boolean;
+            firstSyncMode: components["schemas"]["FirstSyncMode"];
+        };
         CreateAuthorDto: {
+            /**
+             * @description 使用该平台经验证的账号头像作为作者头像；仅用于创建意图
+             * @enum {string}
+             */
+            profileSourcePlatform?: "x" | "pixiv";
+            notes?: string | null;
             displayName: string;
             sourceLanguage: components["schemas"]["SourceLanguage"];
             authorizationStatus: components["schemas"]["AuthorizationStatus"];
             tagNames: string[];
+            /**
+             * Format: uuid
+             * @description 同一保存意图重试时保留；不同资料复用将返回409。
+             */
+            idempotencyKey?: string;
+            accounts?: components["schemas"]["CreateAuthorAccountDto"][];
+        };
+        AuthorCreationResultDto: {
+            author: components["schemas"]["ManagedAuthorDto"] | null;
         };
         AuthorEvidenceDto: {
             /** Format: uuid */
@@ -2431,6 +2543,7 @@ export interface components {
             evidenceIds: string[];
         };
         UpdateAuthorDto: {
+            notes?: string | null;
             displayName: string;
             sourceLanguage: components["schemas"]["SourceLanguage"];
             authorizationStatus: components["schemas"]["AuthorizationStatus"];
@@ -2438,6 +2551,9 @@ export interface components {
             expectedRevision: number;
         };
         CreateExternalAccountDto: {
+            notes?: string | null;
+            /** @description 平台资料解析返回的短时身份凭证，绑定平台与稳定用户 ID */
+            profileProof?: string;
             platform: string;
             externalUserId: string;
             handle?: string | null;
@@ -2452,7 +2568,10 @@ export interface components {
             firstSyncMode: components["schemas"]["FirstSyncMode"];
         };
         UpdateExternalAccountDto: {
-            /** @description 更换平台身份时归档旧关联并创建新关联，保留历史来源 */
+            notes?: string | null;
+            /** @description 平台资料同步凭证；X 身份变更或重新启用采集时必须提供 */
+            profileProof?: string;
+            /** @description 稳定平台用户 ID 不可修改；兼容旧客户端传入相同 ID，不同 ID 返回 409。新账号使用新建入口关联。 */
             externalUserId?: string;
             /** Format: uuid */
             avatarFileObjectId?: string | null;
@@ -6556,6 +6675,8 @@ export interface operations {
                 cursor?: string;
                 limit?: number;
                 authorizationStatus?: components["schemas"]["AuthorizationStatus"];
+                xState?: components["schemas"]["AuthorAccountFilter"];
+                pixivState?: components["schemas"]["AuthorAccountFilter"];
                 platform?: string;
                 tag?: string;
             };
@@ -7575,6 +7696,176 @@ export interface operations {
             };
         };
     };
+    resolvePixivProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolvePixivProfileDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolvedPixivProfileDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    getAuthorCreationResult: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                idempotencyKey: unknown;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthorCreationResultDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
     getAuthor: {
         parameters: {
             query?: never;
@@ -7940,6 +8231,90 @@ export interface operations {
                 };
             };
         };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedAuthorDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    getManagedAuthor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: unknown;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             200: {
                 headers: {

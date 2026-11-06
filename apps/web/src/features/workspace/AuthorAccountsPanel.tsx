@@ -1,19 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
-import {
-  Button,
-  Badge,
-  Surface,
-  SelectField,
-  TextField,
-} from "../../components/ui";
+import { Button, Badge, Surface, TextField } from "../../components/ui";
 import { OptionalSection } from "../../components/OptionalSection";
 import { PlatformLinks } from "../../components/PlatformLinks";
 import { useAccount } from "../account/account-context";
 import { client, queryClient, unwrap } from "../account/api";
 import { Feedback } from "../account/forms";
 import { useAction } from "../account/use-action";
+import { useAuthorCollection } from "./author-collection";
+import { AuthorCollectionFields } from "./AuthorCollectionFields";
+import { preserveProfileAvatar } from "./profile-avatar";
 import {
   sourceAdapterLabels,
   sourceAdapterHealthLabels,
@@ -21,13 +18,10 @@ import {
 
 type Account = components["schemas"]["ExternalAccountDto"];
 type Summary = components["schemas"]["ExternalAccountSummaryDto"];
-type Profile = components["schemas"]["ResolvedXProfileDto"];
+type Profile =
+  | components["schemas"]["ResolvedXProfileDto"]
+  | components["schemas"]["ResolvedPixivProfileDto"];
 type Capability = components["schemas"]["SourceCapabilityDto"];
-const firstSyncModeLabels: Record<Account["firstSyncMode"], string> = {
-  none: "仅后续内容",
-  last_24_hours: "最近 24 小时",
-  last_7_days: "最近 7 天",
-};
 
 export function AuthorAccountsPanel({
   authorId,
@@ -73,6 +67,7 @@ export function AuthorAccountsPanel({
     await Promise.all(
       [
         "author",
+        "managed-author",
         "authors",
         "author-accounts",
         "author-archived-accounts",
@@ -126,6 +121,9 @@ export function AuthorAccountsPanel({
                   <small>
                     {account.displayNameSnapshot || "未设置显示昵称"}
                   </small>
+                  {managed?.notes && (
+                    <p className="workspace-management-note">{managed.notes}</p>
+                  )}
                   {hasCollection && managed && (
                     <small>
                       {managed.fetchEnabled
@@ -274,6 +272,11 @@ export function AuthorAccountsPanel({
                             : `Pixiv · ${account.externalUserId}`}
                         </strong>
                         <small>已解绑；原有候选及作品来源保留</small>
+                        {account.notes && (
+                          <p className="workspace-management-note">
+                            {account.notes}
+                          </p>
+                        )}
                       </div>
                       <Button
                         size="sm"
@@ -318,6 +321,7 @@ export function AuthorAccountsPanel({
           account={editor.account}
           platform={editor.platform}
           capabilities={capabilities.error ? undefined : capabilities.data}
+          capabilityPending={capabilities.isPending}
           capabilityError={capabilities.error}
           onClose={() => setEditor(null)}
           onSaved={async () => {
@@ -349,6 +353,7 @@ function AccountEditor({
   account,
   capabilities,
   capabilityError,
+  capabilityPending,
   onClose,
   onSaved,
 }: {
@@ -357,6 +362,7 @@ function AccountEditor({
   account?: Account;
   capabilities?: Capability[];
   capabilityError: Error | null;
+  capabilityPending: boolean;
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -364,28 +370,12 @@ function AccountEditor({
   const action = useAction();
   const [handle, setHandle] = useState(account?.handle ?? "");
   const [externalUserId, setId] = useState(account?.externalUserId ?? "");
+  const pixivInput = useRef(account?.externalUserId ?? "");
   const [nickname, setNickname] = useState(account?.displayNameSnapshot ?? "");
+  const [notes, setNotes] = useState(account?.notes ?? "");
   const [profile, setProfile] = useState<Profile | null>(null);
-  const collectionModes = [
-    ...new Set(
-      (capabilities ?? [])
-        .filter((item) => item.platform === platform && item.available)
-        .flatMap((item) => item.supportedFirstSyncModes),
-    ),
-  ];
-  const [fetchEnabled, setFetch] = useState(
-    account?.fetchEnabled ?? (platform === "x" && collectionModes.length > 0),
-  );
-  const [firstSyncMode, setMode] = useState<Account["firstSyncMode"]>(
-    account?.firstSyncMode ??
-      (platform === "x" && collectionModes.includes("last_24_hours")
-        ? "last_24_hours"
-        : "none"),
-  );
-  const [replaceConfirmed, setReplaceConfirmed] = useState(false);
-  const replacing = Boolean(
-    account && externalUserId.trim() !== account.externalUserId,
-  );
+  const collection = useAuthorCollection(platform, capabilities, account);
+  const { fetchEnabled, firstSyncMode } = collection.value;
   useEffect(() => {
     const element = dialog.current;
     element?.showModal();
@@ -394,32 +384,35 @@ function AccountEditor({
   async function save(event: FormEvent) {
     event.preventDefault();
     await action.run(async () => {
+      if (!account && capabilityPending)
+        throw new Error("采集设置仍在读取，请稍后保存");
+      if (platform === "pixiv" && !/^[1-9][0-9]*$/.test(externalUserId.trim()))
+        throw new Error("Pixiv 用户 ID 必须是主页 /users/ 后的数字");
       if (!externalUserId.trim())
-        throw new Error(
-          "请先同步 X 资料；若已知稳定用户 ID，也可在高级区手动填写。",
-        );
-      if (replacing && !replaceConfirmed)
-        throw new Error("请确认更换账号，原有来源记录将保留。");
-      const collectionChanged =
-        (fetchEnabled && !account?.fetchEnabled) ||
-        firstSyncMode !== (account?.firstSyncMode ?? "none");
+        throw new Error("请先同步 X 资料，获取可信平台身份。");
       if (
-        collectionChanged &&
-        (fetchEnabled || firstSyncMode !== "none") &&
-        !collectionModes.includes(firstSyncMode)
+        platform === "x" &&
+        (!account ||
+          handle.toLowerCase() !== (account.handle ?? "").toLowerCase() ||
+          (fetchEnabled && !account.fetchEnabled)) &&
+        !profile
       )
-        throw new Error("当前没有支持所选首次同步范围的可用抓取通道");
+        throw new Error("请先同步 X 资料后保存账号。");
+      collection.validate();
+      collection.freeze();
       const fields = {
-        externalUserId: externalUserId.trim(),
         handle: platform === "x" ? handle : null,
         displayNameSnapshot: nickname.trim() || null,
+        notes: notes.trim() || null,
         fetchEnabled,
         firstSyncMode,
-        ...(profile
+        ...(profile &&
+        (platform === "x" || profile.externalUserId === externalUserId.trim())
           ? {
               avatarFileObjectId: profile.avatarFileObjectId,
               profileSyncAdapter: profile.adapterKey,
               profileSyncedAt: profile.syncedAt,
+              profileProof: profile.profileProof,
             }
           : {}),
       };
@@ -434,7 +427,11 @@ function AccountEditor({
         await unwrap(
           await client.POST("/api/authors/{authorId}/accounts", {
             params: { path: { authorId } },
-            body: { ...fields, platform },
+            body: {
+              ...fields,
+              platform,
+              externalUserId: externalUserId.trim(),
+            },
           }),
         );
       await onSaved();
@@ -471,7 +468,8 @@ function AccountEditor({
           <>
             <TextField
               label="X @账号"
-              hint="输入 @ 后的名称，也可粘贴 X 主页地址。更换实际账号请同步资料或填写新的稳定 ID。"
+              disabled={action.busy}
+              hint="输入 @ 后的名称，也可粘贴 X 主页地址。"
               required
               value={handle}
               onChange={(event) => {
@@ -488,14 +486,30 @@ function AccountEditor({
                 void action.run(async () => {
                   const result = await unwrap(
                     await client.POST("/api/authors/x-profile/resolve", {
-                      body: { handle, authorId },
+                      body: {
+                        handle,
+                        authorId,
+                        ...(account &&
+                        handle.toLowerCase() ===
+                          (account.handle ?? "").toLowerCase()
+                          ? { accountId: account.id }
+                          : {}),
+                      },
                     }),
                   );
-                  setProfile(result);
+                  if (
+                    account &&
+                    result.externalUserId !== account.externalUserId
+                  )
+                    throw new Error(
+                      "同步结果属于不同的 X 账号，请通过新建入口关联新账号。",
+                    );
+                  setProfile((current) =>
+                    preserveProfileAvatar(current, result),
+                  );
                   setHandle(result.handle);
                   setId(result.externalUserId);
                   setNickname(result.displayName);
-                  setReplaceConfirmed(false);
                   action.setSuccess("X 昵称和头像已同步，保存后生效");
                 })
               }
@@ -517,92 +531,107 @@ function AccountEditor({
             >
               <TextField
                 label="X 稳定用户 ID"
-                hint="平台分配的身份 ID，与可修改的 @账号不同。通常由同步自动获取；只有已知该 ID 时才手动填写，不要填 @名称。"
+                disabled={action.busy}
+                hint="由平台资料同步获取，关联后不可修改。"
                 value={externalUserId}
-                onChange={(event) => {
-                  setId(event.target.value);
-                  setProfile(null);
-                  setReplaceConfirmed(false);
-                }}
+                readOnly
               />
             </OptionalSection>
           </>
         ) : (
-          <TextField
-            label="Pixiv 用户 ID"
-            hint="主页 https://www.pixiv.net/users/123456 中的 123456；不是登录账号名。"
-            placeholder="123456"
-            inputMode="numeric"
-            pattern="[1-9][0-9]*"
-            required
-            value={externalUserId}
-            onChange={(event) => {
-              setId(event.target.value);
-              setReplaceConfirmed(false);
-            }}
-          />
+          <>
+            <TextField
+              label="Pixiv 用户 ID"
+              disabled={action.busy}
+              hint="主页 https://www.pixiv.net/users/123456 中的 123456；不是登录账号名。"
+              placeholder="123456"
+              inputMode="numeric"
+              pattern="[1-9][0-9]*"
+              required
+              value={externalUserId}
+              readOnly={Boolean(account)}
+              onChange={(event) => {
+                pixivInput.current = event.target.value;
+                setId(event.target.value);
+                setProfile(null);
+              }}
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              aria-label="同步 Pixiv 昵称和头像"
+              loading={action.busy}
+              disabled={
+                action.busy || !/^[1-9][0-9]*$/.test(externalUserId.trim())
+              }
+              onClick={() =>
+                void action.run(async () => {
+                  const requestedId = externalUserId.trim();
+                  const result = await unwrap(
+                    await client.POST("/api/authors/pixiv-profile/resolve", {
+                      body: {
+                        externalUserId: requestedId,
+                        authorId,
+                        ...(account ? { accountId: account.id } : {}),
+                      },
+                    }),
+                  );
+                  if (
+                    pixivInput.current.trim() !== requestedId ||
+                    result.externalUserId !== requestedId ||
+                    (account &&
+                      result.externalUserId !== account.externalUserId)
+                  )
+                    throw new Error(
+                      "Pixiv 用户 ID 已变化或同步结果不匹配，请重新同步。",
+                    );
+                  setProfile((current) =>
+                    preserveProfileAvatar(current, { ...result, handle: null }),
+                  );
+                  setNickname(result.displayName);
+                  action.setSuccess("Pixiv 昵称和头像已同步，保存后生效");
+                })
+              }
+            >
+              同步昵称和头像
+            </Button>
+            {profile && (
+              <p className="workspace-profile-sync">
+                <strong>{profile.externalUserId}</strong>
+                <span>{profile.displayName}</span>
+                {profile.avatarUrl && (
+                  <img src={profile.avatarUrl} alt="同步的 Pixiv 头像" />
+                )}
+              </p>
+            )}
+          </>
         )}
         <TextField
           label="平台显示昵称（可选）"
+          disabled={action.busy}
           hint="仅作为资料快照显示，不用于生成主页链接。"
           value={nickname}
           maxLength={255}
           onChange={(event) => setNickname(event.target.value)}
         />
-        {(collectionModes.length > 0 || account?.fetchEnabled) && (
-          <>
-            <label className="account-checkbox">
-              <input
-                type="checkbox"
-                checked={fetchEnabled}
-                disabled={
-                  !fetchEnabled && !collectionModes.includes(firstSyncMode)
-                }
-                onChange={(event) => setFetch(event.target.checked)}
-              />
-              启用自动抓取
-            </label>
-            <SelectField
-              label="首次同步范围"
-              value={firstSyncMode}
-              disabled={collectionModes.length === 0}
-              onValueChange={(value) =>
-                setMode(value as Account["firstSyncMode"])
-              }
-            >
-              {!collectionModes.includes(firstSyncMode) && (
-                <option value={firstSyncMode} disabled>
-                  {firstSyncModeLabels[firstSyncMode]}
-                  （当前不可用）
-                </option>
-              )}
-              {collectionModes.includes("none") && (
-                <option value="none">{firstSyncModeLabels.none}</option>
-              )}
-              {collectionModes.includes("last_7_days") && (
-                <option value="last_7_days">
-                  {firstSyncModeLabels.last_7_days}
-                </option>
-              )}
-              {collectionModes.includes("last_24_hours") && (
-                <option value="last_24_hours">
-                  {firstSyncModeLabels.last_24_hours}
-                </option>
-              )}
-            </SelectField>
-          </>
-        )}
-        {replacing && (
-          <label className="account-checkbox">
-            <input
-              type="checkbox"
-              required
-              checked={replaceConfirmed}
-              onChange={(event) => setReplaceConfirmed(event.target.checked)}
+        <label className="ui-field">
+          <span className="ui-field__label">账号备注（可选）</span>
+          <span className="ui-field__control">
+            <textarea
+              rows={3}
+              disabled={action.busy}
+              maxLength={2000}
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
             />
-            确认更换平台身份：旧关联及来源保留，新账号从新的抓取范围开始。
-          </label>
-        )}
+          </span>
+        </label>
+        <AuthorCollectionFields
+          value={collection.value}
+          modes={collection.modes}
+          onChange={collection.change}
+          disabled={action.busy}
+        />
         <Feedback
           error={action.error || capabilityError?.message}
           success={action.success}

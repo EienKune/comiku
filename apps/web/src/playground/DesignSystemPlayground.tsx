@@ -1,4 +1,6 @@
 import { Avatar } from "../components/Avatar";
+import { ImagePicker } from "../components/ImagePicker";
+import { ErrorToast } from "../components/ErrorToast";
 import { useEffect, useRef, useState } from "react";
 import { OptionalSection } from "../components/OptionalSection";
 import { PlatformLinks } from "../components/PlatformLinks";
@@ -72,6 +74,135 @@ const colorTokens = [
   { name: "Danger", value: "#F26B83", className: "danger" },
 ];
 
+function ImagePickerDemo() {
+  const [name, setName] = useState("合成作者");
+  const [avatar, setAvatar] = useState<File[]>([]);
+  const [evidence, setEvidence] = useState<File[]>([]);
+  const [disabled, setDisabled] = useState(false);
+  function showSamples() {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 96;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.fillStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue("--color-brand")
+      .trim();
+    context.fillRect(0, 0, 96, 96);
+    context.fillStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue("--color-on-brand")
+      .trim();
+    context.font = "48px sans-serif";
+    context.textAlign = "center";
+    context.fillText("A", 48, 66);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      setAvatar([new File([blob], "示例头像.png", { type: "image/png" })]);
+      setEvidence(
+        [1, 2].map(
+          (index) =>
+            new File(
+              [blob],
+              `授权凭证-用于检查窄屏长文件名和移除操作-${index}.png`,
+              { type: "image/png" },
+            ),
+        ),
+      );
+    }, "image/png");
+  }
+  return (
+    <Surface
+      className="component-panel component-panel--wide"
+      id="image-picker-demo"
+    >
+      <h3>作者图片选择</h3>
+      <div className="button-showcase">
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={disabled}
+          onClick={showSamples}
+        >
+          显示合成示例
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-pressed={disabled}
+          onClick={() => setDisabled((value) => !value)}
+        >
+          {disabled ? "启用选择" : "禁用选择"}
+        </Button>
+      </div>
+      <div className="field-grid">
+        <ImagePicker
+          label="示例头像"
+          variant="avatar"
+          currentAvatar={<Avatar name={name} size="lg" />}
+          avatarFallback={<Avatar name={name} size="lg" />}
+          avatarField={
+            <TextField
+              label="作者昵称"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              disabled={disabled}
+            />
+          }
+          files={avatar}
+          onChange={setAvatar}
+          maxFileSize={5 * 1024 * 1024}
+          disabled={disabled}
+        />
+        <ImagePicker
+          label="示例授权凭证"
+          files={evidence}
+          onChange={setEvidence}
+          multiple
+          disabled={disabled}
+        />
+      </div>
+    </Surface>
+  );
+}
+
+function AuthorProfileFieldsDemo() {
+  const [syncedPlatform, setSyncedPlatform] = useState<string | null>(null);
+  return (
+    <>
+      <div className="field-grid">
+        <TextField
+          label="X @账号"
+          placeholder="@comiku_demo"
+          action={
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setSyncedPlatform("X")}
+            >
+              同步昵称和头像
+            </Button>
+          }
+        />
+        <TextField
+          label="Pixiv 用户 ID"
+          placeholder="123456"
+          hint="主页 /users/123456 中的数字，不是登录账号名。"
+          inputMode="numeric"
+          action={
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setSyncedPlatform("Pixiv")}
+            >
+              同步昵称和头像
+            </Button>
+          }
+        />
+      </div>
+      {syncedPlatform && <p role="status">{syncedPlatform} 示例资料已同步</p>}
+    </>
+  );
+}
+
 function PlaygroundSection({
   id,
   eyebrow,
@@ -129,6 +260,7 @@ export function DesignSystemPlayground() {
   );
   const [activeTab, setActiveTab] = useState("candidate");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
   const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -476,6 +608,7 @@ export function DesignSystemPlayground() {
             description="组件保留足够圆润度与呼吸感，但尺寸和状态遵循工作型应用的效率要求。"
           >
             <div className="component-grid">
+              <ImagePickerDemo />
               <Surface className="component-panel component-panel--wide">
                 <div className="panel-heading">
                   <div>
@@ -649,6 +782,16 @@ export function DesignSystemPlayground() {
                   <Button variant="ghost" onClick={showToast}>
                     显示轻提示
                   </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() =>
+                      setErrorMessage(
+                        "资料暂不可用，请稍后重试。当前输入已保留。",
+                      )
+                    }
+                  >
+                    显示错误轻提示
+                  </Button>
                 </div>
               </Surface>
             </div>
@@ -681,25 +824,46 @@ export function DesignSystemPlayground() {
                 ]}
               />
               <PlatformLinks accounts={[]} />
+              <h3>作者目录账号与采集设置</h3>
+              <p>
+                图标后直接展示账号；电源和暂停角标表示采集开关，关闭仍可打开主页。
+              </p>
+              <PlatformLinks
+                variant="accounts"
+                accounts={[
+                  {
+                    platform: "x",
+                    handle: "comiku_demo",
+                    externalUserId: "1",
+                    fetchEnabled: true,
+                  },
+                  {
+                    platform: "pixiv",
+                    handle: null,
+                    externalUserId: "123456",
+                    fetchEnabled: false,
+                  },
+                ]}
+              />
+              <PlatformLinks
+                variant="accounts"
+                collectionBlockedReason="作者授权已过期，当前不会采集"
+                accounts={[
+                  {
+                    platform: "x",
+                    handle: "comiku_one",
+                    externalUserId: "2",
+                    fetchEnabled: true,
+                  },
+                ]}
+              />
               <PlatformLinks
                 accounts={[
                   { platform: "x", handle: "comiku_one", externalUserId: "2" },
                 ]}
               />
               <h3>平台身份表单</h3>
-              <div className="playground-row">
-                <TextField
-                  label="X @账号"
-                  placeholder="@comiku_demo"
-                  hint="同步资料后获取稳定用户 ID，不把 @名称当作 ID。"
-                />
-                <TextField
-                  label="Pixiv 用户 ID"
-                  placeholder="123456"
-                  hint="主页 /users/123456 中的数字，不是登录账号名。"
-                  inputMode="numeric"
-                />
-              </div>
+              <AuthorProfileFieldsDemo />
             </Surface>
             <div className="pattern-block">
               <div className="subsection-heading">
@@ -1198,6 +1362,10 @@ export function DesignSystemPlayground() {
         </dialog>
       )}
 
+      <ErrorToast
+        message={errorMessage}
+        onDismiss={() => setErrorMessage("")}
+      />
       <div
         className={`toast ${toastVisible ? "is-visible" : ""}`}
         role="status"

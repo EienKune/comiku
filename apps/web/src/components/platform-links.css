@@ -15,3 +15,122 @@
   color: var(--color-text-muted);
   opacity: 0.4;
 }
+.platform-links--accounts {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+.platform-account-entry {
+  display: block;
+  position: relative;
+  min-width: 0;
+}
+.platform-account-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2.5rem;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+}
+.platform-account-link:disabled {
+  opacity: 1;
+  cursor: default;
+}
+.platform-account-glyph {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+.platform-account-identity {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-soft);
+  font-size: var(--text-xs);
+}
+.platform-account-entry.is-missing .platform-account-glyph {
+  opacity: 0.4;
+  color: var(--color-text-muted);
+  border-color: transparent;
+}
+.platform-account-entry.is-missing .platform-account-identity {
+  color: var(--color-text-muted);
+}
+.platform-collection-mark {
+  display: grid;
+  place-items: center;
+  position: absolute;
+  right: -0.3rem;
+  bottom: -0.25rem;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border-strong);
+  box-shadow: 0 0 0 2px var(--color-surface);
+}
+.platform-collection-mark svg {
+  stroke-width: 2.5;
+}
+.platform-collection-mark.is-enabled {
+  color: var(--color-status-success-text);
+  background: var(--color-status-success-bg);
+  border-color: var(--color-status-success-border);
+}
+.platform-collection-mark.is-disabled {
+  color: var(--color-text-muted);
+  background: var(--color-surface-muted);
+}
+.platform-account-tooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + var(--space-2));
+  left: 0;
+  z-index: 50;
+  width: max-content;
+  max-width: min(17rem, calc(100vw - 3rem));
+  overflow-wrap: anywhere;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-text);
+  color: var(--color-surface);
+  font-size: var(--text-xs);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+.platform-account-tooltip > * {
+  display: block;
+}
+.platform-account-warning {
+  margin-top: var(--space-1);
+}
+.platform-account-entry:focus-within .platform-account-tooltip,
+.platform-account-entry:hover .platform-account-tooltip {
+  display: block;
+}
+.platform-account-entry:focus-visible,
+.platform-account-link:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .platform-account-link:not(:disabled):hover {
+    background: var(--color-surface-soft);
+  }
+}

@@ -8,6 +8,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   loadRootEnvironment,
   parseEnvironment,
@@ -227,6 +228,191 @@ async function fixture() {
     environment,
   };
 }
+
+for (const platform of ["x", "pixiv"] as const)
+  for (const profileFirst of [false, true])
+    test(`${platform} profile and collection overlap in either start order (${profileFirst ? "profile first" : "collection first"})`, async () => {
+      const f = await fixture();
+      const entered = pause(),
+        release = pause();
+      let profile: Promise<string> | undefined;
+      let collection: Promise<void> | undefined;
+      const beginProfile = () => {
+        profile = f.service.platforms.profileNetwork(
+          f.actor.id,
+          async () => {
+            entered.release();
+            await release.promise;
+            return "resolved";
+          },
+          platform,
+        );
+        return Promise.race([entered.promise, profile]);
+      };
+      const beginCollection = async () => {
+        const job = await f.jobs.claim(
+          "network",
+          new Date(),
+          `source:${platform}`,
+        );
+        assert.ok(job, "live profile must not prevent a collection claim");
+        collection = f.jobs.execute(job);
+        await f.entered[platform].promise;
+      };
+      try {
+        await f.manual(f.accounts.map((a) => a.id));
+        f.setBlock();
+        if (profileFirst) {
+          await beginProfile();
+          await beginCollection();
+        } else {
+          await beginCollection();
+          await beginProfile();
+        }
+        assert.equal(
+          await f.db.backgroundJob.count({
+            where: {
+              executionScope: `source:${platform}`,
+              status: "running",
+              leaseUntil: { gt: new Date() },
+            },
+          }),
+          2,
+        );
+        await assert.rejects(
+          f.peer.platforms.profileNetwork(
+            f.actor.id,
+            async () => {
+              assert.fail("second profile must not contact the platform");
+            },
+            platform,
+          ),
+          /资料同步正在运行/,
+        );
+        assert.equal(
+          await f.peerJobs.claim("network", new Date(), `source:${platform}`),
+          null,
+        );
+        await assert.rejects(
+          f.peer.platforms.recheck(platform, f.actor.id),
+          /still running/,
+        );
+        await assert.rejects(
+          f.peer.platforms.activate(platform, "old-generation"),
+          /Drain/,
+        );
+        release.release();
+        assert.equal(await profile, "resolved");
+        f.release[platform].release();
+        await collection;
+      } finally {
+        release.release();
+        f.release[platform].release();
+        await Promise.allSettled([profile, collection]);
+        await f.cleanup();
+      }
+    });
+
+test("concurrent platform outcomes preserve authentication pauses and longest rate deadlines", async () => {
+  const f = await fixture();
+  try {
+    await f.service.platforms.profileNetwork(f.actor.id, async () => "ready");
+    const state = await f.db.sourcePlatformState.findUniqueOrThrow({
+      where: { platform: "x" },
+    });
+    const auth = new SourceResponseError("authentication", {
+      scope: "credential",
+      reason: "auth_failed",
+    });
+    const rate = (seconds: number) =>
+      new SourceResponseError("rate_limited", {
+        scope: "credential",
+        reason: "rate_limited",
+        diagnostic: {
+          http_response_headers: { "retry-after": String(seconds) },
+        },
+      });
+    for (const [first, second, status, minDelay] of [
+      [auth, undefined, "auth_paused", 0],
+      [undefined, auth, "auth_paused", 0],
+      [rate(120), undefined, "cooling_down", 110_000],
+      [undefined, rate(120), "cooling_down", 110_000],
+      [rate(120), rate(5), "cooling_down", 110_000],
+      [rate(5), rate(120), "cooling_down", 110_000],
+      [auth, rate(120), "auth_paused", 110_000],
+      [rate(120), auth, "auth_paused", 110_000],
+    ] as const) {
+      await f.db.sourcePlatformState.update({
+        where: { platform: "x" },
+        data: { status: "healthy", errorCode: null, cooldownUntil: null },
+      });
+      const locked = pause(),
+        release = pause();
+      const before = Date.now();
+      const leading = f.db.$transaction(async (tx) => {
+        await f.service.platforms.outcome(
+          tx,
+          "x",
+          state.credentialGeneration,
+          first,
+        );
+        locked.release();
+        await release.promise;
+      });
+      await locked.promise;
+      const trailingStarted = pause();
+      let trailingPid = 0;
+      const trailing = f.db.$transaction(async (tx) => {
+        const [backend] = await tx.$queryRaw<
+          Array<{ pid: number }>
+        >`SELECT pg_backend_pid() AS pid`;
+        trailingPid = backend.pid;
+        trailingStarted.release();
+        await f.peer.platforms.outcome(
+          tx,
+          "x",
+          state.credentialGeneration,
+          second,
+        );
+      });
+      await trailingStarted.promise;
+      let blockedBeforeRead = false;
+      try {
+        for (let attempt = 0; attempt < 40; attempt++) {
+          const [activity] = await f.db.$queryRaw<Array<{ blocked: boolean }>>`
+            SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+              WHERE pid = ${trailingPid} AND wait_event_type = 'Lock'
+              AND query LIKE 'SELECT platform FROM source_platform_states%FOR UPDATE%') AS blocked`;
+          if (activity.blocked) {
+            blockedBeforeRead = true;
+            break;
+          }
+          await delay(10);
+        }
+      } finally {
+        release.release();
+      }
+      await Promise.all([leading, trailing]);
+      assert.ok(
+        blockedBeforeRead,
+        "the trailing outcome must wait on the platform row before reading state",
+      );
+      const result = await f.db.sourcePlatformState.findUniqueOrThrow({
+        where: { platform: "x" },
+      });
+      assert.equal(result.status, status);
+      if (minDelay)
+        assert.ok(
+          result.cooldownUntil &&
+            result.cooldownUntil.getTime() >= before + minDelay,
+        );
+      if (status === "auth_paused")
+        assert.equal(result.errorCode, "auth_failed");
+    }
+  } finally {
+    await f.cleanup();
+  }
+});
 
 test("D6 actual two workers: cross-platform parallel, same-platform exclusion, durable aggregate and waiting summary", async () => {
   const f = await fixture();
