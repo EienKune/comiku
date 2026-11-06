@@ -679,7 +679,8 @@ for (const mutation of [
             displayName: f.author.displayName,
             sourceLanguage: "ja",
             authorizationStatus: "revoked",
-            tagNames: [],
+            existingTags: [],
+            newTagNames: [],
             expectedRevision: 0,
           });
         if (mutation === "archive_author")
@@ -749,7 +750,8 @@ test("PostgreSQL download-time revocation avoids object storage and existing-can
         displayName: f.author.displayName,
         sourceLanguage: "ja",
         authorizationStatus: "revoked",
-        tagNames: [],
+        existingTags: [],
+        newTagNames: [],
         expectedRevision: 0,
       });
     };
@@ -857,7 +859,8 @@ for (const mutation of ["author", "account", "adapter"] as const)
           displayName: f.author.displayName,
           sourceLanguage: "ja",
           authorizationStatus: "revoked",
-          tagNames: [],
+          existingTags: [],
+          newTagNames: [],
           expectedRevision: 0,
         });
       if (mutation === "account")

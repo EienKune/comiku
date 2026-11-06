@@ -1,3 +1,9 @@
+import {
+  lockAuthorTagCatalog,
+  normalizeAuthorTagName,
+  normalizeAuthorTagSelection,
+  resolveAuthorTagSelections,
+} from "./author-tags.js";
 import { createHash } from "node:crypto";
 import { DirectUploadsService } from "../transfers/direct-uploads.service.js";
 import { ENVIRONMENT, type Environment } from "../config/environment.js";
@@ -439,40 +445,54 @@ export class AuthorsService {
   }
 
   listTags(): Promise<TagDto[]> {
-    return this.db.tag.findMany({ orderBy: [{ name: "asc" }, { id: "asc" }] });
+    return this.db.tag.findMany({
+      select: { id: true, name: true, revision: true },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+    });
   }
 
   createTag(input: CreateTagDto): Promise<TagDto> {
-    const [tag] = this.tags([input.name]);
-    return this.withConflict(() => this.db.tag.create({ data: tag }));
+    const tag = normalizeAuthorTagName(input.name);
+    return this.withConflict(() =>
+      this.db.$transaction(async (tx) => {
+        await lockAuthorTagCatalog(tx);
+        return tx.tag.create({ data: tag });
+      }),
+    );
   }
 
   async updateTag(id: string, input: UpdateTagDto): Promise<TagDto> {
-    const [tag] = this.tags([input.name]);
-    return this.withConflict(async () => {
-      const result = await this.db.tag.updateMany({
-        where: { id, revision: input.expectedRevision },
-        data: { ...tag, revision: { increment: 1 } },
-      });
-      if (!result.count) {
-        const existing = await this.db.tag.findUnique({ where: { id } });
-        if (!existing) throw new NotFoundException("标签不存在");
-        throw new ConflictException("标签已更新，请刷新后重试");
-      }
-      return this.db.tag.findUniqueOrThrow({ where: { id } });
-    });
+    const tag = normalizeAuthorTagName(input.name);
+    return this.withConflict(() =>
+      this.db.$transaction(async (tx) => {
+        await lockAuthorTagCatalog(tx);
+        const result = await tx.tag.updateMany({
+          where: { id, revision: input.expectedRevision },
+          data: { ...tag, revision: { increment: 1 } },
+        });
+        if (!result.count) {
+          if (!(await tx.tag.findUnique({ where: { id } })))
+            throw new NotFoundException("标签不存在");
+          throw new ConflictException("标签已更新，请刷新后重试");
+        }
+        return tx.tag.findUniqueOrThrow({ where: { id } });
+      }),
+    );
   }
 
   async deleteTag(id: string, expectedRevision: number) {
-    const result = await this.db.tag.deleteMany({
-      where: { id, revision: expectedRevision },
+    return this.db.$transaction(async (tx) => {
+      await lockAuthorTagCatalog(tx);
+      const result = await tx.tag.deleteMany({
+        where: { id, revision: expectedRevision },
+      });
+      if (!result.count) {
+        if (!(await tx.tag.findUnique({ where: { id } })))
+          throw new NotFoundException("标签不存在");
+        throw new ConflictException("标签已更新，请刷新后重试");
+      }
+      return { ok: true };
     });
-    if (!result.count) {
-      const existing = await this.db.tag.findUnique({ where: { id } });
-      if (!existing) throw new NotFoundException("标签不存在");
-      throw new ConflictException("标签已更新，请刷新后重试");
-    }
-    return { ok: true };
   }
 
   async get(id: string): Promise<AuthorDto> {
@@ -520,6 +540,28 @@ export class AuthorsService {
   private creationPayloadHash(input: CreateAuthorDto) {
     // Proof signatures/TTL and provider timestamps are transport evidence, not a new intent.
     // All user-visible account values that can be persisted still participate in the hash.
+    const normalizedTags =
+      input.tagNames === undefined ? normalizeAuthorTagSelection(input) : null;
+    const compare = (
+      left: { normalizedName: string },
+      right: { normalizedName: string },
+    ) =>
+      left.normalizedName < right.normalizedName
+        ? -1
+        : left.normalizedName > right.normalizedName
+          ? 1
+          : 0;
+    const tagHashFields = normalizedTags
+      ? {
+          tagSelection: {
+            existingTags: [...normalizedTags.existingTags].sort(
+              (left, right) =>
+                left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+            ),
+            newTagNames: this.tags(normalizedTags.newTagNames).sort(compare),
+          },
+        }
+      : { tags: this.tags(input.tagNames!).sort(compare) };
     const accounts = (input.accounts ?? [])
       .map((account) => {
         const platform = normalizePlatform(account.platform);
@@ -551,13 +593,7 @@ export class AuthorsService {
           displayName: input.displayName.trim(),
           sourceLanguage: input.sourceLanguage,
           authorizationStatus: input.authorizationStatus,
-          tags: this.tags(input.tagNames).sort((left, right) =>
-            left.normalizedName < right.normalizedName
-              ? -1
-              : left.normalizedName > right.normalizedName
-                ? 1
-                : 0,
-          ),
+          ...tagHashFields,
           accounts,
           ...(input.profileSourcePlatform !== undefined
             ? { profileSourcePlatform: input.profileSourcePlatform }
@@ -586,7 +622,15 @@ export class AuthorsService {
     input: CreateAuthorDto,
     actorId?: string,
   ): Promise<ManagedAuthorDto> {
-    const tags = this.tags(input.tagNames);
+    const legacyTags = input.tagNames !== undefined;
+    if (legacyTags && !Array.isArray(input.tagNames))
+      throw new BadRequestException("标签格式无效，请刷新页面");
+    if (
+      legacyTags &&
+      (input.existingTags !== undefined || input.newTagNames !== undefined)
+    )
+      throw new BadRequestException("标签格式不能混用，请刷新页面");
+    const selection = legacyTags ? null : normalizeAuthorTagSelection(input);
     const accounts = input.accounts ?? [];
     if (!actorId && (input.idempotencyKey || accounts.length))
       throw new ForbiddenException("创建账号关联和恢复标识需要当前操作人");
@@ -622,6 +666,10 @@ export class AuthorsService {
       });
       if (previous) return previous;
     }
+    if (legacyTags)
+      throw new ConflictException(
+        "页面已更新，请刷新后重新选择标签；已保存的作者可通过恢复入口查看",
+      );
     const prepared = await Promise.all(
       accounts.map((account) => this.prepareAccountIdentity(account, actorId)),
     );
@@ -671,6 +719,7 @@ export class AuthorsService {
           if (request.author) return this.managed(request.author);
           requestId = request.id;
         }
+        const [tagIds] = await resolveAuthorTagSelections(tx, [selection!]);
         if (profileSource)
           await this.validateProfileAvatar(
             profileSource.avatarFileObjectId,
@@ -685,16 +734,7 @@ export class AuthorsService {
               : {}),
             sourceLanguage: input.sourceLanguage,
             authorizationStatus: input.authorizationStatus,
-            tags: {
-              create: tags.map((tag) => ({
-                tag: {
-                  connectOrCreate: {
-                    where: { normalizedName: tag.normalizedName },
-                    create: tag,
-                  },
-                },
-              })),
-            },
+            tags: { create: tagIds.map((tagId) => ({ tagId })) },
           },
         });
         for (const account of prepared) {
@@ -719,9 +759,10 @@ export class AuthorsService {
   }
 
   update(id: string, input: UpdateAuthorDto): Promise<ManagedAuthorDto> {
-    const tags = this.tags(input.tagNames);
+    const selection = normalizeAuthorTagSelection(input);
     return this.withConflict(() =>
       this.db.$transaction(async (tx) => {
+        const [tagIds] = await resolveAuthorTagSelections(tx, [selection]);
         const result = await tx.author.updateMany({
           where: { id, revision: input.expectedRevision, deletedAt: null },
           data: {
@@ -737,16 +778,8 @@ export class AuthorsService {
         if (!result.count)
           await this.throwMissingOrConflict(tx, id, input.expectedRevision);
         await tx.authorTag.deleteMany({ where: { authorId: id } });
-        for (const tag of tags) {
-          const saved = await tx.tag.upsert({
-            where: { normalizedName: tag.normalizedName },
-            create: tag,
-            update: {},
-          });
-          await tx.authorTag.create({
-            data: { authorId: id, tagId: saved.id },
-          });
-        }
+        for (const tagId of tagIds)
+          await tx.authorTag.create({ data: { authorId: id, tagId } });
         return this.managed(
           await tx.author.findUniqueOrThrow({
             where: { id },
@@ -1822,7 +1855,8 @@ export class AuthorsService {
     for (const original of rows) {
       const row: AuthorImportRowDto & { errors: string[] } = {
         ...original,
-        tagNames: [...original.tagNames],
+        existingTags: [...original.existingTags],
+        newTagNames: [...original.newTagNames],
         errors: [],
       };
       if (!row.displayName.trim() || row.displayName.trim().length > 100)
@@ -1840,7 +1874,7 @@ export class AuthorsService {
       )
         row.errors.push("授权状态无效");
       try {
-        this.tags(row.tagNames);
+        normalizeAuthorTagSelection(row);
       } catch (error) {
         row.errors.push(error instanceof Error ? error.message : "标签无效");
       }
@@ -1947,7 +1981,33 @@ export class AuthorsService {
         error instanceof Error ? error.message : "CSV 无法解析",
       );
     }
-    const validated = await this.validateImportRows(actorId, rows, true);
+    const names = [
+      ...new Set(
+        rows.flatMap((row) =>
+          row.tagNames.map((name) =>
+            name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase(),
+          ),
+        ),
+      ),
+    ];
+    const catalog = await this.db.tag.findMany({
+      where: { normalizedName: { in: names } },
+    });
+    const byName = new Map(catalog.map((tag) => [tag.normalizedName, tag]));
+    const selections = rows.map(({ tagNames, ...row }) => {
+      const existingTags: { id: string; expectedRevision: number }[] = [],
+        newTagNames: string[] = [];
+      for (const name of tagNames) {
+        const tag = byName.get(
+          name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase(),
+        );
+        if (tag)
+          existingTags.push({ id: tag.id, expectedRevision: tag.revision });
+        else newTagNames.push(name);
+      }
+      return { ...row, existingTags, newTagNames };
+    });
+    const validated = await this.validateImportRows(actorId, selections, true);
     return {
       rows: validated,
       validCount: validated.filter((row) => !row.errors.length).length,
@@ -1969,8 +2029,10 @@ export class AuthorsService {
     }
     return this.withConflict(() =>
       this.db.$transaction(async (tx) => {
+        await this.assertCreateActor(tx, actorId);
+        const tagSelections = await resolveAuthorTagSelections(tx, validated);
         const authorIds: string[] = [];
-        for (const row of validated) {
+        for (const [index, row] of validated.entries()) {
           const author = await tx.author.create({
             data: {
               displayName: row.displayName.trim(),
@@ -1978,14 +2040,7 @@ export class AuthorsService {
               authorizationStatus:
                 row.authorizationStatus as AuthorizationStatus,
               tags: {
-                create: this.tags(row.tagNames).map((tag) => ({
-                  tag: {
-                    connectOrCreate: {
-                      where: { normalizedName: tag.normalizedName },
-                      create: tag,
-                    },
-                  },
-                })),
+                create: tagSelections[index].map((tagId) => ({ tagId })),
               },
             },
           });

@@ -74,6 +74,7 @@ function fixture() {
         return { count: 1 };
       },
     },
+    $executeRaw: async () => 1,
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
   };
   const service = new AuthorsService(
@@ -142,13 +143,26 @@ test("author and account PATCH trim notes, preserve omission and clear blank", a
   const { service, row } = fixture();
   await service.update("author", {
     ...base,
+    existingTags: [],
+    newTagNames: [],
     notes: " saved ",
     expectedRevision: 0,
   });
   assert.equal(row().notes, "saved");
-  await service.update("author", { ...base, expectedRevision: 1 });
+  await service.update("author", {
+    ...base,
+    existingTags: [],
+    newTagNames: [],
+    expectedRevision: 1,
+  });
   assert.equal(row().notes, "saved");
-  await service.update("author", { ...base, notes: "  ", expectedRevision: 2 });
+  await service.update("author", {
+    ...base,
+    existingTags: [],
+    newTagNames: [],
+    notes: "  ",
+    expectedRevision: 2,
+  });
   assert.equal(row().notes, null);
   for (const [notes, expected] of [
     [" account saved ", "account saved"],

@@ -1,3 +1,5 @@
+import { AuthorTagPicker } from "./AuthorTagPicker";
+import { authorTagInput, type AuthorTagChoice } from "./author-tag-selection";
 import { CandidateCard } from "./CandidateCard";
 import { CandidateDiscardDialog } from "./CandidateDiscardDialog";
 import { CandidateRulesDialog } from "./CandidateRulesDialog";
@@ -860,7 +862,7 @@ function AuthorCreateDialog({
   const [sourceLanguage, setSourceLanguage] = useState<SourceLanguage>("ja");
   const [status, setStatus] =
     useState<components["schemas"]["AuthorizationStatus"]>("pending");
-  const [tags, setTags] = useState("");
+  const [tags, setTags] = useState<AuthorTagChoice[]>([]);
   const [notes, setNotes] = useState("");
   const [xNotes, setXNotes] = useState("");
   const [pixivNotes, setPixivNotes] = useState("");
@@ -1036,7 +1038,12 @@ function AuthorCreateDialog({
     await action.run(async () => {
       const result = await unwrap(
         await client.POST("/api/authors/imports", {
-          body: { rows: preview.rows },
+          body: {
+            rows: preview.rows.map(({ errors, ...row }) => {
+              void errors;
+              return row;
+            }),
+          },
         }),
       );
       await onCompleted(`已导入 ${result.createdCount} 位作者`);
@@ -1119,10 +1126,7 @@ function AuthorCreateDialog({
                 ...(notes.trim() ? { notes: notes.trim() } : {}),
                 sourceLanguage,
                 authorizationStatus: status,
-                tagNames: tags
-                  .split(/[,，]/)
-                  .map((value) => value.trim())
-                  .filter(Boolean),
+                ...authorTagInput(tags),
                 accounts,
                 idempotencyKey: requestId,
               },
@@ -1487,12 +1491,10 @@ function AuthorCreateDialog({
               <option value="revoked">已撤销</option>
             </SelectField>
           </div>
-          <TextField
-            label="标签"
+          <AuthorTagPicker
             disabled={fieldsDisabled}
-            hint="使用逗号分隔"
             value={tags}
-            onChange={(event) => setTags(event.target.value)}
+            onChange={setTags}
           />
           <label className="ui-field">
             <span className="ui-field__label">作者备注（可选）</span>
@@ -1702,9 +1704,7 @@ function AuthorEditForm({
   const [displayName, setDisplayName] = useState(author.displayName);
   const [status, setStatus] = useState(author.authorizationStatus);
   const [sourceLanguage, setSourceLanguage] = useState(author.sourceLanguage);
-  const [tags, setTags] = useState(
-    author.tags.map((tag) => tag.name).join("，"),
-  );
+  const [tags, setTags] = useState<AuthorTagChoice[]>(author.tags);
   const [notes, setNotes] = useState(author.notes ?? "");
   const [avatar, setAvatar] = useState<File | null>(null);
   const saved = useRef(false);
@@ -1720,7 +1720,7 @@ function AuthorEditForm({
       setNotes(snapshot.notes ?? "");
       setStatus(snapshot.authorizationStatus);
       setSourceLanguage(snapshot.sourceLanguage);
-      setTags(snapshot.tags.map((tag) => tag.name).join("，"));
+      setTags(snapshot.tags);
       setMetadataDirty(false);
     },
     [],
@@ -1767,10 +1767,7 @@ function AuthorEditForm({
                 notes: notes.trim() || null,
                 sourceLanguage,
                 authorizationStatus: status,
-                tagNames: tags
-                  .split(/[,，]/)
-                  .map((item) => item.trim())
-                  .filter(Boolean),
+                ...authorTagInput(tags),
                 expectedRevision: baselineRevision,
               },
             }),
@@ -1883,13 +1880,12 @@ function AuthorEditForm({
         <option value="expired">已过期</option>
         <option value="revoked">已撤销</option>
       </SelectField>
-      <TextField
-        label="标签"
+      <AuthorTagPicker
         disabled={fieldsDisabled}
         value={tags}
-        onChange={(event) => {
+        onChange={(next) => {
           setMetadataDirty(true);
-          setTags(event.target.value);
+          setTags(next);
         }}
       />
       <label className="ui-field">

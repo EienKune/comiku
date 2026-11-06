@@ -17458,6 +17458,23 @@
           "expectedRevision"
         ]
       },
+      "ExistingAuthorTagDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "expectedRevision"
+        ]
+      },
       "AuthorImportPreviewRowDto": {
         "type": "object",
         "properties": {
@@ -17474,7 +17491,15 @@
           "authorizationStatus": {
             "type": "string"
           },
-          "tagNames": {
+          "existingTags": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExistingAuthorTagDto"
+            }
+          },
+          "newTagNames": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string"
@@ -17530,7 +17555,8 @@
           "displayName",
           "sourceLanguage",
           "authorizationStatus",
-          "tagNames",
+          "existingTags",
+          "newTagNames",
           "xHandle",
           "xExternalUserId",
           "xDisplayName",
@@ -17581,7 +17607,15 @@
           "authorizationStatus": {
             "type": "string"
           },
-          "tagNames": {
+          "existingTags": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExistingAuthorTagDto"
+            }
+          },
+          "newTagNames": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string"
@@ -17631,7 +17665,8 @@
           "displayName",
           "sourceLanguage",
           "authorizationStatus",
-          "tagNames",
+          "existingTags",
+          "newTagNames",
           "xHandle",
           "xExternalUserId",
           "xDisplayName",
@@ -17925,6 +17960,23 @@
           },
           "tagNames": {
             "maxItems": 50,
+            "deprecated": true,
+            "description": "仅用于恢复已提交的旧格式创建请求，不接受新的名称写入。",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "existingTags": {
+            "maxItems": 50,
+            "description": "与 newTagNames 同时提供，合计最多50个。",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExistingAuthorTagDto"
+            }
+          },
+          "newTagNames": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string"
@@ -17946,8 +17998,7 @@
         "required": [
           "displayName",
           "sourceLanguage",
-          "authorizationStatus",
-          "tagNames"
+          "authorizationStatus"
         ]
       },
       "AuthorCreationResultDto": {
@@ -18052,7 +18103,14 @@
               }
             ]
           },
-          "tagNames": {
+          "existingTags": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExistingAuthorTagDto"
+            }
+          },
+          "newTagNames": {
             "maxItems": 50,
             "type": "array",
             "items": {
@@ -18068,7 +18126,8 @@
           "displayName",
           "sourceLanguage",
           "authorizationStatus",
-          "tagNames",
+          "existingTags",
+          "newTagNames",
           "expectedRevision"
         ]
       },

@@ -107,7 +107,8 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       displayName: "测试作者",
       sourceLanguage: "ja",
       authorizationStatus: "authorized",
-      tagNames: ["原创", " 插画 "],
+      existingTags: [],
+      newTagNames: ["原创", " 插画 "],
     };
     assert.equal(
       (await request(member, "POST", "/api/authors", input)).status,

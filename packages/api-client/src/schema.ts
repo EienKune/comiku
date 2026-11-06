@@ -2392,12 +2392,18 @@ export interface components {
         RevisionDto: {
             expectedRevision: number;
         };
+        ExistingAuthorTagDto: {
+            /** Format: uuid */
+            id: string;
+            expectedRevision: number;
+        };
         AuthorImportPreviewRowDto: {
             row: number;
             displayName: string;
             sourceLanguage: string;
             authorizationStatus: string;
-            tagNames: string[];
+            existingTags: components["schemas"]["ExistingAuthorTagDto"][];
+            newTagNames: string[];
             xHandle: string | null;
             xExternalUserId: string | null;
             xDisplayName: string | null;
@@ -2421,7 +2427,8 @@ export interface components {
             displayName: string;
             sourceLanguage: string;
             authorizationStatus: string;
-            tagNames: string[];
+            existingTags: components["schemas"]["ExistingAuthorTagDto"][];
+            newTagNames: string[];
             xHandle: string | null;
             xExternalUserId: string | null;
             xDisplayName: string | null;
@@ -2515,7 +2522,14 @@ export interface components {
             displayName: string;
             sourceLanguage: components["schemas"]["SourceLanguage"];
             authorizationStatus: components["schemas"]["AuthorizationStatus"];
-            tagNames: string[];
+            /**
+             * @deprecated
+             * @description 仅用于恢复已提交的旧格式创建请求，不接受新的名称写入。
+             */
+            tagNames?: string[];
+            /** @description 与 newTagNames 同时提供，合计最多50个。 */
+            existingTags?: components["schemas"]["ExistingAuthorTagDto"][];
+            newTagNames?: string[];
             /**
              * Format: uuid
              * @description 同一保存意图重试时保留；不同资料复用将返回409。
@@ -2547,7 +2561,8 @@ export interface components {
             displayName: string;
             sourceLanguage: components["schemas"]["SourceLanguage"];
             authorizationStatus: components["schemas"]["AuthorizationStatus"];
-            tagNames: string[];
+            existingTags: components["schemas"]["ExistingAuthorTagDto"][];
+            newTagNames: string[];
             expectedRevision: number;
         };
         CreateExternalAccountDto: {
