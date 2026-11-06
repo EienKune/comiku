@@ -24126,6 +24126,39 @@
           "includeDetails"
         ]
       },
+      "NotificationTemplateRevisionDto": {
+        "type": "object",
+        "properties": {
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "imported",
+              "stage_joined",
+              "stage_started",
+              "typeset_handoff_started",
+              "stage_left",
+              "stage_assignment_updated",
+              "stage_submitted",
+              "proofreading_skipped",
+              "stage_submission_cancelled",
+              "review_opened",
+              "review_withdrawn",
+              "review_resumed",
+              "archived",
+              "restored",
+              "publish_confirmed"
+            ]
+          },
+          "revision": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "eventType",
+          "revision"
+        ]
+      },
       "NotificationChannelUpdateDto": {
         "type": "object",
         "properties": {
@@ -24188,6 +24221,12 @@
           "expectedRevision": {
             "type": "number",
             "minimum": 0
+          },
+          "expectedTemplateRevisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationTemplateRevisionDto"
+            }
           }
         },
         "required": [
@@ -24312,6 +24351,12 @@
           "channelName": {
             "type": "string"
           },
+          "groupId": {
+            "type": "string"
+          },
+          "connectionKey": {
+            "type": "string"
+          },
           "eventType": {
             "type": "string"
           },
@@ -24369,6 +24414,8 @@
           "id",
           "channelId",
           "channelName",
+          "groupId",
+          "connectionKey",
           "eventType",
           "workNumber",
           "status",

@@ -35,6 +35,8 @@ const delivery = {
   id: "d1",
   channelId: "c1",
   channelName: "合成群",
+  groupId: "123",
+  connectionKey: "bot",
   eventType: "imported",
   workNumber: 1,
   status: "unknown",
@@ -97,16 +99,20 @@ function setup(enabled = true, available = true, mode = "legacy") {
   const post = vi
     .spyOn(client, "POST")
     .mockResolvedValue({ data: delivery, response: new Response() } as never);
-  render(
-    <QueryClientProvider
-      client={
-        new QueryClient({ defaultOptions: { queries: { retry: false } } })
-      }
-    >
-      <NotificationManagement />
-    </QueryClientProvider>,
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const renderManagement = (active = true) => (
+    <QueryClientProvider client={queryClient}>
+      <NotificationManagement enabled={active} />
+    </QueryClientProvider>
   );
-  return { get, post };
+  const view = render(renderManagement());
+  return {
+    get,
+    post,
+    setActive: (active: boolean) => view.rerender(renderManagement(active)),
+  };
 }
 afterEach(() => {
   cleanup();
@@ -263,6 +269,7 @@ test.each([false, true])(
     } as never);
     fireEvent.click(screen.getByRole("button", { name: "刷新配置" }));
     await screen.findByRole("button", { name: "编辑 服务器群名" });
+    if (adopted) await confirmAdoption();
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
     expect(patch.mock.calls[1][1]).toEqual(
@@ -310,6 +317,12 @@ test.each([false, true])(
       data: channel,
       response: new Response(),
     } as never);
+    if (adopted) {
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+      expect(patch).toHaveBeenCalledTimes(2);
+      await screen.findByText(/重新预览并确认/);
+      await confirmAdoption();
+    }
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("配置已保存");
     expect(patch.mock.calls[2][1]).toEqual(
@@ -326,6 +339,13 @@ test.each([false, true])(
             { eventType: "stage_submitted", stages: ["proofread"] },
           ],
           receiverMode: adopted ? "templates" : "legacy",
+          ...(adopted
+            ? {
+                expectedTemplateRevisions: [
+                  { eventType: "stage_submitted", revision: 0 },
+                ],
+              }
+            : {}),
         },
       }),
     );
@@ -1073,3 +1093,385 @@ test("refreshed templates invalidate adoption consent and pending adoption previ
     "保留群草稿",
   );
 });
+
+async function confirmAdoption() {
+  fireEvent.click(screen.getByRole("button", { name: "预览并切换事件模板" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "确认使用事件模板" }),
+  );
+}
+
+test("adoption PATCH sends the exact previewed revisions for every selected template including zero", async () => {
+  const { get, post } = setup();
+  post.mockResolvedValue({
+    data: { text: "模板预览" },
+    response: new Response(),
+  } as never);
+  const patch = vi
+    .spyOn(client, "PATCH")
+    .mockResolvedValue({ data: channel, response: new Response() } as never);
+  await screen.findByRole("button", { name: "编辑 合成群" });
+  const initial = (await get.mock.results[0].value) as {
+    data: { templates: Template[] };
+  };
+  get.mockResolvedValueOnce({
+    data: {
+      ...initial.data,
+      templates: initial.data.templates.map((template) => ({
+        ...template,
+        revision: template.eventType === "stage_submitted" ? 7 : 0,
+      })),
+    },
+    response: new Response(),
+  } as never);
+  fireEvent.click(screen.getByRole("button", { name: "刷新配置" }));
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "刷新配置" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "编辑 合成群" }));
+  fireEvent.click(screen.getByLabelText("阶段提交"));
+  await confirmAdoption();
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  await screen.findByText("配置已保存");
+  expect(patch).toHaveBeenCalledWith(
+    "/api/notifications/channels/{id}",
+    expect.objectContaining({
+      body: expect.objectContaining({
+        expectedTemplateRevisions: [
+          { eventType: "imported", revision: 0 },
+          { eventType: "stage_submitted", revision: 7 },
+        ],
+      }),
+    }),
+  );
+});
+
+test("an unseen server template update rejects adoption, keeps fields and rules and requires a fresh preview map", async () => {
+  const { get, post } = setup();
+  post.mockResolvedValue({
+    data: { text: "模板预览" },
+    response: new Response(),
+  } as never);
+  const patch = vi
+    .spyOn(client, "PATCH")
+    .mockResolvedValueOnce({
+      error: { message: "事件模板已变更，请重新预览并确认后重试" },
+      response: new Response(null, { status: 409 }),
+    } as never)
+    .mockResolvedValue({ data: channel, response: new Response() } as never);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑 合成群" }));
+  fireEvent.change(screen.getByLabelText("名称"), {
+    target: { value: "保留采用草稿" },
+  });
+  fireEvent.click(screen.getByLabelText("阶段提交"));
+  fireEvent.click(screen.getByLabelText("阶段提交：指定职责"));
+  fireEvent.click(screen.getByLabelText("阶段提交：校对"));
+  await confirmAdoption();
+  const initial = (await get.mock.results[0].value) as {
+    data: { templates: Template[] };
+  };
+  get.mockResolvedValue({
+    data: {
+      ...initial.data,
+      templates: initial.data.templates.map((t) => ({
+        ...t,
+        revision: 1,
+        titleEnabled: true,
+      })),
+    },
+    response: new Response(),
+  } as never);
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  await screen.findByText(/事件模板已变更/);
+  await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+  expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
+    "保留采用草稿",
+  );
+  expect(
+    (screen.getByLabelText("阶段提交：校对") as HTMLInputElement).checked,
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  expect(patch).toHaveBeenCalledTimes(1);
+  await confirmAdoption();
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  await screen.findByText("配置已保存");
+  expect(patch.mock.calls[1][1]).toEqual(
+    expect.objectContaining({
+      body: expect.objectContaining({
+        name: "保留采用草稿",
+        expectedRevision: 3,
+        expectedTemplateRevisions: [
+          { eventType: "imported", revision: 1 },
+          { eventType: "stage_submitted", revision: 1 },
+        ],
+      }),
+    }),
+  );
+});
+
+test.each(["template refresh", "field edit", "rule edit"])(
+  "confirmed adoption is invalidated after %s and cannot save until previewed again",
+  async (change) => {
+    const { get, post } = setup();
+    post.mockResolvedValue({
+      data: { text: "模板预览" },
+      response: new Response(),
+    } as never);
+    const patch = vi
+      .spyOn(client, "PATCH")
+      .mockResolvedValue({ data: channel, response: new Response() } as never);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 合成群" }));
+    await confirmAdoption();
+    if (change === "template refresh") {
+      const initial = (await get.mock.results[0].value) as {
+        data: { templates: Template[] };
+      };
+      get.mockResolvedValueOnce({
+        data: {
+          ...initial.data,
+          templates: initial.data.templates.map((t) => ({ ...t, revision: 2 })),
+        },
+        response: new Response(),
+      } as never);
+      fireEvent.click(screen.getByRole("button", { name: "刷新配置" }));
+      await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+      await waitFor(() =>
+        expect(
+          (
+            screen.getByRole("button", {
+              name: "刷新配置",
+            }) as HTMLButtonElement
+          ).disabled,
+        ).toBe(false),
+      );
+    } else if (change === "field edit") {
+      fireEvent.change(screen.getByLabelText("名称"), {
+        target: { value: "更改草稿" },
+      });
+    } else {
+      fireEvent.click(screen.getByLabelText("阶段提交"));
+    }
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(patch).not.toHaveBeenCalled();
+    await screen.findByText(/重新预览并确认/);
+    await confirmAdoption();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("配置已保存");
+  },
+);
+
+test("history identifies the frozen destination even when the current management name and target changed", async () => {
+  const { get } = setup();
+  await screen.findByRole("button", { name: "编辑 合成群" });
+  get.mockResolvedValueOnce({
+    data: {
+      items: [
+        {
+          ...delivery,
+          channelName: "新管理名称",
+          groupId: "111222",
+          connectionKey: "retired-bot",
+        },
+      ],
+      nextCursor: null,
+    },
+    response: new Response(),
+  } as never);
+  fireEvent.click(screen.getByRole("tab", { name: "投递记录" }));
+  expect(await screen.findByText(/当前管理名称：新管理名称/)).toBeTruthy();
+  expect(screen.getByText(/原投递目标：QQ 群 111222/)).toBeTruthy();
+  expect(screen.getByText(/连接标识：retired-bot/)).toBeTruthy();
+});
+
+test("disabled adoption with no selected events sends an explicit empty revision map", async () => {
+  setup();
+  const patch = vi
+    .spyOn(client, "PATCH")
+    .mockResolvedValue({ data: channel, response: new Response() } as never);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑 合成群" }));
+  fireEvent.click(screen.getByLabelText("启用此群通知"));
+  fireEvent.click(screen.getByLabelText("导入作品"));
+  await confirmAdoption();
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  await screen.findByText("配置已保存");
+  expect(patch.mock.calls[0][1]).toEqual(
+    expect.objectContaining({
+      body: expect.objectContaining({
+        expectedTemplateRevisions: [],
+        eventTypes: [],
+        enabled: false,
+      }),
+    }),
+  );
+});
+
+test("missing selected template configuration cannot produce adoption consent", async () => {
+  const { get, post } = setup();
+  fireEvent.click(await screen.findByRole("button", { name: "编辑 合成群" }));
+  const initial = (await get.mock.results[0].value) as { data: object };
+  get.mockResolvedValueOnce({
+    data: { ...initial.data, templates: [] },
+    response: new Response(),
+  } as never);
+  fireEvent.click(screen.getByRole("button", { name: "刷新配置" }));
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "刷新配置" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "预览并切换事件模板" }));
+  await screen.findByText(/事件模板配置缺失/);
+  expect(post).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "确认使用事件模板" })).toBeNull();
+});
+
+test.each([false, true])(
+  "explicit group rebase keeps an already modern server group in template mode with prior adoption=%s",
+  async (adopted) => {
+    const { get, post } = setup();
+    post.mockResolvedValue({
+      data: { text: "模板预览" },
+      response: new Response(),
+    } as never);
+    const patch = vi
+      .spyOn(client, "PATCH")
+      .mockResolvedValueOnce({
+        response: new Response(null, { status: 409 }),
+      } as never)
+      .mockResolvedValue({ data: channel, response: new Response() } as never);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 合成群" }));
+    fireEvent.change(screen.getByLabelText("名称"), {
+      target: { value: "保留现代表单" },
+    });
+    if (adopted) await confirmAdoption();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText(/配置已被其他管理员修改/);
+    const initial = (await get.mock.results[0].value) as { data: object };
+    get.mockResolvedValue({
+      data: {
+        ...initial.data,
+        channels: [{ ...channel, revision: 4, receiverMode: "templates" }],
+      },
+      response: new Response(),
+    } as never);
+    fireEvent.click(screen.getByRole("button", { name: "比较当前版本" }));
+    await screen.findByText("当前服务器版本 4");
+    fireEvent.click(
+      screen.getByRole("button", { name: "保留草稿并以当前版本重试" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("配置已保存");
+    expect(patch.mock.calls[1][1]).toEqual(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          name: "保留现代表单",
+          expectedRevision: 4,
+          receiverMode: "templates",
+        }),
+      }),
+    );
+    expect(patch.mock.calls[1][1]).not.toHaveProperty(
+      "body.expectedTemplateRevisions",
+    );
+  },
+);
+
+test.each(["history", "outer panel"])(
+  "a late adoption conflict while hidden by %s defers configuration reads until reactivation",
+  async (hiddenBy) => {
+    const { get, post, setActive } = setup();
+    post.mockResolvedValue({
+      data: { text: "旧模板预览" },
+      response: new Response(),
+    } as never);
+    let complete!: (value: never) => void;
+    const patch = vi
+      .spyOn(client, "PATCH")
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+      )
+      .mockResolvedValue({ data: channel, response: new Response() } as never);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 合成群" }));
+    fireEvent.change(screen.getByLabelText("名称"), {
+      target: { value: "隐藏期间保留草稿" },
+    });
+    await confirmAdoption();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    const initial = (await get.mock.results[0].value) as {
+      data: { templates: Template[] };
+    };
+    get.mockImplementation((async (path: string) => ({
+      data: path.endsWith("/configuration")
+        ? {
+            ...initial.data,
+            templates: initial.data.templates.map((template) => ({
+              ...template,
+              revision: 5,
+              titleEnabled: true,
+            })),
+          }
+        : { items: [delivery], nextCursor: null },
+      response: new Response(),
+    })) as never);
+    if (hiddenBy === "history") {
+      fireEvent.click(screen.getByRole("tab", { name: "投递记录" }));
+      await screen.findByText(/原投递目标/);
+    } else {
+      setActive(false);
+    }
+    await act(async () => {
+      complete({
+        error: { message: "事件模板已变更，请重新预览并确认后重试" },
+        response: new Response(null, { status: 409 }),
+      } as never);
+    });
+    const configurationReads = () =>
+      get.mock.calls.filter(
+        (call) => call[0] === "/api/notifications/configuration",
+      ).length;
+    await screen.findByText(/事件模板已变更/);
+    expect(configurationReads()).toBe(1);
+    if (hiddenBy === "history")
+      fireEvent.click(screen.getByRole("tab", { name: "群订阅" }));
+    else setActive(true);
+    await waitFor(() => expect(configurationReads()).toBe(2));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "刷新配置" }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false),
+    );
+    expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
+      "隐藏期间保留草稿",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(patch).toHaveBeenCalledTimes(1);
+    await confirmAdoption();
+    expect(post).toHaveBeenLastCalledWith(
+      "/api/notifications/preview",
+      expect.objectContaining({
+        body: expect.objectContaining({
+          template: expect.objectContaining({ titleEnabled: true }),
+        }),
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("配置已保存");
+    expect(patch.mock.calls[1][1]).toEqual(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          name: "隐藏期间保留草稿",
+          expectedRevision: 3,
+          expectedTemplateRevisions: [{ eventType: "imported", revision: 5 }],
+        }),
+      }),
+    );
+  },
+);

@@ -15,6 +15,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from "class-validator";
 import { NOTIFICATION_EVENT_KEYS } from "./notification-events.js";
@@ -157,11 +158,31 @@ export class NotificationChannelInputDto {
   subscriptionRules?: NotificationSubscriptionRuleDto[];
 }
 
+export class NotificationTemplateRevisionDto {
+  @ApiProperty({ type: String, enum: NOTIFICATION_EVENT_KEYS })
+  @IsIn(NOTIFICATION_EVENT_KEYS)
+  eventType!: string;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  @IsInt()
+  @Min(0)
+  revision!: number;
+}
+
 export class NotificationChannelUpdateDto extends NotificationChannelInputDto {
   @ApiProperty({ type: Number, minimum: 0 })
   @IsInt()
   @Min(0)
   expectedRevision!: number;
+
+  @ApiPropertyOptional({ type: NotificationTemplateRevisionDto, isArray: true })
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsArray()
+  @ArrayMaxSize(NOTIFICATION_EVENT_KEYS.length)
+  @ArrayUnique((entry: NotificationTemplateRevisionDto) => entry?.eventType)
+  @ValidateNested({ each: true })
+  @Type(() => NotificationTemplateRevisionDto)
+  expectedTemplateRevisions?: NotificationTemplateRevisionDto[];
 }
 
 export class NotificationPreviewInputDto {
@@ -200,6 +221,8 @@ export class NotificationDeliveryDto {
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: String, format: "uuid" }) channelId!: string;
   @ApiProperty({ type: String }) channelName!: string;
+  @ApiProperty({ type: String }) groupId!: string;
+  @ApiProperty({ type: String }) connectionKey!: string;
   @ApiProperty({ type: String }) eventType!: string;
   @ApiProperty({ type: Number, nullable: true }) workNumber!: number | null;
   @ApiProperty({ enum: notificationDeliveryStatuses })

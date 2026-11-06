@@ -3884,6 +3884,11 @@ export interface components {
             receiverMode?: "legacy" | "templates";
             subscriptionRules?: components["schemas"]["NotificationSubscriptionRuleDto"][];
         };
+        NotificationTemplateRevisionDto: {
+            /** @enum {string} */
+            eventType: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed";
+            revision: number;
+        };
         NotificationChannelUpdateDto: {
             name: string;
             connectionKey: string;
@@ -3895,6 +3900,7 @@ export interface components {
             receiverMode?: "legacy" | "templates";
             subscriptionRules?: components["schemas"]["NotificationSubscriptionRuleDto"][];
             expectedRevision: number;
+            expectedTemplateRevisions?: components["schemas"]["NotificationTemplateRevisionDto"][];
         };
         NotificationTemplateSettingsDto: {
             titleEnabled: boolean;
@@ -3926,6 +3932,8 @@ export interface components {
             /** Format: uuid */
             channelId: string;
             channelName: string;
+            groupId: string;
+            connectionKey: string;
             eventType: string;
             workNumber: number | null;
             /** @enum {string} */

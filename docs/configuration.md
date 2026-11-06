@@ -51,7 +51,7 @@ local 与 R2 不是自动迁移关系：更换驱动不会搬运已有对象。�
 
 ## X 与后台调度
 
-群通知使用可选 `NOTIFICATIONS_ENABLED`（默认 false）和绝对路径 `NOTIFICATION_CONNECTIONS_FILE`。连接、token 环境变量和精确 IP 白名单由部署者在私有文件配置，API/worker 共享同一配置；网页只选择已配置连接。详见 [群通知](notifications.md)。当前基础模块尚未接入作品事件生产点，启用不会扫描旧审计记录或自动播报工作台变化。
+群通知使用可选 `NOTIFICATIONS_ENABLED`（默认 false）和绝对路径 `NOTIFICATION_CONNECTIONS_FILE`。连接、token 环境变量和精确 IP 白名单由部署者在私有文件配置，API/worker 共享同一配置；网页只选择已配置连接。业务 Service 不调用通知模块，后台已通过持久 WorkEvent 异步接入作品变化。启用后会自动推送持久起点之后符合已启用群订阅的事件；首次起点之前的历史不自动补发，全局暂停后恢复沿用原起点。启用真实连接前应核对群目标、订阅和模板。详见 [群通知](notifications.md)。
 
 日常采集与账号资料同步只使用 gallery-dl 的 X/Pixiv 实现，配置见下方 gallery-dl 章节。旧网页会话与官方 API 实现仅保留为历史源码和合成测试，不注册到运行时，不作为失败回退；旧凭据环境变量不再读取。
 

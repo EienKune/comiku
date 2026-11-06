@@ -64,6 +64,37 @@ export interface NotificationResolveInput {
   confirmPossibleDuplicate?: boolean;
 }
 
+function assertAdoptionTemplateRevisions(
+  expected: unknown,
+  eventTypes: readonly string[],
+  templates: readonly NotificationTemplatePolicy[],
+) {
+  const invalid = () => new BadRequestException("请重新预览并确认所选事件模板");
+  if (!Array.isArray(expected) || expected.length !== eventTypes.length)
+    throw invalid();
+  const revisions = new Map<string, number>();
+  for (const entry of expected) {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      typeof entry.eventType !== "string" ||
+      !eventTypes.includes(entry.eventType) ||
+      revisions.has(entry.eventType) ||
+      !Number.isSafeInteger(entry.revision) ||
+      entry.revision < 0
+    )
+      throw invalid();
+    revisions.set(entry.eventType, entry.revision);
+  }
+  for (const [eventType, revision] of revisions) {
+    if (
+      templates.find((template) => template.eventType === eventType)
+        ?.revision !== revision
+    )
+      throw new ConflictException("事件模板已变更，请重新预览并确认后重试");
+  }
+}
+
 function channelConstraintConflict(error: unknown): never {
   if (
     error &&
@@ -248,10 +279,18 @@ export class NotificationsService {
   async updateChannel(
     actorId: string,
     id: string,
-    input: NotificationChannelInput & { expectedRevision: number },
+    input: NotificationChannelInput & {
+      expectedRevision: number;
+      expectedTemplateRevisions?: { eventType: string; revision: number }[];
+    },
   ) {
     return this.db
       .$transaction(async (tx) => {
+        // Capture and sample transactions take this lock before channel locks.
+        const templates =
+          input.receiverMode === "templates"
+            ? await readNotificationTemplates(tx, { lock: true })
+            : [];
         await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${id}::uuid FOR UPDATE`;
         await assertNotificationAdministrator(tx, actorId);
         const channel = await tx.notificationChannel.findUnique({
@@ -261,6 +300,15 @@ export class NotificationsService {
         if (channel.revision !== input.expectedRevision)
           throw new ConflictException("通知通道已更新");
         const data = this.channelInput(input, channel);
+        if (
+          (channel.receiverMode ?? "legacy") === "legacy" &&
+          data.receiverMode === "templates"
+        )
+          assertAdoptionTemplateRevisions(
+            input.expectedTemplateRevisions,
+            data.eventTypes,
+            templates,
+          );
         const oldRules = normalizeSubscriptionRules(
           Array.isArray(channel.subscriptionRules) &&
             channel.subscriptionRules.length

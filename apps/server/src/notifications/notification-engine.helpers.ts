@@ -71,6 +71,8 @@ export function deliveryDto(
     id: row.id,
     channelId: row.channelId,
     channelName: row.channel.name,
+    groupId: row.groupId,
+    connectionKey: row.connectionKey,
     eventType: row.event.type,
     workNumber: snapshot.workNumber ?? null,
     status: row.status as (typeof DELIVERY_STATUSES)[number],

@@ -384,6 +384,12 @@ test(
             receiverMode: "templates",
             subscriptionRules: [{ eventType: "stage_submitted", stages: null }],
             expectedRevision: legacy.revision,
+            expectedTemplateRevisions: [
+              {
+                eventType: "stage_submitted",
+                revision: (await template()).revision,
+              },
+            ],
           });
           assert.equal(legacy.audienceGeneration, stored.audienceGeneration);
           assert.equal(

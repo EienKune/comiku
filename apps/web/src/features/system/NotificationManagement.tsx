@@ -65,6 +65,12 @@ export function NotificationManagement({
   const [adopting, setAdopting] = useState(false);
   const [adoptionPreview, setAdoptionPreview] = useState("");
   const [adoptionPreviewIdentity, setAdoptionPreviewIdentity] = useState("");
+  const [adoptionRequired, setAdoptionRequired] = useState(false);
+  const [adoptionRevisions, setAdoptionRevisions] = useState<
+    Pick<Template, "eventType" | "revision">[] | null
+  >(null);
+  const [confirmedAdoptionIdentity, setConfirmedAdoptionIdentity] =
+    useState("");
   const latestAdoptionIdentity = useRef("");
   const [adoptionBusy, setAdoptionBusy] = useState(false);
   const configuration = useQuery({
@@ -120,6 +126,8 @@ export function NotificationManagement({
     setPreview("");
     setAdopting(false);
     setAdoptionPreview("");
+    setAdoptionRevisions(null);
+    setConfirmedAdoptionIdentity("");
     setDraft((current) => (current ? { ...current, ...patch } : null));
   }
   function edit(channel?: Channel) {
@@ -128,6 +136,11 @@ export function NotificationManagement({
     setPreview("");
     setAdopting(false);
     setAdoptionPreview("");
+    setAdoptionRevisions(null);
+    setConfirmedAdoptionIdentity("");
+    setAdoptionRequired(
+      !!channel && (channel.receiverMode ?? "legacy") === "legacy",
+    );
     setError("");
     setSuccess("");
     setComparison(null);
@@ -173,6 +186,15 @@ export function NotificationManagement({
       setError("指定职责时至少选择一个职责。");
       return;
     }
+    const adoptingTemplates =
+      adoptionRequired && draft.receiverMode === "templates";
+    if (
+      adoptingTemplates &&
+      (!adoptionRevisions || confirmedAdoptionIdentity !== adoptionIdentity)
+    ) {
+      setError("请重新预览并确认所选事件模板后保存。");
+      return;
+    }
     setSaving(true);
     setError("");
     setSuccess("");
@@ -181,11 +203,37 @@ export function NotificationManagement({
       const result = id
         ? await client.PATCH("/api/notifications/channels/{id}", {
             params: { path: { id } },
-            body: { ...input, expectedRevision: expectedRevision! },
+            body: {
+              ...input,
+              expectedRevision: expectedRevision!,
+              ...(adoptingTemplates
+                ? { expectedTemplateRevisions: adoptionRevisions! }
+                : {}),
+            },
           })
         : await client.POST("/api/notifications/channels", { body: input });
       if (result.response.status === 409) {
         setComparison(null);
+        setConfirmedAdoptionIdentity("");
+        setAdoptionRevisions(null);
+        setAdopting(false);
+        setAdoptionPreview("");
+        if (adoptingTemplates) {
+          // Refresh the preview source without rebasing the channel CAS or draft.
+          await queryClient.invalidateQueries({
+            queryKey: ["notification-configuration"],
+          });
+          const serverError = result.error;
+          if (
+            typeof serverError === "object" &&
+            serverError !== null &&
+            "message" in serverError &&
+            typeof serverError.message === "string" &&
+            serverError.message.includes("模板")
+          ) {
+            throw new Error(serverError.message);
+          }
+        }
         throw new Error(
           "配置已被其他管理员修改。草稿已保留，请比较当前版本后核对。",
         );
@@ -248,7 +296,8 @@ export function NotificationManagement({
     }
   }
   const data = configuration.data;
-  const adoptionIdentity = JSON.stringify(
+  const adoptionIdentity = JSON.stringify([
+    draft && { ...draft, receiverMode: undefined },
     (draft?.eventTypes ?? []).map((eventType) => {
       const template = templates.find((t) => t.eventType === eventType);
       return [
@@ -261,8 +310,15 @@ export function NotificationManagement({
         template?.note,
       ];
     }),
-  );
+  ]);
   useLayoutEffect(() => {
+    if (latestAdoptionIdentity.current !== adoptionIdentity) {
+      previewEpoch.current++;
+      setAdopting(false);
+      setAdoptionPreview("");
+      setAdoptionRevisions(null);
+      setConfirmedAdoptionIdentity("");
+    }
     latestAdoptionIdentity.current = adoptionIdentity;
   }, [adoptionIdentity]);
   const original = data?.channels.find((c) => c.id === draft?.id) as
@@ -281,6 +337,22 @@ export function NotificationManagement({
     if (!draft) return;
     const epoch = ++previewEpoch.current;
     const identity = adoptionIdentity;
+    const revisions = draft.eventTypes.map((eventType) => {
+      const template = templates.find((t) => t.eventType === eventType);
+      if (
+        !template ||
+        !Number.isInteger(template.revision) ||
+        template.revision < 0
+      )
+        return null;
+      return { eventType, revision: template.revision };
+    });
+    if (revisions.some((revision) => revision === null)) {
+      setError("事件模板配置缺失，请刷新配置后重新预览并确认。");
+      return;
+    }
+    setAdoptionRevisions(null);
+    setConfirmedAdoptionIdentity("");
     setAdoptionPreviewIdentity(identity);
     setAdopting(true);
     setAdoptionPreview("");
@@ -324,11 +396,13 @@ export function NotificationManagement({
       if (
         epoch === previewEpoch.current &&
         identity === latestAdoptionIdentity.current
-      )
+      ) {
+        setAdoptionRevisions(revisions.filter((revision) => revision !== null));
         setAdoptionPreview(
           texts.join("\n\n") ||
             "此群尚未订阅事件，切换后使用各事件的公共模板。",
         );
+      }
     } catch (caught) {
       if (
         epoch === previewEpoch.current &&
@@ -743,7 +817,7 @@ export function NotificationManagement({
                   )}
                 </div>
               )}
-              {draft.receiverMode === "legacy" && (
+              {(draft.receiverMode === "legacy" || adoptionRequired) && (
                 <div className="notification-content">
                   <Button
                     type="button"
@@ -766,7 +840,14 @@ export function NotificationManagement({
                         <Button
                           type="button"
                           onClick={() => {
-                            changeDraft({ receiverMode: "templates" });
+                            setDraft((current) =>
+                              current
+                                ? { ...current, receiverMode: "templates" }
+                                : null,
+                            );
+                            setConfirmedAdoptionIdentity(
+                              adoptionPreviewIdentity,
+                            );
                             setAdopting(false);
                           }}
                         >
@@ -845,11 +926,19 @@ export function NotificationManagement({
                       setAdopting(false);
                       setAdoptionPreview("");
                       setAdoptionPreviewIdentity("");
+                      setAdoptionRevisions(null);
+                      setConfirmedAdoptionIdentity("");
+                      setAdoptionRequired(
+                        (comparison.receiverMode ?? "legacy") === "legacy",
+                      );
                       setDraft((current) =>
                         current
                           ? {
                               ...current,
                               expectedRevision: comparison.revision,
+                              ...(comparison.receiverMode === "templates"
+                                ? { receiverMode: "templates" as const }
+                                : {}),
                             }
                           : null,
                       );
@@ -1006,7 +1095,7 @@ function DeliveryRow({
     <article className="notification-delivery">
       <div className="notification-heading">
         <strong>
-          {delivery.channelName}
+          当前管理名称：{delivery.channelName}
           {delivery.workNumber !== null
             ? ` · #${delivery.workNumber}`
             : " · 合成测试"}
@@ -1016,6 +1105,8 @@ function DeliveryRow({
         </Badge>
       </div>
       <div className="notification-meta">
+        <span>原投递目标：QQ 群 {delivery.groupId}</span>
+        <span>连接标识：{delivery.connectionKey}</span>
         <span>{eventLabel}</span>
         <time dateTime={delivery.createdAt}>
           {new Date(delivery.createdAt).toLocaleString()}

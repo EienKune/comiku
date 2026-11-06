@@ -152,6 +152,7 @@ test("explicit adoption preserves audience and old queued text", async () => {
     receiverMode: "templates",
     subscriptionRules: [{ eventType: "stage_submitted", stages: null }],
     expectedRevision: 2,
+    expectedTemplateRevisions: [{ eventType: "stage_submitted", revision: 0 }],
   });
   assert.equal(result.audienceGeneration, 4);
   assert.equal(result.receiverMode, "templates");
