@@ -1,3 +1,14 @@
+import {
+  CandidateAuthorFilter,
+  type CandidateAuthorChoice,
+} from "./CandidateAuthorFilter";
+import { CandidateDraftLeaveGuard } from "./CandidateDraftLeaveGuard";
+import {
+  candidateOrderDraft,
+  moveCandidateOrder,
+  candidateOrderConflict,
+  type CandidateOrderDraft,
+} from "./candidate-order-drafts";
 import { AuthorArchiveControl } from "./AuthorArchiveControl";
 import { AuthorEvidenceRemovalDialog } from "./AuthorEvidenceRemovalDialog";
 import {
@@ -2281,36 +2292,47 @@ function CandidateMediaThumbnail({
 
 function CandidateOrderPanel({
   candidate,
+  draft,
+  saving,
+  onSaveStart,
+  onSaveEnd,
+  onDraftChange,
   onSaved,
 }: {
   candidate: Candidate;
+  draft?: CandidateOrderDraft;
+  saving: boolean;
+  onSaveStart: () => boolean;
+  onSaveEnd: () => void;
+  onDraftChange: (draft: CandidateOrderDraft) => void;
   onSaved: () => Promise<unknown>;
 }) {
   const action = useAction();
-  const [media, setMedia] = useState(candidate.media);
-  useEffect(() => setMedia(candidate.media), [candidate.media]);
+  const current = candidateOrderDraft(draft, candidate);
+  const media = current.media;
+  const conflict = current.dirty && candidateOrderConflict(current, candidate);
   function move(index: number, offset: number) {
-    const target = index + offset;
-    if (target < 0 || target >= media.length) return;
-    setMedia((current) => {
-      const next = [...current];
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
+    onDraftChange(moveCandidateOrder(current, candidate, index, offset));
   }
   async function save() {
+    if (!onSaveStart()) return;
     await action.run(async () => {
-      await unwrap(
-        await client.POST("/api/candidates/{id}/media-order", {
-          params: { path: { id: candidate.id } },
-          body: {
-            expectedRevision: candidate.revision,
-            mediaIds: media.map((item) => item.id),
-          },
-        }),
-      );
-      await onSaved();
-      action.setSuccess("图片顺序已保存");
+      try {
+        const saved = await unwrap(
+          await client.POST("/api/candidates/{id}/media-order", {
+            params: { path: { id: candidate.id } },
+            body: {
+              expectedRevision: current.expectedRevision,
+              mediaIds: media.map((item) => item.id),
+            },
+          }),
+        );
+        onDraftChange(candidateOrderDraft(undefined, saved));
+        await onSaved();
+        action.setSuccess("图片顺序已保存");
+      } finally {
+        onSaveEnd();
+      }
     });
   }
   return (
@@ -2326,7 +2348,7 @@ function CandidateOrderPanel({
                 type="button"
                 size="sm"
                 variant="ghost"
-                disabled={index === 0}
+                disabled={saving || action.busy || conflict || index === 0}
                 leadingIcon={<ArrowUp size={15} />}
                 onClick={() => move(index, -1)}
               >
@@ -2336,7 +2358,12 @@ function CandidateOrderPanel({
                 type="button"
                 size="sm"
                 variant="ghost"
-                disabled={index === media.length - 1}
+                disabled={
+                  saving ||
+                  action.busy ||
+                  conflict ||
+                  index === media.length - 1
+                }
                 leadingIcon={<ArrowDown size={15} />}
                 onClick={() => move(index, 1)}
               >
@@ -2346,8 +2373,29 @@ function CandidateOrderPanel({
           </div>
         ))}
       </div>
+      {conflict && (
+        <p role="alert" className="account-error">
+          帖子图片或版本已变化，当前调整仍保留。
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={saving}
+            onClick={() =>
+              onDraftChange(candidateOrderDraft(undefined, candidate))
+            }
+          >
+            放弃调整并加载最新顺序
+          </Button>
+        </p>
+      )}
       <Feedback error={action.error} success={action.success} />
-      <Button size="sm" loading={action.busy} onClick={() => void save()}>
+      <Button
+        size="sm"
+        loading={action.busy}
+        disabled={saving || conflict || !current.dirty}
+        onClick={() => void save()}
+      >
         保存顺序
       </Button>
     </div>
@@ -2977,6 +3025,12 @@ function CandidateGridSection({
   onOpenChange,
   scopeTotal,
   orderingCandidateId,
+  orderDrafts,
+  orderSaving,
+  onOrderSaveStart,
+  onOrderSaveEnd,
+  onOrderingSaved,
+  onOrderDraftChange,
   onToggleOrdering,
   busy,
 }: {
@@ -2993,6 +3047,12 @@ function CandidateGridSection({
   scopeTotal?: number;
   onRetryAnalysis: (candidate: Candidate) => void;
   orderingCandidateId: string | null;
+  orderDrafts: Record<string, CandidateOrderDraft>;
+  orderSaving: ReadonlySet<string>;
+  onOrderSaveStart: (id: string) => boolean;
+  onOrderSaveEnd: (id: string) => void;
+  onOrderingSaved: (id: string) => void;
+  onOrderDraftChange: (id: string, draft: CandidateOrderDraft) => void;
   onToggleOrdering: (id: string) => void;
   busy: boolean;
 }) {
@@ -3091,8 +3151,15 @@ function CandidateGridSection({
                 candidate.status === "pending" && (
                   <CandidateOrderPanel
                     candidate={candidate}
+                    draft={orderDrafts[candidate.id]}
+                    saving={orderSaving.has(candidate.id)}
+                    onSaveStart={() => onOrderSaveStart(candidate.id)}
+                    onSaveEnd={() => onOrderSaveEnd(candidate.id)}
+                    onDraftChange={(draft) =>
+                      onOrderDraftChange(candidate.id, draft)
+                    }
                     onSaved={async () => {
-                      onToggleOrdering(candidate.id);
+                      onOrderingSaved(candidate.id);
                       await queryClient.invalidateQueries({
                         queryKey: ["candidates"],
                       });
@@ -3153,7 +3220,27 @@ export function CandidatesPage() {
   const [status, setStatus] = useState("pending");
   const [language, setLanguage] = useState<SourceLanguage | "all">("all");
   const [fetchedRange, setFetchedRange] = useState("all");
-  const [search, setSearch] = useState("");
+  const [authorFilter, setAuthorFilter] =
+    useState<CandidateAuthorChoice | null>(null);
+  const [orderDrafts, setOrderDrafts] = useState<
+    Record<string, CandidateOrderDraft>
+  >({});
+  const changeOrderDraft = (id: string, draft: CandidateOrderDraft) =>
+    setOrderDrafts((current) => ({ ...current, [id]: draft }));
+  const orderSaveLocks = useRef(new Set<string>());
+  const [orderSaving, setOrderSaving] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const startOrderSave = (id: string) => {
+    if (orderSaveLocks.current.has(id)) return false;
+    orderSaveLocks.current.add(id);
+    setOrderSaving(new Set(orderSaveLocks.current));
+    return true;
+  };
+  const endOrderSave = (id: string) => {
+    orderSaveLocks.current.delete(id);
+    setOrderSaving(new Set(orderSaveLocks.current));
+  };
   const [selected, setSelected] = useState<Map<string, number>>(
     () => new Map(),
   );
@@ -3206,7 +3293,7 @@ export function CandidatesPage() {
     () => ({
       status: status as components["schemas"]["CandidateStatus"],
       ...(language === "all" ? {} : { sourceLanguage: language }),
-      ...(search.trim() ? { search: search.trim() } : {}),
+      ...(authorFilter ? { authorId: authorFilter.id } : {}),
       ...(fetchedRange === "all"
         ? {}
         : {
@@ -3215,7 +3302,7 @@ export function CandidatesPage() {
             ).toISOString(),
           }),
     }),
-    [status, language, search, fetchedRange],
+    [status, language, authorFilter, fetchedRange],
   );
   const review = useCandidateReviewSession(baseFilter);
   const runCandidateAction = action.run;
@@ -3323,15 +3410,17 @@ export function CandidatesPage() {
   useTopbarActions(topbarRegistration);
   return (
     <PermissionGate permission="candidates:read">
+      <CandidateDraftLeaveGuard
+        dirty={Object.values(orderDrafts).some((draft) => draft.dirty)}
+      />
       <SectionHeading title="候选池">
         筛选已抓取的图片组，批量入库为作品。
       </SectionHeading>
       <Toolbar>
-        <SearchField
-          placeholder="搜索作者昵称或 @账号"
-          value={search}
-          onChange={(event) => {
-            setSearch(event.target.value);
+        <CandidateAuthorFilter
+          value={authorFilter}
+          onChange={(value) => {
+            setAuthorFilter(value);
             setSelected(new Map());
           }}
         />
@@ -3475,6 +3564,16 @@ export function CandidatesPage() {
               onOpenChange={(open) => changeGroupOpen(section.value, open)}
               scopeTotal={review.session?.counts[section.value]}
               onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
+              orderDrafts={orderDrafts}
+              orderSaving={orderSaving}
+              onOrderSaveStart={startOrderSave}
+              onOrderSaveEnd={endOrderSave}
+              onOrderingSaved={(id) =>
+                setOrderingCandidateId((current) =>
+                  current === id ? null : current,
+                )
+              }
+              onOrderDraftChange={changeOrderDraft}
               orderingCandidateId={orderingCandidateId}
               busy={action.busy}
               onToggleOrdering={(id) =>
@@ -3507,6 +3606,16 @@ export function CandidatesPage() {
             )
           }
           onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
+          orderDrafts={orderDrafts}
+          orderSaving={orderSaving}
+          onOrderSaveStart={startOrderSave}
+          onOrderSaveEnd={endOrderSave}
+          onOrderingSaved={(id) =>
+            setOrderingCandidateId((current) =>
+              current === id ? null : current,
+            )
+          }
+          onOrderDraftChange={changeOrderDraft}
           orderingCandidateId={orderingCandidateId}
           busy={action.busy}
           onToggleOrdering={(id) =>

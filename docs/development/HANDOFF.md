@@ -21,6 +21,11 @@ This tracked document records reusable implementation constraints. Business rule
 - Historical author-creation hashes excluded notes. Add hash keys only for nonempty normalized notes at both author/account levels, so old committed requests replay unchanged. Blank/null/omitted notes must hash identically; changing a nonempty note under the same request key conflicts.
 - Dirty notes follow the metadata form baseline and survive background refresh and failed attachment retries. A failed managed background read must retain the cached editor and upload state, with a nonfatal retry status; an error-only page wrapper would unmount the form and discard both. A clean newer managed snapshot may hydrate notes; only explicit load-latest discards dirty fields. The synthetic notes integration test requires the usual disposable `_test` database and exercises HTTP role/privacy, revision, persistence and old-request compatibility; unit/UI checks alone do not certify a migrated database or browser layout.
 
+## Candidate review editing
+
+- Author suggestions debounce their own paginated reads; only explicit single-author confirmation changes the review scope. Keep draft input separate from the selected author ID and consume cancellation signals so late searches cannot replace current suggestions.
+- Keep unsaved per-post media order and its original revision at page scope, independently of membership snapshots and panel mounts. Ordinary model refreshes do not discard drafts; real media/version changes require an explicit reset. Saving locks belong to the page too: an old request must not overwrite a newer panel instance's edits. Warn on route departure or hard refresh, without promising browser-close restoration.
+
 ## Author attachments
 
 - Evidence reads distinguish loading, failed reads and confirmed empty results; keep cached evidence visible on a failed refresh. Removal confirms a pinned author revision and does not change authorization status.

@@ -95,9 +95,15 @@ test("evidence loading, failed read and confirmed empty are distinct and cached 
   );
   fireEvent.click(screen.getByRole("button", { name: "重试读取" }));
   await screen.findByText(/有效授权尚未附凭证/);
+  await waitFor(() =>
+    expect(
+      queryClient.isFetching({ queryKey: ["author-evidence", "author"] }),
+    ).toBe(0),
+  );
   await act(async () =>
     queryClient.setQueryData(["author-evidence", "author"], [item]),
   );
+  await screen.findByText("1 张");
   get.mockImplementation(async (path) => {
     if (path === "/api/authors/{id}/authorization-evidence")
       throw Error("background read");
@@ -114,7 +120,7 @@ test("evidence loading, failed read and confirmed empty are distinct and cached 
   });
   fireEvent.click(screen.getByText("授权凭证"));
   expect(screen.getByRole("img", { name: "授权凭证 1" })).toBeTruthy();
-  expect(screen.getByText(/凭证读取失败/)).toBeTruthy();
+  expect(await screen.findByText(/凭证读取失败/)).toBeTruthy();
 });
 test("evidence removal defaults to cancel and pins the observed revision without altering authorization", async () => {
   vi.spyOn(client, "GET").mockImplementation(async (path) =>
