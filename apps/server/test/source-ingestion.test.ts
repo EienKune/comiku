@@ -77,7 +77,7 @@ test("content source registry swaps providers without leaking platform cursors",
   assert.throws(() => registry.require("unknown"), /Unsupported/);
 });
 
-test("content source registry keeps adapters independent and ordered by priority", () => {
+test("content source registry keeps adapter implementations independent and ordered by priority", () => {
   const slower = new FixtureSource();
   Object.defineProperties(slower, {
     adapterKey: { value: "fixture_slow" },

@@ -14,6 +14,20 @@ export class ContentSourceRegistry {
     return this;
   }
 
+  assertSingleActiveAdapters(): this {
+    const platforms = new Set<string>();
+    for (const client of this.clients.values()) {
+      if (!client.available) continue;
+      const platform = normalizePlatform(client.platform);
+      if (platforms.has(platform))
+        throw new Error(
+          `Only one active adapter is allowed per platform: ${platform}`,
+        );
+      platforms.add(platform);
+    }
+    return this;
+  }
+
   get(adapterKey: string): ContentSourceClient | undefined {
     return this.clients.get(normalizeAdapterKey(adapterKey));
   }

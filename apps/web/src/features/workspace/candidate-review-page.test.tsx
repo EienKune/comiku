@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useState } from "react";
 import {
   act,
@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
@@ -30,6 +31,14 @@ const user: CurrentUser = {
   revision: 0,
   permissions: ["candidates:read", "candidates:manage"],
 };
+beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.removeAttribute("open");
+  };
+});
 function Shell() {
   const [actions, setActions] = useState<TopbarActionRegistration | null>(null);
   return (
@@ -76,6 +85,96 @@ afterEach(() => {
   vi.unstubAllGlobals();
   queryClient.clear();
   window.localStorage.clear();
+});
+
+test("ignored content supports loaded selection, cancellation and revision-aware bulk restore while imported content is read-only", async () => {
+  const requests: unknown[] = [];
+  vi.spyOn(client, "POST").mockImplementation((async (
+    path: string,
+    options: { body?: unknown },
+  ) => {
+    if (path === "/api/candidates/actions") {
+      requests.push(options.body);
+      return {
+        data: {
+          results: [{ id: "ignored", outcome: "succeeded", message: null }],
+        },
+        response: new Response(null, { status: 200 }),
+      };
+    }
+    return {
+      data: {
+        sessionId: crypto.randomUUID(),
+        expiresAt: "2030-01-01T00:00:00Z",
+        counts: { priority: 0, uncertain: 0, low_priority: 0 },
+      },
+      response: new Response(null, { status: 201 }),
+    };
+  }) as never);
+  vi.spyOn(client, "GET").mockImplementation((async (
+    path: string,
+    options?: { params?: { query?: { status?: string } } },
+  ) => {
+    if (path === "/api/source-fetch/progress")
+      return {
+        data: { active: null, lastManual: null },
+        response: new Response(null, { status: 200 }),
+      };
+    const status = options?.params?.query?.status;
+    const items =
+      status === "discarded"
+        ? [{ ...candidate("ignored", 7), status }]
+        : status === "imported"
+          ? [{ ...candidate("imported", 9), status }]
+          : [];
+    return {
+      data: {
+        items,
+        total: items.length,
+        nextCursor: null,
+        analysisPending: false,
+      },
+      response: new Response(null, { status: 200 }),
+    };
+  }) as never);
+  render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/candidates"]}>
+        <Routes>
+          <Route element={<Shell />}>
+            <Route path="/candidates" element={<CandidatesPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  fireEvent.click(screen.getByRole("combobox", { name: "候选状态" }));
+  fireEvent.click(screen.getByRole("option", { name: "已忽略" }));
+  await screen.findByText("候选 ignored");
+  fireEvent.click(screen.getByRole("button", { name: /选择当前已加载内容/ }));
+  expect(
+    (screen.getByRole("checkbox", { name: "选择" }) as HTMLInputElement)
+      .checked,
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: /取消当前已加载选择/ }));
+  expect(
+    (screen.getByRole("checkbox", { name: "选择" }) as HTMLInputElement)
+      .checked,
+  ).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: /选择当前已加载内容/ }));
+  fireEvent.click(screen.getByRole("button", { name: /恢复所选/ }));
+  await waitFor(() =>
+    expect(requests).toEqual([
+      { action: "restore", items: [{ id: "ignored", expectedRevision: 7 }] },
+    ]),
+  );
+  fireEvent.click(screen.getByRole("combobox", { name: "候选状态" }));
+  fireEvent.click(screen.getByRole("option", { name: "已入库" }));
+  await screen.findByText("候选 imported");
+  expect(screen.queryByRole("checkbox", { name: "选择" })).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: /选择当前已加载内容|恢复所选/ }),
+  ).toBeNull();
 });
 
 test("80 CJK characters can expand when narrow and stop offering expansion after resizing to fit", async () => {
@@ -273,6 +372,17 @@ test("shared sessions preserve first revisions across pages, refresh and expiry;
         data: { active: null, lastManual: null },
         response: new Response(null, { status: 200 }),
       };
+    if (path === "/api/authors")
+      return {
+        data: {
+          items: [
+            { id: "new-author", displayName: "新作者", externalAccounts: [] },
+          ],
+          nextCursor: null,
+          total: 1,
+        },
+        response: new Response(),
+      } as never;
     const q = options.params?.query;
     if (path === "/api/candidates") requestedSessions.push(q?.reviewSessionId);
     if (expired && q?.reviewSessionId === `session-${generation}`)
@@ -320,28 +430,50 @@ test("shared sessions preserve first revisions across pages, refresh and expiry;
   fireEvent.click(screen.getByRole("button", { name: "刷新列表" }));
   await waitFor(() => expect(creates).toHaveLength(2));
   await screen.findByText("候选 a");
-  fireEvent.click(
-    screen.getAllByRole("button", { name: "选择当前已加载内容" })[0],
-  );
+  expect(
+    screen.getByRole("button", { name: "取消当前已加载选择" }),
+  ).toBeTruthy();
   expect(screen.getByText("已选择 2 项候选")).toBeTruthy();
   expired = true;
   fireEvent.click(screen.getByRole("button", { name: "再加载 24 个" }));
   await waitFor(() => expect(creates).toHaveLength(3));
   await screen.findByText("候选 a");
   expect(screen.getByText("已选择 2 项候选")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "忽略" }));
+  fireEvent.click(screen.getByRole("button", { name: "忽略所选（2）" }));
+  expect(actions).toHaveLength(0);
+  let confirmation = screen.getByRole("dialog", {
+    name: "忽略所选 2 个帖子？",
+  });
+  expect(document.activeElement).toBe(
+    within(confirmation).getByRole("button", { name: "取消" }),
+  );
+  fireEvent.click(within(confirmation).getByRole("button", { name: "取消" }));
+  expect(actions).toHaveLength(0);
+  expect(screen.getByText("已选择 2 项候选")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "忽略所选（2）" }));
+  confirmation = screen.getByRole("dialog", { name: "忽略所选 2 个帖子？" });
+  fireEvent.click(
+    within(confirmation).getByRole("button", { name: "忽略 2 个帖子" }),
+  );
   await screen.findByText("已选择 1 项候选");
   await screen.findByRole("button", { name: "优先审核 0" });
   expect(actions[0].items).toEqual([
     { id: "a", expectedRevision: 2 },
     { id: "b", expectedRevision: 3 },
   ]);
-  fireEvent.click(screen.getByRole("button", { name: "忽略" }));
+  fireEvent.click(screen.getByRole("button", { name: "忽略所选（1）" }));
+  fireEvent.click(
+    within(screen.getByRole("dialog")).getByRole("button", {
+      name: "忽略 1 个帖子",
+    }),
+  );
   await waitFor(() => expect(actions).toHaveLength(2));
   expect(actions[1].items).toEqual([{ id: "b", expectedRevision: 3 }]);
-  fireEvent.change(screen.getByPlaceholderText("搜索作者昵称或 @账号"), {
-    target: { value: "new" },
-  });
+  const input = screen.getByRole("combobox", { name: "搜索并选择作者" });
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: "new" } });
+  expect(screen.getByText("已选择 1 项候选")).toBeTruthy();
+  fireEvent.click(await screen.findByRole("option", { name: "新作者" }));
   await waitFor(() => expect(screen.queryByText("已选择 1 项候选")).toBeNull());
 });
 
@@ -415,3 +547,152 @@ test("three section navigation expands low priority, remembers its state, and re
   await screen.findByRole("navigation", { name: "候选审核区域" });
   expect(low().open).toBe(true);
 });
+
+for (const delayed of [false, true])
+  test(`dirty picture order survives snapshot replacement and ${delayed ? "an in-flight panel remount" : "its original write revision"}`, async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((r) => (release = r));
+    let generation = 0,
+      expired = false;
+    let current = {
+      ...candidate("ordered", 2),
+      media: [
+        {
+          id: "a",
+          externalMediaId: "a",
+          orderIndex: 0,
+          width: 1,
+          height: 1,
+          mediaType: "photo",
+        },
+        {
+          id: "b",
+          externalMediaId: "b",
+          orderIndex: 1,
+          width: 1,
+          height: 1,
+          mediaType: "photo",
+        },
+      ],
+    };
+    const writes: unknown[] = [];
+    vi.spyOn(client, "POST").mockImplementation((async (
+      path: string,
+      options: {
+        body?: unknown;
+        params?: { query?: { triageGroup?: string; reviewSessionId?: string } };
+      } = {},
+    ) => {
+      if (path === "/api/candidates/{id}/media-order") {
+        writes.push(options?.body);
+        if (delayed) await pending;
+        current = {
+          ...current,
+          revision: 3,
+          media: [...current.media].reverse(),
+        };
+        return { data: current, response: new Response() } as never;
+      }
+      generation++;
+      return {
+        data: {
+          sessionId: `order-${generation}`,
+          expiresAt: "2030-01-01T00:00:00Z",
+          counts: { priority: 1, uncertain: 0, low_priority: 0 },
+        },
+        response: new Response(),
+      } as never;
+    }) as never);
+    vi.spyOn(client, "GET").mockImplementation((async (
+      path: string,
+      options: {
+        body?: unknown;
+        params?: { query?: { triageGroup?: string; reviewSessionId?: string } };
+      } = {},
+    ) => {
+      if (path === "/api/source-fetch/progress")
+        return {
+          data: { active: null, lastManual: null },
+          response: new Response(),
+        } as never;
+      if (path.includes("/media/"))
+        return {
+          data: { url: "https://images.invalid/synthetic.png" },
+          response: new Response(),
+        } as never;
+      const q = options?.params?.query as {
+        triageGroup?: string;
+        reviewSessionId?: string;
+      };
+      if (expired && q?.reviewSessionId === "order-1")
+        return {
+          error: { message: "过期" },
+          response: new Response(null, { status: 410 }),
+        } as never;
+      return {
+        data: {
+          items: q?.triageGroup === "priority" ? [current] : [],
+          total: q?.triageGroup === "priority" ? 1 : 0,
+          nextCursor: null,
+          analysisPending: false,
+        },
+        response: new Response(),
+      } as never;
+    }) as never);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/candidates"]}>
+          <Routes>
+            <Route element={<Shell />}>
+              <Route path="/candidates" element={<CandidatesPage />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "图片顺序" }));
+    const panel = () => document.querySelector(".candidate-order-panel")!;
+    fireEvent.click(
+      within(panel() as HTMLElement).getAllByRole("button", {
+        name: "下移",
+      })[0],
+    );
+    const rowIds = () =>
+      Array.from(panel().querySelectorAll(".candidate-order-row img")).map(
+        (img) => img.getAttribute("alt"),
+      );
+    const unload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+    expired = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["candidates"] });
+    });
+    await waitFor(() => expect(generation).toBe(2));
+    await screen.findByRole("button", { name: "保存顺序" });
+    expect(panel().querySelectorAll(".candidate-order-row")).toHaveLength(2);
+    expect(rowIds()).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "保存顺序" }));
+    await waitFor(() =>
+      expect(writes).toEqual([{ expectedRevision: 2, mediaIds: ["b", "a"] }]),
+    );
+    if (delayed) {
+      fireEvent.click(screen.getByRole("button", { name: "图片顺序" }));
+      fireEvent.click(screen.getByRole("button", { name: "图片顺序" }));
+      expect(
+        within(panel() as HTMLElement)
+          .getAllByRole("button", { name: "下移" })[0]
+          .hasAttribute("disabled"),
+      ).toBe(true);
+      expect(
+        screen
+          .getByRole("button", { name: "保存顺序" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+      await act(async () => release());
+      await waitFor(() =>
+        expect(document.querySelector(".candidate-order-panel")).toBeNull(),
+      );
+      expect(writes).toHaveLength(1);
+    }
+  });

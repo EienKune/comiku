@@ -35,7 +35,7 @@ import { ContentSourceRegistry } from "./source-registry.js";
               }),
             );
         }
-        return registry;
+        return registry.assertSingleActiveAdapters();
       },
     },
     {

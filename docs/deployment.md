@@ -72,7 +72,7 @@ df -h
 
 业务 Bucket 保持私有，精确允许前端 Origin 的 GET/PUT/HEAD 及 content-type、x-amz-meta-sha256，暴露所需响应头。预签名 PUT/GET 使用 R2 S3 域名，不通过 Pages/API 代理。不要启用公开 r2.dev 或对正式对象统一短期删除。
 
-一日 staging 清理只覆盖 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/`、`staging/direct-upload/`。应用完成权威校验和采用事务；缩略图随原文件引用、成图随版本恢复期、交接历史及发布来源保持可追溯，24 小时临时发布 ZIP 缓存按未引用条件清理。清理失败保留恢复点。
+一日 staging 清理只覆盖 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/`。`staging/direct-upload/` 必须排除在按对象年龄自动删除的规则之外，由应用按终态清理；已确认的排队任务可能超过 24 小时。升级前先调整既有桶生命周期规则，否则外部清理会破坏任务恢复。应用完成权威校验和采用事务；缩略图随原文件引用、成图随版本恢复期、交接历史及发布来源保持可追溯，24 小时临时发布 ZIP 缓存按未引用条件清理。清理失败保留恢复点。
 
 数据库备份不是图片备份。演练必须核对恢复库的 FileObject key 是否仍存在，以及版本、发布快照、任务与软件版本。制作对象历史恢复期和备份保留窗口需一起确认；切勿尝试恢复时间跨度过大的历史数据库备份，并假设已被云存储生命周期规则清理的对象能自动找回。
 
@@ -110,7 +110,7 @@ docker compose --env-file deploy/production.env -f deploy/compose.production.yml
 
 联调所需配置与样本：
 
-1. **R2 私有测试 Bucket**、Account ID、只授权该桶的 Access Key/Secret；CORS 精确允许实际本地 Origin，例如 `http://localhost:5173`，staging 一日生命周期。若测试备份，另建私有备份测试桶和独立凭据/加密密钥。
+1. **R2 私有测试 Bucket**、Account ID、只授权该桶的 Access Key/Secret；CORS 精确允许实际本地 Origin，例如 `http://localhost:5173`，仅上述临时前缀的一日生命周期。若测试备份，另建私有备份测试桶和独立凭据/加密密钥。
 2. **网页会话使用的 X 账号**：建议专用测试账号，确认能正常登录/查看作者。在本机私有环境文件中填写 X_WEB_BEARER_TOKEN、AUTH_TOKEN、CSRF_TOKEN、当前 UserMedia query ID/features；昵称头像辅助同步还需 UserByScreenName query ID。这些参数来自本人已登录会话，可能过期；不将 Cookie/令牌粘贴进聊天、文档或 Git。
 3. **官方 X API**：如需验证官方通道，准备对应应用 Bearer、核对当前开发者控制台访问/费用能力，确认小额可接受消耗和明确日/月请求上限；若不启用官方通道，将对应日/月请求预算保持为 0 即可。
 4. **2–3 位已授权测试作者**、首次同步不回溯或最近 24 小时的选择，以及少量自制 PNG/JPEG/WebP/ZIP 样本。先分别测两通道，再测重复抓取、失败水位、恢复和完整制作流程；初期只手动抓取，不开启定时器。

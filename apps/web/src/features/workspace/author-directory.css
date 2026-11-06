@@ -278,3 +278,32 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.author-directory-card,
+.author-directory-row {
+  position: relative;
+}
+.author-directory-card .author-directory-name::after,
+.author-directory-row .author-directory-name::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+}
+.author-directory-card .author-directory-name:focus-visible::after,
+.author-directory-row .author-directory-name:focus-visible::after {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.author-directory-card .platform-account-entry,
+.author-directory-row .platform-account-entry,
+.author-directory-tags :is(a, button) {
+  position: relative;
+  z-index: 2;
+}
+
+.author-directory-card .platform-account-entry:is(:hover, :focus-within),
+.author-directory-row .platform-account-entry:is(:hover, :focus-within) {
+  z-index: 3;
+}

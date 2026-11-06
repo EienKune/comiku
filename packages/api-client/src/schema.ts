@@ -210,6 +210,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["renewSessionActivity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/logout": {
         parameters: {
             query?: never;
@@ -2070,6 +2086,35 @@ export interface components {
         Role: "admin" | "source" | "translator" | "proofreader" | "typesetter" | "operator" | "reviewer";
         /** @enum {string} */
         LanguageCapability: "ja" | "ko";
+        AuthUserDto: {
+            /** @description 头像文件标识，仅用于读取与缓存更新，不可由资料 PATCH 写入 */
+            avatarVersion?: string | null;
+            canSkipProofreading: boolean;
+            /** Format: uuid */
+            id: string;
+            username: string;
+            displayName: string;
+            roles: components["schemas"]["Role"][];
+            languageCapabilities: components["schemas"]["LanguageCapability"][];
+            isActive: boolean;
+            mustChangePassword: boolean;
+            revision: number;
+            permissions: string[];
+            /** @description 真实前台活动请求的最短间隔（秒）；普通读取不续期 */
+            activityIntervalSeconds: number;
+        };
+        OkDto: {
+            ok: boolean;
+        };
+        ChangePasswordDto: {
+            /** Format: password */
+            currentPassword: string;
+            /** Format: password */
+            newPassword: string;
+        };
+        ProfileDto: {
+            displayName: string;
+        };
         UserDto: {
             /** @description 头像文件标识，仅用于读取与缓存更新，不可由资料 PATCH 写入 */
             avatarVersion?: string | null;
@@ -2084,18 +2129,6 @@ export interface components {
             mustChangePassword: boolean;
             revision: number;
             permissions: string[];
-        };
-        OkDto: {
-            ok: boolean;
-        };
-        ChangePasswordDto: {
-            /** Format: password */
-            currentPassword: string;
-            /** Format: password */
-            newPassword: string;
-        };
-        ProfileDto: {
-            displayName: string;
         };
         CreateUserAvatarUploadDto: {
             sourceName: string;
@@ -2392,12 +2425,18 @@ export interface components {
         RevisionDto: {
             expectedRevision: number;
         };
+        ExistingAuthorTagDto: {
+            /** Format: uuid */
+            id: string;
+            expectedRevision: number;
+        };
         AuthorImportPreviewRowDto: {
             row: number;
             displayName: string;
             sourceLanguage: string;
             authorizationStatus: string;
-            tagNames: string[];
+            existingTags: components["schemas"]["ExistingAuthorTagDto"][];
+            newTagNames: string[];
             xHandle: string | null;
             xExternalUserId: string | null;
             xDisplayName: string | null;
@@ -2421,7 +2460,8 @@ export interface components {
             displayName: string;
             sourceLanguage: string;
             authorizationStatus: string;
-            tagNames: string[];
+            existingTags: components["schemas"]["ExistingAuthorTagDto"][];
+            newTagNames: string[];
             xHandle: string | null;
             xExternalUserId: string | null;
             xDisplayName: string | null;
@@ -2515,7 +2555,14 @@ export interface components {
             displayName: string;
             sourceLanguage: components["schemas"]["SourceLanguage"];
             authorizationStatus: components["schemas"]["AuthorizationStatus"];
-            tagNames: string[];
+            /**
+             * @deprecated
+             * @description 仅用于恢复已提交的旧格式创建请求，不接受新的名称写入。
+             */
+            tagNames?: string[];
+            /** @description 与 newTagNames 同时提供，合计最多50个。 */
+            existingTags?: components["schemas"]["ExistingAuthorTagDto"][];
+            newTagNames?: string[];
             /**
              * Format: uuid
              * @description 同一保存意图重试时保留；不同资料复用将返回409。
@@ -2547,7 +2594,8 @@ export interface components {
             displayName: string;
             sourceLanguage: components["schemas"]["SourceLanguage"];
             authorizationStatus: components["schemas"]["AuthorizationStatus"];
-            tagNames: string[];
+            existingTags: components["schemas"]["ExistingAuthorTagDto"][];
+            newTagNames: string[];
             expectedRevision: number;
         };
         CreateExternalAccountDto: {
@@ -4652,7 +4700,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UserDto"];
+                    "application/json": components["schemas"]["AuthUserDto"];
                 };
             };
             /** @description 请求字段无效 */
@@ -4734,7 +4782,93 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UserDto"];
+                    "application/json": components["schemas"]["AuthUserDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    renewSessionActivity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkDto"];
                 };
             };
             /** @description 请求字段无效 */
@@ -4906,7 +5040,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UserDto"];
+                    "application/json": components["schemas"]["AuthUserDto"];
                 };
             };
             /** @description 请求字段无效 */

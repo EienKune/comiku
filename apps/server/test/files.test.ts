@@ -109,6 +109,11 @@ test("R2 signed writes bind the staging key, content type and checksum", async (
   assert.equal(target.headers["Content-Type"], "image/png");
   assert.equal(target.headers["x-amz-meta-sha256"], checksum);
   const url = new URL(target.url);
+  const signedHeaders = url.searchParams.get("X-Amz-SignedHeaders")?.split(";");
+  assert.ok(signedHeaders?.includes("x-amz-meta-sha256"));
+  assert.ok(signedHeaders?.includes("content-type"));
+  assert.equal(url.searchParams.has("x-amz-meta-sha256"), false);
+
   assert.equal(
     url.hostname,
     "comiku-private.0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com",
