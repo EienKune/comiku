@@ -1,3 +1,4 @@
+import { AuthorArchiveControl } from "./AuthorArchiveControl";
 import { AuthorEvidenceRemovalDialog } from "./AuthorEvidenceRemovalDialog";
 import {
   ManualUploadCheckpoints,
@@ -1678,6 +1679,11 @@ export function AuthorDetailPage() {
             <SectionHeading title={author.displayName}>
               作者授权与来源账号
             </SectionHeading>
+            {user.permissions.includes("authors:admin") && (
+              <div className="workspace-inline-actions">
+                <AuthorArchiveControl author={author} />
+              </div>
+            )}
             <div className="workspace-detail-grid">
               <Surface className="workspace-panel">
                 <h2>基本信息</h2>

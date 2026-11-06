@@ -78,6 +78,7 @@ function fixture(
       }
     : null;
   const db = {
+    $queryRaw: async () => [],
     author: { findFirst: async () => ({ id: "author" }) },
     authorExternalAccount: {
       findFirst: async ({

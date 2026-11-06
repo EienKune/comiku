@@ -288,7 +288,7 @@ export function AuthorDirectory({ onCreate }: { onCreate?: () => void }) {
             </thead>
             <tbody>
               {items.map((author) => (
-                <tr key={author.id}>
+                <tr className="author-directory-row" key={author.id}>
                   <td>
                     <AuthorIdentity author={author} />
                   </td>

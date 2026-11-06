@@ -1013,6 +1013,7 @@ export class AuthorsService {
     await this.validateProfileAvatar(input.avatarFileObjectId);
     return this.withConflict(() =>
       this.db.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM authors WHERE id = ${authorId}::uuid FOR SHARE`;
         if (
           !(await tx.author.findFirst({
             where: { id: authorId, deletedAt: null },
@@ -1298,6 +1299,7 @@ export class AuthorsService {
   ) {
     return this.withConflict(() =>
       this.db.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM authors WHERE id = ${authorId}::uuid FOR SHARE`;
         if (
           !(await tx.author.findFirst({
             where: { id: authorId, deletedAt: null },

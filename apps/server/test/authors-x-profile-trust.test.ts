@@ -51,6 +51,7 @@ function fixture(
     adapterStates: [],
   };
   const db = {
+    $queryRaw: async () => [],
     sourceAdapterState: { updateMany: async () => ({ count: 0 }) },
     author: { findFirst: async () => ({ id: "author" }) },
     fileObject: {

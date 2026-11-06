@@ -11,6 +11,8 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## Author management notes
 
+- Account binding/restoration must lock and recheck the active parent author before account writes, in the same author-to-account order as archive. A prior read outside that lock can create an active account after the author was archived. Author deletion in the UI is the existing archive operation: pin nickname/revision when confirming, require the exact nickname, retain works/history, and leave restoration to the existing administrative backend.
+
 - Author forms keep tags as choices, not comma-delimited text. Existing choices submit immutable tag IDs with their observed revisions; explicit new names are separate. Resolve references before any author/tag-link write and reject stale or removed references rather than recreating their names. All catalog/link writers, including the whole CSV batch, take the same short transaction-scoped catalog mutex before tag/author rows; ordinary reads do not. Batch new-name insertion and lookup instead of per-tag round trips. No provider or file network request belongs inside this lock.
 - Keep the original creation hash algorithm for committed legacy name-format replays only. New intent hashes use sorted reference IDs/revisions and normalized new names, without consulting current tag names; replay committed results before revalidating the catalog. Old-format uncommitted writes require a page refresh. CSV preview pins references and commit validates them; strip preview-only errors before nested request validation. Enforce both display-name and normalized-name column limits, since Unicode lowercasing can expand a name.
 
