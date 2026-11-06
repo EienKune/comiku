@@ -2820,13 +2820,16 @@ function CandidateAuthorIdentity({ candidate }: { candidate: Candidate }) {
   );
   return (
     <div className="workspace-candidate-author">
-      <span className="workspace-author-avatar">
-        {avatar.data?.url ? (
-          <img src={avatar.data.url} alt="" />
-        ) : (
-          candidate.authorName.slice(0, 1).toUpperCase()
-        )}
-      </span>
+      <Avatar
+        className="workspace-author-avatar"
+        name={candidate.authorName}
+        src={
+          avatar.data?.url && isDisplayableImageUrl(avatar.data.url)
+            ? avatar.data.url
+            : undefined
+        }
+        loading="lazy"
+      />
       <div>
         <h2>{candidate.authorName}</h2>
         <span>

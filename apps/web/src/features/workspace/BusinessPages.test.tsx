@@ -1224,9 +1224,9 @@ test.each([
     const candidate = {
       id: "00000000-0000-4000-8000-000000000010",
       authorId: "00000000-0000-4000-8000-000000000020",
-      authorName: "测试作者",
+      authorName: matched ? "👩🏽‍🎨 合成作者" : "测试作者",
       authorHandle: "test_artist",
-      authorAvatarAvailable: false,
+      authorAvatarAvailable: matched,
       platform: "x",
       sourceLanguage: "ja",
       sourceAdapters: ["x_web_session"],
@@ -1263,6 +1263,11 @@ test.each([
     const get = vi.spyOn(client, "GET").mockImplementation((async (
       ...args: unknown[]
     ) => {
+      if (args[0] === "/api/authors/{id}/avatar/url")
+        return {
+          data: { url: "https://images.example.test/large-avatar.png" },
+          response: new Response(null, { status: 200 }),
+        };
       if (args[0] === "/api/source-fetch/progress")
         return {
           data: { active: null, lastManual: null },
@@ -1313,6 +1318,17 @@ test.each([
     );
 
     expect(await screen.findByText("测试候选")).toBeTruthy();
+    if (matched) {
+      const avatar = screen.getByRole("img", { name: "👩🏽‍🎨 合成作者的头像" });
+      await waitFor(() =>
+        expect(avatar.querySelector("img")?.getAttribute("src")).toBe(
+          "https://images.example.test/large-avatar.png",
+        ),
+      );
+      fireEvent.error(avatar.querySelector("img")!);
+      expect(avatar.textContent).toBe("👩🏽‍🎨");
+      expect(avatar.querySelector("img")).toBeNull();
+    }
     expect(screen.getByRole("button", { name: "重试识别" })).toBeTruthy();
     expect(screen.queryByText("同步记录")).toBeNull();
     expect(screen.queryByText(/来源抓取已排队|正在抓取：/)).toBeNull();
