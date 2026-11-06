@@ -1,6 +1,5 @@
-import { CandidateClassificationScores } from "./CandidateClassificationScores";
-import { CandidateTags } from "./CandidateTags";
-import { CandidateMediaPreview } from "./CandidateMediaPreview";
+import { CandidateCard } from "./CandidateCard";
+import { CandidateDiscardDialog } from "./CandidateDiscardDialog";
 import { CandidateRulesDialog } from "./CandidateRulesDialog";
 import "./candidates.css";
 import {
@@ -8,8 +7,10 @@ import {
   type CandidateBaseFilter,
 } from "./use-candidate-review-session";
 import {
-  selectCandidates,
   settleCandidateSelection,
+  toggleLoadedCandidates,
+  CANDIDATE_SELECTION_LIMIT,
+  canCancelLoadedCandidates,
 } from "./candidate-selection";
 import { downloadPrepared, uploadDirect, pollTransfer } from "./transfers-api";
 import { useImageUrl } from "../../components/use-image-url";
@@ -2784,25 +2785,28 @@ function CandidateDescription({ text }: { text: string | null }) {
     observer.observe(wrapper);
     return () => observer.disconnect();
   }, [text]);
-  if (!text) return null;
   return (
     <div ref={container} className="candidate-description">
-      <p
-        ref={paragraph}
-        className={expanded ? undefined : "candidate-description__collapsed"}
-      >
-        {text}
-      </p>
-      {expandable && (
-        <button
-          type="button"
-          className="candidate-description__toggle"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
+      {text && (
+        <p
+          ref={paragraph}
+          className={expanded ? undefined : "candidate-description__collapsed"}
         >
-          {expanded ? "收起全文" : "展开全文"}
-        </button>
+          {text}
+        </p>
       )}
+      <span className="candidate-description-controls">
+        {expandable && (
+          <button
+            type="button"
+            className="candidate-description__toggle"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? "收起全文" : "展开全文"}
+          </button>
+        )}
+      </span>
     </div>
   );
 }
@@ -2831,8 +2835,8 @@ function CandidateAuthorIdentity({ candidate }: { candidate: Candidate }) {
         loading="lazy"
       />
       <div>
-        <h2>{candidate.authorName}</h2>
-        <span>
+        <h2 title={candidate.authorName}>{candidate.authorName}</h2>
+        <span title={candidate.authorHandle ?? undefined}>
           {candidate.authorHandle
             ? `${candidate.platform === "pixiv" ? "p@" : "@"}${candidate.authorHandle}`
             : candidate.platform}
@@ -2870,6 +2874,7 @@ function CandidateGridSection({
   scopeTotal,
   orderingCandidateId,
   onToggleOrdering,
+  busy,
 }: {
   status: components["schemas"]["CandidateStatus"];
   group?: CandidateTriageGroup;
@@ -2885,6 +2890,7 @@ function CandidateGridSection({
   onRetryAnalysis: (candidate: Candidate) => void;
   orderingCandidateId: string | null;
   onToggleOrdering: (id: string) => void;
+  busy: boolean;
 }) {
   const user = useAccount();
   const cache = useQueryClient();
@@ -2938,89 +2944,47 @@ function CandidateGridSection({
     );
   }, [cache, group, liveTotal, baseFilter, sessionId]);
   const section = candidateTriageSections.find((item) => item.value === group);
+  const loadedSelection = status !== "imported" &&
+    user.permissions.includes("candidates:manage") && (
+      <div className="workspace-candidate-section-actions">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={busy || !items.length}
+          title={`每批最多选择 ${CANDIDATE_SELECTION_LIMIT} 个帖子`}
+          onClick={() => onSelectLoaded(items)}
+        >
+          {canCancelLoadedCandidates(selected, items)
+            ? "取消当前已加载选择"
+            : "选择当前已加载内容"}
+        </Button>
+      </div>
+    );
   const content = (
     <>
       {items.length ? (
         <div className="workspace-card-grid workspace-media-grid">
           {items.map((candidate) => (
-            <Surface className="workspace-media-card" key={candidate.id}>
-              <CandidateMediaPreview candidate={candidate} />
-              <div className="workspace-card-body">
-                <div className="workspace-card-title">
-                  <CandidateAuthorIdentity candidate={candidate} />
-                  <Badge
-                    tone={
-                      candidate.status === "pending"
-                        ? "warning"
-                        : candidate.status === "imported"
-                          ? "success"
-                          : "neutral"
-                    }
-                  >
-                    {candidateLabels[candidate.status]}
-                  </Badge>
-                </div>
-                <CandidateDescription text={candidate.text} />
-                <CandidateTags
-                  hashtags={candidate.hashtags}
-                  matches={candidate.tagRuleMatches ?? []}
-                  model={
-                    candidate.classificationTags?.[0] ? (
-                      <CandidateClassificationScores
-                        candidateId={candidate.id}
-                        category={candidate.classificationTags[0]}
-                      />
-                    ) : undefined
-                  }
-                />
-                {candidate.triageReasons?.includes("rule_conflict") && (
-                  <p className="candidate-conflict">优先与降级线索冲突</p>
-                )}
-                <footer>
-                  {user.permissions.includes("candidates:manage") && (
-                    <label className="account-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={selected.has(candidate.id)}
-                        onChange={() => onToggle(candidate)}
-                      />
-                      选择
-                    </label>
-                  )}
-                  {candidate.externalPostUrl && (
-                    <a
-                      href={candidate.externalPostUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      原帖 <ExternalLink size={14} />
-                    </a>
-                  )}
-                  {candidate.status === "pending" &&
-                    candidate.media.length > 1 &&
-                    user.permissions.includes("candidates:manage") && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        leadingIcon={<Images size={15} />}
-                        onClick={() => onToggleOrdering(candidate.id)}
-                      >
-                        图片顺序
-                      </Button>
-                    )}
-                  {candidate.canRetryAnalysis &&
-                    user.permissions.includes("candidates:manage") && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => onRetryAnalysis(candidate)}
-                      >
-                        重试识别
-                      </Button>
-                    )}
-                </footer>
-                {orderingCandidateId === candidate.id && (
+            <CandidateCard
+              key={candidate.id}
+              candidate={candidate}
+              statusLabel={candidateLabels[candidate.status]}
+              author={<CandidateAuthorIdentity candidate={candidate} />}
+              description={<CandidateDescription text={candidate.text} />}
+              canManage={user.permissions.includes("candidates:manage")}
+              selected={selected.has(candidate.id)}
+              selectionDisabled={
+                busy ||
+                (!selected.has(candidate.id) &&
+                  selected.size >= CANDIDATE_SELECTION_LIMIT)
+              }
+              onToggle={() => onToggle(candidate)}
+              onRetryAnalysis={() => onRetryAnalysis(candidate)}
+              onToggleOrdering={() => onToggleOrdering(candidate.id)}
+            >
+              {orderingCandidateId === candidate.id &&
+                candidate.status === "pending" && (
                   <CandidateOrderPanel
                     candidate={candidate}
                     onSaved={async () => {
@@ -3031,8 +2995,7 @@ function CandidateGridSection({
                     }}
                   />
                 )}
-              </div>
-            </Surface>
+            </CandidateCard>
           ))}
         </div>
       ) : !query.isPending ? (
@@ -3053,7 +3016,13 @@ function CandidateGridSection({
       )}
     </>
   );
-  if (!section) return <PageState query={query}>{() => content}</PageState>;
+  if (!section)
+    return (
+      <>
+        {loadedSelection}
+        <PageState query={query}>{() => content}</PageState>
+      </>
+    );
   return (
     <details
       id={`candidate-section-${group}`}
@@ -3067,18 +3036,7 @@ function CandidateGridSection({
         </span>
         <Badge>{total}</Badge>
       </summary>
-      {open && user.permissions.includes("candidates:manage") && (
-        <div className="workspace-candidate-section-actions">
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!items.length}
-            onClick={() => onSelectLoaded(items)}
-          >
-            选择当前已加载内容
-          </Button>
-        </div>
-      )}
+      {open && loadedSelection}
       {open && <PageState query={query}>{() => content}</PageState>}
     </details>
   );
@@ -3097,6 +3055,10 @@ export function CandidatesPage() {
   );
   const [showUpload, setShowUpload] = useState(false);
   const [showRules, setShowRules] = useState(false);
+  const [discardIntent, setDiscardIntent] = useState<Map<
+    string,
+    number
+  > | null>(null);
   const lowStorageKey = `comiku.candidates.low-priority-open:${user.id}`;
   const [lowOpen, setLowOpen] = useState(() => {
     try {
@@ -3166,11 +3128,15 @@ export function CandidatesPage() {
     });
   }
   const batch = useCallback(
-    async (kind: components["schemas"]["CandidateAction"]) => {
-      const items = [...selected].map(([id, expectedRevision]) => ({
+    async (
+      kind: components["schemas"]["CandidateAction"],
+      submitted = selected,
+    ) => {
+      const items = [...submitted].map(([id, expectedRevision]) => ({
         id,
         expectedRevision,
       }));
+      if (!items.length) return;
       await runCandidateAction(async () => {
         const result = await unwrap(
           await client.POST("/api/candidates/actions", {
@@ -3185,7 +3151,7 @@ export function CandidatesPage() {
           invalidateWorkViews(),
         ]);
         setSelected((current) =>
-          settleCandidateSelection(current, result.results),
+          settleCandidateSelection(current, result.results, submitted),
         );
         setCandidateSuccess(
           failures.length
@@ -3202,48 +3168,53 @@ export function CandidatesPage() {
       selectedCount
         ? {
             content: (
-              <div className="workspace-topbar-actions">
-                <strong>已选择 {selectedCount} 项候选</strong>
-                {status === "pending" ? (
-                  <>
-                    <Button
-                      size="sm"
-                      loading={action.busy}
-                      onClick={() => void batch("import")}
-                    >
-                      入库
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      loading={action.busy}
-                      onClick={() => void batch("discard")}
-                    >
-                      忽略
-                    </Button>
-                  </>
-                ) : (
+              <div className="candidate-batch-actions">
+                <div className="candidate-batch-selection">
+                  <strong>已选择 {selectedCount} 项候选</strong>
                   <Button
                     size="sm"
-                    loading={action.busy}
-                    onClick={() => void batch("restore")}
+                    variant="ghost"
+                    disabled={action.busy}
+                    onClick={() => setSelected(new Map())}
                   >
-                    恢复待处理
+                    取消选择
                   </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setSelected(new Map())}
-                >
-                  清除选择
-                </Button>
+                </div>
+                <div className="candidate-batch-operations">
+                  {status === "pending" ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={action.busy}
+                        onClick={() => setDiscardIntent(new Map(selected))}
+                      >
+                        忽略所选（{selectedCount}）
+                      </Button>
+                      <Button
+                        size="sm"
+                        loading={action.busy}
+                        onClick={() => void batch("import")}
+                      >
+                        入库所选（{selectedCount}）
+                      </Button>
+                    </>
+                  ) : status === "discarded" ? (
+                    <Button
+                      size="sm"
+                      loading={action.busy}
+                      onClick={() => void batch("restore")}
+                    >
+                      恢复所选（{selectedCount}）
+                    </Button>
+                  ) : null}
+                </div>
               </div>
             ),
             collapsedLabel: `已选 ${selectedCount}`,
           }
         : null,
-    [action.busy, batch, selectedCount, status],
+    [action.busy, batch, selectedCount, status, selected],
   );
   useTopbarActions(topbarRegistration);
   return (
@@ -3356,6 +3327,17 @@ export function CandidatesPage() {
         />
       )}
       <Feedback error={review.error ?? action.error} success={action.success} />
+      {discardIntent && (
+        <CandidateDiscardDialog
+          count={discardIntent.size}
+          onCancel={() => setDiscardIntent(null)}
+          onConfirm={() => {
+            const submitted = discardIntent;
+            setDiscardIntent(null);
+            void batch("discard", submitted);
+          }}
+        />
+      )}
       {status === "pending" ? (
         <div className="workspace-candidate-sections">
           {candidateTriageSections.map((section) => (
@@ -3371,12 +3353,15 @@ export function CandidatesPage() {
                 setSelected((current) => {
                   const next = new Map(current);
                   if (next.has(candidate.id)) next.delete(candidate.id);
-                  else next.set(candidate.id, candidate.revision);
+                  else if (next.size < CANDIDATE_SELECTION_LIMIT)
+                    next.set(candidate.id, candidate.revision);
                   return next;
                 })
               }
               onSelectLoaded={(candidates) =>
-                setSelected((current) => selectCandidates(current, candidates))
+                setSelected((current) =>
+                  toggleLoadedCandidates(current, candidates),
+                )
               }
               open={
                 section.value === "low_priority"
@@ -3387,6 +3372,7 @@ export function CandidatesPage() {
               scopeTotal={review.session?.counts[section.value]}
               onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
               orderingCandidateId={orderingCandidateId}
+              busy={action.busy}
               onToggleOrdering={(id) =>
                 setOrderingCandidateId((current) =>
                   current === id ? null : id,
@@ -3406,13 +3392,19 @@ export function CandidatesPage() {
             setSelected((current) => {
               const next = new Map(current);
               if (next.has(candidate.id)) next.delete(candidate.id);
-              else next.set(candidate.id, candidate.revision);
+              else if (next.size < CANDIDATE_SELECTION_LIMIT)
+                next.set(candidate.id, candidate.revision);
               return next;
             })
           }
-          onSelectLoaded={() => undefined}
+          onSelectLoaded={(candidates) =>
+            setSelected((current) =>
+              toggleLoadedCandidates(current, candidates),
+            )
+          }
           onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
           orderingCandidateId={orderingCandidateId}
+          busy={action.busy}
           onToggleOrdering={(id) =>
             setOrderingCandidateId((current) => (current === id ? null : id))
           }

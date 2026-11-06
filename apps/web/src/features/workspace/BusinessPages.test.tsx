@@ -1209,6 +1209,16 @@ test.each([
 ] as const)(
   "candidate filters preserve tag evidence and display classifier category $label",
   async ({ matched, label, text, tone }) => {
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        if (this.matches(".candidate-tags"))
+          return DOMRect.fromRect({ width: 320 });
+        if (this.closest(".candidate-tags"))
+          return DOMRect.fromRect({ width: 70, height: 26 });
+        return rect.call(this);
+      },
+    );
     const user: CurrentUser = {
       canSkipProofreading: false,
       id: "00000000-0000-4000-8000-000000000001",
@@ -1333,7 +1343,8 @@ test.each([
     expect(screen.queryByText("同步记录")).toBeNull();
     expect(screen.queryByText(/来源抓取已排队|正在抓取：/)).toBeNull();
     expect(screen.getByRole("button", { name: "同步图源" })).toBeTruthy();
-    if (!matched) expect(screen.getByText("#BlueArchive")).toBeTruthy();
+    if (!matched)
+      expect(screen.getByRole("button", { name: "#BlueArchive" })).toBeTruthy();
     expect(screen.queryByText("有效标签")).toBeNull();
     if (matched)
       expect(
