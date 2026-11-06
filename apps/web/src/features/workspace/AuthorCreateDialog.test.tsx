@@ -1764,85 +1764,105 @@ test("dirty author notes survive background refresh until explicit latest load",
   await waitFor(() => expect(notes.value).toBe("other manager notes"));
 });
 
-test("a transient managed refetch error preserves dirty fields and the selected avatar", async () => {
-  const original = {
-    id: "author",
-    revision: 1,
-    displayName: "Artist",
-    authorizationStatus: "pending",
-    sourceLanguage: "ja",
-    tags: [],
-    externalAccounts: [],
-    avatarAvailable: false,
-    notes: "saved notes",
-  };
-  let failManaged = false;
-  vi.stubGlobal(
-    "URL",
-    Object.assign(URL, {
-      createObjectURL: vi.fn(() => "blob:preview"),
-      revokeObjectURL: vi.fn(),
-    }),
-  );
-  vi.spyOn(client, "GET").mockImplementation(async (path) => {
-    if (path === "/api/authors/{id}/managed" && failManaged)
-      throw new Error("temporary managed read failure");
-    return ok(
-      path === "/api/authors/{id}" || path === "/api/authors/{id}/managed"
-        ? original
-        : [],
+for (const read of ["managed", "public"] as const)
+  test(`a transient ${read} refetch error preserves dirty fields and the selected avatar`, async () => {
+    const failingPath =
+      read === "managed" ? "/api/authors/{id}/managed" : "/api/authors/{id}";
+    const failingKey = read === "managed" ? "managed-author" : "author";
+    const original = {
+      id: "author",
+      revision: 1,
+      displayName: "Artist",
+      authorizationStatus: "pending",
+      sourceLanguage: "ja",
+      tags: [],
+      externalAccounts: [],
+      avatarAvailable: false,
+      notes: "saved notes",
+    };
+    let failManaged = false;
+    vi.stubGlobal(
+      "URL",
+      Object.assign(URL, {
+        createObjectURL: vi.fn(() => "blob:preview"),
+        revokeObjectURL: vi.fn(),
+      }),
     );
-  });
-  render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/authors/author"]}>
-        <Routes>
-          <Route
-            element={
-              <Outlet
-                context={{ permissions: ["authors:read", "authors:manage"] }}
-              />
-            }
-          >
-            <Route path="/authors/:id" element={<AuthorDetailPage />} />
-          </Route>
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
-  const notes = (await screen.findByLabelText(
-    "作者备注（可选）",
-  )) as HTMLTextAreaElement;
-  fireEvent.change(notes, { target: { value: "dirty notes" } });
-  fireEvent.change(screen.getByLabelText("作者昵称"), {
-    target: { value: "dirty name" },
-  });
-  fireEvent.change(screen.getByLabelText("作者头像"), {
-    target: {
-      files: [
-        new File(["avatar"], "pending-avatar.png", { type: "image/png" }),
-      ],
-    },
-  });
-  failManaged = true;
-  await act(async () => {
-    await queryClient.invalidateQueries({
-      queryKey: ["managed-author", "author"],
+    vi.spyOn(client, "GET").mockImplementation(async (path) => {
+      if (path === failingPath && failManaged)
+        throw new Error("temporary managed read failure");
+      return ok(
+        path === "/api/authors/{id}" || path === "/api/authors/{id}/managed"
+          ? original
+          : [],
+      );
     });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/authors/author"]}>
+          <Routes>
+            <Route
+              element={
+                <Outlet
+                  context={{ permissions: ["authors:read", "authors:manage"] }}
+                />
+              }
+            >
+              <Route path="/authors/:id" element={<AuthorDetailPage />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const notes = (await screen.findByLabelText(
+      "作者备注（可选）",
+    )) as HTMLTextAreaElement;
+    fireEvent.change(notes, { target: { value: "dirty notes" } });
+    fireEvent.change(screen.getByLabelText("作者昵称"), {
+      target: { value: "dirty name" },
+    });
+    fireEvent.change(screen.getByLabelText("作者头像"), {
+      target: {
+        files: [
+          new File(["avatar"], "pending-avatar.png", { type: "image/png" }),
+        ],
+      },
+    });
+    failManaged = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: [failingKey, "author"],
+      });
+    });
+    expect(screen.getByLabelText("作者备注（可选）")).toBe(notes);
+    expect(notes.value).toBe("dirty notes");
+    expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
+      "dirty name",
+    );
+    expect(
+      screen.getByRole("img", { name: "pending-avatar.png" }),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText(
+        read === "managed" ? /管理资料更新失败/ : /作者资料更新失败/,
+      ),
+    ).toBeTruthy();
+    failManaged = false;
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: read === "managed" ? "重试读取" : "重试作者资料",
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByText(
+          read === "managed" ? /管理资料更新失败/ : /作者资料更新失败/,
+        ),
+      ).toBeNull(),
+    );
+    expect(screen.getByLabelText("作者备注（可选）")).toBe(notes);
+    expect(notes.value).toBe("dirty notes");
+    expect(
+      screen.getByRole("img", { name: "pending-avatar.png" }),
+    ).toBeTruthy();
   });
-  expect(screen.getByLabelText("作者备注（可选）")).toBe(notes);
-  expect(notes.value).toBe("dirty notes");
-  expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
-    "dirty name",
-  );
-  expect(screen.getByRole("img", { name: "pending-avatar.png" })).toBeTruthy();
-  expect(await screen.findByText(/管理资料更新失败/)).toBeTruthy();
-  failManaged = false;
-  fireEvent.click(screen.getByRole("button", { name: "重试读取" }));
-  await waitFor(() =>
-    expect(screen.queryByText(/管理资料更新失败/)).toBeNull(),
-  );
-  expect(screen.getByLabelText("作者备注（可选）")).toBe(notes);
-  expect(notes.value).toBe("dirty notes");
-  expect(screen.getByRole("img", { name: "pending-avatar.png" })).toBeTruthy();
-});
