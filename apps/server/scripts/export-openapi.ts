@@ -12,6 +12,8 @@ const app = await createApplication({
   port: 3000,
   databaseUrl: "postgresql://offline:offline@127.0.0.1:1/offline",
   appOrigin: "http://localhost:5173",
+  authSessionIdleSeconds: 1800,
+  authSessionAbsoluteSeconds: 28800,
   xOfficialDailyBudget: 0,
   xOfficialMonthlyBudget: 0,
   sourceOverlapMinutes: 10,

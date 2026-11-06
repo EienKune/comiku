@@ -78,7 +78,8 @@ test("management notes persist, respect revision fences and remain absent for pu
       displayName: prefix,
       sourceLanguage: "ja",
       authorizationStatus: "authorized",
-      tagNames: [],
+      existingTags: [],
+      newTagNames: [],
       notes: " author private ",
       idempotencyKey: randomUUID(),
       accounts: [
@@ -164,7 +165,8 @@ test("management notes persist, respect revision fences and remain absent for pu
       displayName: prefix,
       sourceLanguage: "ja",
       authorizationStatus: "authorized",
-      tagNames: [],
+      existingTags: [],
+      newTagNames: [],
     };
     const preserved = await request<ManagedAuthorDto>(
       admin.cookie,
@@ -278,7 +280,15 @@ test("management notes persist, respect revision fences and remain absent for pu
       source.cookie,
       "POST",
       "/api/authors",
-      { ...fields, notes: null, accounts: [], idempotencyKey: legacyKey },
+      {
+        ...fields,
+        existingTags: undefined,
+        newTagNames: undefined,
+        tagNames: [],
+        notes: null,
+        accounts: [],
+        idempotencyKey: legacyKey,
+      },
     );
     assert.equal(replay.status, 201);
     assert.equal(replay.data.id, id);
@@ -287,6 +297,9 @@ test("management notes persist, respect revision fences and remain absent for pu
         await request(source.cookie, "POST", "/api/authors", {
           ...fields,
           notes: "new intent",
+          existingTags: undefined,
+          newTagNames: undefined,
+          tagNames: [],
           idempotencyKey: legacyKey,
         })
       ).status,

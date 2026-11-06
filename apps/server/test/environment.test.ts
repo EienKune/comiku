@@ -11,6 +11,8 @@ test("validates configuration and uses explicit development defaults", () => {
     port: 3000,
     databaseUrl,
     appOrigin: "http://localhost:5173",
+    authSessionIdleSeconds: 1800,
+    authSessionAbsoluteSeconds: 28800,
     xOfficialDailyBudget: 0,
     xOfficialMonthlyBudget: 0,
     sourceOverlapMinutes: 10,
@@ -203,4 +205,43 @@ test("source media size configuration is bounded independently of manual uploads
         }),
       /SOURCE_MEDIA_MAX_MIB/,
     );
+});
+
+test("session lifetimes accept long internal sessions and reject unsafe deadlines", () => {
+  const env = parseEnvironment({
+    DATABASE_URL: databaseUrl,
+    AUTH_SESSION_IDLE_SECONDS: "604800",
+    AUTH_SESSION_ABSOLUTE_SECONDS: "2592000",
+  }) as unknown as {
+    authSessionIdleSeconds: number;
+    authSessionAbsoluteSeconds: number;
+  };
+  assert.equal(env.authSessionIdleSeconds, 604800);
+  assert.equal(env.authSessionAbsoluteSeconds, 2592000);
+  for (const value of [
+    "0",
+    "-1",
+    "1.5",
+    "NaN",
+    "Infinity",
+    "9007199254740993",
+    "8640000000000000",
+  ])
+    for (const key of [
+      "AUTH_SESSION_IDLE_SECONDS",
+      "AUTH_SESSION_ABSOLUTE_SECONDS",
+    ])
+      assert.throws(
+        () => parseEnvironment({ DATABASE_URL: databaseUrl, [key]: value }),
+        /AUTH_SESSION/,
+      );
+  assert.throws(
+    () =>
+      parseEnvironment({
+        DATABASE_URL: databaseUrl,
+        AUTH_SESSION_IDLE_SECONDS: "100",
+        AUTH_SESSION_ABSOLUTE_SECONDS: "99",
+      }),
+    /AUTH_SESSION/,
+  );
 });

@@ -32,6 +32,15 @@ test("CSV numeric X IDs cannot bypass trusted identity lookup and enable collect
       AUTHOR_IMPORT_TEMPLATE + "Artist,ja,authorized,,artist,42,,\r\n",
     ),
   );
-  await assert.rejects(service.importAuthors("actor", rows));
+  await assert.rejects(
+    service.importAuthors(
+      "actor",
+      rows.map(({ tagNames, ...row }) => ({
+        ...row,
+        existingTags: [],
+        newTagNames: tagNames,
+      })),
+    ),
+  );
   assert.equal(created, 0);
 });

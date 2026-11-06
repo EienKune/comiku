@@ -1529,6 +1529,12 @@ model DirectUploadSession {
 
   @@index([actorId, createdAt])
   @@index([status, expiresAt])
+  terminalAt       DateTime?           @map("terminal_at") @db.Timestamptz(3)
+  stagingCleanedAt DateTime?           @map("staging_cleaned_at") @db.Timestamptz(3)
+
+  @@index([terminalAt, id], map: "direct_upload_terminal_idx")
+  @@index([terminalAt, expiresAt, id], map: "direct_upload_pending_idx")
+  @@index([stagingCleanedAt, terminalAt, id], map: "direct_upload_cleanup_idx")
   @@map("direct_upload_sessions")
 }
 

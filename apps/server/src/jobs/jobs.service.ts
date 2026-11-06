@@ -442,6 +442,13 @@ export class JobsService {
   async assertCurrentLease(tx: Prisma.TransactionClient) {
     const job = this.leaseContext.getStore();
     if (!job) return;
+    return this.assertLease(tx, job);
+  }
+
+  async assertLease(
+    tx: Prisma.TransactionClient,
+    job: { id: string; leaseId: string | null },
+  ) {
     // Hold ownership until this short protected transaction commits. A count
     // alone allows a peer to replace the lease between verification and writes.
     await tx.$queryRaw`SELECT id FROM background_jobs WHERE id = ${job.id}::uuid FOR UPDATE`;

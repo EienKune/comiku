@@ -20,6 +20,8 @@ test("HTTP liveness, readiness and OpenAPI remain distinct when the database fai
         port: 3000,
         databaseUrl: "postgresql://unused:unused@127.0.0.1:1/unused",
         appOrigin: "http://localhost:5173",
+        authSessionIdleSeconds: 1800,
+        authSessionAbsoluteSeconds: 28800,
         xOfficialDailyBudget: 0,
         xOfficialMonthlyBudget: 0,
         sourceOverlapMinutes: 10,

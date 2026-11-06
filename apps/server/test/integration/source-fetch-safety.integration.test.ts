@@ -679,7 +679,8 @@ for (const mutation of [
             displayName: f.author.displayName,
             sourceLanguage: "ja",
             authorizationStatus: "revoked",
-            tagNames: [],
+            existingTags: [],
+            newTagNames: [],
             expectedRevision: 0,
           });
         if (mutation === "archive_author")
@@ -749,7 +750,8 @@ test("PostgreSQL download-time revocation avoids object storage and existing-can
         displayName: f.author.displayName,
         sourceLanguage: "ja",
         authorizationStatus: "revoked",
-        tagNames: [],
+        existingTags: [],
+        newTagNames: [],
         expectedRevision: 0,
       });
     };
@@ -857,7 +859,8 @@ for (const mutation of ["author", "account", "adapter"] as const)
           displayName: f.author.displayName,
           sourceLanguage: "ja",
           authorizationStatus: "revoked",
-          tagNames: [],
+          existingTags: [],
+          newTagNames: [],
           expectedRevision: 0,
         });
       if (mutation === "account")
@@ -985,7 +988,14 @@ async function actorAdministration(f: Awaited<ReturnType<typeof fixture>>) {
       expiresAt: new Date(Date.now() + 60_000),
     },
   });
-  const users = new UsersService(f.db, null as any);
+  const users = new UsersService(
+    f.db,
+    null as any,
+    parseEnvironment({
+      NODE_ENV: "test",
+      DATABASE_URL: process.env.TEST_DATABASE_URL,
+    }),
+  );
   return () =>
     users.manage({ userId: f.peer.id, sessionId: session.id }, f.actor.id, {
       expectedRevision: 0,

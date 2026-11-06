@@ -372,6 +372,17 @@ test("shared sessions preserve first revisions across pages, refresh and expiry;
         data: { active: null, lastManual: null },
         response: new Response(null, { status: 200 }),
       };
+    if (path === "/api/authors")
+      return {
+        data: {
+          items: [
+            { id: "new-author", displayName: "新作者", externalAccounts: [] },
+          ],
+          nextCursor: null,
+          total: 1,
+        },
+        response: new Response(),
+      } as never;
     const q = options.params?.query;
     if (path === "/api/candidates") requestedSessions.push(q?.reviewSessionId);
     if (expired && q?.reviewSessionId === `session-${generation}`)
@@ -458,9 +469,11 @@ test("shared sessions preserve first revisions across pages, refresh and expiry;
   );
   await waitFor(() => expect(actions).toHaveLength(2));
   expect(actions[1].items).toEqual([{ id: "b", expectedRevision: 3 }]);
-  fireEvent.change(screen.getByPlaceholderText("搜索作者昵称或 @账号"), {
-    target: { value: "new" },
-  });
+  const input = screen.getByRole("combobox", { name: "搜索并选择作者" });
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: "new" } });
+  expect(screen.getByText("已选择 1 项候选")).toBeTruthy();
+  fireEvent.click(await screen.findByRole("option", { name: "新作者" }));
   await waitFor(() => expect(screen.queryByText("已选择 1 项候选")).toBeNull());
 });
 
@@ -534,3 +547,152 @@ test("three section navigation expands low priority, remembers its state, and re
   await screen.findByRole("navigation", { name: "候选审核区域" });
   expect(low().open).toBe(true);
 });
+
+for (const delayed of [false, true])
+  test(`dirty picture order survives snapshot replacement and ${delayed ? "an in-flight panel remount" : "its original write revision"}`, async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((r) => (release = r));
+    let generation = 0,
+      expired = false;
+    let current = {
+      ...candidate("ordered", 2),
+      media: [
+        {
+          id: "a",
+          externalMediaId: "a",
+          orderIndex: 0,
+          width: 1,
+          height: 1,
+          mediaType: "photo",
+        },
+        {
+          id: "b",
+          externalMediaId: "b",
+          orderIndex: 1,
+          width: 1,
+          height: 1,
+          mediaType: "photo",
+        },
+      ],
+    };
+    const writes: unknown[] = [];
+    vi.spyOn(client, "POST").mockImplementation((async (
+      path: string,
+      options: {
+        body?: unknown;
+        params?: { query?: { triageGroup?: string; reviewSessionId?: string } };
+      } = {},
+    ) => {
+      if (path === "/api/candidates/{id}/media-order") {
+        writes.push(options?.body);
+        if (delayed) await pending;
+        current = {
+          ...current,
+          revision: 3,
+          media: [...current.media].reverse(),
+        };
+        return { data: current, response: new Response() } as never;
+      }
+      generation++;
+      return {
+        data: {
+          sessionId: `order-${generation}`,
+          expiresAt: "2030-01-01T00:00:00Z",
+          counts: { priority: 1, uncertain: 0, low_priority: 0 },
+        },
+        response: new Response(),
+      } as never;
+    }) as never);
+    vi.spyOn(client, "GET").mockImplementation((async (
+      path: string,
+      options: {
+        body?: unknown;
+        params?: { query?: { triageGroup?: string; reviewSessionId?: string } };
+      } = {},
+    ) => {
+      if (path === "/api/source-fetch/progress")
+        return {
+          data: { active: null, lastManual: null },
+          response: new Response(),
+        } as never;
+      if (path.includes("/media/"))
+        return {
+          data: { url: "https://images.invalid/synthetic.png" },
+          response: new Response(),
+        } as never;
+      const q = options?.params?.query as {
+        triageGroup?: string;
+        reviewSessionId?: string;
+      };
+      if (expired && q?.reviewSessionId === "order-1")
+        return {
+          error: { message: "过期" },
+          response: new Response(null, { status: 410 }),
+        } as never;
+      return {
+        data: {
+          items: q?.triageGroup === "priority" ? [current] : [],
+          total: q?.triageGroup === "priority" ? 1 : 0,
+          nextCursor: null,
+          analysisPending: false,
+        },
+        response: new Response(),
+      } as never;
+    }) as never);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/candidates"]}>
+          <Routes>
+            <Route element={<Shell />}>
+              <Route path="/candidates" element={<CandidatesPage />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "图片顺序" }));
+    const panel = () => document.querySelector(".candidate-order-panel")!;
+    fireEvent.click(
+      within(panel() as HTMLElement).getAllByRole("button", {
+        name: "下移",
+      })[0],
+    );
+    const rowIds = () =>
+      Array.from(panel().querySelectorAll(".candidate-order-row img")).map(
+        (img) => img.getAttribute("alt"),
+      );
+    const unload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+    expired = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["candidates"] });
+    });
+    await waitFor(() => expect(generation).toBe(2));
+    await screen.findByRole("button", { name: "保存顺序" });
+    expect(panel().querySelectorAll(".candidate-order-row")).toHaveLength(2);
+    expect(rowIds()).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "保存顺序" }));
+    await waitFor(() =>
+      expect(writes).toEqual([{ expectedRevision: 2, mediaIds: ["b", "a"] }]),
+    );
+    if (delayed) {
+      fireEvent.click(screen.getByRole("button", { name: "图片顺序" }));
+      fireEvent.click(screen.getByRole("button", { name: "图片顺序" }));
+      expect(
+        within(panel() as HTMLElement)
+          .getAllByRole("button", { name: "下移" })[0]
+          .hasAttribute("disabled"),
+      ).toBe(true);
+      expect(
+        screen
+          .getByRole("button", { name: "保存顺序" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+      await act(async () => release());
+      await waitFor(() =>
+        expect(document.querySelector(".candidate-order-panel")).toBeNull(),
+      );
+      expect(writes).toHaveLength(1);
+    }
+  });

@@ -9,6 +9,7 @@ import {
 } from "@nestjs/common";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Prisma, Role } from "../generated/prisma/client.js";
+import { ENVIRONMENT, type Environment } from "../config/environment.js";
 import { PrismaService } from "../database/prisma.service.js";
 import {
   permissionsFor,
@@ -33,14 +34,13 @@ import type {
   ManageUserDto,
   ProfileDto,
   UserDto,
+  AuthUserDto,
 } from "./users.dto.js";
 
 type UserWithRoles = Prisma.UserGetPayload<{
   include: { roles: true; languageCapabilities: true };
 }>;
 type Tx = Prisma.TransactionClient;
-export const SESSION_MS = 8 * 60 * 60 * 1000;
-const IDLE_MS = 30 * 60 * 1000;
 const withRoles = { roles: true, languageCapabilities: true } as const;
 export function publicUser(user: UserWithRoles): UserDto {
   const roles = user.roles.map(({ role }) => role).sort();
@@ -66,6 +66,7 @@ export class UsersService {
   constructor(
     @Inject(PrismaService) private readonly db: PrismaService,
     @Inject(FileObjectsService) private readonly files: FileObjectsService,
+    @Inject(ENVIRONMENT) private readonly environment: Environment,
   ) {}
 
   private async write<T>(action: (tx: Tx) => Promise<T>): Promise<T> {
@@ -99,15 +100,18 @@ export class UsersService {
       data: { actorId, targetId, action, detail },
     });
   }
-  private async session(tx: Tx, actor: Actor) {
-    const now = new Date();
+  private async session(tx: Tx, actor: Actor, now = new Date()) {
     const session = await tx.authSession.findFirst({
       where: {
         id: actor.sessionId,
         userId: actor.userId,
         revokedAt: null,
         expiresAt: { gt: now },
-        lastSeenAt: { gt: new Date(now.getTime() - IDLE_MS) },
+        lastSeenAt: {
+          gt: new Date(
+            now.getTime() - this.environment.authSessionIdleSeconds * 1000,
+          ),
+        },
         user: { isActive: true },
       },
       include: { user: { include: withRoles } },
@@ -135,11 +139,16 @@ export class UsersService {
   }
   private async issue(tx: Tx, userId: string) {
     const token = randomBytes(32).toString("base64url");
+    const now = new Date();
     const session = await tx.authSession.create({
       data: {
         userId,
         tokenHash: tokenHash(token),
-        expiresAt: new Date(Date.now() + SESSION_MS),
+        createdAt: now,
+        lastSeenAt: now,
+        expiresAt: new Date(
+          now.getTime() + this.environment.authSessionAbsoluteSeconds * 1000,
+        ),
       },
     });
     return { token, sessionId: session.id };
@@ -168,7 +177,7 @@ export class UsersService {
         throw new UnauthorizedException("账户名或密码不正确");
       const session = await this.issue(tx, current.id);
       await this.audit(tx, current.id, current.id, "auth.login");
-      return { ...session, user: publicUser(current) };
+      return { ...session, user: this.authUser(publicUser(current)) };
     });
   }
   async authenticate(token: string) {
@@ -180,24 +189,67 @@ export class UsersService {
         tokenHash: tokenHash(token),
         revokedAt: null,
         expiresAt: { gt: now },
-        lastSeenAt: { gt: new Date(now.getTime() - IDLE_MS) },
+        lastSeenAt: {
+          gt: new Date(
+            now.getTime() - this.environment.authSessionIdleSeconds * 1000,
+          ),
+        },
         user: { isActive: true },
       },
       include: { user: { include: withRoles } },
     });
     if (!session) throw new UnauthorizedException("登录已失效，请重新登录");
-    // Never resurrect a session that was revoked while this request was being read.
-    await this.db.authSession.updateMany({
-      where: { id: session.id, revokedAt: null },
-      data: { lastSeenAt: now },
-    });
     return {
       actor: { userId: session.userId, sessionId: session.id },
       user: publicUser(session.user),
     };
   }
+  private authUser(user: UserDto): AuthUserDto {
+    return {
+      ...user,
+      activityIntervalSeconds: Math.min(
+        300,
+        this.environment.authSessionIdleSeconds / 2,
+      ),
+    };
+  }
   async me(actor: Actor) {
-    return publicUser((await this.session(this.db, actor)).user);
+    return this.authUser(publicUser((await this.session(this.db, actor)).user));
+  }
+  async activity(actor: Actor) {
+    return this.db.$transaction(async (tx) => {
+      // Shared renewal barrier: unrelated sessions may renew concurrently; account/session
+      // administration uses the exclusive barrier before revocation or credential changes.
+      await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock_shared(20260905, 2)`;
+      await tx.$queryRaw`SELECT id FROM auth_sessions WHERE id=${actor.sessionId}::uuid FOR UPDATE`;
+      const now = new Date();
+      const session = await this.session(tx, actor, now);
+      const intervalMs = Math.min(
+        300_000,
+        this.environment.authSessionIdleSeconds * 500,
+      );
+      if (now.getTime() - session.lastSeenAt.getTime() < intervalMs)
+        return { ok: true };
+      const changed = await tx.authSession.updateMany({
+        where: {
+          id: actor.sessionId,
+          userId: actor.userId,
+          revokedAt: null,
+          expiresAt: { gt: now },
+          lastSeenAt: {
+            equals: session.lastSeenAt,
+            gt: new Date(
+              now.getTime() - this.environment.authSessionIdleSeconds * 1000,
+            ),
+          },
+          user: { isActive: true },
+        },
+        data: { lastSeenAt: now },
+      });
+      if (!changed.count)
+        throw new UnauthorizedException("登录已失效，请重新登录");
+      return { ok: true };
+    });
   }
   async logout(actor: Actor) {
     return this.write(async (tx) => {
@@ -255,7 +307,7 @@ export class UsersService {
       });
       const session = await this.issue(tx, user.id);
       await this.audit(tx, user.id, user.id, "auth.password_changed");
-      return { ...session, user: publicUser(updated) };
+      return { ...session, user: this.authUser(publicUser(updated)) };
     });
   }
   async updateProfile(actor: Actor, input: ProfileDto) {

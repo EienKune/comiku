@@ -31,6 +31,17 @@ import {
 const trimmed = ({ value }: { value: unknown }) =>
   typeof value === "string" ? value.trim() : value;
 
+export class ExistingAuthorTagDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  @IsUUID()
+  id!: string;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  @IsInt()
+  @Min(0)
+  expectedRevision!: number;
+}
+
 export class CreateAuthorDto {
   @ApiPropertyOptional({
     enum: ["x", "pixiv"],
@@ -62,13 +73,41 @@ export class CreateAuthorDto {
   @IsEnum(AuthorizationStatus)
   authorizationStatus!: AuthorizationStatus;
 
-  @ApiProperty({ type: String, isArray: true, maxItems: 50 })
+  @ApiPropertyOptional({
+    type: String,
+    isArray: true,
+    maxItems: 50,
+    deprecated: true,
+    description: "仅用于恢复已提交的旧格式创建请求，不接受新的名称写入。",
+  })
+  @ValidateIf((_object, value) => value !== undefined)
   @IsArray()
   @ArrayMaxSize(50)
   @ArrayUnique()
   @IsString({ each: true })
   @MaxLength(64, { each: true })
-  tagNames!: string[];
+  tagNames?: string[];
+
+  @ApiPropertyOptional({
+    type: ExistingAuthorTagDto,
+    isArray: true,
+    maxItems: 50,
+    description: "与 newTagNames 同时提供，合计最多50个。",
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => ExistingAuthorTagDto)
+  existingTags?: ExistingAuthorTagDto[];
+
+  @ApiPropertyOptional({ type: String, isArray: true, maxItems: 50 })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  @MaxLength(64, { each: true })
+  newTagNames?: string[];
 
   @ApiPropertyOptional({
     type: String,
@@ -163,7 +202,23 @@ export class UpdateAuthorDto extends OmitType(CreateAuthorDto, [
   "idempotencyKey",
   "accounts",
   "profileSourcePlatform",
+  "tagNames",
+  "existingTags",
+  "newTagNames",
 ] as const) {
+  @ApiProperty({ type: ExistingAuthorTagDto, isArray: true, maxItems: 50 })
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => ExistingAuthorTagDto)
+  existingTags!: ExistingAuthorTagDto[];
+
+  @ApiProperty({ type: String, isArray: true, maxItems: 50 })
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  @MaxLength(64, { each: true })
+  newTagNames!: string[];
   @ApiProperty({ type: Number, minimum: 0 })
   @IsInt()
   @Min(0)
@@ -545,11 +600,18 @@ export class AuthorImportRowDto {
   @ApiProperty({ type: String }) @IsString() displayName!: string;
   @ApiProperty({ type: String }) @IsString() sourceLanguage!: string;
   @ApiProperty({ type: String }) @IsString() authorizationStatus!: string;
-  @ApiProperty({ type: String, isArray: true })
+  @ApiProperty({ type: ExistingAuthorTagDto, isArray: true, maxItems: 50 })
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => ExistingAuthorTagDto)
+  existingTags!: ExistingAuthorTagDto[];
+  @ApiProperty({ type: String, isArray: true, maxItems: 50 })
   @IsArray()
   @ArrayMaxSize(50)
   @IsString({ each: true })
-  tagNames!: string[];
+  @MaxLength(64, { each: true })
+  newTagNames!: string[];
   @ApiProperty({ type: String, nullable: true })
   @IsOptional()
   @IsString()
@@ -603,6 +665,7 @@ export class ImportAuthorsDto {
   @ApiProperty({ type: AuthorImportRowDto, isArray: true, maxItems: 500 })
   @IsArray()
   @ArrayMaxSize(500)
+  @ValidateNested({ each: true })
   @Type(() => AuthorImportRowDto)
   rows!: AuthorImportRowDto[];
 }
