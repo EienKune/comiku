@@ -349,6 +349,17 @@ def install_pixiv_ajax_checks(ext):
     ext.request, ext._request_ajax = request, ajax
 
 
+def install_pixiv_rate_limit_guard(ext):
+    # The pinned native API sleeps for 300s after a rate-limit response.
+    # Return that outcome to the platform scheduler instead of timing out here.
+    wait = ext.wait
+    def rate_limit_wait(*args, **kwargs):
+        if kwargs.get("seconds") == 300:
+            raise AdapterError("rate_limited")
+        return wait(*args, **kwargs)
+    ext.wait = rate_limit_wait
+
+
 def collect(source, cursor):
     if version.__version__ != "1.32.11":
         raise AdapterError("runtime_unavailable")
@@ -701,12 +712,7 @@ def collect(source, cursor):
             work["type"] = ("illust", "manga", "ugoira")[artwork_type]
             return () if artwork_type == 2 else files
         ext._extract_ajax = typed_extract_ajax
-        wait = ext.wait
-        def rate_limit_wait(*args, **kwargs):
-            if kwargs.get("seconds") == 300:
-                raise AdapterError("rate_limited")
-            return wait(*args, **kwargs)
-        ext.wait = rate_limit_wait
+        install_pixiv_rate_limit_guard(ext)
         pager = PixivPager(ext, source, cursor, result, pixiv_cursor, AdapterError, PageDone, remember)
         original = pager.works
         slot = "works"
@@ -1024,6 +1030,7 @@ def collect_profile(source):
             # Dispatch.initialize is a no-op; native profile items also invokes
             # the base initializer explicitly before constructing PixivAppAPI.
             Extractor.initialize(ext)
+            install_pixiv_rate_limit_guard(ext)
             response = pixiv.PixivAppAPI(ext).user_detail(remote_id)
             if not isinstance(response, dict) or "error" in response or not isinstance(response.get("user"), dict):
                 raise AdapterError("source_unresolved")

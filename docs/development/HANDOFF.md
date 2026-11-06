@@ -177,3 +177,5 @@ Manual multi-target reconciliation must lock all sibling job rows before the fir
 Terminal analysis maintenance must match failed jobs to queued analyses before applying its batch limit. A paused historical queue must not hide newer exhausted incremental jobs. Keep the per-row scope/job/candidate fences after selection; the isolated PostgreSQL regression covers more than one full batch of paused history.
 
 Pixiv directory fallback details must pass the same future-window deferral as batch metadata. A future item written into a successful baseline can disappear permanently when its ID falls outside the bounded recheck prefix. Test a second window, including an initially empty `none` window, rather than only asserting the first page.
+
+Pixiv profile resolution uses the native App API without enumerating works, but still needs the same rate-limit wait guard as collection. Native 300-second throttling sleeps must become `rate_limited` before the bounded profile subprocess times out; retain ordinary request pacing. Native mocked-429 tests must exercise `user_detail` rather than replacing `_call` and bypassing its wait path.
