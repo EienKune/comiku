@@ -175,7 +175,11 @@ export class R2ObjectStorage implements ObjectStorage {
           ContentType: input.contentType,
           Metadata: { sha256: input.checksum.toLowerCase() },
         }),
-        { expiresIn: expiresInSeconds },
+        {
+          expiresIn: expiresInSeconds,
+          unhoistableHeaders: new Set(["x-amz-meta-sha256"]),
+          signableHeaders: new Set(["content-type"]),
+        },
       ),
       expiresInSeconds,
       headers,

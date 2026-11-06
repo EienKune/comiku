@@ -206,3 +206,8 @@ Manual multi-target reconciliation must lock all sibling job rows before the fir
 ## System management sections
 
 - System management uses `/settings/system?tab=<section>` with `collection` as its default (the parameter may be omitted). Keep the source panel in `SourceManagement(enabled)` so other management sections can compose it without moving source state or duplicating requests. Gate both source capability reads and history polling when the panel is inactive; hiding a DOM panel alone does not stop queries. Preserve mounted panels when their forms have unsaved drafts, and keep the administrator check outside the panel mount. Only register sections that are actually delivered; connection availability is not proof of successful credential validation.
+
+## R2 signed browser uploads
+
+- Keep returned checksum metadata headers in the presigned request's signed headers (`unhoistableHeaders`), and explicitly sign the returned content type. Hoisting checksum metadata into query parameters while also sending the header can fail R2 signature validation; removing the header may instead lose the stored metadata and break adoption. This metadata binds the declaration only: worker content hashing and media inspection remain mandatory. CORS preflight success alone does not verify a signed PUT, HEAD metadata or subsequent signed read.
+- Workspace build, typecheck and test scripts each generate Prisma code. Run those generation steps sequentially in one checkout; concurrent generation can race on the same output directory. Independent checks that only read generated code may run in parallel.
