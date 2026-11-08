@@ -1705,12 +1705,12 @@ export class WorksService {
   ): Promise<WorkDetailDto> {
     const operation = `skip-proofread:${actorId}`;
     await this.db.$transaction(async (tx) => {
-      await tx.$queryRaw(
-        Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
-      );
       // Account updates acquire this row too, so revocation cannot race authorization.
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM users WHERE id = ${actorId}::uuid FOR SHARE`,
+      );
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
       );
       await this.assertStagePermission(actorId, "translate", workId, tx);
       if (

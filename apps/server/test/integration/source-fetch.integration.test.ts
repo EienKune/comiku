@@ -269,7 +269,8 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
       displayName: `抓取作者 ${prefix}`,
       sourceLanguage: "ja",
       authorizationStatus: "authorized",
-      tagNames: ["抓取测试"],
+      existingTags: [],
+      newTagNames: ["抓取测试"],
     });
     authorId = author.id;
     const account = await authors.createAccount(author.id, {

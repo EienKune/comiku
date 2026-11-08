@@ -1,6 +1,24 @@
-import { CandidateClassificationScores } from "./CandidateClassificationScores";
-import { CandidateTags } from "./CandidateTags";
-import { CandidateMediaPreview } from "./CandidateMediaPreview";
+import {
+  CandidateAuthorFilter,
+  type CandidateAuthorChoice,
+} from "./CandidateAuthorFilter";
+import { CandidateDraftLeaveGuard } from "./CandidateDraftLeaveGuard";
+import {
+  candidateOrderDraft,
+  moveCandidateOrder,
+  candidateOrderConflict,
+  type CandidateOrderDraft,
+} from "./candidate-order-drafts";
+import { AuthorArchiveControl } from "./AuthorArchiveControl";
+import { AuthorEvidenceRemovalDialog } from "./AuthorEvidenceRemovalDialog";
+import {
+  ManualUploadCheckpoints,
+  type ManualCandidateDraft,
+} from "./manual-upload-checkpoints";
+import { AuthorTagPicker } from "./AuthorTagPicker";
+import { authorTagInput, type AuthorTagChoice } from "./author-tag-selection";
+import { CandidateCard } from "./CandidateCard";
+import { CandidateDiscardDialog } from "./CandidateDiscardDialog";
 import { CandidateRulesDialog } from "./CandidateRulesDialog";
 import "./candidates.css";
 import {
@@ -8,8 +26,10 @@ import {
   type CandidateBaseFilter,
 } from "./use-candidate-review-session";
 import {
-  selectCandidates,
   settleCandidateSelection,
+  toggleLoadedCandidates,
+  CANDIDATE_SELECTION_LIMIT,
+  canCancelLoadedCandidates,
 } from "./candidate-selection";
 import { downloadPrepared, uploadDirect, pollTransfer } from "./transfers-api";
 import { useImageUrl } from "../../components/use-image-url";
@@ -859,7 +879,7 @@ function AuthorCreateDialog({
   const [sourceLanguage, setSourceLanguage] = useState<SourceLanguage>("ja");
   const [status, setStatus] =
     useState<components["schemas"]["AuthorizationStatus"]>("pending");
-  const [tags, setTags] = useState("");
+  const [tags, setTags] = useState<AuthorTagChoice[]>([]);
   const [notes, setNotes] = useState("");
   const [xNotes, setXNotes] = useState("");
   const [pixivNotes, setPixivNotes] = useState("");
@@ -1035,7 +1055,12 @@ function AuthorCreateDialog({
     await action.run(async () => {
       const result = await unwrap(
         await client.POST("/api/authors/imports", {
-          body: { rows: preview.rows },
+          body: {
+            rows: preview.rows.map(({ errors, ...row }) => {
+              void errors;
+              return row;
+            }),
+          },
         }),
       );
       await onCompleted(`已导入 ${result.createdCount} 位作者`);
@@ -1118,10 +1143,7 @@ function AuthorCreateDialog({
                 ...(notes.trim() ? { notes: notes.trim() } : {}),
                 sourceLanguage,
                 authorizationStatus: status,
-                tagNames: tags
-                  .split(/[,，]/)
-                  .map((value) => value.trim())
-                  .filter(Boolean),
+                ...authorTagInput(tags),
                 accounts,
                 idempotencyKey: requestId,
               },
@@ -1486,12 +1508,10 @@ function AuthorCreateDialog({
               <option value="revoked">已撤销</option>
             </SelectField>
           </div>
-          <TextField
-            label="标签"
+          <AuthorTagPicker
             disabled={fieldsDisabled}
-            hint="使用逗号分隔"
             value={tags}
-            onChange={(event) => setTags(event.target.value)}
+            onChange={setTags}
           />
           <label className="ui-field">
             <span className="ui-field__label">作者备注（可选）</span>
@@ -1547,6 +1567,47 @@ function AuthorCreateDialog({
                 检查保存结果
               </Button>
             )}
+            {savedAuthorId &&
+              (progress.current.avatar.resultUnknown ||
+                progress.current.evidence.resultUnknown) && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={action.busy}
+                  onClick={() =>
+                    void action.run(async () => {
+                      const latest = await unwrap(
+                        await client.GET("/api/authors/{id}/managed", {
+                          params: { path: { id: savedAuthorId } },
+                        }),
+                      );
+                      const attachments = await unwrap(
+                        await client.GET(
+                          "/api/authors/{id}/authorization-evidence",
+                          { params: { path: { id: savedAuthorId } } },
+                        ),
+                      );
+                      queryClient.setQueryData(
+                        ["managed-author", savedAuthorId],
+                        latest,
+                      );
+                      queryClient.setQueryData(
+                        ["author-evidence", savedAuthorId],
+                        attachments,
+                      );
+                      if (progress.current.avatar.resetUnknown())
+                        setAvatar(null);
+                      if (progress.current.evidence.resetUnknown())
+                        setEvidence([]);
+                      action.setSuccess(
+                        "已核对作者资料，请重新选择需要补传的文件",
+                      );
+                    })
+                  }
+                >
+                  核对后重新选择文件
+                </Button>
+              )}
             <Button type="submit" loading={action.busy}>
               {savedAuthorId ? "继续保存" : "保存作者"}
             </Button>
@@ -1641,6 +1702,11 @@ export function AuthorDetailPage() {
                 </Button>
               </p>
             )}
+            {user.permissions.includes("authors:admin") && (
+              <div className="workspace-inline-actions">
+                <AuthorArchiveControl author={author} />
+              </div>
+            )}
             <div className="workspace-detail-grid">
               <Surface className="workspace-panel">
                 <h2>基本信息</h2>
@@ -1684,7 +1750,10 @@ export function AuthorDetailPage() {
               {user.permissions.includes("authors:sensitive") && (
                 <AuthorEvidencePanel
                   author={author}
-                  items={evidence.data ?? []}
+                  items={evidence.data}
+                  loading={evidence.isPending}
+                  readError={evidence.isError ? evidence.error.message : ""}
+                  onRetry={() => void evidence.refetch()}
                   onUpdated={async () => {
                     await Promise.all([
                       query.refetch(),
@@ -1713,9 +1782,7 @@ function AuthorEditForm({
   const [displayName, setDisplayName] = useState(author.displayName);
   const [status, setStatus] = useState(author.authorizationStatus);
   const [sourceLanguage, setSourceLanguage] = useState(author.sourceLanguage);
-  const [tags, setTags] = useState(
-    author.tags.map((tag) => tag.name).join("，"),
-  );
+  const [tags, setTags] = useState<AuthorTagChoice[]>(author.tags);
   const [notes, setNotes] = useState(author.notes ?? "");
   const [avatar, setAvatar] = useState<File | null>(null);
   const saved = useRef(false);
@@ -1731,7 +1798,7 @@ function AuthorEditForm({
       setNotes(snapshot.notes ?? "");
       setStatus(snapshot.authorizationStatus);
       setSourceLanguage(snapshot.sourceLanguage);
-      setTags(snapshot.tags.map((tag) => tag.name).join("，"));
+      setTags(snapshot.tags);
       setMetadataDirty(false);
     },
     [],
@@ -1778,10 +1845,7 @@ function AuthorEditForm({
                 notes: notes.trim() || null,
                 sourceLanguage,
                 authorizationStatus: status,
-                tagNames: tags
-                  .split(/[,，]/)
-                  .map((item) => item.trim())
-                  .filter(Boolean),
+                ...authorTagInput(tags),
                 expectedRevision: baselineRevision,
               },
             }),
@@ -1894,13 +1958,12 @@ function AuthorEditForm({
         <option value="expired">已过期</option>
         <option value="revoked">已撤销</option>
       </SelectField>
-      <TextField
-        label="标签"
+      <AuthorTagPicker
         disabled={fieldsDisabled}
         value={tags}
-        onChange={(event) => {
+        onChange={(next) => {
           setMetadataDirty(true);
-          setTags(event.target.value);
+          setTags(next);
         }}
       />
       <label className="ui-field">
@@ -1944,6 +2007,37 @@ function AuthorEditForm({
             </Button>
           </div>
         )}
+      {upload.current.resultUnknown && (
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={action.busy}
+          onClick={() =>
+            void action.run(async () => {
+              const latest = await unwrap(
+                await client.GET("/api/authors/{id}/managed", {
+                  params: { path: { id: author.id } },
+                }),
+              );
+              loadSnapshot(latest);
+              queryClient.setQueryData(["managed-author", author.id], latest);
+              const publicSnapshot = await unwrap(
+                await client.GET("/api/authors/{id}", {
+                  params: { path: { id: author.id } },
+                }),
+              );
+              queryClient.setQueryData(["author", author.id], publicSnapshot);
+              queryClient.removeQueries({
+                queryKey: ["author-avatar", author.id],
+              });
+              if (upload.current.resetUnknown()) setAvatar(null);
+              action.setSuccess("已核对最新资料，请重新选择头像");
+            })
+          }
+        >
+          核对后重新选择文件
+        </Button>
+      )}
       <Feedback error={action.error} success={action.success} />
       <Button size="sm" type="submit" loading={action.busy}>
         {detailsSaved ? (avatar ? "继续上传头像" : "确认保存结果") : "保存作者"}
@@ -1954,14 +2048,26 @@ function AuthorEditForm({
 
 function AuthorEvidencePanel({
   author,
-  items,
+  items: loadedItems,
+  loading,
+  readError,
+  onRetry,
   onUpdated,
 }: {
   author: Author;
-  items: components["schemas"]["AuthorEvidenceDto"][];
+  items?: components["schemas"]["AuthorEvidenceDto"][];
+  loading: boolean;
+  readError: string;
+  onRetry: () => void;
   onUpdated: () => Promise<unknown>;
 }) {
   const action = useAction();
+  const items = loadedItems ?? [];
+  const unavailable = !loadedItems || Boolean(readError);
+  const [removing, setRemoving] = useState<{
+    id: string;
+    expectedRevision: number;
+  } | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const uploadProgress = useRef(new AuthorImageUpload());
   async function upload(event: FormEvent<HTMLFormElement>) {
@@ -2012,10 +2118,21 @@ function AuthorEvidencePanel({
       <details>
         <summary>
           <span>授权凭证</span>
-          <Badge tone={items.length ? "success" : "warning"}>
-            {items.length ? `${items.length} 张` : "待补充"}
-          </Badge>
+          {loadedItems && (
+            <Badge tone={items.length ? "success" : "warning"}>
+              {items.length ? `${items.length} 张` : "待补充"}
+            </Badge>
+          )}
         </summary>
+        {readError && (
+          <p className="account-error" role="alert">
+            凭证读取失败：{readError}
+            <Button type="button" size="sm" variant="ghost" onClick={onRetry}>
+              重试读取
+            </Button>
+          </p>
+        )}
+        {loading && !loadedItems && <p role="status">正在读取凭证…</p>}
         {items.length ? (
           <div className="workspace-evidence-grid">
             {items.map((item, index) => (
@@ -2027,7 +2144,7 @@ function AuthorEvidencePanel({
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={action.busy || index === 0}
+                      disabled={action.busy || unavailable || index === 0}
                       onClick={() => void move(index, -1)}
                     >
                       <ArrowUp size={14} />
@@ -2036,7 +2153,9 @@ function AuthorEvidencePanel({
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={action.busy || index === items.length - 1}
+                      disabled={
+                        action.busy || unavailable || index === items.length - 1
+                      }
                       onClick={() => void move(index, 1)}
                     >
                       <ArrowDown size={14} />
@@ -2045,24 +2164,14 @@ function AuthorEvidencePanel({
                     <Button
                       size="sm"
                       variant="danger"
-                      disabled={action.busy}
-                      onClick={() =>
-                        void action.run(async () => {
-                          await unwrap(
-                            await client.DELETE(
-                              "/api/authors/{id}/authorization-evidence/{evidenceId}",
-                              {
-                                params: {
-                                  path: { id: author.id, evidenceId: item.id },
-                                },
-                                body: { expectedRevision: author.revision },
-                              },
-                            ),
-                          );
-                          await onUpdated();
-                          action.setSuccess("授权凭证已移除");
-                        })
-                      }
+                      disabled={action.busy || unavailable}
+                      onClick={() => {
+                        action.clearError();
+                        setRemoving({
+                          id: item.id,
+                          expectedRevision: author.revision,
+                        });
+                      }}
                     >
                       移除
                     </Button>
@@ -2071,10 +2180,35 @@ function AuthorEvidencePanel({
               </figure>
             ))}
           </div>
-        ) : (
+        ) : loadedItems && !readError ? (
           <p className="workspace-muted">
             有效授权尚未附凭证，不阻塞维护，但建议尽快补充。
           </p>
+        ) : null}
+        {removing && (
+          <AuthorEvidenceRemovalDialog
+            busy={action.busy}
+            error={action.error}
+            onCancel={() => setRemoving(null)}
+            onConfirm={() =>
+              void action.run(async () => {
+                await unwrap(
+                  await client.DELETE(
+                    "/api/authors/{id}/authorization-evidence/{evidenceId}",
+                    {
+                      params: {
+                        path: { id: author.id, evidenceId: removing.id },
+                      },
+                      body: { expectedRevision: removing.expectedRevision },
+                    },
+                  ),
+                );
+                setRemoving(null);
+                await onUpdated();
+                action.setSuccess("授权凭证已移除");
+              })
+            }
+          />
         )}
         <form
           className="workspace-stacked-form"
@@ -2088,13 +2222,42 @@ function AuthorEvidencePanel({
               setFiles(next);
               uploadProgress.current = new AuthorImageUpload();
             }}
-            disabled={action.busy || uploadProgress.current.locked}
+            disabled={
+              action.busy || unavailable || uploadProgress.current.locked
+            }
           />
+          {uploadProgress.current.resultUnknown && (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={action.busy || unavailable}
+              onClick={() =>
+                void action.run(async () => {
+                  await unwrap(
+                    await client.GET("/api/authors/{id}/managed", {
+                      params: { path: { id: author.id } },
+                    }),
+                  );
+                  await unwrap(
+                    await client.GET(
+                      "/api/authors/{id}/authorization-evidence",
+                      { params: { path: { id: author.id } } },
+                    ),
+                  );
+                  if (uploadProgress.current.resetUnknown()) setFiles([]);
+                  await onUpdated();
+                  action.setSuccess("已核对现有凭证，请重新选择需要补传的文件");
+                })
+              }
+            >
+              核对后重新选择文件
+            </Button>
+          )}
           <Feedback error={action.error} success={action.success} />
           <Button
             type="submit"
             size="sm"
-            disabled={!files.length}
+            disabled={!files.length || unavailable}
             loading={action.busy}
           >
             上传凭证
@@ -2141,36 +2304,47 @@ function CandidateMediaThumbnail({
 
 function CandidateOrderPanel({
   candidate,
+  draft,
+  saving,
+  onSaveStart,
+  onSaveEnd,
+  onDraftChange,
   onSaved,
 }: {
   candidate: Candidate;
+  draft?: CandidateOrderDraft;
+  saving: boolean;
+  onSaveStart: () => boolean;
+  onSaveEnd: () => void;
+  onDraftChange: (draft: CandidateOrderDraft) => void;
   onSaved: () => Promise<unknown>;
 }) {
   const action = useAction();
-  const [media, setMedia] = useState(candidate.media);
-  useEffect(() => setMedia(candidate.media), [candidate.media]);
+  const current = candidateOrderDraft(draft, candidate);
+  const media = current.media;
+  const conflict = current.dirty && candidateOrderConflict(current, candidate);
   function move(index: number, offset: number) {
-    const target = index + offset;
-    if (target < 0 || target >= media.length) return;
-    setMedia((current) => {
-      const next = [...current];
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
+    onDraftChange(moveCandidateOrder(current, candidate, index, offset));
   }
   async function save() {
+    if (!onSaveStart()) return;
     await action.run(async () => {
-      await unwrap(
-        await client.POST("/api/candidates/{id}/media-order", {
-          params: { path: { id: candidate.id } },
-          body: {
-            expectedRevision: candidate.revision,
-            mediaIds: media.map((item) => item.id),
-          },
-        }),
-      );
-      await onSaved();
-      action.setSuccess("图片顺序已保存");
+      try {
+        const saved = await unwrap(
+          await client.POST("/api/candidates/{id}/media-order", {
+            params: { path: { id: candidate.id } },
+            body: {
+              expectedRevision: current.expectedRevision,
+              mediaIds: media.map((item) => item.id),
+            },
+          }),
+        );
+        onDraftChange(candidateOrderDraft(undefined, saved));
+        await onSaved();
+        action.setSuccess("图片顺序已保存");
+      } finally {
+        onSaveEnd();
+      }
     });
   }
   return (
@@ -2186,7 +2360,7 @@ function CandidateOrderPanel({
                 type="button"
                 size="sm"
                 variant="ghost"
-                disabled={index === 0}
+                disabled={saving || action.busy || conflict || index === 0}
                 leadingIcon={<ArrowUp size={15} />}
                 onClick={() => move(index, -1)}
               >
@@ -2196,7 +2370,12 @@ function CandidateOrderPanel({
                 type="button"
                 size="sm"
                 variant="ghost"
-                disabled={index === media.length - 1}
+                disabled={
+                  saving ||
+                  action.busy ||
+                  conflict ||
+                  index === media.length - 1
+                }
                 leadingIcon={<ArrowDown size={15} />}
                 onClick={() => move(index, 1)}
               >
@@ -2206,8 +2385,29 @@ function CandidateOrderPanel({
           </div>
         ))}
       </div>
+      {conflict && (
+        <p role="alert" className="account-error">
+          帖子图片或版本已变化，当前调整仍保留。
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={saving}
+            onClick={() =>
+              onDraftChange(candidateOrderDraft(undefined, candidate))
+            }
+          >
+            放弃调整并加载最新顺序
+          </Button>
+        </p>
+      )}
       <Feedback error={action.error} success={action.success} />
-      <Button size="sm" loading={action.busy} onClick={() => void save()}>
+      <Button
+        size="sm"
+        loading={action.busy}
+        disabled={saving || conflict || !current.dirty}
+        onClick={() => void save()}
+      >
         保存顺序
       </Button>
     </div>
@@ -2267,18 +2467,10 @@ function ManualCandidateUpload({
   const [completed, setCompleted] = useState<CandidateUploadSession | null>(
     null,
   );
-  const [drafts, setDrafts] = useState<
-    Record<
-      string,
-      {
-        authorId: string;
-        text: string;
-        sourceUrl: string;
-        media: Candidate["media"];
-        originalMediaIds: string[];
-      }
-    >
-  >({});
+  const checkpoints = useRef(new ManualUploadCheckpoints());
+  const [drafts, setDrafts] = useState<Record<string, ManualCandidateDraft>>(
+    {},
+  );
   const [recoverableSessionId, setRecoverableSessionId] = useState(
     storedCandidateUploadSessionId,
   );
@@ -2307,9 +2499,6 @@ function ManualCandidateUpload({
                     text: item.candidate.text ?? "",
                     sourceUrl: item.candidate.externalPostUrl ?? "",
                     media: item.candidate.media,
-                    originalMediaIds: item.candidate.media.map(
-                      (media) => media.id,
-                    ),
                   },
                 ],
               ]
@@ -2486,63 +2675,13 @@ function ManualCandidateUpload({
   async function confirmUpload() {
     if (!completed) return;
     await action.run(async () => {
-      const candidates: Candidate[] = [];
-      for (const item of completed.items) {
-        if (!item.candidate) continue;
-        const draft = drafts[item.candidate.id];
-        if (!draft) continue;
-        let current = item.candidate;
-        const mediaIds = draft.media.map((media) => media.id);
-        if (
-          mediaIds.some((id, index) => id !== draft.originalMediaIds[index])
-        ) {
-          current = await unwrap(
-            await client.POST("/api/candidates/{id}/media-order", {
-              params: { path: { id: current.id } },
-              body: { expectedRevision: current.revision, mediaIds },
-            }),
-          );
-        }
-        if (
-          draft.authorId !== current.authorId ||
-          draft.text.trim() !== (current.text ?? "") ||
-          draft.sourceUrl.trim() !== (current.externalPostUrl ?? "")
-        ) {
-          current = await unwrap(
-            await client.PATCH("/api/candidates/{id}/manual-metadata", {
-              params: { path: { id: current.id } },
-              body: {
-                authorId: draft.authorId,
-                text: draft.text.trim() || null,
-                sourceUrl: draft.sourceUrl.trim() || null,
-                expectedRevision: current.revision,
-              },
-            }),
-          );
-        }
-        candidates.push(current);
-      }
-      if (destination === "direct" && candidates.length) {
-        const result = await unwrap(
-          await client.POST("/api/candidates/actions", {
-            body: {
-              action: "import",
-              items: candidates.map((candidate) => ({
-                id: candidate.id,
-                expectedRevision: candidate.revision,
-              })),
-            },
-          }),
-        );
-        const failures = result.results.filter(
-          (item) => !["succeeded", "unchanged"].includes(item.outcome),
-        );
-        if (failures.length) {
-          throw new Error(
-            `${failures.length} 个图组未能直接入库，请在候选池检查`,
-          );
-        }
-      }
+      await checkpoints.current.confirm(
+        completed.items.flatMap((item) =>
+          item.candidate ? [item.candidate] : [],
+        ),
+        drafts,
+        destination,
+      );
       await onUploaded();
       onClose();
     });
@@ -2587,13 +2726,20 @@ function ManualCandidateUpload({
                 <div className="workspace-upload-preview-fields">
                   <AuthorPicker
                     value={draft.authorId}
-                    disabled={action.busy}
+                    disabled={
+                      action.busy ||
+                      checkpoints.current.isImported(candidate.id)
+                    }
                     onValueChange={(value) =>
                       updateDraft(candidate.id, { authorId: value })
                     }
                   />
                   <TextField
                     label="原帖配文（可选）"
+                    disabled={
+                      action.busy ||
+                      checkpoints.current.isImported(candidate.id)
+                    }
                     value={draft.text}
                     maxLength={4000}
                     onChange={(event) =>
@@ -2603,6 +2749,10 @@ function ManualCandidateUpload({
                   <TextField
                     label="来源链接（可选）"
                     type="url"
+                    disabled={
+                      action.busy ||
+                      checkpoints.current.isImported(candidate.id)
+                    }
                     value={draft.sourceUrl}
                     onChange={(event) =>
                       updateDraft(candidate.id, {
@@ -2623,7 +2773,11 @@ function ManualCandidateUpload({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        disabled={index === 0}
+                        disabled={
+                          action.busy ||
+                          checkpoints.current.isImported(candidate.id) ||
+                          index === 0
+                        }
                         onClick={() => movePreview(candidate.id, index, -1)}
                       >
                         前移
@@ -2632,7 +2786,11 @@ function ManualCandidateUpload({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        disabled={index === draft.media.length - 1}
+                        disabled={
+                          action.busy ||
+                          checkpoints.current.isImported(candidate.id) ||
+                          index === draft.media.length - 1
+                        }
                         onClick={() => movePreview(candidate.id, index, 1)}
                       >
                         后移
@@ -2645,6 +2803,7 @@ function ManualCandidateUpload({
           })}
           <SelectField
             label="完成后"
+            disabled={action.busy}
             value={destination}
             onValueChange={(value) =>
               setDestination(value as "direct" | "candidate")
@@ -2658,10 +2817,11 @@ function ManualCandidateUpload({
             <Button
               loading={action.busy}
               disabled={
-                !completed.items.some((item) => item.candidate) ||
-                completed.items.some(
-                  (item) =>
-                    item.candidate && !drafts[item.candidate.id]?.authorId,
+                !checkpoints.current.canConfirm(
+                  completed.items.flatMap((item) =>
+                    item.candidate ? [item.candidate] : [],
+                  ),
+                  drafts,
                 )
               }
               onClick={() => void confirmUpload()}
@@ -2682,7 +2842,6 @@ function ManualCandidateUpload({
           <AuthorPicker
             value={authorId}
             onValueChange={setAuthorId}
-            autoSelectFirst
             disabled={action.busy}
           />
           <TextField
@@ -2697,22 +2856,16 @@ function ManualCandidateUpload({
             value={sourceUrl}
             onChange={(event) => setSourceUrl(event.target.value)}
           />
-          <label className="workspace-file-field">
-            <span>图片或 ZIP</span>
-            <input
-              type="file"
-              aria-label="图片或 ZIP"
-              accept=".zip,image/png,image/jpeg,image/webp,image/gif"
-              multiple
-              required
-              onChange={(event) =>
-                setFiles(Array.from(event.currentTarget.files ?? []))
-              }
-            />
-            <small>
-              最多 20 个文件，每个不超过 25 MiB；单个 ZIP 最多 100 张图片。
-            </small>
-          </label>
+          <ImagePicker
+            label="图片或 ZIP"
+            formats="source"
+            files={files}
+            onChange={setFiles}
+            multiple
+            maxFiles={20}
+            maxFileSize={25 * 1024 * 1024}
+            disabled={action.busy}
+          />
           <Feedback error={action.error} success={action.success} />
           {progress && <p className="workspace-muted">{progress}</p>}
           {recoverableSessionId && !progress && (
@@ -2796,25 +2949,28 @@ function CandidateDescription({ text }: { text: string | null }) {
     observer.observe(wrapper);
     return () => observer.disconnect();
   }, [text]);
-  if (!text) return null;
   return (
     <div ref={container} className="candidate-description">
-      <p
-        ref={paragraph}
-        className={expanded ? undefined : "candidate-description__collapsed"}
-      >
-        {text}
-      </p>
-      {expandable && (
-        <button
-          type="button"
-          className="candidate-description__toggle"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
+      {text && (
+        <p
+          ref={paragraph}
+          className={expanded ? undefined : "candidate-description__collapsed"}
         >
-          {expanded ? "收起全文" : "展开全文"}
-        </button>
+          {text}
+        </p>
       )}
+      <span className="candidate-description-controls">
+        {expandable && (
+          <button
+            type="button"
+            className="candidate-description__toggle"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? "收起全文" : "展开全文"}
+          </button>
+        )}
+      </span>
     </div>
   );
 }
@@ -2843,8 +2999,8 @@ function CandidateAuthorIdentity({ candidate }: { candidate: Candidate }) {
         loading="lazy"
       />
       <div>
-        <h2>{candidate.authorName}</h2>
-        <span>
+        <h2 title={candidate.authorName}>{candidate.authorName}</h2>
+        <span title={candidate.authorHandle ?? undefined}>
           {candidate.authorHandle
             ? `${candidate.platform === "pixiv" ? "p@" : "@"}${candidate.authorHandle}`
             : candidate.platform}
@@ -2881,7 +3037,14 @@ function CandidateGridSection({
   onOpenChange,
   scopeTotal,
   orderingCandidateId,
+  orderDrafts,
+  orderSaving,
+  onOrderSaveStart,
+  onOrderSaveEnd,
+  onOrderingSaved,
+  onOrderDraftChange,
   onToggleOrdering,
+  busy,
 }: {
   status: components["schemas"]["CandidateStatus"];
   group?: CandidateTriageGroup;
@@ -2896,7 +3059,14 @@ function CandidateGridSection({
   scopeTotal?: number;
   onRetryAnalysis: (candidate: Candidate) => void;
   orderingCandidateId: string | null;
+  orderDrafts: Record<string, CandidateOrderDraft>;
+  orderSaving: ReadonlySet<string>;
+  onOrderSaveStart: (id: string) => boolean;
+  onOrderSaveEnd: (id: string) => void;
+  onOrderingSaved: (id: string) => void;
+  onOrderDraftChange: (id: string, draft: CandidateOrderDraft) => void;
   onToggleOrdering: (id: string) => void;
+  busy: boolean;
 }) {
   const user = useAccount();
   const cache = useQueryClient();
@@ -2950,101 +3120,65 @@ function CandidateGridSection({
     );
   }, [cache, group, liveTotal, baseFilter, sessionId]);
   const section = candidateTriageSections.find((item) => item.value === group);
+  const loadedSelection = status !== "imported" &&
+    user.permissions.includes("candidates:manage") && (
+      <div className="workspace-candidate-section-actions">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={busy || !items.length}
+          title={`每批最多选择 ${CANDIDATE_SELECTION_LIMIT} 个帖子`}
+          onClick={() => onSelectLoaded(items)}
+        >
+          {canCancelLoadedCandidates(selected, items)
+            ? "取消当前已加载选择"
+            : "选择当前已加载内容"}
+        </Button>
+      </div>
+    );
   const content = (
     <>
       {items.length ? (
         <div className="workspace-card-grid workspace-media-grid">
           {items.map((candidate) => (
-            <Surface className="workspace-media-card" key={candidate.id}>
-              <CandidateMediaPreview candidate={candidate} />
-              <div className="workspace-card-body">
-                <div className="workspace-card-title">
-                  <CandidateAuthorIdentity candidate={candidate} />
-                  <Badge
-                    tone={
-                      candidate.status === "pending"
-                        ? "warning"
-                        : candidate.status === "imported"
-                          ? "success"
-                          : "neutral"
-                    }
-                  >
-                    {candidateLabels[candidate.status]}
-                  </Badge>
-                </div>
-                <CandidateDescription text={candidate.text} />
-                <CandidateTags
-                  hashtags={candidate.hashtags}
-                  matches={candidate.tagRuleMatches ?? []}
-                  model={
-                    candidate.classificationTags?.[0] ? (
-                      <CandidateClassificationScores
-                        candidateId={candidate.id}
-                        category={candidate.classificationTags[0]}
-                      />
-                    ) : undefined
-                  }
-                />
-                {candidate.triageReasons?.includes("rule_conflict") && (
-                  <p className="candidate-conflict">优先与降级线索冲突</p>
-                )}
-                <footer>
-                  {user.permissions.includes("candidates:manage") && (
-                    <label className="account-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={selected.has(candidate.id)}
-                        onChange={() => onToggle(candidate)}
-                      />
-                      选择
-                    </label>
-                  )}
-                  {candidate.externalPostUrl && (
-                    <a
-                      href={candidate.externalPostUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      原帖 <ExternalLink size={14} />
-                    </a>
-                  )}
-                  {candidate.status === "pending" &&
-                    candidate.media.length > 1 &&
-                    user.permissions.includes("candidates:manage") && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        leadingIcon={<Images size={15} />}
-                        onClick={() => onToggleOrdering(candidate.id)}
-                      >
-                        图片顺序
-                      </Button>
-                    )}
-                  {candidate.canRetryAnalysis &&
-                    user.permissions.includes("candidates:manage") && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => onRetryAnalysis(candidate)}
-                      >
-                        重试识别
-                      </Button>
-                    )}
-                </footer>
-                {orderingCandidateId === candidate.id && (
+            <CandidateCard
+              key={candidate.id}
+              candidate={candidate}
+              statusLabel={candidateLabels[candidate.status]}
+              author={<CandidateAuthorIdentity candidate={candidate} />}
+              description={<CandidateDescription text={candidate.text} />}
+              canManage={user.permissions.includes("candidates:manage")}
+              selected={selected.has(candidate.id)}
+              selectionDisabled={
+                busy ||
+                (!selected.has(candidate.id) &&
+                  selected.size >= CANDIDATE_SELECTION_LIMIT)
+              }
+              onToggle={() => onToggle(candidate)}
+              onRetryAnalysis={() => onRetryAnalysis(candidate)}
+              onToggleOrdering={() => onToggleOrdering(candidate.id)}
+            >
+              {orderingCandidateId === candidate.id &&
+                candidate.status === "pending" && (
                   <CandidateOrderPanel
                     candidate={candidate}
+                    draft={orderDrafts[candidate.id]}
+                    saving={orderSaving.has(candidate.id)}
+                    onSaveStart={() => onOrderSaveStart(candidate.id)}
+                    onSaveEnd={() => onOrderSaveEnd(candidate.id)}
+                    onDraftChange={(draft) =>
+                      onOrderDraftChange(candidate.id, draft)
+                    }
                     onSaved={async () => {
-                      onToggleOrdering(candidate.id);
+                      onOrderingSaved(candidate.id);
                       await queryClient.invalidateQueries({
                         queryKey: ["candidates"],
                       });
                     }}
                   />
                 )}
-              </div>
-            </Surface>
+            </CandidateCard>
           ))}
         </div>
       ) : !query.isPending ? (
@@ -3065,7 +3199,13 @@ function CandidateGridSection({
       )}
     </>
   );
-  if (!section) return <PageState query={query}>{() => content}</PageState>;
+  if (!section)
+    return (
+      <>
+        {loadedSelection}
+        <PageState query={query}>{() => content}</PageState>
+      </>
+    );
   return (
     <details
       id={`candidate-section-${group}`}
@@ -3079,18 +3219,7 @@ function CandidateGridSection({
         </span>
         <Badge>{total}</Badge>
       </summary>
-      {open && user.permissions.includes("candidates:manage") && (
-        <div className="workspace-candidate-section-actions">
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!items.length}
-            onClick={() => onSelectLoaded(items)}
-          >
-            选择当前已加载内容
-          </Button>
-        </div>
-      )}
+      {open && loadedSelection}
       {open && <PageState query={query}>{() => content}</PageState>}
     </details>
   );
@@ -3103,12 +3232,36 @@ export function CandidatesPage() {
   const [status, setStatus] = useState("pending");
   const [language, setLanguage] = useState<SourceLanguage | "all">("all");
   const [fetchedRange, setFetchedRange] = useState("all");
-  const [search, setSearch] = useState("");
+  const [authorFilter, setAuthorFilter] =
+    useState<CandidateAuthorChoice | null>(null);
+  const [orderDrafts, setOrderDrafts] = useState<
+    Record<string, CandidateOrderDraft>
+  >({});
+  const changeOrderDraft = (id: string, draft: CandidateOrderDraft) =>
+    setOrderDrafts((current) => ({ ...current, [id]: draft }));
+  const orderSaveLocks = useRef(new Set<string>());
+  const [orderSaving, setOrderSaving] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const startOrderSave = (id: string) => {
+    if (orderSaveLocks.current.has(id)) return false;
+    orderSaveLocks.current.add(id);
+    setOrderSaving(new Set(orderSaveLocks.current));
+    return true;
+  };
+  const endOrderSave = (id: string) => {
+    orderSaveLocks.current.delete(id);
+    setOrderSaving(new Set(orderSaveLocks.current));
+  };
   const [selected, setSelected] = useState<Map<string, number>>(
     () => new Map(),
   );
   const [showUpload, setShowUpload] = useState(false);
   const [showRules, setShowRules] = useState(false);
+  const [discardIntent, setDiscardIntent] = useState<Map<
+    string,
+    number
+  > | null>(null);
   const lowStorageKey = `comiku.candidates.low-priority-open:${user.id}`;
   const [lowOpen, setLowOpen] = useState(() => {
     try {
@@ -3152,7 +3305,7 @@ export function CandidatesPage() {
     () => ({
       status: status as components["schemas"]["CandidateStatus"],
       ...(language === "all" ? {} : { sourceLanguage: language }),
-      ...(search.trim() ? { search: search.trim() } : {}),
+      ...(authorFilter ? { authorId: authorFilter.id } : {}),
       ...(fetchedRange === "all"
         ? {}
         : {
@@ -3161,7 +3314,7 @@ export function CandidatesPage() {
             ).toISOString(),
           }),
     }),
-    [status, language, search, fetchedRange],
+    [status, language, authorFilter, fetchedRange],
   );
   const review = useCandidateReviewSession(baseFilter);
   const runCandidateAction = action.run;
@@ -3178,11 +3331,15 @@ export function CandidatesPage() {
     });
   }
   const batch = useCallback(
-    async (kind: components["schemas"]["CandidateAction"]) => {
-      const items = [...selected].map(([id, expectedRevision]) => ({
+    async (
+      kind: components["schemas"]["CandidateAction"],
+      submitted = selected,
+    ) => {
+      const items = [...submitted].map(([id, expectedRevision]) => ({
         id,
         expectedRevision,
       }));
+      if (!items.length) return;
       await runCandidateAction(async () => {
         const result = await unwrap(
           await client.POST("/api/candidates/actions", {
@@ -3197,7 +3354,7 @@ export function CandidatesPage() {
           invalidateWorkViews(),
         ]);
         setSelected((current) =>
-          settleCandidateSelection(current, result.results),
+          settleCandidateSelection(current, result.results, submitted),
         );
         setCandidateSuccess(
           failures.length
@@ -3214,61 +3371,68 @@ export function CandidatesPage() {
       selectedCount
         ? {
             content: (
-              <div className="workspace-topbar-actions">
-                <strong>已选择 {selectedCount} 项候选</strong>
-                {status === "pending" ? (
-                  <>
-                    <Button
-                      size="sm"
-                      loading={action.busy}
-                      onClick={() => void batch("import")}
-                    >
-                      入库
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      loading={action.busy}
-                      onClick={() => void batch("discard")}
-                    >
-                      忽略
-                    </Button>
-                  </>
-                ) : (
+              <div className="candidate-batch-actions">
+                <div className="candidate-batch-selection">
+                  <strong>已选择 {selectedCount} 项候选</strong>
                   <Button
                     size="sm"
-                    loading={action.busy}
-                    onClick={() => void batch("restore")}
+                    variant="ghost"
+                    disabled={action.busy}
+                    onClick={() => setSelected(new Map())}
                   >
-                    恢复待处理
+                    取消选择
                   </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setSelected(new Map())}
-                >
-                  清除选择
-                </Button>
+                </div>
+                <div className="candidate-batch-operations">
+                  {status === "pending" ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={action.busy}
+                        onClick={() => setDiscardIntent(new Map(selected))}
+                      >
+                        忽略所选（{selectedCount}）
+                      </Button>
+                      <Button
+                        size="sm"
+                        loading={action.busy}
+                        onClick={() => void batch("import")}
+                      >
+                        入库所选（{selectedCount}）
+                      </Button>
+                    </>
+                  ) : status === "discarded" ? (
+                    <Button
+                      size="sm"
+                      loading={action.busy}
+                      onClick={() => void batch("restore")}
+                    >
+                      恢复所选（{selectedCount}）
+                    </Button>
+                  ) : null}
+                </div>
               </div>
             ),
             collapsedLabel: `已选 ${selectedCount}`,
           }
         : null,
-    [action.busy, batch, selectedCount, status],
+    [action.busy, batch, selectedCount, status, selected],
   );
   useTopbarActions(topbarRegistration);
   return (
     <PermissionGate permission="candidates:read">
+      <CandidateDraftLeaveGuard
+        dirty={Object.values(orderDrafts).some((draft) => draft.dirty)}
+      />
       <SectionHeading title="候选池">
         筛选已抓取的图片组，批量入库为作品。
       </SectionHeading>
       <Toolbar>
-        <SearchField
-          placeholder="搜索作者昵称或 @账号"
-          value={search}
-          onChange={(event) => {
-            setSearch(event.target.value);
+        <CandidateAuthorFilter
+          value={authorFilter}
+          onChange={(value) => {
+            setAuthorFilter(value);
             setSelected(new Map());
           }}
         />
@@ -3368,6 +3532,17 @@ export function CandidatesPage() {
         />
       )}
       <Feedback error={review.error ?? action.error} success={action.success} />
+      {discardIntent && (
+        <CandidateDiscardDialog
+          count={discardIntent.size}
+          onCancel={() => setDiscardIntent(null)}
+          onConfirm={() => {
+            const submitted = discardIntent;
+            setDiscardIntent(null);
+            void batch("discard", submitted);
+          }}
+        />
+      )}
       {status === "pending" ? (
         <div className="workspace-candidate-sections">
           {candidateTriageSections.map((section) => (
@@ -3383,12 +3558,15 @@ export function CandidatesPage() {
                 setSelected((current) => {
                   const next = new Map(current);
                   if (next.has(candidate.id)) next.delete(candidate.id);
-                  else next.set(candidate.id, candidate.revision);
+                  else if (next.size < CANDIDATE_SELECTION_LIMIT)
+                    next.set(candidate.id, candidate.revision);
                   return next;
                 })
               }
               onSelectLoaded={(candidates) =>
-                setSelected((current) => selectCandidates(current, candidates))
+                setSelected((current) =>
+                  toggleLoadedCandidates(current, candidates),
+                )
               }
               open={
                 section.value === "low_priority"
@@ -3398,7 +3576,18 @@ export function CandidatesPage() {
               onOpenChange={(open) => changeGroupOpen(section.value, open)}
               scopeTotal={review.session?.counts[section.value]}
               onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
+              orderDrafts={orderDrafts}
+              orderSaving={orderSaving}
+              onOrderSaveStart={startOrderSave}
+              onOrderSaveEnd={endOrderSave}
+              onOrderingSaved={(id) =>
+                setOrderingCandidateId((current) =>
+                  current === id ? null : current,
+                )
+              }
+              onOrderDraftChange={changeOrderDraft}
               orderingCandidateId={orderingCandidateId}
+              busy={action.busy}
               onToggleOrdering={(id) =>
                 setOrderingCandidateId((current) =>
                   current === id ? null : id,
@@ -3418,13 +3607,29 @@ export function CandidatesPage() {
             setSelected((current) => {
               const next = new Map(current);
               if (next.has(candidate.id)) next.delete(candidate.id);
-              else next.set(candidate.id, candidate.revision);
+              else if (next.size < CANDIDATE_SELECTION_LIMIT)
+                next.set(candidate.id, candidate.revision);
               return next;
             })
           }
-          onSelectLoaded={() => undefined}
+          onSelectLoaded={(candidates) =>
+            setSelected((current) =>
+              toggleLoadedCandidates(current, candidates),
+            )
+          }
           onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
+          orderDrafts={orderDrafts}
+          orderSaving={orderSaving}
+          onOrderSaveStart={startOrderSave}
+          onOrderSaveEnd={endOrderSave}
+          onOrderingSaved={(id) =>
+            setOrderingCandidateId((current) =>
+              current === id ? null : current,
+            )
+          }
+          onOrderDraftChange={changeOrderDraft}
           orderingCandidateId={orderingCandidateId}
+          busy={action.busy}
           onToggleOrdering={(id) =>
             setOrderingCandidateId((current) => (current === id ? null : id))
           }

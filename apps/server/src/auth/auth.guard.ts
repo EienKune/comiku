@@ -46,7 +46,9 @@ export class AuthGuard implements CanActivate {
           "请求来源或格式无效，请从 Comiku 页面操作",
         );
       }
-      this.rate.check(`write-ip:${req.ip}`, 3000);
+      if (policy?.rateClass === "session-activity")
+        this.rate.check(`activity-ip:${req.ip}`, 2400, 60_000);
+      else this.rate.check(`write-ip:${req.ip}`, 3000);
     }
     if (policy?.public) return true;
     const matches = (req.headers.cookie ?? "")
@@ -58,7 +60,11 @@ export class AuthGuard implements CanActivate {
       matches[0].slice(SESSION_COOKIE.length + 1),
     );
     req.actor = actor;
-    if (isWrite) this.rate.check(`write-user:${actor.userId}`, 600);
+    if (isWrite) {
+      if (policy?.rateClass === "session-activity")
+        this.rate.check(`activity-user:${actor.userId}`, 240, 60_000);
+      else this.rate.check(`write-user:${actor.userId}`, 600);
+    }
     if (!policy?.permission || !user.permissions.includes(policy.permission))
       throw new ForbiddenException("没有执行此操作的权限");
     if (user.mustChangePassword && !policy.allowPasswordChange)

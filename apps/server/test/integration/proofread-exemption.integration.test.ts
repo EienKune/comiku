@@ -52,7 +52,14 @@ test("proofread exemption preserves versions, explicit claim consent, qualificat
           const translations = new TranslationsService(facade, files);
           const works = new WorksService(facade, files, translations);
           const publishing = new PublishingService(facade, files);
-          const users = new UsersService(facade, files);
+          const users = new UsersService(
+            facade,
+            files,
+            parseEnvironment({
+              NODE_ENV: "test",
+              DATABASE_URL: process.env.TEST_DATABASE_URL,
+            }),
+          );
           const password = "exemption-fixture-password";
           const passwordHash = await hashPassword(password);
           async function member(roles: Role[], exemption = false) {

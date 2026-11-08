@@ -1,27 +1,27 @@
 .candidate-tags {
-  display: grid;
-  min-width: 0;
-  gap: var(--space-2);
-}
-.candidate-tags__featured,
-.candidate-tags__ordinary {
+  --candidate-tag-gap: 6px;
+  position: relative;
   display: flex;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--candidate-tag-gap);
 }
-.candidate-tags__featured > * {
+.candidate-tags__model {
+  display: contents;
+}
+.candidate-tags__model > * {
+  flex: 0 0 auto;
   min-width: 0;
   max-width: 100%;
 }
-.candidate-tags__featured .ui-badge {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.candidate-tags__model:has(> :nth-child(2)) > * {
+  max-width: calc((100% - var(--candidate-tag-gap) - 1px) / 2);
 }
-.candidate-tags__trigger,
-.candidate-tags__more {
+.candidate-tags__trigger {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: min(100%, 10rem);
   border: 0;
   border-radius: var(--radius-pill);
   padding: 0;
@@ -30,20 +30,39 @@
   font: inherit;
   cursor: pointer;
 }
-.candidate-tags__ordinary {
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
+.candidate-tags__trigger--featured {
+  max-width: min(100%, var(--candidate-tags-featured-max, 10rem));
 }
-.candidate-tags__ordinary-tag {
+.candidate-tags__trigger .ui-badge,
+.candidate-tags__model .ui-badge {
+  display: block;
+  box-sizing: border-box;
+  max-width: 100%;
   overflow: hidden;
+  line-height: 1.625rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .candidate-tags__more {
+  max-width: 100%;
+}
+.candidate-tags__more,
+[data-candidate-more-measure] {
+  font-variant-numeric: tabular-nums;
+}
+.candidate-tags__measure {
+  position: absolute;
+  inset: 0 0 auto;
+  display: flex;
+  height: 0;
+  overflow: hidden;
+  contain: strict;
+  visibility: hidden;
+  pointer-events: none;
+}
+.candidate-tags__measure > * {
   flex: 0 0 auto;
-  padding: 2px 6px;
-  color: var(--color-text-soft);
-  font-weight: var(--font-weight-control);
+  white-space: nowrap;
 }
 .candidate-tag-overview {
   position: fixed;

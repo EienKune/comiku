@@ -39,6 +39,65 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+test("a missing receipt stops automatic uploads until explicit reset and file reselection", async () => {
+  vi.stubGlobal("crypto", {
+    subtle: { digest: async () => new ArrayBuffer(32) },
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 500 })),
+  );
+  const post = vi.spyOn(client, "POST").mockResolvedValue(ok(session("known")));
+  vi.spyOn(client, "GET").mockResolvedValue({
+    error: { message: "上传会话不存在" },
+    response: new Response(null, { status: 404 }),
+  } as never);
+  const upload = new AuthorImageUpload();
+  await expect(upload.upload(input, [file("one.png")])).rejects.toThrow(
+    "上传失败",
+  );
+  expect(upload.resetUnknown()).toBe(false);
+  await expect(upload.upload(input, [file("one.png")])).rejects.toThrow(/核对/);
+  expect(upload.resultUnknown).toBe(true);
+  expect(upload.locked).toBe(true);
+  await expect(upload.upload(input, [file("one.png")])).rejects.toThrow(/核对/);
+  expect(post).toHaveBeenCalledOnce();
+  expect(upload.resetUnknown()).toBe(true);
+  expect(upload.locked).toBe(false);
+  expect(upload.resultUnknown).toBe(false);
+  expect(post).toHaveBeenCalledOnce();
+});
+
+test.each(["permission", "network"])(
+  "%s failure preserves recovery instead of permitting replacement",
+  async (kind) => {
+    vi.stubGlobal("crypto", {
+      subtle: { digest: async () => new ArrayBuffer(32) },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 500 })),
+    );
+    const post = vi
+      .spyOn(client, "POST")
+      .mockResolvedValue(ok(session("known")));
+    const get = vi.spyOn(client, "GET");
+    if (kind === "permission")
+      get.mockResolvedValue({
+        error: { message: "权限已变化" },
+        response: new Response(null, { status: 403 }),
+      } as never);
+    else get.mockRejectedValue(new Error("网络中断"));
+    const upload = new AuthorImageUpload();
+    await expect(upload.upload(input, [file("one.png")])).rejects.toThrow();
+    await expect(upload.upload(input, [file("one.png")])).rejects.toThrow();
+    expect(upload.resultUnknown).toBe(false);
+    expect(upload.locked).toBe(true);
+    expect(upload.resetUnknown()).toBe(false);
+    expect(post).toHaveBeenCalledOnce();
+  },
+);
+
 test("a partial transfer retries only unfinished PUTs in the same attachment session", async () => {
   vi.stubGlobal("crypto", {
     subtle: { digest: async () => new ArrayBuffer(32) },

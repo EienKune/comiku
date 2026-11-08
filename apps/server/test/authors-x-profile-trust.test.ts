@@ -51,6 +51,8 @@ function fixture(
     adapterStates: [],
   };
   const db = {
+    $queryRaw: async () => [],
+    sourceAdapterState: { updateMany: async () => ({ count: 0 }) },
     author: { findFirst: async () => ({ id: "author" }) },
     fileObject: {
       findFirst: async ({ where }: { where: { id: string } }) =>
@@ -219,6 +221,30 @@ test("editing handle or enabling X collection requires proof but pausing and met
   assert.equal(saved.externalUserId, "42");
   assert.equal(saved.handle, "latest");
   assert.equal(row().avatarFileObjectId, null);
+});
+
+test("canonical X handle maintenance does not require profile synchronization", async () => {
+  for (const handle of [
+    " @OLD ",
+    "https://x.com/old",
+    "https://twitter.com/old",
+  ]) {
+    const { service, row } = fixture();
+    const saved = await service.updateAccount(
+      "author",
+      "account",
+      {
+        handle,
+        notes: "maintenance",
+        fetchEnabled: false,
+        firstSyncMode: "none",
+        expectedRevision: 0,
+      },
+      "actor",
+    );
+    assert.equal(saved.handle?.toLowerCase(), "old");
+    assert.equal(row().notes, "maintenance");
+  }
 });
 
 test("same-identity proof refresh retains the observed avatar when its download fails", async () => {

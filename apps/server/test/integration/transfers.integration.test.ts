@@ -273,9 +273,9 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
     await run(expired.id, "direct_author_avatar");
     assert.equal(
       (await app.get(DirectUploadsService).get(source.id, expired.id)).status,
-      "failed",
+      "completed",
     );
-    const interrupted = await prepareUpload("author_avatar", authorId, 3);
+    const interrupted = await prepareUpload("author_avatar", authorId, 4);
     const interruptedJob = await db.backgroundJob.findFirstOrThrow({
       where: { resourceId: interrupted.id },
     });
@@ -296,7 +296,7 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
     loseLease.mock.restore();
     assert.equal(
       (await db.author.findUniqueOrThrow({ where: { id: authorId } })).revision,
-      3,
+      4,
     );
     assert.equal(
       (
@@ -317,7 +317,7 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
     );
     assert.equal(
       (await db.author.findUniqueOrThrow({ where: { id: authorId } })).revision,
-      4,
+      5,
     );
     const original = await files.store({
       body: png,
@@ -569,6 +569,10 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
         where: { id: expired.id },
       })
     ).manifest as { key: string }[];
+    await db.directUploadSession.update({
+      where: { id: expired.id },
+      data: { terminalAt: new Date(Date.now() - 20 * 60_000) },
+    });
     const deleted = mock.method(storage, "delete", async () => {
       throw new Error("Synthetic cleanup failure");
     });
@@ -580,6 +584,19 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
     deleted.mock.restore();
     await app.get(DirectUploadsService).cleanupExpired();
     assert.equal(await storage.head(expiredManifest[0].key), null);
+    assert.equal(
+      await db.directUploadSession.count({ where: { id: expired.id } }),
+      1,
+    );
+    assert.deepEqual(
+      (await app.get(DirectUploadsService).get(source.id, expired.id)).files,
+      [],
+    );
+    await db.directUploadSession.update({
+      where: { id: expired.id },
+      data: { terminalAt: new Date(Date.now() - 8 * 86_400_000) },
+    });
+    await app.get(DirectUploadsService).cleanupExpired();
     assert.equal(
       await db.directUploadSession.count({ where: { id: expired.id } }),
       0,

@@ -9,7 +9,8 @@ const base = {
   displayName: "Manually edited name",
   sourceLanguage: "ja" as const,
   authorizationStatus: "authorized" as const,
-  tagNames: [],
+  existingTags: [],
+  newTagNames: [],
 };
 function fixture() {
   const proofs = new ProfileProofs();
@@ -47,6 +48,7 @@ function fixture() {
     externalAccounts: [],
   };
   const db = {
+    $executeRaw: async () => 1,
     $queryRaw: async () => [],
     user: { count: async () => 1 },
     author: {

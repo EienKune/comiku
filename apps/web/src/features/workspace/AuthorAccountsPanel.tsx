@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
-import { Button, Badge, Surface, TextField } from "../../components/ui";
+import { Button, Surface, TextField } from "../../components/ui";
 import { OptionalSection } from "../../components/OptionalSection";
 import { PlatformLinks } from "../../components/PlatformLinks";
 import { useAccount } from "../account/account-context";
@@ -11,10 +11,7 @@ import { useAction } from "../account/use-action";
 import { useAuthorCollection } from "./author-collection";
 import { AuthorCollectionFields } from "./AuthorCollectionFields";
 import { preserveProfileAvatar } from "./profile-avatar";
-import {
-  sourceAdapterLabels,
-  sourceAdapterHealthLabels,
-} from "./source-labels";
+import { canonicalXHandle } from "./x-account-handle";
 
 type Account = components["schemas"]["ExternalAccountDto"];
 type Summary = components["schemas"]["ExternalAccountSummaryDto"];
@@ -130,69 +127,6 @@ export function AuthorAccountsPanel({
                         ? "自动抓取已启用"
                         : "自动抓取已暂停"}
                     </small>
-                  )}
-                  {managed && managed.adapterStates.length > 0 && (
-                    <div className="workspace-adapter-list">
-                      {managed.adapterStates.map((state) => (
-                        <span key={state.adapterKey}>
-                          <Badge
-                            tone={
-                              state.health === "healthy" ? "success" : "neutral"
-                            }
-                          >
-                            {sourceAdapterLabels[state.adapterKey] ??
-                              state.adapterKey}{" "}
-                            ·{" "}
-                            {sourceAdapterHealthLabels[state.health] ??
-                              state.health}
-                          </Badge>
-                          {state.lastErrorMessage && (
-                            <small>{state.lastErrorMessage}</small>
-                          )}
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            disabled={
-                              action.busy ||
-                              (!state.enabled &&
-                                (Boolean(capabilities.error) ||
-                                  !capabilities.data?.some(
-                                    (item) =>
-                                      item.platform === account.platform &&
-                                      item.adapterKey === state.adapterKey &&
-                                      item.available,
-                                  )))
-                            }
-                            onClick={() =>
-                              void action.run(async () => {
-                                await unwrap(
-                                  await client.PATCH(
-                                    "/api/authors/{authorId}/accounts/{id}/adapters/{adapterKey}",
-                                    {
-                                      params: {
-                                        path: {
-                                          authorId,
-                                          id: account.id,
-                                          adapterKey: state.adapterKey,
-                                        },
-                                      },
-                                      body: {
-                                        enabled: !state.enabled,
-                                        expectedRevision: state.revision,
-                                      },
-                                    },
-                                  ),
-                                );
-                                await refresh();
-                                action.setSuccess("抓取通道设置已保存");
-                              })
-                            }
-                          >
-                            {state.enabled ? "停用通道" : "启用通道"}
-                          </Button>
-                        </span>
-                      ))}
-                    </div>
                   )}
                 </div>
                 {managed && (
@@ -390,23 +324,37 @@ function AccountEditor({
         throw new Error("Pixiv 用户 ID 必须是主页 /users/ 后的数字");
       if (!externalUserId.trim())
         throw new Error("请先同步 X 资料，获取可信平台身份。");
+      const canonicalHandle =
+        platform === "x" && handle.trim() ? canonicalXHandle(handle) : null;
+      const handleChanged =
+        platform === "x" &&
+        (canonicalHandle?.toLowerCase() ?? null) !==
+          (account?.handle
+            ? canonicalXHandle(account.handle).toLowerCase()
+            : null);
       if (
         platform === "x" &&
         (!account ||
-          handle.toLowerCase() !== (account.handle ?? "").toLowerCase() ||
+          handleChanged ||
           (fetchEnabled && !account.fetchEnabled)) &&
         !profile
       )
         throw new Error("请先同步 X 资料后保存账号。");
       collection.validate();
       collection.freeze();
+      const profileChanged =
+        !account ||
+        handleChanged ||
+        (fetchEnabled && !account.fetchEnabled) ||
+        Boolean(profile?.avatarFileObjectId);
       const fields = {
-        handle: platform === "x" ? handle : null,
+        handle: canonicalHandle,
         displayNameSnapshot: nickname.trim() || null,
         notes: notes.trim() || null,
         fetchEnabled,
         firstSyncMode,
         ...(profile &&
+        profileChanged &&
         (platform === "x" || profile.externalUserId === externalUserId.trim())
           ? {
               avatarFileObjectId: profile.avatarFileObjectId,
@@ -470,7 +418,7 @@ function AccountEditor({
               label="X @账号"
               disabled={action.busy}
               hint="输入 @ 后的名称，也可粘贴 X 主页地址。"
-              required
+              required={!account}
               value={handle}
               onChange={(event) => {
                 setHandle(event.target.value);

@@ -45,7 +45,7 @@ Account ID 为 32 位十六进制。实现根据 Account ID 生成 S3 endpoint�
 
 Bucket 保持私有，CORS 精确允许当前浏览器 origin，方法为 GET/PUT/HEAD，允许 content-type、x-amz-meta-sha256，按需暴露 ETag。浏览器直接向签名 URL 上传/下载，API 和 worker 负责权限、HEAD/魔数/摘要、解包及采用校验。业务对象与备份对象使用独立 Bucket 和凭据。
 
-只能给 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/`、`staging/direct-upload/` 设置一日过期规则；使用 `R2_KEY_PREFIX` 时规则也须包含该前缀。不要给所有业务对象统一短期过期。原图、缩略图、可恢复版本、交接和发布历史各有引用与清理规则。
+只能给 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/` 设置一日过期规则；使用 `R2_KEY_PREFIX` 时规则也须包含该前缀。`staging/direct-upload/` 由应用根据任务租约与终态回执分阶段清理，不得配置按对象年龄自动删除的规则；升级前须核对桶中实际规则并排除此路径。不要给所有业务对象统一短期过期。原图、缩略图、可恢复版本、交接和发布历史各有引用与清理规则。
 
 local 与 R2 不是自动迁移关系：更换驱动不会搬运已有对象。使用独立测试库/桶验证 R2，不要把原 local 数据库直接切到空 R2 Bucket。
 
@@ -94,3 +94,9 @@ Image analysis accepts original input up to 32 MiB. Larger images within the col
 Size-limit and forbidden-URL rejections retain controlled media reasons and put the discovery in `needs_attention`. Unsupported-type and empty-body responses remain retryable, since a CDN can transiently return an HTTP-200 error page or empty response. Diagnostics contain controlled reasons, `limit_bytes`, and `declared_bytes` or `observed_bytes` when available. After changing configuration, operators inspect terminal gaps and explicitly authorize recovery.
 
 Transient post gaps first become eligible after 5 minutes; after the first failed recovery campaign they wait 10 minutes, then 30 minutes between remaining campaigns, up to eight campaigns. Each campaign uses the normal job executor (at most three executions, 5/10-second delays). Platform gates, the shared per-platform queue and the maintenance scan determine execution after eligibility. Account cooldown uses `SOURCE_COOLDOWN_MINUTES`.
+
+## 登录期限
+
+`AUTH_SESSION_IDLE_SECONDS`（默认 1800）控制没有实际操作的空闲期限；`AUTH_SESSION_ABSOLUTE_SECONDS`（默认 28800）控制每次登录的固定上限。两项为可安全表示的正整数秒数，空闲期限不能大于绝对期限。私有协作环境可分别设置为 `604800` 和 `2592000`，即空闲 7 天、登录满 30 天重登。
+
+页面可见时的真实点击、键盘或滚轮操作通过同源 `/api/auth/activity` 续空闲期；后台轮询、页面仅保持打开、重新切到前台都不续期。客户端请求与服务端写入分别节流，最短间隔为 300 秒与空闲期限一半的较小值。活动请求不消耗普通业务写入配额，仍有独立的账号和 IP 限流。绝对期限及 Cookie 不随活动延长；登出、撤销会话、禁用账号和改密继续使旧会话失效。新配置不会批量延长旧会话的绝对到期时间，重新登录后使用新上限。
