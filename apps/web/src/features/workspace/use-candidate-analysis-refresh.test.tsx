@@ -15,8 +15,8 @@ import { useCandidateAnalysisRefresh } from "./use-candidate-analysis-refresh";
 type CandidatePage = InfiniteData<
   components["schemas"]["CandidatePageDto"] & { analysisPending?: boolean }
 >;
-const sourceKey = ["candidates", "pending", "neutral_manga"] as const;
-const destinationKey = ["candidates", "pending", "valid_manga"] as const;
+const sourceKey = ["candidates", "pending", "uncertain"] as const;
+const destinationKey = ["candidates", "pending", "priority"] as const;
 const disposers: (() => void)[] = [];
 
 function page(
@@ -30,13 +30,15 @@ function page(
           ? [
               {
                 id: "synthetic-candidate",
-                reviewPriority: priority,
+                text: priority,
               } as components["schemas"]["CandidateDto"],
             ]
           : [],
         total: priority ? 1 : 0,
         nextCursor: null,
-        ...(analysisPending === undefined ? {} : { analysisPending }),
+        analysisPending:
+          analysisPending ??
+          (priority === "queued" || priority === "unprocessed"),
       },
     ],
     pageParams: [null],
@@ -102,8 +104,7 @@ test("range metadata follows an unprocessed candidate through queueing and compl
     await vi.advanceTimersByTimeAsync(5_000);
   });
   expect(
-    client.getQueryData<CandidatePage>(sourceKey)?.pages[0].items[0]
-      ?.reviewPriority,
+    client.getQueryData<CandidatePage>(sourceKey)?.pages[0].items[0]?.text,
   ).toBe("queued");
   expect(readSource).toHaveBeenCalledTimes(1);
 
@@ -114,8 +115,7 @@ test("range metadata follows an unprocessed candidate through queueing and compl
   });
   await waitFor(() =>
     expect(
-      client.getQueryData<CandidatePage>(sourceKey)?.pages[0].items[0]
-        ?.reviewPriority,
+      client.getQueryData<CandidatePage>(sourceKey)?.pages[0].items[0]?.text,
     ).toBe("high"),
   );
   expect(vi.getTimerCount()).toBe(0);
@@ -272,5 +272,26 @@ test("unmount clears a polling interval while analysis remains queued", async ()
     await vi.advanceTimersByTimeAsync(10_000);
   });
   expect(readSource).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("failed plus queued media keep polling even with a successful score, then stop when all media are terminal", async () => {
+  const { client, observe, mount } = fixture();
+  const readSource = vi.fn(async () => page("high", true));
+  observe(sourceKey, readSource, page("high", true));
+  mount();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
+  expect(readSource).toHaveBeenCalledTimes(1);
+  readSource.mockResolvedValue(page("high", false));
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: sourceKey });
+  });
+  const reads = readSource.mock.calls.length;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15_000);
+  });
+  expect(readSource).toHaveBeenCalledTimes(reads);
   expect(vi.getTimerCount()).toBe(0);
 });

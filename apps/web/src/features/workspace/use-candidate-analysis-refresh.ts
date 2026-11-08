@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
 
-/** Analysis can move a candidate between sections; refresh their shared view. */
+/** Rehydrate visible snapshot entries; only explicit review-session replacement changes membership/rank. */
 export function useCandidateAnalysisRefresh() {
   const client = useQueryClient();
   useEffect(() => {
@@ -31,11 +31,7 @@ export function useCandidateAnalysisRefresh() {
               }
             >
           | undefined;
-        return data?.pages.some(
-          (page) =>
-            page.analysisPending ??
-            page.items.some((item) => item.reviewPriority === "queued"),
-        );
+        return data?.pages.some((page) => page.analysisPending === true);
       });
       if (queued && timer === undefined) timer = setInterval(refresh, 5000);
       else if (!queued && timer !== undefined) {

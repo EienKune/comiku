@@ -27,3 +27,11 @@ With sanity enabled, two complete, ordered App pages older than the lower bound 
 The catalog is capped at 100,000 IDs, with at most 1,000 deferred future IDs in a cursor. Calls retain the existing 120-second process limit; one job retains the 100-page safety limit. A later Pixiv run can resume durable progress after interruption or the page limit; cumulative page count is not a permanent 100-page ceiling. The service stores its verified observed publication watermark alongside the cursor and applies it only after complete coverage. These limits bound individual calls, not total collection time: initial bootstrap and anomalous ordering can require more work, and platform accounts continue to share the network lane. Measure full-run time and request volume before increasing account counts.
 
 Setting `sanity: false` intentionally skips the AJAX supplement and cannot claim coverage of AJAX-only works. Tests use synthetic sources; real-session validation remains necessary when changing gallery-dl or its response contracts.
+
+## Initial windows and source text
+
+Configured gallery adapters support `none`, `last_24_hours` and `last_7_days`. Seven days is exactly 604,800,000 milliseconds. Existing defaults remain unchanged; a successful account coverage boundary takes precedence over the first-sync selection on later scans.
+
+Pixiv titles and existing captions become optional normalized `title` and `description` fields. Caption HTML is parsed once into plain text, preserving line breaks, link labels and entity text. These fields are retained in candidate source metadata, and a nonempty description supplies candidate text; a title is the fallback. Native App captions and captions from already-required AJAX resolution are used directly. Missing captions never trigger extra enrichment or comments requests.
+
+A naturally encountered existing Pixiv candidate can refresh its nonempty source description under the source and candidate locks without downloading media again. Empty descriptions retain known candidate text and metadata. This does not change human review revision/status or a promoted Work's title/source text. Historical identifier-only raw metadata cannot recover missing captions; no historical recrawl is implied.

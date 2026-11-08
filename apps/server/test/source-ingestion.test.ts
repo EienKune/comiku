@@ -1,3 +1,4 @@
+import { SourceIngestionModule } from "../src/source-ingestion/source-ingestion.module.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type {
@@ -185,4 +186,31 @@ test("X web-session adapter maps own photos and preserves its page cursor", asyn
     startTime: "2026-09-07T00:00:00.000Z",
     bottomCursor: "next-page",
   });
+});
+
+test("daily source composition ignores retired configuration and exposes gallery only", () => {
+  const providers = Reflect.getMetadata("providers", SourceIngestionModule);
+  const factory = providers.find(
+    (provider: { provide?: unknown }) =>
+      provider.provide === ContentSourceRegistry,
+  ).useFactory;
+  const retired = {
+    xBearerToken: "synthetic",
+    xWebSession: { bearerToken: "synthetic" },
+  };
+  assert.deepEqual(factory(retired).list(), []);
+  const registry: ContentSourceRegistry = factory({
+    ...retired,
+    galleryDl: {
+      python: "synthetic-python",
+      xConfigPath: "synthetic-x.json",
+      pixivConfigPath: "synthetic-pixiv.json",
+    },
+  });
+  assert.deepEqual(
+    registry.list().map((source) => source.adapterKey),
+    ["x_gallery_dl", "pixiv_gallery_dl"],
+  );
+  assert.equal(registry.get("x_web_session"), undefined);
+  assert.equal(registry.get("x_official_v2"), undefined);
 });

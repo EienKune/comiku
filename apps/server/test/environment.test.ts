@@ -18,6 +18,7 @@ test("validates configuration and uses explicit development defaults", () => {
     sourceScheduleMinutes: 60,
     sourceFailureThreshold: 3,
     sourceCooldownMinutes: 360,
+    sourceMediaMaxBytes: 50 * 1024 * 1024,
     typesetBatchMaxBytes: 512 * 1024 * 1024,
     typesetBatchMaxWorks: 20,
     objectStorageDriver: "local",
@@ -139,41 +140,23 @@ test("local storage is development-only and explicit drivers are validated", () 
   );
 });
 
-test("source adapters require complete credentials and bounded integer policy", () => {
-  assert.throws(
-    () =>
-      parseEnvironment({
-        DATABASE_URL: databaseUrl,
-        X_WEB_AUTH_TOKEN: "session-only",
-      }),
-    /all X_WEB_/,
-  );
-  assert.throws(
-    () =>
-      parseEnvironment({
-        DATABASE_URL: databaseUrl,
-        X_WEB_BEARER_TOKEN: "bearer",
-        X_WEB_AUTH_TOKEN: "auth",
-        X_WEB_CSRF_TOKEN: "csrf",
-        X_WEB_USER_MEDIA_QUERY_ID: "query",
-        X_WEB_FEATURES_JSON: "[]",
-      }),
-    /X_WEB_FEATURES_JSON/,
-  );
+test("retired credentials are ignored while generic source policy stays bounded", () => {
   const configured = parseEnvironment({
     DATABASE_URL: databaseUrl,
     X_WEB_BEARER_TOKEN: "bearer",
     X_WEB_AUTH_TOKEN: "auth",
     X_WEB_CSRF_TOKEN: "csrf",
     X_WEB_USER_MEDIA_QUERY_ID: "query",
-    X_WEB_FEATURES_JSON: '{"fixture":true}',
+    X_WEB_FEATURES_JSON: "invalid retired input",
+    X_BEARER_TOKEN: "retired synthetic bearer",
     X_OFFICIAL_DAILY_BUDGET: "10",
     X_OFFICIAL_MONTHLY_BUDGET: "100",
     SOURCE_OVERLAP_MINUTES: "15",
     SOURCE_FAILURE_THRESHOLD: "4",
     SOURCE_COOLDOWN_MINUTES: "120",
   });
-  assert.equal(configured.xWebSession?.features.fixture, true);
+  assert.equal("xWebSession" in configured, false);
+  assert.equal("xBearerToken" in configured, false);
   assert.equal(configured.xOfficialDailyBudget, 10);
   assert.equal(configured.sourceFailureThreshold, 4);
   assert.throws(
@@ -202,5 +185,22 @@ test("typeset batch safety caps remain bounded and configurable", () => {
   ])
     assert.throws(() =>
       parseEnvironment({ DATABASE_URL: databaseUrl, ...fields }),
+    );
+});
+
+test("source media size configuration is bounded independently of manual uploads", () => {
+  assert.equal(
+    parseEnvironment({ DATABASE_URL: databaseUrl, SOURCE_MEDIA_MAX_MIB: "100" })
+      .sourceMediaMaxBytes,
+    100 * 1024 * 1024,
+  );
+  for (const value of ["0", "101", "1.5", "no", "Infinity"])
+    assert.throws(
+      () =>
+        parseEnvironment({
+          DATABASE_URL: databaseUrl,
+          SOURCE_MEDIA_MAX_MIB: value,
+        }),
+      /SOURCE_MEDIA_MAX_MIB/,
     );
 });

@@ -1,3 +1,4 @@
+import { JobDeferred } from "../src/jobs/jobs.service.js";
 /* Synthetic database boundary doubles keep every race deterministic. */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import "reflect-metadata";
@@ -6,6 +7,192 @@ import test from "node:test";
 import { SourceFetchService } from "../src/source-ingestion/source-fetch.service.js";
 import { ContentSourceRegistry } from "../src/source-ingestion/source-registry.js";
 import { Prisma } from "../src/generated/prisma/client.js";
+import { SourceResponseError } from "../src/source-ingestion/source-response.js";
+
+test("account coverage wins over a stale adapter watermark", async () => {
+  const f = fixture();
+  f.scan.discoveredThroughAt = new Date("2026-10-28T00:00:00.000Z");
+  f.snapshot.completedThroughAt = new Date("2026-10-20T00:00:00.000Z");
+  let lower: unknown;
+  const source = {
+    ...client,
+    fetchPage: async (_account: unknown, cursor: any) => {
+      lower = cursor.startTime;
+      return { items: [], nextCursor: {}, complete: true };
+    },
+  };
+  await f.service.fetchAdapter(
+    "item",
+    "run",
+    f.account,
+    f.snapshot,
+    source,
+    null,
+    new AbortController().signal,
+  );
+  assert.equal(lower, "2026-10-27T23:00:00.000Z");
+});
+
+test("switching adapters rebuilds provider state from the unfinished account window", async () => {
+  const f = fixture();
+  f.scan.windowJson = {
+    version: 1,
+    sourceId: "1",
+    firstSyncMode: "none",
+    startTime: "2026-10-19T00:00:00.000Z",
+    endTime: "2026-10-20T00:00:00.000Z",
+  };
+  f.snapshot.cursorJson = { providerToken: "stale" };
+  let received: any;
+  const source = {
+    ...client,
+    fetchPage: async (_account: unknown, cursor: any) => {
+      received = cursor;
+      return { items: [], nextCursor: {}, complete: true };
+    },
+  };
+  await f.service.fetchAdapter(
+    "item",
+    "run",
+    f.account,
+    f.snapshot,
+    source,
+    null,
+    new AbortController().signal,
+  );
+  assert.equal(received.startTime, "2026-10-19T00:00:00.000Z");
+  assert.equal(received.endTime, "2026-10-20T00:00:00.000Z");
+  assert.equal(received.providerToken, undefined);
+});
+
+test("an old account epoch cannot commit a late failure or release its replacement lease", async () => {
+  const f = fixture();
+  const replacement = new Date(Date.now() + 120_000);
+  const source = {
+    ...client,
+    fetchPage: async () => {
+      f.scan.epoch += 1;
+      f.scan.leaseUntil = replacement;
+      throw new Error("synthetic late failure");
+    },
+  };
+  f.service.sources = new ContentSourceRegistry().register(source);
+  await f.service.fetchWithFallback(
+    "run",
+    f.account,
+    null,
+    new AbortController().signal,
+  );
+  assert.equal(f.live.health, "idle");
+  assert.equal(f.live.consecutiveFailures, 2);
+  assert.equal(f.scan.leaseOwnerJobId, "run");
+  assert.equal(f.scan.leaseUntil, replacement);
+  assert.equal(f.live.fetchLeaseId, "run");
+  assert.equal(f.row.errorCode, "source_changed");
+});
+
+test("natural duplicate posts store no media and still complete shared coverage", async () => {
+  const f = fixture();
+  f.db.candidatePost.findUnique = async () => ({ id: "existing" });
+  await f.service.fetchAdapter(
+    "item",
+    "run",
+    f.account,
+    f.snapshot,
+    client,
+    null,
+    new AbortController().signal,
+  );
+  assert.equal(f.row.mediaStored, 0);
+  assert.equal(f.row.candidatesExisting, 2);
+  assert.equal(f.downloads, 0);
+  assert.ok(f.scan.discoveredThroughAt instanceof Date);
+  assert.deepEqual(f.scan.windowJson, {});
+});
+
+test("failure logs keep private reason and page context out of persisted public errors", async () => {
+  const f = fixture({
+    ...client,
+    fetchPage: async () => {
+      throw new SourceResponseError("authentication", {
+        reason: "source_forbidden",
+        scope: "source",
+        diagnostic: {
+          stage: "enumeration",
+          message: "private synthetic detail",
+        },
+      });
+    },
+  });
+  const logs: string[] = [];
+  const original = console.info;
+  console.info = (message: string) => {
+    logs.push(message);
+  };
+  try {
+    await f.service.fetchWithFallback(
+      "run",
+      f.account,
+      null,
+      new AbortController().signal,
+    );
+    const event = logs
+      .map((line) => JSON.parse(line))
+      .find((entry) => entry.event === "adapter_failed");
+    assert.equal(event.reason, "source_forbidden");
+    assert.equal(event.failureScope, "source");
+    assert.equal(event.page, "1");
+    assert.equal(event.platform, "fixture");
+    assert.equal(event.stage, "fetch_page");
+    assert.equal(event.diagnostic.stage, "enumeration");
+    assert.equal(
+      f.row.errorMessage.includes("private synthetic detail"),
+      false,
+    );
+  } finally {
+    console.info = original;
+  }
+});
+
+test("a second post validation failure cannot inherit the first post media context", async () => {
+  const f = fixture({
+    ...client,
+    fetchPage: async () => ({
+      items: [
+        {
+          ...content("1"),
+          ownMedia: [
+            { ...content("1").ownMedia[0], externalMediaId: "first-media" },
+          ],
+        },
+        { ...content("2"), publishedAt: "invalid-date" },
+      ],
+      nextCursor: {},
+      complete: true,
+    }),
+  });
+  const logs: string[] = [];
+  const original = console.info;
+  console.info = (message: string) => {
+    logs.push(message);
+  };
+  try {
+    await f.service.fetchWithFallback(
+      "run",
+      f.account,
+      null,
+      new AbortController().signal,
+    );
+    const event = logs
+      .map((line) => JSON.parse(line))
+      .find((entry) => entry.event === "adapter_failed");
+    assert.equal(event.postId, "2");
+    assert.equal(event.mediaId, undefined);
+    assert.equal(event.stage, "validate_post");
+  } finally {
+    console.info = original;
+  }
+});
 
 const environment = {
   sourceFailureThreshold: 3,
@@ -21,6 +208,7 @@ const content = (id: string, mediaCount = 1) => ({
   text: "#synthetic",
   type: "post",
   ownMedia: Array.from({ length: mediaCount }, (_, i) => ({
+    externalMediaId: `${id}-${i}`,
     url: `https://fixture.invalid/${id}/${i}.png`,
     type: "photo",
   })),
@@ -60,6 +248,16 @@ function fixture(source = client) {
     fetchLeaseUntil: new Date(Date.now() + 60_000),
   };
   const live = { ...snapshot };
+  const scan: any = {
+    accountId: "account",
+    discoveredThroughAt: null,
+    windowJson: {},
+    leaseOwnerJobId: "run",
+    leaseUntil: new Date(Date.now() + 60_000),
+    epoch: 0,
+    revision: 0,
+  };
+  snapshot.scanEpoch = 0;
   const account: any = {
     id: "account",
     authorId: "author",
@@ -100,16 +298,135 @@ function fixture(source = client) {
     for (const [key, value] of Object.entries(data))
       (live as any)[key] = key === "revision" ? live.revision + 1 : value;
   };
+  const posts = new Map<string, any>();
+  const media = new Map<string, any>();
+  const findPost = (where: any) =>
+    where.id
+      ? [...posts.values()].find((p) => p.id === where.id)
+      : posts.get(where.accountId_platform_externalPostId.externalPostId);
+  const postWithMedia = (where: any) => {
+    const p = findPost(where);
+    if (!p) throw new Error("Missing synthetic discovery");
+    return {
+      ...p,
+      media: [...media.values()]
+        .filter((m) => m.discoveryPostId === p.id)
+        .sort((a, b) => a.orderIndex - b.orderIndex)
+        .map((m) => ({
+          ...m,
+          fileObject: m.fileObjectId
+            ? { id: m.fileObjectId, contentType: "image/png" }
+            : null,
+        })),
+    };
+  };
   const db: any = {
+    sourceDiscoveryPost: {
+      upsert: async ({ where, create }: any) => {
+        const old = findPost(where);
+        if (old) return old;
+        const p = {
+          id: `discovery-${create.externalPostId}`,
+          attempts: 0,
+          revision: 0,
+          ...create,
+        };
+        posts.set(create.externalPostId, p);
+        return p;
+      },
+      findUniqueOrThrow: async ({ where }: any) => postWithMedia(where),
+      findUnique: async ({ where }: any) => findPost(where) ?? null,
+      update: async ({ where, data }: any) =>
+        Object.assign(findPost(where), data),
+      updateMany: async ({ where, data }: any) => {
+        const p = findPost(where);
+        if (p) Object.assign(p, data);
+        return { count: p ? 1 : 0 };
+      },
+      count: async () =>
+        [...posts.values()].filter(
+          (p) => !["complete", "excluded"].includes(p.state),
+        ).length,
+    },
+    sourceDiscoveryMedia: {
+      createMany: async ({ data }: any) => {
+        for (const create of data) {
+          const k = JSON.stringify({
+            discoveryPostId: create.discoveryPostId,
+            externalMediaId: create.externalMediaId,
+          });
+          if (!media.has(k))
+            media.set(k, { id: k, fileObjectId: null, ...create });
+        }
+        return { count: data.length };
+      },
+      update: async ({ where, data }: any) =>
+        Object.assign(media.get(where.id), data),
+      findMany: async ({ where }: any) =>
+        [...media.values()].filter(
+          (m) => m.discoveryPostId === where.discoveryPostId,
+        ),
+      upsert: async ({ where, create, update }: any) => {
+        const k = JSON.stringify(where.discoveryPostId_externalMediaId);
+        const old = media.get(k);
+        if (old) return Object.assign(old, update);
+        const m = { fileObjectId: null, ...create };
+        media.set(k, m);
+        return m;
+      },
+      updateMany: async ({ where, data }: any) => {
+        const m = [...media.values()].find(
+          (m) =>
+            m.discoveryPostId === where.discoveryPostId &&
+            m.externalMediaId === where.externalMediaId &&
+            (!("fileObjectId" in where) ||
+              m.fileObjectId === where.fileObjectId),
+        );
+        if (m) Object.assign(m, data);
+        return { count: m ? 1 : 0 };
+      },
+    },
+    fileObject: { count: async () => 1 },
     $executeRaw: async () => 1,
     $queryRaw: async () => [],
     user: { count: async () => (actorAllowed ? 1 : 0) },
     authorExternalAccount: {
       count: async ({ where }: any) =>
         eligible &&
+        (!where.scanState ||
+          (where.scanState.is.epoch === scan.epoch &&
+            where.scanState.is.leaseOwnerJobId === scan.leaseOwnerJobId &&
+            scan.leaseUntil > where.scanState.is.leaseUntil.gt)) &&
         (!where.adapterStates || stateMatches(where.adapterStates.some))
           ? 1
           : 0,
+    },
+    sourceAccountScanState: {
+      findUniqueOrThrow: async () => scan,
+      upsert: async () => scan,
+      update: async ({ data }: any) => {
+        for (const [key, value] of Object.entries(data))
+          scan[key] =
+            typeof value === "object" && value !== null && "increment" in value
+              ? scan[key] + (value as any).increment
+              : value;
+        return scan;
+      },
+      updateMany: async ({ where, data }: any) => {
+        if (
+          (where.epoch !== undefined && where.epoch !== scan.epoch) ||
+          (where.leaseOwnerJobId !== undefined &&
+            where.leaseOwnerJobId !== scan.leaseOwnerJobId) ||
+          (where.leaseUntil?.gt && scan.leaseUntil <= where.leaseUntil.gt)
+        )
+          return { count: 0 };
+        for (const [key, value] of Object.entries(data))
+          scan[key] =
+            typeof value === "object" && value !== null && "increment" in value
+              ? scan[key] + (value as any).increment
+              : value;
+        return { count: 1 };
+      },
     },
     sourceAdapterState: {
       findUniqueOrThrow: async () => ({
@@ -153,7 +470,15 @@ function fixture(source = client) {
       },
       update: async () => ({}),
     },
-    candidateMedia: { createMany: async () => ({ count: 1 }) },
+    candidateMedia: {
+      createMany: async () => ({ count: 1 }),
+      findMany: async () =>
+        [...media.values()].map((m) => ({
+          ...m,
+          fileObjectId: "existing-file",
+          sourceUrl: m.metadataJson.url,
+        })),
+    },
     candidateSourceObservation: {
       upsert: async () => {
         observations++;
@@ -191,10 +516,13 @@ function fixture(source = client) {
   );
   return {
     service,
+    posts,
+    media,
     db,
     jobs,
     account,
     snapshot,
+    scan,
     live,
     row,
     downloader,
@@ -223,6 +551,7 @@ test("empty successful scans advance fixed coverage, independently of the latest
   const f = fixture();
   const now = new Date("2026-10-27T04:00:00.000Z");
   const next = new Date("2026-10-27T06:00:00.000Z");
+  f.scan.discoveredThroughAt = new Date("2026-10-26T04:00:00.000Z");
   f.snapshot.completedThroughAt = new Date("2026-10-26T04:00:00.000Z");
   f.snapshot.highWaterPublishedAt = new Date("2026-10-01T00:00:00.000Z");
   const cursors: any[] = [];
@@ -261,6 +590,8 @@ test("empty successful scans advance fixed coverage, independently of the latest
     clock.setTime(next.getTime());
     f.live.fetchLeaseId = "run";
     f.live.fetchLeaseUntil = new Date(next.getTime() + 60_000);
+    f.scan.leaseOwnerJobId = "run";
+    f.scan.leaseUntil = f.live.fetchLeaseUntil;
     await f.service.fetchAdapter(
       "item",
       "run",
@@ -978,6 +1309,19 @@ test("actor revocation on a duplicate insert prevents the P2002 observation path
     );
   };
   f.db.candidatePost.findUniqueOrThrow = async () => ({ id: "existing" });
+  await f.service.discovery.record(
+    f.db,
+    {
+      accountId: "account",
+      platform: "fixture",
+      sourceUserId: "1",
+      adapterKey: "synthetic",
+      actorId: "actor",
+      discoveredRunId: "run",
+      windowJson: {},
+    },
+    content("1"),
+  );
   await assert.rejects(
     f.service.saveCandidate(
       f.account,
@@ -1122,10 +1466,13 @@ test("interrupted items clear their current errors on running and success while 
 
 function manualFixture() {
   const jobs: any[] = [];
+  const tasks: any[] = [];
   const runs: any[] = [];
   const leases: any[] = [];
   const matches = (row: any, where: any): boolean =>
     Object.entries(where).every(([key, value]: [string, any]) => {
+      if (key === "accountTasks")
+        return tasks.some((task) => task.runId === row.id);
       if (key === "OR") return value.some((part: any) => matches(row, part));
       if (value && typeof value === "object") {
         if (value.in) return value.in.includes(row[key]);
@@ -1144,7 +1491,10 @@ function manualFixture() {
     user: { count: async () => 1 },
     authorExternalAccount: {
       findMany: async ({ where }: any) =>
-        [...new Set(where.id?.in ?? ["a", "b"])].map((id) => ({ id })),
+        [...new Set(where.id?.in ?? ["a", "b"])].map((id) => ({
+          id,
+          platform: "fixture",
+        })),
     },
     sourceFetchRun: {
       create: async ({ data }: any) => {
@@ -1153,14 +1503,39 @@ function manualFixture() {
         return run;
       },
       findMany: async ({ where }: any) =>
-        runs.filter((run) => matches(run, where)),
+        runs
+          .filter((run) => matches(run, where))
+          .map((run) => ({
+            ...run,
+            accountTasks: tasks.filter((task) => task.runId === run.id),
+          })),
       updateMany: async ({ where, data }: any) => {
         const rows = runs.filter((run) => matches(run, where));
         rows.forEach((run) => Object.assign(run, data));
         return { count: rows.length };
       },
     },
+    sourceFetchAccountTask: {
+      create: async ({ data }: any) => {
+        const task = { id: `task${tasks.length}`, status: "queued", ...data };
+        tasks.push(task);
+        return task;
+      },
+      update: async ({ where, data }: any) =>
+        Object.assign(
+          tasks.find((task) => matches(task, where)),
+          data,
+        ),
+      updateMany: async ({ where, data }: any) => {
+        const found = tasks.filter((task) => matches(task, where));
+        found.forEach((task) => Object.assign(task, data));
+        return { count: found.length };
+      },
+      findMany: async ({ where }: any) =>
+        tasks.filter((task) => matches(task, where)),
+    },
     sourceFetchRunItem: { updateMany: async () => ({ count: 1 }) },
+    sourceAccountScanState: { updateMany: async () => ({ count: 1 }) },
     sourceAdapterState: {
       findMany: async ({ where }: any) =>
         leases.filter((lease) => matches(lease, where)),
@@ -1196,6 +1571,7 @@ function manualFixture() {
           status: "queued",
           attempts: 0,
         });
+        return jobs.at(-1);
       },
     } as any,
     db,
@@ -1215,7 +1591,7 @@ test("manual clicks from different actors reuse the same normalized active accou
     f.service.runManual("actor2", { accountIds: ["a", "b"] }),
   ]);
   assert.equal(results[0].id, results[1].id);
-  assert.equal(f.jobs.length, 1);
+  assert.equal(f.jobs.length, 2);
 });
 
 test("overlapping different account sets conflict while disjoint accounts can queue", async () => {
@@ -1235,7 +1611,7 @@ test("empty accountIds means all eligible accounts, and retrying active jobs are
   f.jobs[0].attempts = 2;
   const second = await f.service.runManual("actor2", {});
   assert.equal(first.id, second.id);
-  assert.equal(f.jobs.length, 1);
+  assert.equal(f.jobs.length, 2);
 });
 
 for (const terminal of ["failed", "queued", "running"] as const)
@@ -1284,4 +1660,715 @@ test("a live final-attempt execution is reused and its source lease remains owne
   );
   assert.equal(f.leases[0].fetchLeaseId, first.id);
   assert.equal(f.jobs[0].status, "running");
+});
+
+test("natural Pixiv duplicate updates nonempty source caption without media or human revision writes", async () => {
+  const f = fixture();
+  f.account.platform = "pixiv";
+  f.db.candidatePost.findUnique = async () => ({
+    id: "existing",
+    text: "old title",
+    rawJson: { adapter: "old", postId: "10" },
+  });
+  f.db.candidatePost.findUniqueOrThrow = async () => ({
+    id: "existing",
+    text: "old title",
+    rawJson: {},
+  });
+  const updates: any[] = [];
+  f.db.candidatePost.update = async (args: any) => {
+    updates.push(args);
+    return {};
+  };
+  await f.service.saveCandidate(
+    f.account,
+    f.snapshot,
+    client,
+    {
+      ...content("10"),
+      title: "Title",
+      description: "Body & entity\nLink text",
+      text: "Body & entity\nLink text",
+    },
+    null,
+    "run",
+    new AbortController().signal,
+  );
+  assert.equal(f.downloads, 0);
+  assert.ok(
+    updates.some((call) => call.data.text === "Body & entity\nLink text"),
+  );
+  assert.ok(
+    updates.every(
+      (call) =>
+        !("revision" in call.data) &&
+        !("status" in call.data) &&
+        !("work" in call.data),
+    ),
+  );
+  updates.length = 0;
+  await f.service.saveCandidate(
+    f.account,
+    f.snapshot,
+    client,
+    { ...content("10"), title: "Title", description: "", text: "Title" },
+    null,
+    "run",
+    new AbortController().signal,
+  );
+  assert.ok(updates.every((call) => !("text" in call.data)));
+});
+
+test("an account's cooled first adapter does not block a ready fallback", async () => {
+  const f = fixture();
+  f.snapshot.nextAttemptAt = new Date(Date.now() + 60000);
+  const paid = { ...client, adapterKey: "paid", priority: 2, metered: true };
+  f.account.adapterStates.push({
+    ...f.snapshot,
+    id: "paid-state",
+    adapterKey: "paid",
+    nextAttemptAt: null,
+  });
+  f.service.sources.register(paid);
+  const skipped: string[] = [],
+    invoked: string[] = [];
+  f.service.createSkippedItem = async (
+    _run: any,
+    _account: any,
+    _state: any,
+    source: any,
+  ) => skipped.push(source.adapterKey);
+  f.service.lockSource = async () => {};
+  f.service.assertEligible = async () => {};
+  f.db.sourceAdapterState.updateMany = async () => ({ count: 1 });
+  f.service.fetchAdapter = async (
+    _item: any,
+    _run: any,
+    _account: any,
+    _state: any,
+    source: any,
+  ) => invoked.push(source.adapterKey);
+  await f.service.accountExecution.run(
+    { platform: "fixture", generation: "synthetic", job: {} },
+    () =>
+      f.service.fetchWithFallback(
+        "run",
+        f.account,
+        null,
+        new AbortController().signal,
+      ),
+  );
+  assert.deepEqual(skipped, ["synthetic"]);
+  assert.deepEqual(invoked, ["paid"]);
+});
+
+test("discovery gaps preserve good media and good sibling posts while completing coverage", async () => {
+  const source = {
+    ...client,
+    fetchPage: async () => ({
+      items: [content("1", 2), content("2")],
+      nextCursor: {},
+      complete: true,
+    }),
+  };
+  const f = fixture(source);
+  const urls: string[] = [];
+  f.downloader.download = async (url: string) => {
+    urls.push(url);
+    if (url.endsWith("/1/1.png")) throw new Error("synthetic CDN failure");
+    return { body: Buffer.from("synthetic"), contentType: "image/png" };
+  };
+  await f.service.fetchAdapter(
+    "item",
+    "run",
+    f.account,
+    f.snapshot,
+    source,
+    null,
+    new AbortController().signal,
+  );
+  assert.deepEqual(f.committed, ["2"]);
+  assert.equal(f.row.errorCode, "discovery_gaps");
+  assert.ok(f.scan.discoveredThroughAt);
+  assert.equal(f.row.mediaStored, 2);
+  const gap = f.posts.get("1");
+  assert.equal(gap.state, "media_pending");
+  const media = [...f.media.values()].filter(
+    (m: any) => m.discoveryPostId === gap.id,
+  );
+  assert.ok(media[0].fileObjectId);
+  assert.equal(media[1].fileObjectId, null);
+  assert.equal(urls.length, 3);
+});
+
+test("replay downloads only missing media after a failed sibling and uses refreshed URL", async () => {
+  const f = fixture();
+  const original = content("1", 2);
+  await f.service.discovery.record(
+    f.db,
+    {
+      accountId: "account",
+      platform: "fixture",
+      sourceUserId: "1",
+      adapterKey: "synthetic",
+      actorId: null,
+      discoveredRunId: "run",
+      windowJson: {},
+    },
+    original,
+  );
+  let requests: string[] = [];
+  f.downloader.download = async (url: string) => {
+    requests.push(url);
+    if (url.endsWith("/1.png")) throw new Error("CDN");
+    return { body: Buffer.from("synthetic"), contentType: "image/png" };
+  };
+  const first = await f.service.saveCandidate(
+    f.account,
+    f.snapshot,
+    client,
+    original,
+    null,
+    "run",
+    new AbortController().signal,
+  );
+  assert.equal(first.pending, true);
+  assert.equal(f.committed.length, 0);
+  requests = [];
+  const refreshed = {
+    ...original,
+    ownMedia: original.ownMedia.map((m) => ({ ...m, url: m.url + "?fresh=1" })),
+  };
+  await f.service.discovery.record(
+    f.db,
+    {
+      accountId: "account",
+      platform: "fixture",
+      sourceUserId: "1",
+      adapterKey: "synthetic",
+      actorId: null,
+      discoveredRunId: "run",
+      windowJson: {},
+    },
+    refreshed,
+  );
+  f.downloader.download = async (url: string) => {
+    requests.push(url);
+    return { body: Buffer.from("synthetic"), contentType: "image/png" };
+  };
+  const second = await f.service.saveCandidate(
+    f.account,
+    f.snapshot,
+    client,
+    refreshed,
+    null,
+    "run",
+    new AbortController().signal,
+  );
+  assert.equal(second.created, true);
+  assert.deepEqual(requests, ["https://fixture.invalid/1/1.png?fresh=1"]);
+  assert.equal(f.posts.get("1").state, "complete");
+});
+
+test("a replaced Pixiv asset at the same ordinal never mixes old and new files", async () => {
+  const f = fixture();
+  const context = {
+    accountId: "account",
+    platform: "fixture",
+    sourceUserId: "1",
+    adapterKey: "synthetic",
+    actorId: null,
+    discoveredRunId: "run",
+    windowJson: {},
+  };
+  const old = content("1", 2);
+  await f.service.discovery.record(f.db, context, old);
+  f.downloader.download = async (url: string) => {
+    if (url.endsWith("/1.png")) throw new Error("CDN");
+    return { body: Buffer.from("old-A"), contentType: "image/png" };
+  };
+  await f.service.saveCandidate(
+    f.account,
+    f.snapshot,
+    client,
+    old,
+    null,
+    "run",
+    new AbortController().signal,
+  );
+  const before = [...f.media.values()].find(
+    (m: any) => m.fileObjectId,
+  )!.fileObjectId;
+  f.downloader.download = async () => ({
+    body: Buffer.from("new-B"),
+    contentType: "image/png",
+  });
+  const revised = {
+    ...old,
+    ownMedia: old.ownMedia.map((m) => ({
+      ...m,
+      url: m.url.replace("/1/", "/v2/1/"),
+    })),
+  };
+  await f.service.discovery.record(f.db, context, revised);
+  const next = await f.service.saveCandidate(
+    f.account,
+    f.snapshot,
+    client,
+    revised,
+    null,
+    "run",
+    new AbortController().signal,
+  );
+  assert.equal(next.pending, true);
+  assert.equal(f.committed.length, 0);
+  assert.equal(f.posts.get("1").state, "needs_attention");
+  assert.equal(f.posts.get("1").failureCode, "asset_identity_changed");
+  assert.equal(
+    [...f.media.values()].find((m: any) => m.fileObjectId)!.fileObjectId,
+    before,
+  );
+  assert.deepEqual(f.posts.get("1").metadataJson, old);
+});
+
+test("absorbed media and storage failures retain sanitized diagnostics exactly once while siblings continue", async () => {
+  const source = {
+    ...client,
+    fetchPage: async () => ({
+      items: [content("1"), content("2"), content("3")],
+      nextCursor: {},
+      complete: true,
+    }),
+  };
+  const f = fixture(source);
+  const logs: string[] = [];
+  const log = console.info;
+  console.info = (s: string) => {
+    logs.push(s);
+  };
+  const originalStore = f.files.store;
+  f.downloader.download = async (url: string) => {
+    if (url.includes("/1/"))
+      throw new SourceResponseError("temporary_failure", {
+        reason: "media_http_404",
+        scope: "media",
+        diagnostic: {
+          http_status: 404,
+          message: "https://cdn.invalid/a?signature=HIDDEN",
+          http_response_headers: { "x-request-id": "request-a" },
+        },
+      });
+    return { body: Buffer.from(url), contentType: "image/png" };
+  };
+  f.files.store = async (input: any) => {
+    if (input.sourceName.includes("/2/"))
+      throw new SourceResponseError("temporary_failure", {
+        reason: "storage_failure",
+        scope: "storage",
+        diagnostic: { message: "token=HIDDEN", guard: "write_failed" },
+      });
+    return originalStore();
+  };
+  try {
+    await f.service.fetchAdapter(
+      "item",
+      "run",
+      f.account,
+      f.snapshot,
+      source,
+      null,
+      new AbortController().signal,
+    );
+  } finally {
+    console.info = log;
+  }
+  const failures = logs
+    .map((s) => JSON.parse(s))
+    .filter((e) => e.event === "media_failed");
+  assert.equal(failures.length, 2);
+  assert.deepEqual(
+    failures.map((e) => e.failureScope),
+    ["media", "storage"],
+  );
+  assert.deepEqual(
+    failures.map((e) => e.stage),
+    ["download", "store"],
+  );
+  assert.equal(failures[0].diagnostic.http_status, "404");
+  assert.equal(failures[1].reason, "storage_failure");
+  assert.equal(logs.join("").includes("HIDDEN"), false);
+  assert.deepEqual(f.committed, ["3"]);
+});
+
+test("recovery fetchPost failures log one sanitized event; gate waits log no failure or campaign outcome", async () => {
+  const failure = new SourceResponseError("temporary_failure", {
+    reason: "post_not_found",
+    scope: "post",
+    diagnostic: {
+      http_status: 404,
+      message: "https://source.invalid/post?token=HIDDEN",
+      guard: "leaf_metadata",
+    },
+  });
+  const source = {
+    ...client,
+    fetchPost: async () => {
+      throw failure;
+    },
+  };
+  const f = fixture(source);
+  const context = {
+    accountId: "account",
+    platform: "fixture",
+    sourceUserId: "1",
+    adapterKey: "synthetic",
+    actorId: null,
+    discoveredRunId: "run",
+    windowJson: {},
+  };
+  await f.service.discovery.record(f.db, context, content("1"));
+  f.service.accounts = async () => [f.account];
+  f.service.claimSource = async () => ({ count: 1 });
+  f.db.sourcePlatformState = { count: async () => 1 };
+  f.service.platforms.lock = async () => {};
+  f.service.platforms.beforeNetwork = async () => {};
+  f.jobs.diagnosticContext = () => ({ jobId: "job", attempt: 2 });
+  let finishes = 0;
+  f.service.recovery.finish = async () => {
+    finishes++;
+  };
+  const campaign = {
+    id: "campaign",
+    number: 2,
+    discoveryPostId: "discovery-1",
+    discoveryPost: f.posts.get("1"),
+  };
+  const job = {
+    id: "job",
+    payload: { platform: "fixture", credentialGeneration: "generation" },
+  };
+  const logs: string[] = [];
+  const log = console.info;
+  console.info = (s: string) => {
+    logs.push(s);
+  };
+  try {
+    await assert.rejects(
+      f.service.recoverPost(job, campaign, new AbortController().signal),
+    );
+    const events = logs
+      .map((s) => JSON.parse(s))
+      .filter((e) => e.event === "recovery_failed");
+    assert.equal(events.length, 1);
+    assert.equal(events[0].stage, "fetch_post");
+    assert.equal(events[0].campaign, "2");
+    assert.equal(events[0].jobId, "job");
+    assert.equal(events[0].attempt, "2");
+    assert.equal(events[0].failureScope, "post");
+    assert.equal(events[0].diagnostic.http_status, "404");
+    assert.equal(logs.join("").includes("HIDDEN"), false);
+    logs.length = 0;
+    f.service.platforms.beforeNetwork = async () => {
+      throw new JobDeferred(new Date(Date.now() + 60000), "scope_paused");
+    };
+    await assert.rejects(
+      f.service.recoverPost(job, campaign, new AbortController().signal),
+    );
+    assert.equal(logs.length, 0);
+    assert.equal(finishes, 0);
+  } finally {
+    console.info = log;
+  }
+});
+
+test("historical candidate adoption proves asset identity and preserves terminal attention", async () => {
+  for (const variant of [
+    "changed",
+    "unknown",
+    "query",
+    "needs_attention",
+    "excluded",
+  ]) {
+    const f = fixture();
+    const manifest = content("1");
+    await f.service.discovery.record(
+      f.db,
+      {
+        accountId: "account",
+        platform: "fixture",
+        sourceUserId: "1",
+        adapterKey: "synthetic",
+        actorId: null,
+        discoveredRunId: "run",
+        windowJson: {},
+      },
+      manifest,
+    );
+    const post = f.posts.get("1");
+    if (["needs_attention", "excluded"].includes(variant))
+      Object.assign(post, { state: variant, failureCode: "preserve_reason" });
+    f.db.candidatePost.findUnique = async () => ({
+      id: "historical",
+      status: "imported",
+      revision: 7,
+      workId: "human-work",
+    });
+    f.db.candidateMedia.findMany = async () => [
+      {
+        externalMediaId: manifest.ownMedia[0].externalMediaId,
+        fileObjectId: "historical-file",
+        sourceUrl:
+          variant === "unknown"
+            ? null
+            : variant === "changed"
+              ? "https://fixture.invalid/old.png"
+              : manifest.ownMedia[0].url + "?old=1",
+      },
+    ];
+    const result = await f.service.saveCandidate(
+      f.account,
+      f.snapshot,
+      client,
+      manifest,
+      null,
+      "run",
+      new AbortController().signal,
+    );
+    const stored = [...f.media.values()][0];
+    assert.equal(
+      stored.fileObjectId,
+      variant === "query" ? "historical-file" : null,
+      variant,
+    );
+    assert.equal(
+      post.state,
+      variant === "query"
+        ? "complete"
+        : variant === "excluded"
+          ? "excluded"
+          : "needs_attention",
+      variant,
+    );
+    assert.equal(
+      Boolean(result.pending),
+      !["query", "excluded"].includes(variant),
+      variant,
+    );
+    if (["needs_attention", "excluded"].includes(variant))
+      assert.equal(post.failureCode, "preserve_reason");
+    assert.equal(f.downloads, 0);
+    assert.equal(f.committed.length, 0);
+  }
+});
+
+test("actual credential failures emit one scrubbed platform diagnostic before scan and recovery defer", async () => {
+  for (const [reason, status] of [
+    ["auth_failed", 401],
+    ["challenge_required", 403],
+    ["rate_limited", 429],
+  ] as const)
+    for (const mode of ["scan", "recovery"]) {
+      const failure = new SourceResponseError(
+        reason === "rate_limited" ? "rate_limited" : "authentication",
+        {
+          reason,
+          scope: "credential",
+          diagnostic: {
+            guard: "native_auth",
+            http_status: status,
+            message: "https://source.invalid/graphql?token=HIDDEN",
+            http_response_headers: {
+              "x-request-id": "request-42",
+              "set-cookie": "HIDDEN",
+            },
+          },
+        },
+      );
+      const source = {
+        ...client,
+        fetchPage: async () => {
+          throw failure;
+        },
+        fetchPost: async () => {
+          throw failure;
+        },
+      };
+      const f = fixture(source);
+      f.jobs.diagnosticContext = () => ({ jobId: "job", attempt: 2 });
+      f.scan.leaseOwnerJobId = "job";
+      f.snapshot.scanOwnerJobId = "job";
+      f.service.platforms.outcome = async () => {};
+      f.service.platforms.lock = async () => {};
+      f.service.platforms.beforeNetwork = async () => {};
+      f.db.sourcePlatformState = { count: async () => 1 };
+      const logs: string[] = [];
+      const log = console.info;
+      console.info = (line: string) => {
+        logs.push(line);
+      };
+      try {
+        if (mode === "scan") {
+          await assert.rejects(
+            f.service.accountExecution.run(
+              { platform: "fixture", generation: "generation", job: {} },
+              () =>
+                f.service.fetchWithFallback(
+                  "run",
+                  f.account,
+                  null,
+                  new AbortController().signal,
+                ),
+            ),
+            JobDeferred,
+          );
+        } else {
+          await f.service.discovery.record(
+            f.db,
+            {
+              accountId: "account",
+              platform: "fixture",
+              sourceUserId: "1",
+              adapterKey: "synthetic",
+              actorId: null,
+              discoveredRunId: "run",
+              windowJson: {},
+            },
+            content("1"),
+          );
+          f.service.accounts = async () => [f.account];
+          f.service.claimSource = async () => ({ count: 1 });
+          f.live.fetchLeaseId = "campaign";
+          await assert.rejects(
+            f.service.recoverPost(
+              {
+                id: "job",
+                payload: {
+                  platform: "fixture",
+                  credentialGeneration: "generation",
+                },
+              },
+              {
+                id: "campaign",
+                number: 2,
+                discoveryPostId: "discovery-1",
+                discoveryPost: f.posts.get("1"),
+              },
+              new AbortController().signal,
+            ),
+            JobDeferred,
+          );
+        }
+        const events = logs
+          .map((line) => JSON.parse(line))
+          .filter((e) => e.event === "platform_failed");
+        assert.equal(events.length, 1, mode);
+        assert.equal(events[0].jobId, "job");
+        assert.equal(events[0].accountId, "account");
+        assert.equal(events[0].reason, reason);
+        assert.equal(events[0].failureScope, "credential");
+        assert.equal(events[0].diagnostic.http_status, String(status));
+        assert.equal(events[0].diagnostic.guard, "native_auth");
+        assert.equal(
+          JSON.parse(events[0].diagnostic.http_response_headers)[
+            "x-request-id"
+          ],
+          "request-42",
+        );
+        assert.equal(logs.join("").includes("HIDDEN"), false);
+        assert.equal(
+          logs.some(
+            (s) =>
+              s.includes('"adapter_failed"') || s.includes('"recovery_failed"'),
+          ),
+          false,
+        );
+      } finally {
+        console.info = log;
+      }
+    }
+});
+
+test("technical run history preserves capacity waits without inventing cooldown", async () => {
+  const f = fixture();
+  f.db.backgroundJob = { findMany: async () => [] };
+  f.service.dto = (run: any) => ({ id: run.id });
+  for (const [code, expected] of [
+    ["capacity", "capacity"],
+    ["platform_cooldown", "platform_cooldown"],
+    ["scope_paused", "credential_unavailable"],
+    ["unknown", null],
+  ]) {
+    const [run] = await f.service.withExecution([
+      {
+        id: "run",
+        accountTasks: [
+          {
+            id: "task",
+            status: "waiting",
+            completedAt: null,
+            failureCode: code,
+          },
+        ],
+      },
+    ]);
+    assert.equal(run.waitingReason, expected);
+  }
+});
+
+test("a queued recovery never reopens an established terminal attention ledger", async () => {
+  let requests = 0;
+  const f = fixture({
+    ...client,
+    fetchPost: async () => {
+      requests++;
+      return { kind: "excluded", postId: "1", reason: "foreign" };
+    },
+  });
+  await f.service.discovery.record(
+    f.db,
+    {
+      accountId: "account",
+      platform: "fixture",
+      sourceUserId: "1",
+      adapterKey: "synthetic",
+      actorId: null,
+      discoveredRunId: "run",
+      windowJson: {},
+    },
+    content("1"),
+  );
+  Object.assign(f.posts.get("1"), {
+    state: "needs_attention",
+    failureCode: "preserve_reason",
+    nextRetryAt: null,
+  });
+  f.service.accounts = async () => [f.account];
+  f.service.claimSource = async () => ({ count: 1 });
+  f.service.platforms.lock = async () => {};
+  f.service.platforms.beforeNetwork = async () => {};
+  f.service.platforms.outcome = async () => {};
+  f.service.recovery.finish = async () => {};
+  f.db.sourcePlatformState = { count: async () => 1 };
+  f.scan.leaseOwnerJobId = "job";
+  f.snapshot.scanOwnerJobId = "job";
+  f.live.fetchLeaseId = "campaign";
+  await assert.rejects(
+    f.service.recoverPost(
+      {
+        id: "job",
+        payload: { platform: "fixture", credentialGeneration: "generation" },
+      },
+      {
+        id: "campaign",
+        number: 2,
+        discoveryPostId: "discovery-1",
+        discoveryPost: f.posts.get("1"),
+      },
+      new AbortController().signal,
+    ),
+    /attention/,
+  );
+  assert.equal(requests, 0);
+  assert.equal(f.posts.get("1").state, "needs_attention");
+  assert.equal(f.posts.get("1").failureCode, "preserve_reason");
 });

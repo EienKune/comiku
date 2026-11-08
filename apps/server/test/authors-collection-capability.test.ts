@@ -42,6 +42,7 @@ function adapter(
 function fixture(
   clients: ContentSourceClient[] = [],
   storedAccount?: Partial<CreateExternalAccountDto>,
+  storedStates?: Record<string, unknown>[],
 ) {
   const sources = new ContentSourceRegistry();
   clients.forEach((client) => sources.register(client));
@@ -64,7 +65,7 @@ function fixture(
         metadataJson: {},
         avatarFileObjectId: null,
         deletedAt: null,
-        adapterStates: [
+        adapterStates: storedStates ?? [
           {
             adapterKey: "pixiv_fixture",
             enabled: true,
@@ -358,4 +359,34 @@ test("an authentication failure does not prevent enabling a configured Pixiv cha
   );
   assert.equal(result.adapterStates[0]?.enabled, true);
   assert.equal(result.adapterStates[0]?.health, "idle");
+});
+
+test("daily account DTO omits retired channel switches and their check timestamps", async () => {
+  const service = fixture([], input, [
+    {
+      adapterKey: "x_web_session",
+      enabled: true,
+      lastAttemptAt: new Date("2026-10-28T00:00:00.000Z"),
+    },
+    { adapterKey: "x_official_v2", enabled: true },
+    {
+      adapterKey: "pixiv_gallery_dl",
+      enabled: false,
+      health: "disabled",
+      revision: 3,
+      consecutiveFailures: 0,
+      lastErrorMessage: null,
+    },
+  ]);
+  const result = await service.updateAccount("author", "account", {
+    ...input,
+    fetchEnabled: false,
+    expectedRevision: 2,
+  });
+  assert.deepEqual(
+    result.adapterStates.map((state) => state.adapterKey),
+    ["pixiv_gallery_dl"],
+  );
+  assert.equal(result.adapterStates[0].enabled, false);
+  assert.equal(result.lastCheckedAt, null);
 });

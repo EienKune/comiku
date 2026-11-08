@@ -1,3 +1,23 @@
+import {
+  candidateTagRules,
+  candidateReviewPolicyKey,
+  emptyCandidateReviewReason,
+  type CandidateReviewRow,
+} from "./candidate-review-evidence.js";
+import {
+  CandidateReviewSessions,
+  assertCandidateReader,
+} from "./candidate-review-sessions.js";
+import {
+  candidateBaseWhere,
+  candidateFilterHash,
+  candidateRankingCte,
+  candidatePendingSql,
+  decodeCandidateCursor,
+  encodeCandidateCursor,
+  normalizeCandidateFilter,
+} from "./candidate-query.js";
+import type { CreateCandidateReviewSessionDto } from "./candidates.dto.js";
 import { JobsService } from "../jobs/jobs.service.js";
 import {
   BadRequestException,
@@ -10,7 +30,7 @@ import {
 } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
 import { extname } from "node:path";
-import { CandidateTagDisposition, Prisma } from "../generated/prisma/client.js";
+import { Prisma } from "../generated/prisma/client.js";
 import { PrismaService } from "../database/prisma.service.js";
 import { FileObjectsService } from "../files/file-objects.service.js";
 import { ImageAnalysisService } from "../image-analysis/image-analysis.service.js";
@@ -33,7 +53,6 @@ import {
   type CandidateQueryDto,
   type ManualCandidateUploadDto,
   type ReorderCandidateMediaDto,
-  type SetCandidateClassificationDto,
   type UpdateManualCandidateDto,
   type UpdateCandidateTagGroupDto,
 } from "./candidates.dto.js";
@@ -64,11 +83,6 @@ const details = {
   sourceObservations: {
     select: { adapterKey: true },
     orderBy: { adapterKey: "asc" },
-  },
-  classificationDecision: true,
-  classificationSuggestions: {
-    orderBy: { createdAt: "desc" },
-    take: 1,
   },
 } as const;
 type CandidateDetails = Prisma.CandidatePostGetPayload<{
@@ -168,20 +182,50 @@ export class CandidatesService {
     analysisModelKey: string | null;
     analysisState: string;
     analysisScore: number | null;
+    analysisPredictions: unknown;
   }) {
     const key = this.analysis?.activeModelKey;
     if (!key || candidate.analysisModelKey !== key)
       return { state: "unprocessed", score: null };
     return {
       state: candidate.analysisState,
-      score:
-        candidate.analysisState === "succeeded"
-          ? candidate.analysisScore
-          : null,
+      score: this.analysis?.hasEvidence(
+        candidate.analysisScore,
+        candidate.analysisPredictions,
+      )
+        ? candidate.analysisScore
+        : null,
     };
   }
 
-  private dto(candidate: CandidateDetails): CandidateDto {
+  private detailsWithAnalysis() {
+    return {
+      ...details,
+      _count: {
+        select: {
+          media: {
+            where: {
+              fileObject: {
+                lifecycleStatus: "active" as const,
+                deletedAt: null,
+              },
+              candidatePost: { author: { deletedAt: null } },
+              analyses: {
+                some: {
+                  modelKey: this.analysis?.activeModelKey ?? "",
+                  status: "failed" as const,
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+  }
+
+  private dto(
+    candidate: CandidateDetails & { _count?: { media: number } },
+  ): CandidateDto {
     const analysis = this.analysisSummary(candidate);
     const account =
       candidate.authorExternalAccount ??
@@ -189,23 +233,17 @@ export class CandidatesService {
       candidate.author.externalAccounts[0];
     return {
       id: candidate.id,
+      canRetryAnalysis: Boolean(
+        this.analysis?.activeModelKey && candidate._count?.media,
+      ),
       classificationTags:
-        analysis.state === "succeeded"
+        analysis.score !== null
           ? (this.analysis?.classificationTags(candidate.analysisPredictions) ??
             [])
           : [],
-      reviewPriority:
-        analysis.score !== null
-          ? analysis.score >= 0.8
-            ? "high"
-            : analysis.score >= 0.5
-              ? "medium"
-              : "low"
-          : analysis.state === "failed"
-            ? "failed"
-            : analysis.state === "queued"
-              ? "queued"
-              : "unprocessed",
+      triageGroup: "uncertain",
+      triageReasons: ["insufficient_evidence"],
+      tagRuleMatches: [],
       authorId: candidate.authorId,
       authorName: candidate.author.displayName,
       authorHandle: account?.handle ?? null,
@@ -218,18 +256,6 @@ export class CandidatesService {
         (observation) => observation.adapterKey,
       ),
       hashtags: candidate.hashtags.map((hashtag) => hashtag.displayValue),
-      tagDisposition: candidate.tagDisposition,
-      visualClass:
-        candidate.classificationDecision?.label ??
-        candidate.classificationSuggestions[0]?.label ??
-        "manga",
-      visualClassSource: candidate.classificationDecision
-        ? "human"
-        : candidate.classificationSuggestions.length
-          ? "model"
-          : "default",
-      classificationRevision:
-        candidate.classificationDecision?.revision ?? null,
       externalPostId: candidate.externalPostId,
       externalPostUrl: candidate.externalPostUrl,
       text: candidate.text,
@@ -252,177 +278,212 @@ export class CandidatesService {
     };
   }
 
-  async list(query: CandidateQueryDto): Promise<CandidatePageDto> {
-    const limit = query.limit ?? 24;
-    const search = query.search?.replace(/^@/, "").trim();
-    const activeModelKey = this.analysis?.activeModelKey;
-    const rows = await this.db.candidatePost.findMany({
-      where: {
-        status: query.status ?? "pending",
-        authorId: query.authorId,
-        author: {
-          sourceLanguage: query.sourceLanguage,
-          ...(search
-            ? {
-                OR: [
-                  { displayName: { contains: search, mode: "insensitive" } },
-                  {
-                    externalAccounts: {
-                      some: {
-                        deletedAt: null,
-                        handle: { contains: search, mode: "insensitive" },
-                      },
-                    },
-                  },
-                ],
-              }
-            : {}),
-        },
-        fetchedAt:
-          query.fetchedAfter || query.fetchedBefore
-            ? {
-                gte: query.fetchedAfter
-                  ? new Date(query.fetchedAfter)
-                  : undefined,
-                lte: query.fetchedBefore
-                  ? new Date(query.fetchedBefore)
-                  : undefined,
-              }
-            : undefined,
-      },
-      select: {
-        id: true,
-        tagDisposition: true,
-        analysisScore: true,
-        analysisState: true,
-        analysisModelKey: true,
-        analysisPredictions: true,
-        postedAt: true,
-        classificationDecision: { select: { label: true } },
-        classificationSuggestions: {
-          orderBy: { createdAt: "desc" },
-          take: 1,
-          select: { label: true },
-        },
-        ...(activeModelKey
-          ? {
-              _count: {
-                select: {
-                  media: {
-                    where: {
-                      fileObject: {
-                        lifecycleStatus: "active" as const,
-                        deletedAt: null,
-                      },
-                      candidatePost: { author: { deletedAt: null } },
-                      OR: [
-                        { analyses: { none: { modelKey: activeModelKey } } },
-                        {
-                          analyses: {
-                            some: {
-                              modelKey: activeModelKey,
-                              status: "queued",
-                            },
-                          },
-                        },
-                        {
-                          candidatePost: {
-                            OR: [
-                              { analysisModelKey: null },
-                              { analysisModelKey: { not: activeModelKey } },
-                            ],
-                          },
-                        },
-                      ],
-                    },
-                  },
-                },
-              },
-            }
-          : {}),
-      },
-    });
-    // Pending work can be outside the selected group or loaded page and still
-    // move into this view after analysis. Reuse the existing filtered summary.
-    const analysisPending = Boolean(
-      activeModelKey &&
-      rows.some(
-        (row) =>
-          row._count?.media > 0 &&
-          ["unprocessed", "queued"].includes(this.analysisSummary(row).state),
-      ),
+  private get reviewSessions() {
+    return new CandidateReviewSessions(this.db);
+  }
+  private get queryPolicy() {
+    return (
+      this.analysis?.candidateQueryPolicy ?? {
+        modelKey: null,
+        labels: [],
+        positiveLabels: [],
+        lowPriorityLabels: [],
+      }
     );
-    const classifyGroup = (row: (typeof rows)[number]) => {
-      const visual =
-        row.classificationDecision?.label ??
-        row.classificationSuggestions[0]?.label ??
-        "manga";
-      if (visual === "photo") return "photo" as const;
-      if (row.tagDisposition === "blocked") return "blocked_manga" as const;
-      if (
-        row.tagDisposition === "valid" ||
-        (this.analysisSummary(row).state === "succeeded" &&
-          this.analysis?.promotesReview(row.analysisPredictions))
-      )
-        return "valid_manga" as const;
-      return "neutral_manga" as const;
-    };
-    // Resolve model policy once per candidate, rather than on every sort comparison.
-    const groups = new Map(rows.map((row) => [row.id, classifyGroup(row)]));
-    const group = (row: (typeof rows)[number]) => groups.get(row.id)!;
-    const rank = {
-      valid_manga: 0,
-      neutral_manga: 1,
-      blocked_manga: 2,
-      photo: 3,
-    } as const;
-    const filtered = rows
-      .filter((row) => !query.triageGroup || group(row) === query.triageGroup)
-      .sort(
-        (left, right) =>
-          ((query.status ?? "pending") === "pending"
-            ? rank[group(left)] - rank[group(right)]
-            : 0) ||
-          ((query.status ?? "pending") === "pending"
-            ? (this.analysisSummary(right).score ?? -1) -
-              (this.analysisSummary(left).score ?? -1)
-            : 0) ||
-          right.postedAt.getTime() - left.postedAt.getTime() ||
-          right.id.localeCompare(left.id),
-      );
-    let start = 0;
-    if (query.cursor) {
-      start = filtered.findIndex((row) => row.id === query.cursor) + 1;
-      if (!start) throw new BadRequestException("候选分页游标无效或已过期");
-    }
-    const page = filtered.slice(start, start + limit);
-    const loaded = page.length
-      ? await this.db.candidatePost.findMany({
-          where: { id: { in: page.map((row) => row.id) } },
-          include: details,
-        })
-      : [];
-    const loadedById = new Map(
-      loaded.map((candidate) => [candidate.id, candidate]),
-    );
+  }
+  reviewPolicy() {
+    const policy = this.queryPolicy;
+    const presentation = this.analysis?.labelPresentation ?? [];
     return {
-      analysisPending,
-      items: page.map((row) => this.dto(loadedById.get(row.id)!)),
-      total: filtered.length,
-      nextCursor:
-        start + page.length < filtered.length
-          ? (page.at(-1)?.id ?? null)
-          : null,
+      modelKey: policy.modelKey,
+      policyKey: candidateReviewPolicyKey(policy),
+      classes: policy.labels.map((label) => ({
+        label,
+        text:
+          presentation.find((entry) => entry.label === label)?.text ?? label,
+        tone:
+          presentation.find((entry) => entry.label === label)?.tone ??
+          ("neutral" as const),
+        triageGroup: policy.positiveLabels.includes(label)
+          ? ("priority" as const)
+          : policy.lowPriorityLabels?.includes(label)
+            ? ("low_priority" as const)
+            : ("uncertain" as const),
+      })),
     };
+  }
+  private reviewDto(
+    candidate: Parameters<CandidatesService["dto"]>[0],
+    row?: CandidateReviewRow,
+  ) {
+    const dto = this.dto(candidate);
+    const reason = row?.reason_json ?? emptyCandidateReviewReason;
+    return {
+      ...dto,
+      ...(row && "representative_class" in row
+        ? {
+            classificationTags: row.representative_class
+              ? this.reviewPolicy()
+                  .classes.filter(
+                    (entry) => entry.label === row.representative_class,
+                  )
+                  .map(({ label, text, tone }) => ({ label, text, tone }))
+              : [],
+          }
+        : {}),
+      triageGroup: row?.triage_group ?? dto.triageGroup,
+      triageReasons: reason.triageReasons,
+      tagRuleMatches: reason.tagRuleMatches,
+      hashtags: row ? reason.hashtags : dto.hashtags,
+    };
+  }
+  createReviewSession(actorId: string, input: CreateCandidateReviewSessionDto) {
+    return this.reviewSessions.create(actorId, input, this.queryPolicy);
+  }
+  cleanupReviewSessions() {
+    return this.reviewSessions.cleanup();
+  }
+
+  async list(
+    query: CandidateQueryDto,
+    actorId?: string,
+  ): Promise<CandidatePageDto> {
+    const filter = normalizeCandidateFilter(query);
+    const policy = this.queryPolicy;
+    const binding = {
+      sessionId: query.reviewSessionId ?? null,
+      filterHash: candidateFilterHash(filter),
+      modelKey: policy.modelKey,
+      group: query.triageGroup ?? null,
+    };
+    const limit = Math.min(100, Math.max(1, query.limit ?? 24));
+    return this.db.$transaction(
+      async (tx) => {
+        const session = query.reviewSessionId
+          ? await this.reviewSessions.read(
+              tx,
+              query.reviewSessionId,
+              actorId ?? "",
+              filter,
+              policy.modelKey,
+            )
+          : null;
+        if (actorId && !session) await assertCandidateReader(tx, actorId);
+        const cursor = query.cursor
+          ? decodeCandidateCursor(query.cursor, binding, session?.cursorSecret)
+          : null;
+        type PageRow = {
+          id: string;
+          ordinal: number;
+          rank: number;
+          sort_score: number;
+          posted_at: Date;
+          triage_group: CandidateReviewRow["triage_group"];
+          reason_json: CandidateReviewRow["reason_json"];
+          representative_class?: string | null;
+        };
+        let page: PageRow[];
+        let total: number;
+        if (session) {
+          const where = Prisma.sql`e.session_id = ${session.id}::uuid AND ${candidateBaseWhere(filter)} ${query.triageGroup ? Prisma.sql`AND e.triage_group = ${query.triageGroup}` : Prisma.empty}`;
+          const count = await tx.$queryRaw<
+            { count: number }[]
+          >`SELECT count(*)::int AS count FROM candidate_review_session_entries e JOIN candidate_posts c ON c.id = e.candidate_id JOIN authors a ON a.id = c.author_id WHERE ${where}`;
+          total = count[0].count;
+          page = await tx.$queryRaw<
+            PageRow[]
+          >`SELECT c.id, e.ordinal, e.triage_group, e.reason_json FROM candidate_review_session_entries e JOIN candidate_posts c ON c.id = e.candidate_id JOIN authors a ON a.id = c.author_id WHERE ${where} AND e.ordinal > ${cursor?.ordinal ?? 0} ORDER BY e.ordinal LIMIT ${limit + 1}`;
+        } else {
+          const rules = await candidateTagRules(tx);
+          const cte = candidateRankingCte(filter, policy, rules.rules);
+          const group = query.triageGroup
+            ? Prisma.sql`triage_group = ${query.triageGroup}`
+            : Prisma.sql`true`;
+          const count = await tx.$queryRaw<
+            { count: number }[]
+          >`${cte} SELECT count(*)::int AS count FROM ranked WHERE ${group}`;
+          total = count[0].count;
+          // id sorts descending too; spell out the final tie instead of negating UUIDs.
+          const keyset = cursor
+            ? Prisma.sql`AND (rank > ${cursor.rank} OR (rank = ${cursor.rank} AND (sort_score < ${cursor.score} OR (sort_score = ${cursor.score} AND (posted_at < ${new Date(cursor.postedAt!)} OR (posted_at = ${new Date(cursor.postedAt!)} AND id < ${cursor.id}::uuid))))))`
+            : Prisma.empty;
+          page = await tx.$queryRaw<
+            PageRow[]
+          >`${cte} SELECT id, rank, sort_score, posted_at, triage_group, reason_json, representative_class FROM ranked WHERE ${group} ${keyset} ORDER BY rank, sort_score DESC, posted_at DESC, id DESC LIMIT ${limit + 1}`;
+        }
+        const hasNext = page.length > limit;
+        page = page.slice(0, limit);
+        const loaded = page.length
+          ? await tx.candidatePost.findMany({
+              where: {
+                id: { in: page.map((row) => row.id) },
+                status: filter.status,
+                author: { deletedAt: null },
+              },
+              include: this.detailsWithAnalysis(),
+            })
+          : [];
+        if (session && page.length) {
+          const live = await tx.$queryRaw<
+            { id: string; representative_class: string | null }[]
+          >`${candidateRankingCte(
+            filter,
+            policy,
+            [],
+            page.map((row) => row.id),
+          )} SELECT id,representative_class FROM ranked`;
+          const classes = new Map(
+            live.map((row) => [row.id, row.representative_class]),
+          );
+          for (const row of page)
+            row.representative_class = classes.get(row.id) ?? null;
+        }
+        const byId = new Map(loaded.map((row) => [row.id, row]));
+        const pending = await tx.$queryRaw<{ pending: boolean }[]>(
+          candidatePendingSql(filter, policy.modelKey, session?.id),
+        );
+        const last = page.at(-1);
+        return {
+          analysisPending: pending[0].pending,
+          items: page.flatMap((row) => {
+            const current = byId.get(row.id);
+            return current ? [this.reviewDto(current, row)] : [];
+          }),
+          total,
+          nextCursor:
+            hasNext && last
+              ? encodeCandidateCursor(
+                  {
+                    ...binding,
+                    ...(session
+                      ? { ordinal: last.ordinal }
+                      : {
+                          rank: last.rank,
+                          score: last.sort_score,
+                          postedAt: last.posted_at.toISOString(),
+                          id: last.id,
+                        }),
+                  },
+                  session?.cursorSecret,
+                )
+              : null,
+        };
+      },
+      { timeout: 30_000 },
+    );
   }
 
   async get(id: string): Promise<CandidateDto> {
     const candidate = await this.db.candidatePost.findUnique({
       where: { id },
-      include: details,
+      include: this.detailsWithAnalysis(),
     });
     if (!candidate) throw new NotFoundException("候选不存在");
-    return this.dto(candidate);
+    const rules = await candidateTagRules(this.db);
+    const rows = await this.db.$queryRaw<
+      CandidateReviewRow[]
+    >`${candidateRankingCte(normalizeCandidateFilter({ status: candidate.status }), this.queryPolicy, rules.rules, [id])} SELECT id,triage_group,reason_json,representative_class FROM ranked`;
+    return this.reviewDto(candidate, rows[0]);
   }
 
   async listTagGroups(): Promise<CandidateTagGroupDto[]> {
@@ -443,6 +504,8 @@ export class CandidatesService {
   async createTagGroup(
     input: CreateCandidateTagGroupDto,
   ): Promise<CandidateTagGroupDto> {
+    if (input.kind === "gray")
+      throw new BadRequestException("不能新建灰名单规则");
     const aliases = this.tagAliases(input.aliases);
     await this.withCandidateConflict(() =>
       this.db.candidateTagGroup.create({
@@ -454,7 +517,6 @@ export class CandidatesService {
         },
       }),
     );
-    await this.refreshAllTagDispositions();
     return (await this.listTagGroups()).find(
       (group) => group.name === input.name.trim(),
     )!;
@@ -467,6 +529,12 @@ export class CandidatesService {
     const aliases = this.tagAliases(input.aliases);
     await this.withCandidateConflict(() =>
       this.db.$transaction(async (tx) => {
+        const existing = await tx.candidateTagGroup.findUnique({
+          where: { id },
+          select: { kind: true },
+        });
+        if (input.kind === "gray" && existing?.kind !== "gray")
+          throw new BadRequestException("不能新增灰名单行为");
         const changed = await tx.candidateTagGroup.updateMany({
           where: { id, revision: input.expectedRevision },
           data: {
@@ -484,34 +552,7 @@ export class CandidatesService {
         });
       }),
     );
-    await this.refreshAllTagDispositions();
     return (await this.listTagGroups()).find((group) => group.id === id)!;
-  }
-
-  async setClassification(
-    actorId: string,
-    id: string,
-    input: SetCandidateClassificationDto,
-  ): Promise<CandidateDto> {
-    if (!(await this.db.candidatePost.count({ where: { id } })))
-      throw new NotFoundException("候选不存在");
-    const existing = await this.db.candidateClassificationDecision.findUnique({
-      where: { candidatePostId: id },
-    });
-    if (existing && input.expectedRevision !== existing.revision)
-      throw new ConflictException("人工分类已更新，请刷新后重试");
-    if (!existing && input.expectedRevision !== null)
-      throw new ConflictException("人工分类状态已变化，请刷新后重试");
-    await this.db.candidateClassificationDecision.upsert({
-      where: { candidatePostId: id },
-      create: { candidatePostId: id, label: input.label, decidedById: actorId },
-      update: {
-        label: input.label,
-        decidedById: actorId,
-        revision: { increment: 1 },
-      },
-    });
-    return this.get(id);
   }
 
   private tagAliases(values: string[]) {
@@ -524,50 +565,6 @@ export class CandidatesService {
     )
       throw new BadRequestException("标签别名不能重复");
     return valid;
-  }
-
-  private async refreshAllTagDispositions() {
-    await this.db.$executeRaw`
-      UPDATE candidate_posts AS candidate
-      SET tag_disposition = CASE
-        WHEN EXISTS (
-          SELECT 1 FROM candidate_hashtags AS hashtag
-          JOIN candidate_tag_aliases AS alias ON alias.normalized_value = hashtag.normalized_value
-          JOIN candidate_tag_groups AS tag_group ON tag_group.id = alias.group_id
-          WHERE hashtag.candidate_post_id = candidate.id
-            AND tag_group.enabled = true
-            AND tag_group.kind = 'blocked'::"CandidateTagGroupKind"
-        ) THEN 'blocked'::"CandidateTagDisposition"
-        WHEN EXISTS (
-          SELECT 1 FROM candidate_hashtags AS hashtag
-          JOIN candidate_tag_aliases AS alias ON alias.normalized_value = hashtag.normalized_value
-          JOIN candidate_tag_groups AS tag_group ON tag_group.id = alias.group_id
-          WHERE hashtag.candidate_post_id = candidate.id
-            AND tag_group.enabled = true
-            AND tag_group.kind = 'valid'::"CandidateTagGroupKind"
-        ) THEN 'valid'::"CandidateTagDisposition"
-        ELSE 'neutral'::"CandidateTagDisposition"
-      END
-    `;
-  }
-
-  private async tagDisposition(
-    db: Prisma.TransactionClient | PrismaService,
-    hashtags: { normalizedValue: string }[],
-  ): Promise<CandidateTagDisposition> {
-    if (!hashtags.length) return CandidateTagDisposition.neutral;
-    const matches = await db.candidateTagAlias.findMany({
-      where: {
-        normalizedValue: { in: hashtags.map((tag) => tag.normalizedValue) },
-        group: { enabled: true, kind: { in: ["valid", "blocked"] } },
-      },
-      select: { group: { select: { kind: true } } },
-    });
-    if (matches.some(({ group }) => group.kind === "blocked"))
-      return CandidateTagDisposition.blocked;
-    if (matches.some(({ group }) => group.kind === "valid"))
-      return CandidateTagDisposition.valid;
-    return CandidateTagDisposition.neutral;
   }
 
   private async withCandidateConflict<T>(action: () => Promise<T>) {
@@ -849,6 +846,24 @@ export class CandidatesService {
   ): Promise<CandidateUploadSessionDto> {
     const canUpload =
       session.status === "pending" && session.expiresAt.getTime() > Date.now();
+    const reviewRows = new Map<string, CandidateReviewRow>();
+    const candidates = session.items.flatMap((item) =>
+      item.candidatePost ? [item.candidatePost] : [],
+    );
+    if (candidates.length) {
+      const rules = await candidateTagRules(this.db);
+      for (const status of new Set(
+        candidates.map((candidate) => candidate.status),
+      )) {
+        const ids = candidates
+          .filter((candidate) => candidate.status === status)
+          .map((candidate) => candidate.id);
+        const rows = await this.db.$queryRaw<
+          CandidateReviewRow[]
+        >`${candidateRankingCte(normalizeCandidateFilter({ status }), this.queryPolicy, rules.rules, ids)} SELECT id,triage_group,reason_json,representative_class FROM ranked`;
+        for (const row of rows) reviewRows.set(row.id, row);
+      }
+    }
     const items = await Promise.all(
       session.items.map(async (item) => {
         const lifetime = Math.min(
@@ -890,7 +905,12 @@ export class CandidatesService {
                 (warning): warning is string => typeof warning === "string",
               )
             : [],
-          candidate: item.candidatePost ? this.dto(item.candidatePost) : null,
+          candidate: item.candidatePost
+            ? this.reviewDto(
+                item.candidatePost,
+                reviewRows.get(item.candidatePost.id),
+              )
+            : null,
         };
       }),
     );
@@ -971,7 +991,6 @@ export class CandidatesService {
         await this.assertUploadActor(tx, actorId, input.authorId);
         const candidateText = input.text?.trim() || null;
         const hashtags = collectHashtags([], candidateText ?? undefined);
-        const tagDisposition = await this.tagDisposition(tx, hashtags);
         const candidate = await tx.candidatePost.create({
           data: {
             authorId: input.authorId,
@@ -987,7 +1006,6 @@ export class CandidatesService {
               automaticallySorted: group.automaticallySorted,
               warnings: group.warnings,
             },
-            tagDisposition,
             hashtags: { create: hashtags },
             sourceObservations: {
               create: {
@@ -1094,14 +1112,12 @@ export class CandidatesService {
       ) {
         throw new ConflictException("候选已更新或当前状态不能修改上传信息");
       }
-      const tagDisposition = await this.tagDisposition(tx, hashtags);
       const changed = await tx.candidatePost.updateMany({
         where: { id, status: "pending", revision: input.expectedRevision },
         data: {
           authorId: input.authorId,
           text,
           externalPostUrl: input.sourceUrl?.trim() || null,
-          tagDisposition,
           revision: { increment: 1 },
         },
       });

@@ -35,6 +35,9 @@ import {
   CandidateDto,
   CandidatePageDto,
   CandidateQueryDto,
+  CreateCandidateReviewSessionDto,
+  CandidateReviewSessionDto,
+  CandidateReviewPolicyDto,
   CandidateUploadSessionDto,
   CandidateTagGroupDto,
   CreateCandidateTagGroupDto,
@@ -42,7 +45,6 @@ import {
   ManualCandidateUploadDto,
   ManualUploadResultDto,
   ReorderCandidateMediaDto,
-  SetCandidateClassificationDto,
   UpdateManualCandidateDto,
   UpdateCandidateTagGroupDto,
 } from "./candidates.dto.js";
@@ -73,8 +75,32 @@ export class CandidatesController {
   @ApiOperation({ operationId: "listCandidates" })
   @ApiQuery({ type: CandidateQueryDto })
   @ApiOkResponse({ type: CandidatePageDto })
-  list(@Query(bodyValidation(CandidateQueryDto)) query: CandidateQueryDto) {
-    return this.candidates.list(query);
+  list(
+    @Req() request: AuthRequest,
+    @Query(bodyValidation(CandidateQueryDto)) query: CandidateQueryDto,
+  ) {
+    return this.candidates.list(query, request.actor.userId);
+  }
+
+  @Post("review-sessions")
+  @Access({ permission: "candidates:read" })
+  @ApiOperation({ operationId: "createCandidateReviewSession" })
+  @ApiBody({ type: CreateCandidateReviewSessionDto })
+  @ApiCreatedResponse({ type: CandidateReviewSessionDto })
+  createReviewSession(
+    @Req() request: AuthRequest,
+    @Body(bodyValidation(CreateCandidateReviewSessionDto))
+    input: CreateCandidateReviewSessionDto,
+  ) {
+    return this.candidates.createReviewSession(request.actor.userId, input);
+  }
+
+  @Get("review-policy")
+  @Access({ permission: "candidates:read" })
+  @ApiOperation({ operationId: "getCandidateReviewPolicy" })
+  @ApiOkResponse({ type: CandidateReviewPolicyDto })
+  reviewPolicy() {
+    return this.candidates.reviewPolicy();
   }
 
   @Get("tag-groups")
@@ -109,21 +135,6 @@ export class CandidatesController {
     input: UpdateCandidateTagGroupDto,
   ) {
     return this.candidates.updateTagGroup(id, input);
-  }
-
-  @Patch(":id/classification")
-  @Access({ permission: "candidates:manage" })
-  @ApiOperation({ operationId: "setCandidateClassification" })
-  @ApiParam({ name: "id", format: "uuid" })
-  @ApiBody({ type: SetCandidateClassificationDto })
-  @ApiOkResponse({ type: CandidateDto })
-  setClassification(
-    @Req() request: AuthRequest,
-    @Param("id", ParseUUIDPipe) id: string,
-    @Body(bodyValidation(SetCandidateClassificationDto))
-    input: SetCandidateClassificationDto,
-  ) {
-    return this.candidates.setClassification(request.actor.userId, id, input);
   }
 
   @Patch(":id/manual-metadata")
