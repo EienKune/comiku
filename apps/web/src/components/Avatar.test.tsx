@@ -2,6 +2,19 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Avatar } from "./Avatar";
 afterEach(cleanup);
+
+test.each([
+  ["未来", "未"],
+  ["👩🏽‍🎨 artist", "👩🏽‍🎨"],
+  ["e\u0301clair", "e\u0301"],
+  ["🇨🇳 author", "🇨🇳"],
+  ["  ", "?"],
+])("avatar keeps the first complete character of %s", (name, expected) => {
+  render(<Avatar name={name} />);
+  expect(screen.getByRole("img").textContent).toBe(expected);
+  if (!name.trim())
+    expect(screen.getByRole("img", { name: "头像" })).toBeTruthy();
+});
 test("avatar falls back after a read failure and displays a replacement", () => {
   const failed = vi.fn();
   const { container, rerender } = render(

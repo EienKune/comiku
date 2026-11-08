@@ -11,6 +11,7 @@ import { PrismaService } from "../../src/database/prisma.service.js";
 import { AuthorsService } from "../../src/authors/authors.service.js";
 import { ContentSourceRegistry } from "../../src/source-ingestion/source-registry.js";
 import { hashPassword } from "../../src/users/password.js";
+import { ProfileProofs } from "../../src/authors/profile-proof.js";
 
 loadRootEnvironment();
 const testUrl = process.env.TEST_DATABASE_URL;
@@ -190,13 +191,37 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       200,
     );
 
+    const xIdentity = BigInt(
+      `0x${randomUUID().replaceAll("-", "").slice(0, 15)}`,
+    ).toString();
+    const profileProofs = new ProfileProofs();
+    // Substitute server-issued evidence in this HTTP lifecycle fixture. Real
+    // native resolution and proof trust boundaries have their own synthetic tests.
+    const profileProof = (
+      targetAuthorId: string,
+      externalUserId: string,
+      handle: string,
+    ) =>
+      profileProofs.issue(
+        {
+          platform: "x",
+          externalUserId,
+          handle,
+          avatarFileObjectId: null,
+          adapterKey: "x_gallery_dl",
+          syncedAt: new Date().toISOString(),
+        },
+        source.userId!,
+        targetAuthorId,
+      );
     const account = await request<{
       id: string;
       revision: number;
       providerAvailable: boolean;
     }>(source, "POST", `/api/authors/${authorId}/accounts`, {
       platform: "X",
-      externalUserId: `fixture-${prefix}`,
+      externalUserId: xIdentity,
+      profileProof: profileProof(authorId, xIdentity, "fixture"),
       handle: "fixture",
       profileUrl: "https://x.com/fixture",
       displayNameSnapshot: "Fixture",
@@ -233,14 +258,25 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
         `/api/authors/${authorId}`,
       )
     ).data.externalAccounts[0];
-    assert.equal("fetchEnabled" in publicAccount, false);
-    assert.equal(publicAccount.externalUserId, `fixture-${prefix}`);
+    assert.equal(publicAccount.fetchEnabled, true);
+    assert.deepEqual(Object.keys(publicAccount).sort(), [
+      "avatarAvailable",
+      "displayNameSnapshot",
+      "externalUserId",
+      "fetchEnabled",
+      "handle",
+      "id",
+      "platform",
+      "profileUrl",
+    ]);
+    assert.equal(publicAccount.externalUserId, xIdentity);
     const updatedAccount = await request<{ revision: number }>(
       source,
       "PATCH",
       `/api/authors/${authorId}/accounts/${account.data.id}`,
       {
         handle: "updated",
+        profileProof: profileProof(authorId, xIdentity, "updated"),
         profileUrl: null,
         displayNameSnapshot: null,
         fetchEnabled: false,
@@ -257,6 +293,7 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
           `/api/authors/${authorId}/accounts/${account.data.id}`,
           {
             handle: "stale",
+            profileProof: profileProof(authorId, xIdentity, "stale"),
             profileUrl: null,
             displayNameSnapshot: null,
             fetchEnabled: false,
@@ -330,7 +367,12 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       (
         await request(source, "POST", `/api/authors/${authorId}/accounts`, {
           platform: "x",
-          externalUserId: `other-${prefix}`,
+          externalUserId: (BigInt(xIdentity) + 10n).toString(),
+          profileProof: profileProof(
+            authorId,
+            (BigInt(xIdentity) + 10n).toString(),
+            "other",
+          ),
           handle: "other",
           fetchEnabled: false,
           firstSyncMode: "none",
@@ -349,7 +391,7 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       ).status,
       403,
     );
-    const replacement = await request<{ id: string; revision: number }>(
+    const rejectedIdentity = await request(
       source,
       "PATCH",
       `/api/authors/${authorId}/accounts/${pixiv.data.id}`,
@@ -361,8 +403,58 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
         expectedRevision: pixiv.data.revision,
       },
     );
-    assert.equal(replacement.status, 200);
-    assert.notEqual(replacement.data.id, pixiv.data.id);
+    assert.equal(rejectedIdentity.status, 409);
+    const unchangedAccounts = await request<
+      {
+        id: string;
+        externalUserId: string;
+        revision: number;
+        displayNameSnapshot: string | null;
+      }[]
+    >(source, "GET", `/api/authors/${authorId}/accounts`);
+    const unchangedPixiv = unchangedAccounts.data.find(
+      (item) => item.id === pixiv.data.id,
+    );
+    assert.equal(unchangedPixiv?.externalUserId, pixivId);
+    assert.equal(unchangedPixiv?.revision, pixiv.data.revision);
+    assert.notEqual(unchangedPixiv?.displayNameSnapshot, "新昵称");
+    const editedAccount = await request<{ id: string; revision: number }>(
+      source,
+      "PATCH",
+      `/api/authors/${authorId}/accounts/${pixiv.data.id}`,
+      {
+        externalUserId: pixivId,
+        displayNameSnapshot: "新昵称",
+        fetchEnabled: false,
+        firstSyncMode: "none",
+        expectedRevision: pixiv.data.revision,
+      },
+    );
+    assert.equal(editedAccount.status, 200);
+    assert.equal(editedAccount.data.id, pixiv.data.id);
+    assert.equal(
+      (
+        await request<unknown[]>(
+          source,
+          "GET",
+          `/api/authors/${authorId}/accounts/archived`,
+        )
+      ).data.length,
+      0,
+    );
+    assert.equal(
+      (
+        await request(
+          source,
+          "DELETE",
+          `/api/authors/${authorId}/accounts/${pixiv.data.id}`,
+          {
+            expectedRevision: editedAccount.data.revision,
+          },
+        )
+      ).status,
+      200,
+    );
     const archivedAccounts = await request<{ id: string; revision: number }[]>(
       source,
       "GET",
@@ -371,28 +463,6 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
     assert.equal(archivedAccounts.data.length, 1);
     const oldAccount = archivedAccounts.data[0];
     assert.equal(oldAccount.id, pixiv.data.id);
-    assert.equal(
-      (
-        await request(
-          source,
-          "POST",
-          `/api/authors/${authorId}/accounts/${oldAccount.id}/restore`,
-          { expectedRevision: oldAccount.revision },
-        )
-      ).status,
-      409,
-    );
-    assert.equal(
-      (
-        await request(
-          source,
-          "DELETE",
-          `/api/authors/${authorId}/accounts/${replacement.data.id}`,
-          { expectedRevision: replacement.data.revision },
-        )
-      ).status,
-      200,
-    );
     const restoredAccount = await request<{ fetchEnabled: boolean }>(
       source,
       "POST",
@@ -415,7 +485,7 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
           },
         )
       ).status,
-      400,
+      409,
     );
 
     const raceAuthor = await request<{ id: string }>(
@@ -428,7 +498,12 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       [1, 2].map((index) =>
         request(source, "POST", `/api/authors/${raceAuthor.data.id}/accounts`, {
           platform: "x",
-          externalUserId: `race-${prefix}-${index}`,
+          externalUserId: (BigInt(xIdentity) + BigInt(index)).toString(),
+          profileProof: profileProof(
+            raceAuthor.data.id,
+            (BigInt(xIdentity) + BigInt(index)).toString(),
+            "race",
+          ),
           handle: "race",
           fetchEnabled: false,
           firstSyncMode: "none",

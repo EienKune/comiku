@@ -416,6 +416,26 @@ p {
   font-weight: var(--font-weight-control);
 }
 
+.ui-field__input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ui-field__input-row > .ui-field__control {
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .ui-field__input-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ui-field__input-row > .ui-button {
+    justify-self: start;
+  }
+}
+
 .ui-field__control {
   display: flex;
   align-items: center;

@@ -13,6 +13,7 @@ from urllib.parse import urlsplit, parse_qsl, unquote
 
 from gallery_dl import config, version
 from gallery_dl.extractor import twitter, pixiv
+from gallery_dl.extractor.common import Extractor
 from gallery_dl.util import NullResponse
 from pixiv_paging import PixivPager
 from pixiv_caption import plain_caption
@@ -346,6 +347,17 @@ def install_pixiv_ajax_checks(ext):
             raise error
         return result
     ext.request, ext._request_ajax = request, ajax
+
+
+def install_pixiv_rate_limit_guard(ext):
+    # The pinned native API sleeps for 300s after a rate-limit response.
+    # Return that outcome to the platform scheduler instead of timing out here.
+    wait = ext.wait
+    def rate_limit_wait(*args, **kwargs):
+        if kwargs.get("seconds") == 300:
+            raise AdapterError("rate_limited")
+        return wait(*args, **kwargs)
+    ext.wait = rate_limit_wait
 
 
 def collect(source, cursor):
@@ -700,12 +712,7 @@ def collect(source, cursor):
             work["type"] = ("illust", "manga", "ugoira")[artwork_type]
             return () if artwork_type == 2 else files
         ext._extract_ajax = typed_extract_ajax
-        wait = ext.wait
-        def rate_limit_wait(*args, **kwargs):
-            if kwargs.get("seconds") == 300:
-                raise AdapterError("rate_limited")
-            return wait(*args, **kwargs)
-        ext.wait = rate_limit_wait
+        install_pixiv_rate_limit_guard(ext)
         pager = PixivPager(ext, source, cursor, result, pixiv_cursor, AdapterError, PageDone, remember)
         original = pager.works
         slot = "works"
@@ -1000,6 +1007,73 @@ def collect_post(source, post_id):
         raise error from None
 
 
+def collect_profile(source):
+    """Native info metadata only; never enumerate a user's timeline."""
+    platform = source.get("platform")
+    if version.__version__ != "1.32.11" or platform not in ("x", "pixiv"):
+        raise AdapterError("runtime_unavailable")
+    remote_id, handle = source.get("remote_id"), source.get("handle")
+    if remote_id is not None or platform == "pixiv":
+        if not isinstance(remote_id, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", remote_id):
+            raise AdapterError("source_unresolved")
+        target = "id:" + remote_id
+    else:
+        if not isinstance(handle, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,15}", handle):
+            raise AdapterError("source_unresolved")
+        target = handle
+    ext = None
+    try:
+        if platform == "pixiv":
+            # Dispatching items() would enumerate artworks. The native App API
+            # shares this initialized extractor's configuration and credentials.
+            ext = pixiv.PixivUserExtractor.from_url("https://www.pixiv.net/users/" + remote_id)
+            # Dispatch.initialize is a no-op; native profile items also invokes
+            # the base initializer explicitly before constructing PixivAppAPI.
+            Extractor.initialize(ext)
+            install_pixiv_rate_limit_guard(ext)
+            response = pixiv.PixivAppAPI(ext).user_detail(remote_id)
+            if not isinstance(response, dict) or "error" in response or not isinstance(response.get("user"), dict):
+                raise AdapterError("source_unresolved")
+            data = response["user"]
+            uid = data.get("id")
+            if type(uid) not in (str, int) or not re.fullmatch(r"[1-9][0-9]{0,19}", str(uid)):
+                raise AdapterError("source_unresolved")
+            uid = str(uid)
+            if uid != remote_id:
+                raise AdapterError("source_identity_conflict")
+            name, images = data.get("name"), data.get("profile_image_urls")
+            avatar = images.get("medium") if isinstance(images, dict) else None
+            return {"version": 1, "platform": "pixiv", "profile": {
+                "external_user_id": uid,
+                "display_name": name.strip() if isinstance(name, str) and name.strip() else uid,
+                "avatar_url": avatar if isinstance(avatar, str) else None,
+            }}
+        config.set(("extractor", "twitter"), "metadata-user", False)
+        config.set(("extractor", "twitter"), "transform", True)
+        config.set(("extractor", "twitter"), "ratelimit", "abort")
+        ext = twitter.TwitterInfoExtractor.from_url("https://x.com/" + target + "/info")
+        ext.initialize()
+        install_x_http_checks(ext)
+        entries = list(ext.items())
+        if len(entries) != 1 or len(entries[0]) != 3 or entries[0][0] != 2:
+            raise AdapterError("source_unresolved")
+        data = entries[0][2]
+        uid, name = str(data.get("id", "")), data.get("name")
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", uid) or not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,15}", name):
+            raise AdapterError("source_unresolved")
+        if (remote_id is not None and remote_id != uid) or (remote_id is None and handle.lower() != name.lower()):
+            raise AdapterError("source_identity_conflict")
+        return {"version": 1, "platform": "x", "profile": {
+            "external_user_id": uid, "handle": name,
+            "display_name": data.get("nick") if isinstance(data.get("nick"), str) else name,
+            "avatar_url": data.get("profile_image") if isinstance(data.get("profile_image"), str) else None,
+        }}
+    except Exception as exc:
+        error = exc if isinstance(exc, AdapterError) else AdapterError(safe_error(exc))
+        error.result = {"error": str(error), "diagnostic": safe_diagnostic(attach_http_diagnostic(ext, exc), "profile")}
+        raise error from None
+
+
 def stringify_ids(value):
     """Preserve platform identifiers across the JSON -> JavaScript boundary."""
     if isinstance(value, dict):
@@ -1026,7 +1100,9 @@ def main():
         config.set(("extractor",), "sleep-request", 0)
         source = request["source"]
         mode = source.get("mode", "page")
-        if mode == "post":
+        if mode == "profile":
+            result = collect_profile(source)
+        elif mode == "post":
             result = collect_post(source, source.get("post_id"))
         elif mode == "page":
             result = collect(source, request.get("cursor"))

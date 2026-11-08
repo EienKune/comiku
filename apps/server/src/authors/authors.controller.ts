@@ -36,6 +36,7 @@ import { bodyValidation } from "../common/http.js";
 import type { ManualUploadFile } from "../candidates/manual-candidate-upload.js";
 import {
   AuthorDto,
+  AuthorCreationResultDto,
   AuthorEvidenceDto,
   AuthorEvidenceUploadDto,
   AuthorImportPreviewDto,
@@ -50,6 +51,8 @@ import {
   ManagedAuthorDto,
   ReorderAuthorEvidenceDto,
   ResolvedXProfileDto,
+  ResolvedPixivProfileDto,
+  ResolvePixivProfileDto,
   ResolveXProfileDto,
   RevisionDto,
   SourceCapabilityDto,
@@ -200,6 +203,25 @@ export class AuthorsController {
       request.actor.userId,
       input.handle,
       input.authorId,
+      input.accountId,
+    );
+  }
+
+  @Post("pixiv-profile/resolve")
+  @HttpCode(200)
+  @Access({ permission: "authors:manage" })
+  @ApiOperation({ operationId: "resolvePixivProfile" })
+  @ApiBody({ type: ResolvePixivProfileDto })
+  @ApiOkResponse({ type: ResolvedPixivProfileDto })
+  resolvePixivProfile(
+    @Req() request: AuthRequest,
+    @Body(bodyValidation(ResolvePixivProfileDto)) input: ResolvePixivProfileDto,
+  ) {
+    return this.authors.resolvePixivProfile(
+      request.actor.userId,
+      input.externalUserId,
+      input.authorId,
+      input.accountId,
     );
   }
 
@@ -208,8 +230,25 @@ export class AuthorsController {
   @ApiOperation({ operationId: "createAuthor" })
   @ApiBody({ type: CreateAuthorDto })
   @ApiCreatedResponse({ type: ManagedAuthorDto })
-  create(@Body(bodyValidation(CreateAuthorDto)) input: CreateAuthorDto) {
-    return this.authors.create(input);
+  create(
+    @Req() request: AuthRequest,
+    @Body(bodyValidation(CreateAuthorDto)) input: CreateAuthorDto,
+  ) {
+    return this.authors.create(input, request.actor.userId);
+  }
+
+  @Get("creation-requests/:idempotencyKey")
+  @Access({ permission: "authors:manage" })
+  @ApiOperation({ operationId: "getAuthorCreationResult" })
+  @ApiParam({ name: "idempotencyKey", format: "uuid" })
+  @ApiOkResponse({ type: AuthorCreationResultDto })
+  creationResult(
+    @Req() request: AuthRequest,
+    @Param("idempotencyKey", ParseUUIDPipe) idempotencyKey: string,
+  ) {
+    return this.authors
+      .getCreationResult(request.actor.userId, idempotencyKey)
+      .then((author) => ({ author }));
   }
 
   @Get(":id")
@@ -275,6 +314,15 @@ export class AuthorsController {
       input.expectedRevision,
       file,
     );
+  }
+
+  @Get(":id/managed")
+  @Access({ permission: "authors:manage" })
+  @ApiOperation({ operationId: "getManagedAuthor" })
+  @ApiParam({ name: "id", format: "uuid" })
+  @ApiOkResponse({ type: ManagedAuthorDto })
+  managed(@Param("id", ParseUUIDPipe) id: string) {
+    return this.authors.getManaged(id);
   }
 
   @Get(":id/authorization-evidence")
@@ -424,11 +472,12 @@ export class AuthorsController {
   @ApiBody({ type: CreateExternalAccountDto })
   @ApiCreatedResponse({ type: ExternalAccountDto })
   createAccount(
+    @Req() request: AuthRequest,
     @Param("authorId", ParseUUIDPipe) authorId: string,
     @Body(bodyValidation(CreateExternalAccountDto))
     input: CreateExternalAccountDto,
   ) {
-    return this.authors.createAccount(authorId, input);
+    return this.authors.createAccount(authorId, input, request.actor.userId);
   }
 
   @Get(":authorId/accounts")

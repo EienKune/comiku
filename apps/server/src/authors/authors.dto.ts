@@ -6,6 +6,7 @@ import {
   IsBoolean,
   IsEnum,
   IsInt,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -16,8 +17,10 @@ import {
   Max,
   Min,
   MinLength,
+  ValidateNested,
+  ValidateIf,
 } from "class-validator";
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional, OmitType } from "@nestjs/swagger";
 import {
   AuthorizationStatus,
   FirstSyncMode,
@@ -29,6 +32,21 @@ const trimmed = ({ value }: { value: unknown }) =>
   typeof value === "string" ? value.trim() : value;
 
 export class CreateAuthorDto {
+  @ApiPropertyOptional({
+    enum: ["x", "pixiv"],
+    description: "使用该平台经验证的账号头像作为作者头像；仅用于创建意图",
+  })
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsIn(["x", "pixiv"])
+  profileSourcePlatform?: "x" | "pixiv";
+
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 2000 })
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @MaxLength(2000)
+  notes?: string | null;
+
   @ApiProperty({ type: String, minLength: 1, maxLength: 100 })
   @Transform(trimmed)
   @IsString()
@@ -51,6 +69,34 @@ export class CreateAuthorDto {
   @IsString({ each: true })
   @MaxLength(64, { each: true })
   tagNames!: string[];
+
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    description: "同一保存意图重试时保留；不同资料复用将返回409。",
+  })
+  @IsOptional()
+  @IsUUID()
+  idempotencyKey?: string;
+
+  @ApiPropertyOptional({
+    type: () => CreateAuthorAccountDto,
+    isArray: true,
+    maxItems: 10,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => CreateAuthorAccountDto)
+  accounts?: CreateAuthorAccountDto[];
+}
+
+export enum AuthorAccountFilter {
+  linked = "linked",
+  enabled = "enabled",
+  disabled = "disabled",
+  unlinked = "unlinked",
 }
 
 export class AuthorQueryDto {
@@ -83,6 +129,22 @@ export class AuthorQueryDto {
   @IsEnum(AuthorizationStatus)
   authorizationStatus?: AuthorizationStatus;
 
+  @ApiPropertyOptional({
+    enum: AuthorAccountFilter,
+    enumName: "AuthorAccountFilter",
+  })
+  @IsOptional()
+  @IsEnum(AuthorAccountFilter)
+  xState?: AuthorAccountFilter;
+
+  @ApiPropertyOptional({
+    enum: AuthorAccountFilter,
+    enumName: "AuthorAccountFilter",
+  })
+  @IsOptional()
+  @IsEnum(AuthorAccountFilter)
+  pixivState?: AuthorAccountFilter;
+
   @ApiPropertyOptional({ type: String, maxLength: 32 })
   @IsOptional()
   @Transform(trimmed)
@@ -97,7 +159,11 @@ export class AuthorQueryDto {
   tag?: string;
 }
 
-export class UpdateAuthorDto extends CreateAuthorDto {
+export class UpdateAuthorDto extends OmitType(CreateAuthorDto, [
+  "idempotencyKey",
+  "accounts",
+  "profileSourcePlatform",
+] as const) {
   @ApiProperty({ type: Number, minimum: 0 })
   @IsInt()
   @Min(0)
@@ -112,6 +178,22 @@ export class RevisionDto {
 }
 
 export class CreateExternalAccountDto {
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 2000 })
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @MaxLength(2000)
+  notes?: string | null;
+
+  @ApiPropertyOptional({
+    type: String,
+    maxLength: 4096,
+    description: "平台资料解析返回的短时身份凭证，绑定平台与稳定用户 ID",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  profileProof?: string;
   @ApiProperty({ type: String, pattern: "^[a-z][a-z0-9_-]{0,31}$" })
   @Transform(trimmed)
   @IsString()
@@ -168,12 +250,31 @@ export class CreateExternalAccountDto {
   firstSyncMode!: FirstSyncMode;
 }
 
+export class CreateAuthorAccountDto extends CreateExternalAccountDto {}
+
 export class UpdateExternalAccountDto {
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 2000 })
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @MaxLength(2000)
+  notes?: string | null;
+
+  @ApiPropertyOptional({
+    type: String,
+    maxLength: 4096,
+    description: "平台资料同步凭证；X 身份变更或重新启用采集时必须提供",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  profileProof?: string;
   @ApiPropertyOptional({
     type: String,
     minLength: 1,
     maxLength: 255,
-    description: "更换平台身份时归档旧关联并创建新关联，保留历史来源",
+    description:
+      "稳定平台用户 ID 不可修改；兼容旧客户端传入相同 ID，不同 ID 返回 409。新账号使用新建入口关联。",
   })
   @IsOptional()
   @Transform(trimmed)
@@ -261,6 +362,7 @@ export class ExternalAccountSummaryDto {
   @ApiProperty({ type: String, nullable: true }) displayNameSnapshot!:
     string | null;
   @ApiProperty({ type: Boolean }) avatarAvailable!: boolean;
+  @ApiProperty({ type: Boolean }) fetchEnabled!: boolean;
 }
 
 export class SourceAdapterStateDto {
@@ -293,8 +395,9 @@ export class UpdateSourceAdapterStateDto {
 }
 
 export class ExternalAccountDto extends ExternalAccountSummaryDto {
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 2000 })
+  notes?: string | null;
   @ApiProperty({ type: String, format: "uuid" }) authorId!: string;
-  @ApiProperty({ type: Boolean }) fetchEnabled!: boolean;
   @ApiProperty({ enum: FirstSyncMode, enumName: "FirstSyncMode" })
   firstSyncMode!: FirstSyncMode;
   @ApiProperty({ type: Boolean }) providerAvailable!: boolean;
@@ -332,11 +435,26 @@ export class AuthorPageDto {
 }
 
 export class ManagedAuthorDto extends AuthorDto {
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 2000 })
+  notes?: string | null;
   @ApiProperty({ type: ExternalAccountDto, isArray: true })
   declare externalAccounts: ExternalAccountDto[];
 }
 
+export class AuthorCreationResultDto {
+  @ApiProperty({ type: ManagedAuthorDto, nullable: true })
+  author!: ManagedAuthorDto | null;
+}
+
 export class ResolveXProfileDto {
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    description: "刷新已绑定账号时优先按该账号不可变数字 ID 查询",
+  })
+  @IsOptional()
+  @IsUUID()
+  accountId?: string;
   @ApiPropertyOptional({
     type: String,
     format: "uuid",
@@ -354,8 +472,38 @@ export class ResolveXProfileDto {
 }
 
 export class ResolvedXProfileDto {
+  @ApiProperty({ type: String }) profileProof!: string;
   @ApiProperty({ type: String }) externalUserId!: string;
   @ApiProperty({ type: String }) handle!: string;
+  @ApiProperty({ type: String }) displayName!: string;
+  @ApiProperty({ type: String }) profileUrl!: string;
+  @ApiProperty({ type: String, nullable: true, format: "uuid" })
+  avatarFileObjectId!: string | null;
+  @ApiProperty({ type: String, nullable: true }) avatarUrl!: string | null;
+  @ApiProperty({ type: String }) adapterKey!: string;
+  @ApiProperty({ type: String, format: "date-time" }) syncedAt!: string;
+}
+
+export class ResolvePixivProfileDto {
+  @ApiProperty({ type: String, pattern: "^[1-9][0-9]{0,19}$", maxLength: 20 })
+  @Transform(trimmed)
+  @IsString()
+  @Matches(/^[1-9][0-9]{0,19}$/)
+  externalUserId!: string;
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  @IsOptional()
+  @IsUUID()
+  authorId?: string;
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  @IsOptional()
+  @IsUUID()
+  accountId?: string;
+}
+
+export class ResolvedPixivProfileDto {
+  @ApiProperty({ type: String }) profileProof!: string;
+  @ApiProperty({ type: String }) externalUserId!: string;
+  @ApiProperty({ type: String, nullable: true, enum: [null] }) handle!: null;
   @ApiProperty({ type: String }) displayName!: string;
   @ApiProperty({ type: String }) profileUrl!: string;
   @ApiProperty({ type: String, nullable: true, format: "uuid" })

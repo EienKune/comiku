@@ -144,6 +144,27 @@ export class JobsService {
       (ReturnType<typeof jobEvent> & { reason: JobDeferredReason }) | undefined;
     const claimed = await this.db.$transaction(async (tx) => {
       await this.lockScope(tx, lane, executionScope);
+      // Interactive profile calls cannot be replayed after their HTTP owner dies.
+      // Also retire rows requeued by an older runtime before this cleanup existed.
+      if (lane === "network" && executionScope.startsWith("source:"))
+        await tx.backgroundJob.updateMany({
+          where: {
+            lane,
+            executionScope,
+            kind: "source_profile_resolve",
+            OR: [
+              { status: "running", leaseUntil: { lte: now } },
+              { status: "queued" },
+            ],
+          },
+          data: {
+            status: "failed",
+            leaseId: null,
+            leaseUntil: null,
+            completedAt: now,
+            lastError: "资料同步执行已中断，请重新提交请求",
+          },
+        });
       await tx.backgroundJob.updateMany({
         where: {
           lane,
@@ -166,6 +187,9 @@ export class JobsService {
             executionScope,
             status: "running",
             leaseUntil: { gt: now },
+            ...(lane === "network" && executionScope.startsWith("source:")
+              ? { kind: { not: "source_profile_resolve" } }
+              : {}),
           },
         })
       )

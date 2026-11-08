@@ -4,6 +4,8 @@ Python handles gallery-dl's native extractors; TypeScript owns Comiku identity, 
 
 Install `python/requirements.txt` in a separate Python environment. Set `GALLERY_DL_PYTHON` to its absolute Python executable and `GALLERY_DL_X_CONFIG` / `GALLERY_DL_PIXIV_CONFIG` to private gallery-dl JSON configurations outside this repository. The bridge requires gallery-dl 1.32.11 because its native pagination hooks are version-specific. Upgrades require replay and real-session validation.
 
+X profile resolution uses the pinned runtime's `TwitterInfoExtractor` metadata (`UserByScreenName` or `UserByRestId`), without scanning a timeline. Bound-account refreshes use the numeric ID so a renamed handle can be recovered. The bridge validates both identity fields and bounds this operation to 45 seconds; callers must use the shared platform network scope and credential gate. Avatar transfer is optional and must not invalidate resolved identity. See `AUTHOR_PROFILE_PROOF_SECRET` in the configuration guide for author-form proof handling across API instances.
+
 gallery-dl is an external dependency licensed under GPL-2.0-only. Its upstream source and license are at https://github.com/mikf/gallery-dl. No upstream extractor source is copied here. Preserve applicable dependency notices and source obligations when distributing a bundled runtime.
 
 Run offline checks with `python -m unittest discover -s apps/server/src/source-ingestion/adapters/gallery-dl/python`. These fixtures never use real credentials. Platform IDs are serialized as strings to preserve all digits in JavaScript. Missing or unavailable native photos fail the page rather than admitting a partial post.

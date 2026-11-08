@@ -60,6 +60,28 @@ test("field errors are associated with a uniquely labelled input", () => {
   ).toBe("用于团队展示");
 });
 
+test("a field action keeps the input label and hint associated independently", () => {
+  const sync = vi.fn();
+  render(
+    <TextField
+      label="Pixiv 用户 ID"
+      hint="主页中的数字"
+      action={
+        <Button type="button" onClick={sync}>
+          同步资料
+        </Button>
+      }
+    />,
+  );
+  const input = screen.getByRole("textbox", { name: "Pixiv 用户 ID" });
+  expect(
+    document.getElementById(input.getAttribute("aria-describedby")!)
+      ?.textContent,
+  ).toBe("主页中的数字");
+  fireEvent.click(screen.getByRole("button", { name: "同步资料" }));
+  expect(sync).toHaveBeenCalledOnce();
+});
+
 test("loading blocks repeated button actions and restores the action when complete", () => {
   const onClick = vi.fn();
   const { rerender } = render(

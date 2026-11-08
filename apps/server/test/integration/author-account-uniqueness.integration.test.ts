@@ -135,7 +135,7 @@ test("the forward migration archives duplicate identities, keeps source referenc
   }
 });
 
-test("same-author X synchronization is allowed while identity replacement preserves history and resets source state", async () => {
+test("same-author X synchronization is allowed while identity changes preserve all stored state by rejecting the edit", async () => {
   const db = new PrismaService(
     parseEnvironment({ NODE_ENV: "test", DATABASE_URL: testUrl }),
   );
@@ -145,8 +145,13 @@ test("same-author X synchronization is allowed while identity replacement preser
   const other = await db.author.create({
     data: { displayName: "Account conflict fixture" },
   });
-  const oldIdentity = randomUUID();
-  const newIdentity = randomUUID();
+  const oldIdentity = BigInt(
+    "0x" + randomUUID().replaceAll("-", "").slice(0, 15),
+  ).toString();
+  const newIdentity = BigInt(
+    "0x" + randomUUID().replaceAll("-", "").slice(0, 15),
+  ).toString();
+  const actorId = randomUUID();
   let candidateId: string | undefined;
   const sources = new ContentSourceRegistry().register({
     platform: "x",
@@ -159,7 +164,7 @@ test("same-author X synchronization is allowed while identity replacement preser
     initialCursor: () => ({}),
     checkAccount: async (identity) => identity,
     resolveProfileByHandle: async (handle) => ({
-      externalUserId: oldIdentity,
+      externalUserId: handle === "another" ? newIdentity : oldIdentity,
       handle,
       displayName: "同步昵称",
     }),
@@ -170,16 +175,27 @@ test("same-author X synchronization is allowed while identity replacement preser
     sources,
     {} as never,
     {} as never,
-    {} as never,
+    {
+      platforms: {
+        profileNetwork: async (_actor: string, run: () => Promise<unknown>) =>
+          run(),
+      },
+    } as never,
   );
   try {
-    const original = await service.createAccount(author.id, {
-      platform: "x",
-      externalUserId: oldIdentity,
-      handle: "artist",
-      fetchEnabled: true,
-      firstSyncMode: "none",
-    });
+    const profile = await service.resolveXProfile(actorId, "artist", author.id);
+    const original = await service.createAccount(
+      author.id,
+      {
+        profileProof: profile.profileProof,
+        platform: "x",
+        externalUserId: oldIdentity,
+        handle: "artist",
+        fetchEnabled: true,
+        firstSyncMode: "none",
+      },
+      actorId,
+    );
     await assert.rejects(
       service.resolveXProfile(randomUUID(), "artist"),
       ConflictException,
@@ -224,13 +240,23 @@ test("same-author X synchronization is allowed while identity replacement preser
         epoch: 9,
       },
     });
-    const otherAccount = await service.createAccount(other.id, {
-      platform: "x",
-      externalUserId: newIdentity,
-      handle: "another",
-      fetchEnabled: false,
-      firstSyncMode: "none",
-    });
+    const otherProfile = await service.resolveXProfile(
+      actorId,
+      "another",
+      other.id,
+    );
+    const otherAccount = await service.createAccount(
+      other.id,
+      {
+        profileProof: otherProfile.profileProof,
+        platform: "x",
+        externalUserId: newIdentity,
+        handle: "another",
+        fetchEnabled: false,
+        firstSyncMode: "none",
+      },
+      actorId,
+    );
     // A failed replacement must roll back both unbinding and lease changes.
     await assert.rejects(
       service.updateAccount(author.id, original.id, {
@@ -266,49 +292,62 @@ test("same-author X synchronization is allowed while identity replacement preser
       }),
       ConflictException,
     );
-    const replaced = await service.updateAccount(author.id, original.id, {
-      externalUserId: randomUUID(),
-      handle: "replacement",
-      fetchEnabled: true,
-      firstSyncMode: "last_24_hours",
-      expectedRevision: original.revision,
-    });
-    assert.notEqual(replaced.id, original.id);
-    assert.equal(
-      (
-        await db.candidatePost.findUniqueOrThrow({
-          where: { id: candidate.id },
-        })
-      ).authorExternalAccountId,
-      original.id,
-    );
-    const old = await db.authorExternalAccount.findUniqueOrThrow({
-      where: { id: original.id },
-      include: { adapterStates: true },
-    });
-    assert.ok(old.deletedAt);
-    assert.equal(old.adapterStates[0].fetchLeaseId, null);
-    assert.equal(old.adapterStates[0].enabled, false);
-    const fresh = await db.sourceAdapterState.findFirstOrThrow({
-      where: { externalAccountId: replaced.id },
-    });
-    assert.deepEqual(fresh.cursorJson, {});
-    assert.equal(fresh.highWaterExternalId, null);
-    assert.equal(
-      await db.sourceAccountScanState.findUnique({
-        where: { accountId: replaced.id },
+    const snapshot = async () => ({
+      account: await db.authorExternalAccount.findUniqueOrThrow({
+        where: { id: original.id },
+        include: { adapterStates: true },
       }),
-      null,
-    );
-    const oldScan = await db.sourceAccountScanState.findUniqueOrThrow({
-      where: { accountId: original.id },
+      scan: await db.sourceAccountScanState.findUniqueOrThrow({
+        where: { accountId: original.id },
+      }),
+      candidate: await db.candidatePost.findUniqueOrThrow({
+        where: { id: candidate.id },
+      }),
+      accounts: await db.authorExternalAccount.count({
+        where: { authorId: author.id },
+      }),
     });
-    assert.equal(
-      oldScan.discoveredThroughAt?.toISOString(),
-      coverage.toISOString(),
+    const before = await snapshot();
+    await assert.rejects(
+      service.updateAccount(author.id, original.id, {
+        externalUserId: randomUUID(),
+        handle: "replacement",
+        displayNameSnapshot: "Another person",
+        fetchEnabled: true,
+        firstSyncMode: "last_24_hours",
+        expectedRevision: original.revision,
+      }),
+      ConflictException,
     );
-    assert.deepEqual(oldScan.windowJson, unfinished);
-    assert.equal(oldScan.epoch, 9);
+    assert.deepEqual(await snapshot(), before);
+    const renamed = await service.resolveXProfile(
+      actorId,
+      "artist_renamed",
+      author.id,
+    );
+    const edited = await service.updateAccount(
+      author.id,
+      original.id,
+      {
+        profileProof: renamed.profileProof,
+        externalUserId: oldIdentity,
+        handle: "artist_renamed",
+        displayNameSnapshot: "Same artist",
+        fetchEnabled: false,
+        firstSyncMode: "none",
+        expectedRevision: original.revision,
+      },
+      actorId,
+    );
+    assert.equal(edited.id, original.id);
+    assert.equal(edited.externalUserId, oldIdentity);
+    assert.equal(edited.handle, "artist_renamed");
+    assert.equal(edited.displayNameSnapshot, "Same artist");
+    assert.equal(edited.fetchEnabled, false);
+    const after = await snapshot();
+    assert.deepEqual(after.account.adapterStates, before.account.adapterStates);
+    assert.deepEqual(after.scan, before.scan);
+    assert.deepEqual(after.candidate, before.candidate);
   } finally {
     if (candidateId)
       await db.candidatePost.delete({ where: { id: candidateId } });
