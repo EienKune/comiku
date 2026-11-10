@@ -15,6 +15,7 @@ import {
 import { client, unwrap } from "../account/api";
 import { Feedback } from "../account/forms";
 import "./notifications.css";
+import { NotificationStatusPanel } from "./NotificationStatusPanel";
 import {
   TemplateEditor,
   SavedSample,
@@ -75,7 +76,7 @@ export function NotificationManagement({
   const [adoptionBusy, setAdoptionBusy] = useState(false);
   const configuration = useQuery({
     queryKey: ["notification-configuration"],
-    enabled: enabled && tab !== "history",
+    enabled: enabled && (tab === "groups" || tab === "templates"),
     queryFn: async () =>
       unwrap(await client.GET("/api/notifications/configuration")),
     refetchOnWindowFocus: false,
@@ -418,16 +419,18 @@ export function NotificationManagement({
     <Surface className="notification-management">
       <header className="notification-heading">
         <h2>推送通知</h2>
-        <div className="notification-actions">
-          <Button
-            variant="ghost"
-            size="sm"
-            loading={configuration.isFetching}
-            onClick={() => void configuration.refetch()}
-          >
-            刷新配置
-          </Button>
-        </div>
+        {(tab === "groups" || tab === "templates") && (
+          <div className="notification-actions">
+            <Button
+              variant="ghost"
+              size="sm"
+              loading={configuration.isFetching}
+              onClick={() => void configuration.refetch()}
+            >
+              刷新配置
+            </Button>
+          </div>
+        )}
       </header>
       <div
         className="system-tabs notification-tabs"
@@ -438,6 +441,7 @@ export function NotificationManagement({
           ["groups", "群订阅"],
           ["templates", "消息模板"],
           ["history", "投递记录"],
+          ["status", "运行状态"],
         ].map(([value, label]) => (
           <button
             key={value}
@@ -464,8 +468,10 @@ export function NotificationManagement({
                 event.key === "Home"
                   ? 0
                   : event.key === "End"
-                    ? 2
-                    : (index + (event.key === "ArrowRight" ? 1 : 2)) % 3;
+                    ? buttons.length - 1
+                    : (index +
+                        (event.key === "ArrowRight" ? 1 : buttons.length - 1)) %
+                      buttons.length;
               buttons[next].focus();
               buttons[next].click();
             }}
@@ -1042,6 +1048,14 @@ export function NotificationManagement({
             加载更多
           </Button>
         )}
+      </div>
+      <div
+        role="tabpanel"
+        id="notification-panel-status"
+        aria-labelledby="notification-tab-status"
+        hidden={tab !== "status"}
+      >
+        <NotificationStatusPanel enabled={enabled && tab === "status"} />
       </div>
     </Surface>
   );

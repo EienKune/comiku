@@ -1475,3 +1475,59 @@ test.each(["history", "outer panel"])(
     );
   },
 );
+
+test("running status tab keeps drafts, gates configuration and supports four-tab keyboard navigation", async () => {
+  const { get, setActive } = setup();
+  fireEvent.click(await screen.findByRole("button", { name: "新增群目标" }));
+  fireEvent.change(screen.getByLabelText("名称"), {
+    target: { value: "状态页切换保留" },
+  });
+  get.mockImplementation(
+    async (path) =>
+      ({
+        data: String(path).endsWith("/status")
+          ? {
+              enabled: false,
+              state: "disabled",
+              sourceSince: null,
+              expandedSourceSince: null,
+              lastMaintenanceAt: null,
+              lastCaptureAt: null,
+              lastRegistrationAt: null,
+              lastErrorAt: null,
+              lastErrorCode: null,
+              counts: {
+                uncaptured: null,
+                pending: { count: 0, capped: false, oldestAt: null },
+                retryWait: { count: 0, capped: false, oldestAt: null },
+                invalid: { count: 0, capped: false, oldestAt: null },
+              },
+            }
+          : { items: [], nextCursor: null },
+        response: new Response(),
+      }) as never,
+  );
+  fireEvent.keyDown(screen.getByRole("tab", { name: "群订阅" }), {
+    key: "End",
+  });
+  await screen.findByText("通知已关闭");
+  expect(
+    screen.getByRole("tab", { name: "运行状态" }).getAttribute("aria-selected"),
+  ).toBe("true");
+  expect(
+    get.mock.calls.filter(
+      (call) => call[0] === "/api/notifications/configuration",
+    ),
+  ).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: "刷新配置" })).toBeNull();
+  setActive(false);
+  const reads = get.mock.calls.length;
+  await act(async () => {});
+  expect(get).toHaveBeenCalledTimes(reads);
+  fireEvent.keyDown(screen.getByRole("tab", { name: "运行状态" }), {
+    key: "ArrowRight",
+  });
+  expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
+    "状态页切换保留",
+  );
+});
