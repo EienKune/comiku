@@ -1,7 +1,7 @@
 import { useSearchParams } from "react-router";
 import { useAccount } from "../account/account-context";
 import { SectionHeading } from "../account/forms";
-import { SourceFetchHistory } from "./SourceFetchHistory";
+import { SourceManagement } from "./SourceManagement";
 import { NotificationManagement } from "./NotificationManagement";
 import "./system.css";
 
@@ -77,7 +77,7 @@ export function SystemManagementPage() {
         hidden={active !== "collection"}
         tabIndex={0}
       >
-        <SourceFetchHistory enabled={active === "collection"} />
+        <SourceManagement enabled={active === "collection"} />
       </div>
       <div
         id="system-panel-notifications"

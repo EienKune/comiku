@@ -1164,7 +1164,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UserDto"
+                  "$ref": "#/components/schemas/AuthUserDto"
                 }
               }
             }
@@ -1257,7 +1257,115 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UserDto"
+                  "$ref": "#/components/schemas/AuthUserDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/activity": {
+      "post": {
+        "operationId": "renewSessionActivity",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkDto"
                 }
               }
             }
@@ -1472,7 +1580,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UserDto"
+                  "$ref": "#/components/schemas/AuthUserDto"
                 }
               }
             }
@@ -17081,6 +17189,118 @@
           "ko"
         ]
       },
+      "AuthUserDto": {
+        "type": "object",
+        "properties": {
+          "avatarVersion": {
+            "type": "string",
+            "nullable": true,
+            "description": "头像文件标识，仅用于读取与缓存更新，不可由资料 PATCH 写入"
+          },
+          "canSkipProofreading": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "username": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Role"
+            }
+          },
+          "languageCapabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LanguageCapability"
+            }
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "mustChangePassword": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "number"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "activityIntervalSeconds": {
+            "type": "number",
+            "minimum": 0.5,
+            "description": "真实前台活动请求的最短间隔（秒）；普通读取不续期"
+          }
+        },
+        "required": [
+          "canSkipProofreading",
+          "id",
+          "username",
+          "displayName",
+          "roles",
+          "languageCapabilities",
+          "isActive",
+          "mustChangePassword",
+          "revision",
+          "permissions",
+          "activityIntervalSeconds"
+        ]
+      },
+      "OkDto": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "ChangePasswordDto": {
+        "type": "object",
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 128
+          },
+          "newPassword": {
+            "type": "string",
+            "format": "password",
+            "minLength": 12,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "currentPassword",
+          "newPassword"
+        ]
+      },
+      "ProfileDto": {
+        "type": "object",
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "displayName"
+        ]
+      },
       "UserDto": {
         "type": "object",
         "properties": {
@@ -17141,50 +17361,6 @@
           "mustChangePassword",
           "revision",
           "permissions"
-        ]
-      },
-      "OkDto": {
-        "type": "object",
-        "properties": {
-          "ok": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "ok"
-        ]
-      },
-      "ChangePasswordDto": {
-        "type": "object",
-        "properties": {
-          "currentPassword": {
-            "type": "string",
-            "format": "password",
-            "maxLength": 128
-          },
-          "newPassword": {
-            "type": "string",
-            "format": "password",
-            "minLength": 12,
-            "maxLength": 128
-          }
-        },
-        "required": [
-          "currentPassword",
-          "newPassword"
-        ]
-      },
-      "ProfileDto": {
-        "type": "object",
-        "properties": {
-          "displayName": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "displayName"
         ]
       },
       "CreateUserAvatarUploadDto": {
@@ -18370,6 +18546,23 @@
           "expectedRevision"
         ]
       },
+      "ExistingAuthorTagDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "expectedRevision"
+        ]
+      },
       "AuthorImportPreviewRowDto": {
         "type": "object",
         "properties": {
@@ -18386,7 +18579,15 @@
           "authorizationStatus": {
             "type": "string"
           },
-          "tagNames": {
+          "existingTags": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExistingAuthorTagDto"
+            }
+          },
+          "newTagNames": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string"
@@ -18442,7 +18643,8 @@
           "displayName",
           "sourceLanguage",
           "authorizationStatus",
-          "tagNames",
+          "existingTags",
+          "newTagNames",
           "xHandle",
           "xExternalUserId",
           "xDisplayName",
@@ -18493,7 +18695,15 @@
           "authorizationStatus": {
             "type": "string"
           },
-          "tagNames": {
+          "existingTags": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExistingAuthorTagDto"
+            }
+          },
+          "newTagNames": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string"
@@ -18543,7 +18753,8 @@
           "displayName",
           "sourceLanguage",
           "authorizationStatus",
-          "tagNames",
+          "existingTags",
+          "newTagNames",
           "xHandle",
           "xExternalUserId",
           "xDisplayName",
@@ -18837,6 +19048,23 @@
           },
           "tagNames": {
             "maxItems": 50,
+            "deprecated": true,
+            "description": "仅用于恢复已提交的旧格式创建请求，不接受新的名称写入。",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "existingTags": {
+            "maxItems": 50,
+            "description": "与 newTagNames 同时提供，合计最多50个。",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExistingAuthorTagDto"
+            }
+          },
+          "newTagNames": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string"
@@ -18858,8 +19086,7 @@
         "required": [
           "displayName",
           "sourceLanguage",
-          "authorizationStatus",
-          "tagNames"
+          "authorizationStatus"
         ]
       },
       "AuthorCreationResultDto": {
@@ -18964,7 +19191,14 @@
               }
             ]
           },
-          "tagNames": {
+          "existingTags": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExistingAuthorTagDto"
+            }
+          },
+          "newTagNames": {
             "maxItems": 50,
             "type": "array",
             "items": {
@@ -18980,7 +19214,8 @@
           "displayName",
           "sourceLanguage",
           "authorizationStatus",
-          "tagNames",
+          "existingTags",
+          "newTagNames",
           "expectedRevision"
         ]
       },

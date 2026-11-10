@@ -2,7 +2,7 @@
 
 根 `.env.example` 是配置模板。复制为 `.env` 后再填写；不要把真实配置提交到仓库。源码、构建产物与 Prisma 按文件位置找到项目根目录；进程环境变量优先于文件。生产可使用绝对路径 `COMIKU_ENV_FILE` 指定 secret 文件，指定文件不可读时拒绝启动。
 
-X 账号解析返回有效期十分钟的 `profileProof`，用于新增关联、修改 handle 和重新启用采集。生产及多 API 实例应通过私有环境配置同一个随机 `AUTHOR_PROFILE_PROOF_SECRET`（至少 32 字符）；不配置时使用进程内随机密钥，重启或切换实例后需重新同步资料。此密钥不参与平台凭据 generation，也不影响已有采集状态。不要把它放入前端环境。
+X/Pixiv 资料解析返回有效期十分钟的 `profileProof`，绑定操作人、作者范围、平台及账号身份。X 新增关联、修改 handle 和重新启用采集时需要该凭证；Pixiv 支持仅填数字 ID 手工维护，采用解析资料或平台头像时校验凭证。生产及多 API 实例通过私有环境配置同一个随机 `AUTHOR_PROFILE_PROOF_SECRET`（建议至少 32 字符）；未配置时使用进程内随机密钥，重启或切换实例后需重新同步尚未保存的资料。该密钥用于资料凭证签名，平台采集继续使用独立的凭据 generation。
 
 ## 本地环境
 
@@ -45,7 +45,7 @@ Account ID 为 32 位十六进制。实现根据 Account ID 生成 S3 endpoint�
 
 Bucket 保持私有，CORS 精确允许当前浏览器 origin，方法为 GET/PUT/HEAD，允许 content-type、x-amz-meta-sha256，按需暴露 ETag。浏览器直接向签名 URL 上传/下载，API 和 worker 负责权限、HEAD/魔数/摘要、解包及采用校验。业务对象与备份对象使用独立 Bucket 和凭据。
 
-只能给 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/`、`staging/direct-upload/` 设置一日过期规则；使用 `R2_KEY_PREFIX` 时规则也须包含该前缀。不要给所有业务对象统一短期过期。原图、缩略图、可恢复版本、交接和发布历史各有引用与清理规则。
+只能给 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/` 设置一日过期规则；使用 `R2_KEY_PREFIX` 时规则也须包含该前缀。`staging/direct-upload/` 由应用根据任务租约与终态回执分阶段清理，不得配置按对象年龄自动删除的规则；升级前须核对桶中实际规则并排除此路径。不要给所有业务对象统一短期过期。原图、缩略图、可恢复版本、交接和发布历史各有引用与清理规则。
 
 local 与 R2 不是自动迁移关系：更换驱动不会搬运已有对象。使用独立测试库/桶验证 R2，不要把原 local 数据库直接切到空 R2 Bucket。
 
@@ -91,6 +91,14 @@ BA 常驻推理进程可用独立 EnvironmentFile 注入 `PIXAI_MODEL_DIR`、`PI
 
 `SOURCE_MEDIA_MAX_MIB` limits original image downloads (default 50 MiB, integer 1–100). Both declared and actual streamed bytes are checked; rejected bodies are cancelled. This also applies to remote author profile downloads using the shared downloader; manual uploads retain their separate 25 MiB limit. Each active download can briefly retain chunks plus the final buffer (roughly twice the limit); X and Pixiv may download concurrently. Account for these buffers, thumbnail processing and the separate model process before increasing the limit. Pixel safety limits are unchanged.
 
-Size-limit and forbidden-URL rejections retain controlled media reasons and put the discovery in `needs_attention`; repeating those requests cannot fix the policy. Unsupported-type and empty-body responses also retain specific reasons but remain retryable, since a CDN can transiently return an HTTP-200 error page or empty response. Diagnostics include `limit_bytes` plus `declared_bytes` or `observed_bytes` when available. They never include credentials or raw response bodies. Changing configuration does not silently reopen an existing terminal gap; operators must inspect and explicitly authorize recovery.
+Image analysis accepts original input up to 32 MiB. Larger images within the collection limit can be stored as candidates, but their analysis fails at input validation. Retrying the same oversized image reaches the same limit.
 
-Transient post gaps first become eligible after 5 minutes; after the first failed recovery campaign they wait 10 minutes, then 30 minutes between remaining campaigns, up to eight campaigns. Each campaign uses the normal job executor (at most three executions, 5/10-second delays). These are earliest eligibility times, not promises of execution time: platform gates, the shared per-platform queue and maintenance scan can add a delay. Account cooldown (`SOURCE_COOLDOWN_MINUTES`) remains separate.
+Size-limit and forbidden-URL rejections retain controlled media reasons and put the discovery in `needs_attention`. Unsupported-type and empty-body responses remain retryable, since a CDN can transiently return an HTTP-200 error page or empty response. Diagnostics contain controlled reasons, `limit_bytes`, and `declared_bytes` or `observed_bytes` when available. After changing configuration, operators inspect terminal gaps and explicitly authorize recovery.
+
+Transient post gaps first become eligible after 5 minutes; after the first failed recovery campaign they wait 10 minutes, then 30 minutes between remaining campaigns, up to eight campaigns. Each campaign uses the normal job executor (at most three executions, 5/10-second delays). Platform gates, the shared per-platform queue and the maintenance scan determine execution after eligibility. Account cooldown uses `SOURCE_COOLDOWN_MINUTES`.
+
+## 登录期限
+
+`AUTH_SESSION_IDLE_SECONDS`（默认 1800）控制没有实际操作的空闲期限；`AUTH_SESSION_ABSOLUTE_SECONDS`（默认 28800）控制每次登录的固定上限。两项为可安全表示的正整数秒数，空闲期限不能大于绝对期限。私有协作环境可分别设置为 `604800` 和 `2592000`，即空闲 7 天、登录满 30 天重登。
+
+页面可见时的真实点击、键盘或滚轮操作通过同源 `/api/auth/activity` 续空闲期；后台轮询、页面仅保持打开、重新切到前台都不续期。客户端请求与服务端写入分别节流，最短间隔为 300 秒与空闲期限一半的较小值。活动请求不消耗普通业务写入配额，仍有独立的账号和 IP 限流。绝对期限及 Cookie 不随活动延长；登出、撤销会话、禁用账号和改密继续使旧会话失效。新配置不会批量延长旧会话的绝对到期时间，重新登录后使用新上限。

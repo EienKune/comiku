@@ -107,7 +107,8 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       displayName: "测试作者",
       sourceLanguage: "ja",
       authorizationStatus: "authorized",
-      tagNames: ["原创", " 插画 "],
+      existingTags: [],
+      newTagNames: ["原创", " 插画 "],
     };
     assert.equal(
       (await request(member, "POST", "/api/authors", input)).status,
@@ -270,6 +271,17 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
       "profileUrl",
     ]);
     assert.equal(publicAccount.externalUserId, xIdentity);
+    assert.equal(
+      (
+        await request(
+          source,
+          "PATCH",
+          `/api/authors/${authorId}/accounts/${account.data.id}/adapters/x_fixture`,
+          { enabled: false, expectedRevision: 0 },
+        )
+      ).status,
+      403,
+    );
     const updatedAccount = await request<{ revision: number }>(
       source,
       "PATCH",

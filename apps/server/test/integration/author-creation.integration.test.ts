@@ -92,7 +92,8 @@ test("author creation atomically binds accounts and actor-scoped retries recover
       displayName: prefix,
       sourceLanguage: "ja" as const,
       authorizationStatus: "authorized" as const,
-      tagNames: [],
+      existingTags: [],
+      newTagNames: [],
       idempotencyKey: randomUUID(),
       accounts: [
         {

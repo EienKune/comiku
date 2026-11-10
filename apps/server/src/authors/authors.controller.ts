@@ -512,7 +512,7 @@ export class AuthorsController {
   }
 
   @Patch(":authorId/accounts/:id/adapters/:adapterKey")
-  @Access({ permission: "authors:manage" })
+  @Access({ permission: "system:manage" })
   @ApiOperation({ operationId: "updateAuthorAccountAdapter" })
   @ApiParam({ name: "authorId", format: "uuid" })
   @ApiParam({ name: "id", format: "uuid" })

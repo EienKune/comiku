@@ -6,23 +6,26 @@
 
 React 前端使用共享 OpenAPI 客户端访问 NestJS。PostgreSQL 保存账号、作者、候选、作品、译文、版本、事件和任务；文件正文存于开发 local 或生产私有 R2，数据库只记录文件元信息、摘要、引用与生命周期。
 
-API 处理认证、权限、短事务和任务登记；独立 worker 通过 PostgreSQL 租约执行网络及图片/ZIP 工作。网络与重任务分别有一个全局执行槽，重任务总并发为 1；租约支持进程退出后恢复，有限重试不自动改变作品流程。健康心跳只代表进程/数据库状态，不保证每个任务成功。
+API 处理认证、权限、短事务和任务登记；独立 worker 通过 PostgreSQL 租约执行网络及图片/ZIP 工作。X、Pixiv 采集各有一个平台执行槽，可跨平台并行；图片识别使用独立的 analysis/global 单槽，导出与缩略图使用 heavy/global 单槽，其他网络任务使用 network/global 单槽。租约支持进程退出后恢复，任务采用有限重试。健康心跳记录进程与数据库连接状态，执行结果见各任务记录。
 
 业务模块通过公开服务和契约协作，不直接依赖其他模块的内部实现。X、文件存储、LabelPlus、分类器通过适配器隔离；测试替身不调用真实 X/R2。
 
 ## 账号、角色与署名
 
 - 账号由管理员发放；账户名仅用于登录，成员昵称用于界面和默认署名。用户可改密和头像，管理员敏感操作需验证当前管理员密码。
+- 登录具有可配置的空闲期限与固定绝对上限，默认 30 分钟／8 小时。普通读取和后台轮询不续期；仅可见页面的真实输入通过受保护活动接口续空闲期，不延长绝对上限或 Cookie。详见[登录期限配置](configuration.md#登录期限)。
 - 用户可拥有图源、翻译、校对、嵌字、运营、审核和管理员等多个职务。管理员不自动获得制作资格；主动接取仍需相应职务及语言能力，不代其他成员分配制作任务。
 - 作者和作品各有一种来源语言，用户可以有多种语言能力。日语/韩语翻译、校对需对应能力；英语不单列能力授权，翻译或嵌字职务可接英语翻译，校对仍需校对职务。嵌字和运营不按翻译语言筛选。
 - 默认作品为单人模式，每个制作职责只有一名参与者，同一用户不可同时参与该作品翻译和校对；可以兼任翻译与嵌字。管理员可显式开启多人协作，多人作品的分工与互相校对按协作约定执行。
 - 临时署名以 `(work_id, user_id, stage)` 独立保存，发布前由本人修改；留空用成员昵称。取消一个职责只清理该职责的临时署名。阶段提交保留审计快照，最终发布冻结届时署名。
 
-系统管理独立于个人设置，仅管理员拥有 `system:manage`。采集运行历史在管理入口查询；图源老师仍管理作者、授权与手动同步等业务操作。
+系统管理独立于个人设置，仅管理员拥有 `system:manage`。图源接入状态和采集运行历史集中在“图源采集”页签；未激活的管理面板停止发起查询与轮询。凭证仍由部署配置管理，页面不返回或编辑密钥。图源老师仍管理作者、授权与手动同步等业务操作。
 
 ## 图源与候选
 
 授权作者包括昵称、母语、头像、标签、授权状态与图片凭证。凭证仅图源/管理员可查看；每位作者的 X、Pixiv 各最多一个有效账号。X 使用 handle 生成主页链接，Pixiv 使用数字用户 ID；多账号作者可建立独立作者记录。作者 CSV 先解析预览后原子确认，图片凭证单独补充。
+
+作者标签逐个添加、移除，并可选择已有标签；逗号属于合法名称字符。已有标签按 ID 与所见版本提交，新名称单独提交，两者合计最多 50 个。标签被改名或删除后，旧表单返回冲突，不重新创建旧名称。CSV 预览同样固定标签引用，确认时重新校验；目录变更不需要批量更新作者版本。旧 `tagNames` 创建格式仅兼容已提交请求的结果恢复，新写入使用 `existingTags` 与 `newTagNames`。
 
 作者和平台账号各有一项可选管理备注，最多 2000 字；去除首尾空白，空值清除，更新时省略字段则保留。备注只通过 `authors:manage` 管理接口提供给图源/管理员，普通作者详情、目录摘要、候选和作品不包含备注。备注为纯文本，不解析 HTML。
 
@@ -38,7 +41,9 @@ Pixiv 新建、关联与编辑账号可按数字用户 ID 显式同步昵称和�
 
 单个新增作者和关联账号时，X/Pixiv 共用采集开关与首次同步范围，根据可用来源的 `supportedFirstSyncModes` 提供仅后续内容、最近 24 小时和最近 7 天；新账号默认启用并选最近 24 小时，不支持时选其支持的范围，无可用来源则仅保存资料（关闭、仅后续内容）。能力读取期间等待确认后保存，后续能力响应不覆盖用户选择或已提交的创建意图。编辑已有账号保留原开关和范围，能力不可用时仍可维护资料、暂停采集；不自动启用旧账号，不改变既有采集进度。
 
-X 两通道共用来源契约，游标、水位和健康按账号/适配器独立保存。错误响应不能被当作空页，失败不越过安全水位；官方回退受预算约束。可选 gallery-dl adapter 提供 X/Pixiv 作品抓取，其 Python 桥和固定依赖与 TS adapter 放在同一目录。作者管理根据可用 adapter 能力开放 Pixiv 采集；未配置时仍可只保存资料和主页。各实现的目录、构建资源和运行记录见[采集 adapter 说明](adapters/source-ingestion.md)。
+当前内置采集入口注册已配置的 gallery-dl X/Pixiv adapter，旧 X 网页及官方 API 实现保留为历史源码与合成测试。账号共享发现覆盖时间和未完成扫描窗口，协议游标与目录基线按 adapter 独立保存。每页先登记已发现帖子和媒体缺口，再推进有证明的发现覆盖；失败媒体通过独立补偿任务恢复。Python 桥和固定依赖与 TS adapter 放在同一目录。作者管理根据可用 adapter 能力开放采集；未配置时可保存资料和主页。各实现的目录、构建资源和运行记录见[采集 adapter 说明](adapters/source-ingestion.md)。
+
+运行时启动时校验每个平台仅有一个可用采集实现。作者页提供账号级采集开关；技术适配器控制要求 `system:manage`，系统管理页展示部署接入状态。执行槽、凭据暂停与冷却按平台共享，扫描窗口和覆盖时间按账号保存。
 
 候选池通过只读 `GET /api/source-fetch/progress` 发现团队当前采集批次和最近手动批次，要求 `candidates:manage`。当前批次可由手动或定时触发；历史摘要只取最近手动批次。摘要仅含状态、时间、页数、新候选和原图计数，不含账号明细、游标或上游响应。手动同步受理接口仅返回批次 ID 和状态，等价复用也不返回技术详情；完整历史列表与单批次详情均要求 `system:manage`。查询最多聚合两个批次，使用触发方式/状态与开始时间索引；读取不会登记或修复任务。页面重开和回到前台时重新读取，前台活动批次每 2 秒、空闲每 15 秒查询，后台暂停轮询。只有明确点击同步按钮才登记任务，等价活动范围复用、重叠不同范围拒绝；查看状态不触发采集。同步结束后更新当前审核会话内的卡片；点击“刷新列表”才纳入新候选与新排序。
 
@@ -48,9 +53,11 @@ X 两通道共用来源契约，游标、水位和健康按账号/适配器独�
 
 候选待处理内容按优先审核、待判断、低优先级三个自动区域展示。正向线索是启用优先标签或任一当前有效图片的获胜类别命中 adapter 优先类别；正向线索与降级标签同时出现时进入待判断且区内先展示，否则正向进入优先、有降级进入低优先。没有标签命中且所有图片都具有当前模型、当前有效文件 SHA 对应的合法成功低类结果时，进入低优先；其余包括识别失败、缺失、未知类别和模型未启用均进入待判断。一张正向图即足够，其他失败图片不抹除它。所有区域的入库、忽略权限和 revision 校验相同。向前清理迁移删除已退役的人工 manga/photo 分类、旧建议及单值标签缓存；升级前按正常流程备份数据库。当前模型结果、逐图分数与分类标签，以及人工候选/Work 审核状态继续保留。gray 仅保留历史记录，不提供新增或自动降级行为。
 
-区内按合法图片最高排序分、时间和 ID 排序，不取均值；无分数不伪造零分。模型代表标签优先选择审核优先类别，其次待判断类别、最后低优先类别，同一层级按排序分和类别顺序选择；显示名称来自 adapter，与分区证据相互独立。BA 映射 ba_art 优先、ba_related 待判断、other 低优先。规则保存只影响下一次显式刷新建立的会话，不下载、不重推理；当前会话同时冻结分区、原帖标签和匹配原因，卡片业务状态与模型分数继续实时读取。详见[稳定审核会话](candidate-review-sessions.md)。
+区内按合法图片最高排序分、时间和 ID 排序，无分数时保留空值。代表分类标签从有效图片中按审核映射选择：优先类别、未映射类别、低优先类别依次考虑；同级按排序分和类别声明顺序决定，显示名称来自 adapter。帖子排序分仍取所有有效图片的最高分。BA 映射 ba_art 优先、ba_related 待判断、other 低优先。规则保存后，在下一次显式刷新建立的会话中应用，沿用已有识别结果；当前会话冻结分区、原帖标签和匹配原因，卡片业务状态与模型分数继续实时读取。详见[稳定审核会话](candidate-review-sessions.md)。
 
 作品入库生成稳定数字编号，舍弃后也不回收。作品标题和发布正文可以后续填写；原帖配文只作为参考，不自动填入发布正文。
+
+候选入库在同一事务中按作者、候选的顺序加锁，复查候选所属作者、revision 和待处理状态，并要求作者已授权且未归档。撤权或归档先完成时，入库返回具体冲突原因；入库先完成时保留已有作品。批量操作分别处理每项结果，已入库请求重试返回原作品。
 
 ## 制作流程和权限边界
 
@@ -96,4 +103,4 @@ X 两通道共用来源契约，游标、水位和健康按账号/适配器独�
 
 A complete source page registers verified posts and explicitly proven metadata gaps before its durable cursor advances. `SourceDiscoveryPost` keeps original account identity and window; `SourceDiscoveryMedia` retains successfully stored files through formal references. Only complete, verified, nonempty static manifests become candidates. The shared account discovery watermark therefore describes enumeration coverage, while terminal partial batch status reports unresolved ingestion gaps.
 
-`source_post_recover` jobs use the platform's existing `network/source:<platform>` scope and `recovery` queue. Each persistent campaign has an idempotent key, at most three job executions, and one business outcome; eight failed campaigns stop at `needs_attention`, with 15-minute, one-hour and then six-hour spacing. Current permissions, source identity, management revisions, credential generation and job/source epochs fence recovery writes. Recovery preserves original scan history and successful files, refreshes temporary URLs internally, and exposes only a bounded administrator diagnostic projection through the compiled operations command.
+`source_post_recover` jobs use the platform's existing `network/source:<platform>` scope and `recovery` queue. Each persistent campaign has an idempotent key, at most three job executions, and one business outcome; eight failed campaigns stop at `needs_attention`, with five-minute, ten-minute and then thirty-minute spacing. Current permissions, source identity, management revisions, credential generation and job/source epochs fence recovery writes. Recovery preserves original scan history and successful files, refreshes temporary URLs internally, and exposes only a bounded administrator diagnostic projection through the compiled operations command.

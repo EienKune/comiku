@@ -148,12 +148,15 @@ test.each([true, false])(
         notes: "edited note",
         fetchEnabled: false,
         firstSyncMode: "last_7_days",
-        avatarFileObjectId: avatarAvailable ? "avatar" : null,
-        profileProof: "pixiv-proof",
+        ...(avatarAvailable
+          ? { avatarFileObjectId: "avatar", profileProof: "pixiv-proof" }
+          : {}),
         expectedRevision: 2,
       },
     });
     expect(patch.mock.calls[0][1]).not.toHaveProperty("body.externalUserId");
+    if (!avatarAvailable)
+      expect(patch.mock.calls[0][1]).not.toHaveProperty("body.profileProof");
   },
 );
 
@@ -356,6 +359,72 @@ test("unavailable persisted seven-day mode keeps its actual label", async () => 
   expect(select.textContent).toContain("最近 7 天");
   expect(select.textContent).toContain("当前不可用");
   expect(select.disabled).toBe(true);
+});
+
+test("pausing an X account accepts its canonical handle without profile sync", async () => {
+  const account: Account = {
+    ...pixiv,
+    platform: "x",
+    handle: "artist",
+    externalUserId: "42",
+    fetchEnabled: true,
+    firstSyncMode: "last_24_hours",
+  };
+  collectionFixture([account]);
+  const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(account));
+  setup([account]);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+  fireEvent.change(screen.getByLabelText("X @账号"), {
+    target: { value: "https://x.com/artist" },
+  });
+  fireEvent.click(screen.getByLabelText("启用自动抓取"));
+  fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+  await waitFor(() => expect(patch).toHaveBeenCalled());
+  expect(patch.mock.calls[0]).toMatchObject([
+    "/api/authors/{authorId}/accounts/{id}",
+    { body: { handle: "artist", fetchEnabled: false } },
+  ]);
+});
+
+test("pausing after a nickname-only synchronization omits an unrelated expired proof", async () => {
+  const account: Account = {
+    ...pixiv,
+    platform: "x",
+    handle: "artist",
+    externalUserId: "42",
+    fetchEnabled: true,
+    firstSyncMode: "last_24_hours",
+  };
+  collectionFixture([account]);
+  vi.spyOn(client, "POST").mockResolvedValue(
+    success({
+      ...resolvedPixiv,
+      externalUserId: "42",
+      handle: "artist",
+      displayName: "同步昵称",
+      avatarFileObjectId: null,
+      avatarUrl: null,
+      profileProof: "expired-proof",
+      syncedAt: "2020-01-01T00:00:00Z",
+    }),
+  );
+  const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(account));
+  setup([account]);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑账号" }));
+  fireEvent.click(screen.getByRole("button", { name: "同步昵称和头像" }));
+  await waitFor(() =>
+    expect(
+      (screen.getByLabelText("平台显示昵称（可选）") as HTMLInputElement).value,
+    ).toBe("同步昵称"),
+  );
+  fireEvent.click(screen.getByLabelText("启用自动抓取"));
+  fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+  await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+  expect(patch.mock.calls[0]).toMatchObject([
+    "/api/authors/{authorId}/accounts/{id}",
+    { body: { displayNameSnapshot: "同步昵称", fetchEnabled: false } },
+  ]);
+  expect(patch.mock.calls[0]?.[1]).not.toHaveProperty("body.profileProof");
 });
 
 test("editing a platform identity keeps its ID read-only and omits it from PATCH", async () => {
@@ -893,76 +962,37 @@ test("saving an account locks its metadata and collection choices until the requ
   });
 });
 
-test("configured Pixiv adapter channels can be enabled from the account list", async () => {
-  const account: Account = {
-    ...pixiv,
-    adapterStates: [
-      {
-        adapterKey: "pixiv_fixture",
-        enabled: false,
-        available: true,
-        health: "disabled",
-        revision: 3,
-        consecutiveFailures: 0,
-        lastAttemptAt: null,
-        lastSuccessAt: null,
-        nextAttemptAt: null,
-        lastErrorMessage: null,
-      },
-    ],
-  };
-  collectionFixture([account]);
-  const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(account));
-  setup([account]);
-  const button = await screen.findByRole("button", { name: "启用通道" });
-  await waitFor(() =>
-    expect((button as HTMLButtonElement).disabled).toBe(false),
-  );
-  fireEvent.click(button);
-  await waitFor(() => expect(patch).toHaveBeenCalledOnce());
-  expect(patch.mock.calls[0]).toMatchObject([
-    "/api/authors/{authorId}/accounts/{id}/adapters/{adapterKey}",
-    {
-      params: {
-        path: { authorId: "author", id: "pixiv", adapterKey: "pixiv_fixture" },
-      },
-      body: { enabled: true, expectedRevision: 3 },
-    },
-  ]);
-});
-
-test("a removed Pixiv channel can still be paused from its persisted account state", async () => {
-  const account: Account = {
-    ...pixiv,
-    adapterStates: [
-      {
-        adapterKey: "pixiv_fixture",
-        enabled: true,
-        available: false,
-        health: "unavailable",
-        revision: 3,
-        consecutiveFailures: 0,
-        lastAttemptAt: null,
-        lastSuccessAt: null,
-        nextAttemptAt: null,
-        lastErrorMessage: null,
-      },
-    ],
-  };
-  collectionFixture([account], []);
-  const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(account));
-  setup([account]);
-  const button = await screen.findByRole("button", { name: "停用通道" });
-  expect((button as HTMLButtonElement).disabled).toBe(false);
-  fireEvent.click(button);
-  await waitFor(() => expect(patch).toHaveBeenCalledOnce());
-  expect(patch.mock.calls[0][1]).toMatchObject({
-    params: {
-      path: { authorId: "author", id: "pixiv", adapterKey: "pixiv_fixture" },
-    },
-    body: { enabled: false, expectedRevision: 3 },
-  });
-});
+test.each([true, false])(
+  "account controls hide technical adapter switches (available=%s)",
+  async (available) => {
+    const account: Account = {
+      ...pixiv,
+      adapterStates: [
+        {
+          adapterKey: "pixiv_fixture",
+          enabled: false,
+          available,
+          health: "disabled",
+          revision: 3,
+          consecutiveFailures: 0,
+          lastAttemptAt: null,
+          lastSuccessAt: null,
+          nextAttemptAt: null,
+          lastErrorMessage: "private technical failure",
+        },
+      ],
+    };
+    collectionFixture([account]);
+    const patch = vi.spyOn(client, "PATCH").mockResolvedValue(success(account));
+    setup([account]);
+    await screen.findByRole("button", { name: "编辑账号" });
+    expect(
+      screen.queryByRole("button", { name: /启用通道|停用通道/ }),
+    ).toBeNull();
+    expect(screen.queryByText("private technical failure")).toBeNull();
+    expect(patch).not.toHaveBeenCalled();
+  },
+);
 
 test("Pixiv can pause collection and explicitly select seven days", async () => {
   collectionFixture(

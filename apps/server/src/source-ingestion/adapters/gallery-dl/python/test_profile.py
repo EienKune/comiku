@@ -116,6 +116,30 @@ class PixivProfileTests(unittest.TestCase):
                 self.assertEqual(code, raised.exception.result["error"])
                 self.assertIn("diagnostic", raised.exception.result)
 
+    def test_native_rate_limit_returns_without_waiting(self):
+        def response(ext, *args, **kwargs):
+            class Response:
+                status_code = 429
+                def json(self):
+                    return {"error": {"message": "Rate limit exceeded"}}
+            return Response()
+        with patch.object(pixiv.PixivAppAPI, "login", lambda api: None), \
+             patch.object(pixiv.PixivUserExtractor, "request", response), \
+             patch.object(pixiv.PixivUserExtractor, "wait", side_effect=AssertionError("unexpected native wait")):
+            with self.assertRaisesRegex(adapter.AdapterError, "rate_limited") as raised:
+                adapter.collect_profile({"platform": "pixiv", "remote_id": "42"})
+        self.assertEqual("rate_limited", raised.exception.result["error"])
+
+    def test_profile_preserves_normal_request_pacing(self):
+        def call(api, *args, **kwargs):
+            api.extractor.wait(seconds=2.5)
+            return {"user": {"id": 42, "name": "Artist"}}
+        with patch.object(pixiv.PixivAppAPI, "_call", call), \
+             patch.object(pixiv.PixivUserExtractor, "wait") as wait:
+            result = adapter.collect_profile({"platform": "pixiv", "remote_id": "42"})
+        wait.assert_called_once_with(seconds=2.5)
+        self.assertEqual("42", result["profile"]["external_user_id"])
+
 
 if __name__ == "__main__":
     unittest.main()

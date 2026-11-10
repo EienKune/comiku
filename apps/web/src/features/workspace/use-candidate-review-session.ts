@@ -5,7 +5,7 @@ import { client, unwrap } from "../account/api";
 
 export type CandidateBaseFilter = Pick<
   components["schemas"]["CreateCandidateReviewSessionDto"],
-  "status" | "search" | "sourceLanguage" | "fetchedAfter"
+  "authorId" | "status" | "search" | "sourceLanguage" | "fetchedAfter"
 >;
 
 /** One scope owns one membership snapshot; all sections share it. */

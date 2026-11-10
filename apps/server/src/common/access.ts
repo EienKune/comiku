@@ -88,6 +88,7 @@ export interface AccessPolicy {
   permission?: Permission;
   public?: boolean;
   allowPasswordChange?: boolean;
+  rateClass?: "session-activity";
   contentType?:
     | "application/json"
     | "multipart/form-data"

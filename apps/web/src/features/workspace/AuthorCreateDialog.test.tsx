@@ -1764,19 +1764,202 @@ test("dirty author notes survive background refresh until explicit latest load",
   await waitFor(() => expect(notes.value).toBe("other manager notes"));
 });
 
-test("a transient managed refetch error preserves dirty fields and the selected avatar", async () => {
-  const original = {
-    id: "author",
-    revision: 1,
-    displayName: "Artist",
-    authorizationStatus: "pending",
-    sourceLanguage: "ja",
-    tags: [],
-    externalAccounts: [],
-    avatarAvailable: false,
-    notes: "saved notes",
-  };
-  let failManaged = false;
+for (const read of ["managed", "public"] as const)
+  test(`a transient ${read} refetch error preserves dirty fields and the selected avatar`, async () => {
+    const failingPath =
+      read === "managed" ? "/api/authors/{id}/managed" : "/api/authors/{id}";
+    const failingKey = read === "managed" ? "managed-author" : "author";
+    const original = {
+      id: "author",
+      revision: 1,
+      displayName: "Artist",
+      authorizationStatus: "pending",
+      sourceLanguage: "ja",
+      tags: [],
+      externalAccounts: [],
+      avatarAvailable: false,
+      notes: "saved notes",
+    };
+    let failManaged = false;
+    vi.stubGlobal(
+      "URL",
+      Object.assign(URL, {
+        createObjectURL: vi.fn(() => "blob:preview"),
+        revokeObjectURL: vi.fn(),
+      }),
+    );
+    vi.spyOn(client, "GET").mockImplementation(async (path) => {
+      if (path === failingPath && failManaged)
+        throw new Error("temporary managed read failure");
+      return ok(
+        path === "/api/authors/{id}" || path === "/api/authors/{id}/managed"
+          ? original
+          : [],
+      );
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/authors/author"]}>
+          <Routes>
+            <Route
+              element={
+                <Outlet
+                  context={{ permissions: ["authors:read", "authors:manage"] }}
+                />
+              }
+            >
+              <Route path="/authors/:id" element={<AuthorDetailPage />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const notes = (await screen.findByLabelText(
+      "作者备注（可选）",
+    )) as HTMLTextAreaElement;
+    fireEvent.change(notes, { target: { value: "dirty notes" } });
+    fireEvent.change(screen.getByLabelText("作者昵称"), {
+      target: { value: "dirty name" },
+    });
+    fireEvent.change(screen.getByLabelText("作者头像"), {
+      target: {
+        files: [
+          new File(["avatar"], "pending-avatar.png", { type: "image/png" }),
+        ],
+      },
+    });
+    failManaged = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: [failingKey, "author"],
+      });
+    });
+    expect(screen.getByLabelText("作者备注（可选）")).toBe(notes);
+    expect(notes.value).toBe("dirty notes");
+    expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
+      "dirty name",
+    );
+    expect(
+      screen.getByRole("img", { name: "pending-avatar.png" }),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText(
+        read === "managed" ? /管理资料更新失败/ : /作者资料更新失败/,
+      ),
+    ).toBeTruthy();
+    failManaged = false;
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: read === "managed" ? "重试读取" : "重试作者资料",
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByText(
+          read === "managed" ? /管理资料更新失败/ : /作者资料更新失败/,
+        ),
+      ).toBeNull(),
+    );
+    expect(screen.getByLabelText("作者备注（可选）")).toBe(notes);
+    expect(notes.value).toBe("dirty notes");
+    expect(
+      screen.getByRole("img", { name: "pending-avatar.png" }),
+    ).toBeTruthy();
+  });
+
+for (const purpose of ["author_avatar", "author_evidence"] as const)
+  test(`creation can explicitly leave a missing ${purpose} receipt without recreating the author`, async () => {
+    vi.stubGlobal("crypto", {
+      randomUUID: () => "74d00bc2-61ad-4d0c-873f-e7a6ae9706aa",
+      subtle: { digest: async () => new ArrayBuffer(32) },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 500 })),
+    );
+    let inspectFails = false;
+    vi.spyOn(client, "GET").mockImplementation(async (path) => {
+      if (path === "/api/transfers/uploads/{id}")
+        return {
+          error: { message: "上传会话不存在" },
+          response: new Response(null, { status: 404 }),
+        } as never;
+      if (inspectFails && path === "/api/authors/{id}/managed")
+        throw Error("核对失败");
+      return ok(
+        path === "/api/authors/sources" ||
+          path === "/api/authors/{id}/authorization-evidence"
+          ? []
+          : path === "/api/authors"
+            ? { items: [], total: 0, nextCursor: null }
+            : { id: "author", revision: 1 },
+      );
+    });
+    const post = vi.spyOn(client, "POST").mockImplementation(async (path) =>
+      ok(
+        path === "/api/authors"
+          ? { id: "author", revision: 1 }
+          : {
+              id: "upload",
+              status: "pending",
+              expiresAt: "2099-01-01T00:00:00Z",
+              error: null,
+              files: [
+                {
+                  sourceName: "test.png",
+                  upload: {
+                    url: "https://storage.invalid/file",
+                    headers: {},
+                  },
+                },
+              ],
+            },
+      ),
+    );
+    await openCreate();
+    const file = new File(["image"], "test.png", { type: "image/png" });
+    Object.defineProperty(file, "arrayBuffer", {
+      value: async () => new ArrayBuffer(5),
+    });
+    const label =
+      purpose === "author_avatar" ? "作者头像" : "授权凭证（可多张）";
+    fireEvent.change(screen.getByLabelText(label), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "继续保存" }));
+    const reset = await screen.findByRole("button", {
+      name: "核对后重新选择文件",
+    });
+    expect(screen.getByLabelText(label).hasAttribute("disabled")).toBe(true);
+    inspectFails = true;
+    fireEvent.click(reset);
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("核对失败"),
+    );
+    expect(screen.getByLabelText(label).hasAttribute("disabled")).toBe(true);
+    inspectFails = false;
+    fireEvent.click(reset);
+    await waitFor(() =>
+      expect(screen.getByLabelText(label).hasAttribute("disabled")).toBe(false),
+    );
+    expect(
+      (post.mock.calls as unknown as [string, unknown][]).filter(
+        ([path]) => path === "/api/authors",
+      ),
+    ).toHaveLength(1);
+    expect(
+      (post.mock.calls as unknown as [string, unknown][]).filter(
+        ([path]) => path === "/api/transfers/uploads",
+      ),
+    ).toHaveLength(1);
+    expect(
+      screen.queryByRole("button", { name: "核对后重新选择文件" }),
+    ).toBeNull();
+  });
+
+test("detail missing-avatar receipt refreshes visible saved state and never replays saved metadata", async () => {
   vi.stubGlobal(
     "URL",
     Object.assign(URL, {
@@ -1784,15 +1967,54 @@ test("a transient managed refetch error preserves dirty fields and the selected 
       revokeObjectURL: vi.fn(),
     }),
   );
+  vi.stubGlobal("crypto", {
+    subtle: { digest: async () => new ArrayBuffer(32) },
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 500 })),
+  );
+  let revision = 1,
+    adopted = false;
+  const author = () => ({
+    id: "author",
+    revision,
+    displayName: "合成作者",
+    notes: "",
+    authorizationStatus: "pending",
+    sourceLanguage: "ja",
+    tags: [],
+    externalAccounts: [],
+    avatarAvailable: adopted,
+  });
   vi.spyOn(client, "GET").mockImplementation(async (path) => {
-    if (path === "/api/authors/{id}/managed" && failManaged)
-      throw new Error("temporary managed read failure");
+    if (path === "/api/transfers/uploads/{id}") {
+      adopted = true;
+      return {
+        error: { message: "不存在" },
+        response: new Response(null, { status: 404 }),
+      } as never;
+    }
     return ok(
       path === "/api/authors/{id}" || path === "/api/authors/{id}/managed"
-        ? original
-        : [],
+        ? author()
+        : path === "/api/authors/{id}/avatar/url"
+          ? { url: "https://images.invalid/saved.png" }
+          : [],
     );
   });
+  const patch = vi.spyOn(client, "PATCH").mockImplementation(async () => {
+    revision++;
+    return ok(author());
+  });
+  const post = vi.spyOn(client, "POST").mockResolvedValue(
+    ok({
+      id: "upload",
+      status: "pending",
+      expiresAt: "2099-01-01T00:00:00Z",
+      files: [{ upload: { url: "https://storage.invalid/file", headers: {} } }],
+    }),
+  );
   render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={["/authors/author"]}>
@@ -1800,7 +2022,13 @@ test("a transient managed refetch error preserves dirty fields and the selected 
           <Route
             element={
               <Outlet
-                context={{ permissions: ["authors:read", "authors:manage"] }}
+                context={{
+                  permissions: [
+                    "authors:read",
+                    "authors:manage",
+                    "authors:sensitive",
+                  ],
+                }}
               />
             }
           >
@@ -1810,39 +2038,32 @@ test("a transient managed refetch error preserves dirty fields and the selected 
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  const notes = (await screen.findByLabelText(
-    "作者备注（可选）",
-  )) as HTMLTextAreaElement;
-  fireEvent.change(notes, { target: { value: "dirty notes" } });
-  fireEvent.change(screen.getByLabelText("作者昵称"), {
-    target: { value: "dirty name" },
+  const picker = await screen.findByLabelText("作者头像");
+  const file = new File(["image"], "avatar.png", { type: "image/png" });
+  Object.defineProperty(file, "arrayBuffer", {
+    value: async () => new ArrayBuffer(5),
   });
-  fireEvent.change(screen.getByLabelText("作者头像"), {
-    target: {
-      files: [
-        new File(["avatar"], "pending-avatar.png", { type: "image/png" }),
-      ],
-    },
-  });
-  failManaged = true;
-  await act(async () => {
-    await queryClient.invalidateQueries({
-      queryKey: ["managed-author", "author"],
-    });
-  });
-  expect(screen.getByLabelText("作者备注（可选）")).toBe(notes);
-  expect(notes.value).toBe("dirty notes");
-  expect((screen.getByLabelText("作者昵称") as HTMLInputElement).value).toBe(
-    "dirty name",
+  fireEvent.change(picker, { target: { files: [file] } });
+  fireEvent.click(screen.getByRole("button", { name: "保存作者" }));
+  await screen.findByRole("alert");
+  fireEvent.click(screen.getByRole("button", { name: "继续上传头像" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "核对后重新选择文件" }),
   );
-  expect(screen.getByRole("img", { name: "pending-avatar.png" })).toBeTruthy();
-  expect(await screen.findByText(/管理资料更新失败/)).toBeTruthy();
-  failManaged = false;
-  fireEvent.click(screen.getByRole("button", { name: "重试读取" }));
+  await waitFor(() => expect(picker.hasAttribute("disabled")).toBe(false));
+  expect(queryClient.getQueryData(["author", "author"])).toMatchObject({
+    avatarAvailable: true,
+  });
   await waitFor(() =>
-    expect(screen.queryByText(/管理资料更新失败/)).toBeNull(),
+    expect(
+      screen
+        .getByRole("button", { name: "更换作者头像" })
+        .querySelector("img")
+        ?.getAttribute("src"),
+    ).toBe("https://images.invalid/saved.png"),
   );
-  expect(screen.getByLabelText("作者备注（可选）")).toBe(notes);
-  expect(notes.value).toBe("dirty notes");
-  expect(screen.getByRole("img", { name: "pending-avatar.png" })).toBeTruthy();
+  fireEvent.change(picker, { target: { files: [file] } });
+  fireEvent.click(screen.getByRole("button", { name: "继续上传头像" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+  expect(patch).toHaveBeenCalledOnce();
 });

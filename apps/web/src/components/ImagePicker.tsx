@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { ImagePlus, X } from "lucide-react";
+import { FileArchive, ImagePlus, X } from "lucide-react";
 import { Button, IconButton } from "./ui";
 import "./image-picker.css";
 
@@ -35,6 +35,7 @@ export function ImagePicker({
   avatarField,
   avatarFallback,
   selectionStatus = "头像未保存",
+  formats = "images",
 }: {
   label: string;
   files: File[];
@@ -48,10 +49,13 @@ export function ImagePicker({
   avatarField?: ReactNode;
   avatarFallback?: ReactNode;
   selectionStatus?: string;
+  formats?: "images" | "source";
 }) {
   const input = useRef<HTMLInputElement>(null);
   const id = useId();
   const [error, setError] = useState("");
+  const sourceFiles = formats === "source";
+  const noun = sourceFiles ? "文件" : "图片";
   const sizeLimit = `${maxFileSize / 1024 / 1024} MiB`;
   return (
     <fieldset className={`ui-image-picker ui-image-picker--${variant}`}>
@@ -62,7 +66,11 @@ export function ImagePicker({
         hidden
         aria-label={label}
         aria-describedby={`${id}-hint${error ? ` ${id}-error` : ""}`}
-        accept={accept}
+        accept={
+          sourceFiles
+            ? ".zip,image/png,image/jpeg,image/webp,image/gif"
+            : accept
+        }
         multiple={multiple}
         disabled={disabled}
         onChange={(event) => {
@@ -70,13 +78,24 @@ export function ImagePicker({
           event.currentTarget.value = "";
           if (disabled || !selected.length) return;
           if (
-            selected.some((file) => !/\.(png|jpe?g|webp)$/i.test(file.name))
+            selected.some(
+              (file) =>
+                !(
+                  sourceFiles
+                    ? /\.(zip|png|jpe?g|webp|gif)$/i
+                    : /\.(png|jpe?g|webp)$/i
+                ).test(file.name),
+            )
           ) {
-            setError("请选择 PNG、JPEG 或 WebP 图片");
+            setError(
+              sourceFiles
+                ? "请选择图片或 ZIP 文件"
+                : "请选择 PNG、JPEG 或 WebP 图片",
+            );
             return;
           }
           if (selected.some((file) => file.size > maxFileSize)) {
-            setError(`每张图片不能超过 ${sizeLimit}`);
+            setError(`每个${noun}不能超过 ${sizeLimit}`);
             return;
           }
           const next = multiple
@@ -87,7 +106,7 @@ export function ImagePicker({
               ]
             : selected.slice(0, 1);
           if (next.length > maxFiles) {
-            setError(`最多选择 ${maxFiles} 张图片`);
+            setError(`最多选择 ${maxFiles} 个${noun}`);
             return;
           }
           setError("");
@@ -150,11 +169,15 @@ export function ImagePicker({
             aria-describedby={`${id}-hint${error ? ` ${id}-error` : ""}`}
             onClick={() => input.current?.click()}
           >
-            {files.length ? (multiple ? "添加图片" : "更换图片") : "选择图片"}
+            {files.length
+              ? multiple
+                ? `添加${noun}`
+                : `更换${noun}`
+              : `选择${noun}`}
           </Button>
           <small id={`${id}-hint`}>
-            PNG、JPEG、WebP · {multiple ? `最多 ${maxFiles} 张 · ` : ""}每张{" "}
-            {sizeLimit}
+            {sourceFiles ? "图片或 ZIP" : "PNG、JPEG、WebP"} ·{" "}
+            {multiple ? `最多 ${maxFiles} 个 · ` : ""}每个 {sizeLimit}
           </small>
         </div>
       )}
@@ -167,7 +190,11 @@ export function ImagePicker({
         <ul className="ui-image-picker__files">
           {files.map((file) => (
             <li key={fileKey(file)}>
-              <LocalImage file={file} />
+              {sourceFiles && /\.zip$/i.test(file.name) ? (
+                <FileArchive size={28} aria-hidden="true" />
+              ) : (
+                <LocalImage file={file} />
+              )}
               <span className="ui-image-picker__name" title={file.name}>
                 {file.name}
               </span>

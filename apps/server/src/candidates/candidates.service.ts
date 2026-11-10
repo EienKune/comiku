@@ -1207,6 +1207,15 @@ export class CandidatesService {
 
   private async import(actorId: string, item: CandidateActionItemDto) {
     return this.db.$transaction(async (tx) => {
+      const observed = await tx.candidatePost.findUnique({
+        where: { id: item.id },
+        select: { authorId: true },
+      });
+      if (!observed) throw new NotFoundException("候选不存在");
+      // Author mutations lock this row too. Keep author before candidate, then
+      // re-read the binding so a concurrent manual reassignment cannot bypass it.
+      await tx.$queryRaw`SELECT id FROM authors WHERE id = ${observed.authorId}::uuid FOR SHARE`;
+      await tx.$queryRaw`SELECT id FROM candidate_posts WHERE id = ${item.id}::uuid FOR UPDATE`;
       const candidate = await tx.candidatePost.findUnique({
         where: { id: item.id },
         include: {
@@ -1225,11 +1234,16 @@ export class CandidatesService {
         };
       }
       if (
+        candidate.authorId !== observed.authorId ||
         candidate.revision !== item.expectedRevision ||
         candidate.status !== "pending"
       ) {
         throw new ConflictException("候选已更新或当前状态不允许入库");
       }
+      if (candidate.author.deletedAt)
+        throw new ConflictException("作者已归档，无法入库");
+      if (candidate.author.authorizationStatus !== "authorized")
+        throw new ConflictException("作者当前授权无效，无法入库");
       if (!candidate.media.length)
         throw new ConflictException("候选没有可入库图片");
       const changed = await tx.candidatePost.updateMany({

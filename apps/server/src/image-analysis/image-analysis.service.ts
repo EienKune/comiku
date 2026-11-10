@@ -571,26 +571,25 @@ export class ImageAnalysisService {
     const model = this.model;
     await this.reconcileSummaries(model.modelKey, candidateId);
     // A worker can die after its final claim, before the handler records failure.
-    const pending = await this.db.candidateMediaAnalysis.findMany({
-      where: {
-        modelKey: model.modelKey,
-        status: "queued",
-        ...(candidateId ? { media: { candidatePostId: candidateId } } : {}),
-      },
-      select: { mediaId: true },
-      orderBy: { createdAt: "asc" },
-      take: 100,
-    });
-    const exhausted = await this.db.backgroundJob.findMany({
-      where: {
-        kind: "image_analysis",
-        status: "failed",
-        resourceId: { in: pending.map((row) => row.mediaId) },
-        payload: { path: ["modelKey"], equals: model.modelKey },
-      },
-      select: { resourceId: true },
-      take: 100,
-    });
+    // Filter terminal jobs before the cap: paused historical work can otherwise
+    // permanently occupy the first 100 queued analyses and hide newer crashes.
+    const exhausted = await this.db.$queryRaw<
+      { resourceId: string }[]
+    >(Prisma.sql`
+      SELECT a.media_id AS "resourceId"
+      FROM candidate_media_analyses a
+      JOIN candidate_media m ON m.id = a.media_id
+      WHERE a.model_key = ${model.modelKey} AND a.status = 'queued'
+        ${candidateId ? Prisma.sql`AND m.candidate_post_id = ${candidateId}::uuid` : Prisma.empty}
+        AND EXISTS (
+          SELECT 1 FROM background_jobs j
+          WHERE j.kind = 'image_analysis' AND j.status = 'failed'
+            AND j.resource_id = a.media_id
+            AND j.payload->'modelKey' = to_jsonb(${model.modelKey}::text)
+        )
+      ORDER BY a.created_at, a.id
+      LIMIT 100
+    `);
     for (const job of exhausted) {
       await this.db.$transaction(async (tx) => {
         const row = await tx.candidateMediaAnalysis.findFirst({

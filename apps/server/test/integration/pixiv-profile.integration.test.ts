@@ -119,7 +119,8 @@ test("Pixiv profile HTTP evidence persists with revision fences and keeps notes 
         displayName: prefix,
         sourceLanguage: "ja",
         authorizationStatus: "authorized",
-        tagNames: [],
+        existingTags: [],
+        newTagNames: [],
         notes: "private author note",
         idempotencyKey: randomUUID(),
         accounts: [

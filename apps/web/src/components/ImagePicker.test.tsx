@@ -226,3 +226,51 @@ test("the labelled native button is focusable and opens its linked file input", 
   fireEvent.click(button);
   expect(click).toHaveBeenCalledOnce();
 });
+
+test("source selection preserves ZIP and GIF support with explicit manual-upload limits", () => {
+  vi.stubGlobal(
+    "URL",
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => "blob:source"),
+      revokeObjectURL: vi.fn(),
+    }),
+  );
+  const onChange = vi.fn();
+  const zip = new File(["zip"], "book.zip", { type: "application/zip" });
+  const { rerender } = render(
+    <ImagePicker
+      label="图源"
+      formats="source"
+      files={[]}
+      onChange={onChange}
+      multiple
+      maxFiles={20}
+      maxFileSize={25 * 1024 * 1024}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText("图源"), {
+    target: {
+      files: [zip, new File(["gif"], "page.gif", { type: "image/gif" })],
+    },
+  });
+  expect(onChange.mock.calls[0][0]).toHaveLength(2);
+  rerender(
+    <ImagePicker
+      label="图源"
+      formats="source"
+      files={[zip]}
+      onChange={onChange}
+      multiple
+      maxFiles={20}
+      maxFileSize={25 * 1024 * 1024}
+    />,
+  );
+  expect(screen.getByText("book.zip")).toBeTruthy();
+  expect(screen.queryByRole("img", { name: "book.zip" })).toBeNull();
+  fireEvent.change(screen.getByLabelText("图源"), {
+    target: {
+      files: [new File([new Uint8Array(25 * 1024 * 1024 + 1)], "large.zip")],
+    },
+  });
+  expect(screen.getByRole("alert").textContent).toContain("25 MiB");
+});

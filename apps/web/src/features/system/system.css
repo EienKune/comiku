@@ -24,6 +24,11 @@
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
+.system-source-management {
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+}
 .system-history {
   padding: var(--space-5);
   min-width: 0;

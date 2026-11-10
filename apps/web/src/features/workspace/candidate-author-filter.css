@@ -1,0 +1,29 @@
+.candidate-author-filter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: min(100%, 15rem);
+  gap: var(--space-2);
+}
+.candidate-author-filter > .ui-field {
+  flex: 1;
+  min-width: 0;
+}
+.candidate-author-filter__menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  width: max(100%, 18rem);
+  max-width: calc(100vw - 2rem);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+}
+.candidate-author-filter__menu p {
+  margin: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}

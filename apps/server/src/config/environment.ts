@@ -9,6 +9,8 @@ export interface Environment {
   port: number;
   databaseUrl: string;
   appOrigin: string;
+  authSessionIdleSeconds: number;
+  authSessionAbsoluteSeconds: number;
   authorProfileProofSecret?: string;
   trustedProxyCidrs?: string[];
   notifications?: {
@@ -131,6 +133,23 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
     }
     return Number(value);
   };
+  const authSessionIdleSeconds = integer("AUTH_SESSION_IDLE_SECONDS", 1800, 1);
+  const authSessionAbsoluteSeconds = integer(
+    "AUTH_SESSION_ABSOLUTE_SECONDS",
+    28800,
+    1,
+  );
+  if (
+    [authSessionIdleSeconds, authSessionAbsoluteSeconds].some(
+      (seconds) =>
+        !Number.isSafeInteger(seconds * 1000) ||
+        !Number.isFinite(new Date(Date.now() + seconds * 1000).getTime()),
+    ) ||
+    authSessionIdleSeconds > authSessionAbsoluteSeconds
+  )
+    throw new Error(
+      "AUTH_SESSION lifetimes must be safe positive seconds with idle <= absolute.",
+    );
   const appOrigin =
     input.APP_ORIGIN ??
     (nodeEnv === "production" ? "" : "http://localhost:5173");
@@ -278,6 +297,8 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
     port: Number(port),
     databaseUrl: databaseUrl!,
     appOrigin,
+    authSessionIdleSeconds,
+    authSessionAbsoluteSeconds,
     xOfficialDailyBudget: integer("X_OFFICIAL_DAILY_BUDGET", 0),
     xOfficialMonthlyBudget: integer("X_OFFICIAL_MONTHLY_BUDGET", 0),
     sourceOverlapMinutes: integer("SOURCE_OVERLAP_MINUTES", 10, 1),

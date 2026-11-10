@@ -31,7 +31,7 @@ export function SourceFetchHistory({ enabled = true }: { enabled?: boolean }) {
   return (
     <Surface className="system-history">
       <header className="system-history-heading">
-        <h2>图源采集</h2>
+        <h2>同步记录</h2>
         <Button
           variant="ghost"
           size="sm"
