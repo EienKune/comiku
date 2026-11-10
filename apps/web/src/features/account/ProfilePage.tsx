@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { Palette, UserRound, KeyRound, X } from "lucide-react";
 import {
   Button,
@@ -26,6 +26,7 @@ import { useSettingsNavigation } from "./settings-routing";
 import { AvatarSettings } from "./AvatarSettings";
 import { refreshMemberProfile } from "./profile-cache";
 import { useAction } from "./use-action";
+import { loginReturnTarget } from "./login-return";
 
 const profileSchema = z.object({
   displayName: z.string().trim().min(1, "请输入成员昵称").max(100),
@@ -245,6 +246,7 @@ export function PasswordPage() {
   const user = useAccount();
   const action = useAction();
   const navigate = useNavigate();
+  const location = useLocation();
   const { close } = useSettingsNavigation();
   const {
     register,
@@ -278,7 +280,8 @@ export function PasswordPage() {
               reset();
               if (user.mustChangePassword) queryClient.clear();
               queryClient.setQueryData(["me"], updated);
-              if (user.mustChangePassword) navigate("/", { replace: true });
+              if (user.mustChangePassword)
+                navigate(loginReturnTarget(location.state), { replace: true });
               else close();
             }),
           )}
