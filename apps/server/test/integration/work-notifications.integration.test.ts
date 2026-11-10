@@ -1,6 +1,8 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { Test } from "@nestjs/testing";
 import { AppModule } from "../../src/app.module.js";
@@ -16,8 +18,6 @@ import { NOTIFICATION_EVENT_KEYS } from "../../src/notifications/notification-ev
 import { NotificationPublisherService } from "../../src/notifications/notification-publisher.service.js";
 import { NotificationRuntimeService } from "../../src/notifications/notification-runtime.service.js";
 import { NotificationsService } from "../../src/notifications/notifications.service.js";
-import type { NotificationSendResult } from "../../src/notifications/notifications.contracts.js";
-import { OneBotHttpAdapter } from "../../src/notifications/onebot-http.adapter.js";
 import { hashPassword } from "../../src/users/password.js";
 import {
   defaultLabelPlusHeader,
@@ -56,41 +56,83 @@ for (const receiverMode of ["legacy", "templates"] as const) {
         url: `https://fixture.invalid/PRIVATE_URL_${prefix}`,
         token: `SYNTHETIC_TOKEN_${prefix}`,
       };
+      const sent: { group: string; text: string }[] = [];
+      let workId = "";
+      let channelId = "";
+      let protocolRequests = 0;
+      let protocolFailure: unknown = null;
+      const botServer = createServer(async (request, response) => {
+        protocolRequests++;
+        try {
+          assert.equal(request.method, "POST");
+          assert.equal(request.url, "/send_group_msg");
+          assert.equal(
+            request.headers.authorization,
+            `Bearer ${canaries.token}`,
+          );
+          let raw = "";
+          for await (const chunk of request) raw += chunk;
+          const payload = JSON.parse(raw) as {
+            group_id: string;
+            auto_escape: boolean;
+            message: { type: string; data: { text: string } }[];
+          };
+          assert.equal(payload.auto_escape, true);
+          assert.equal(payload.message.length, 1);
+          assert.equal(payload.message[0]!.type, "text");
+          assert.equal(typeof payload.message[0]!.data.text, "string");
+          // The real adapter's network request must run outside these locks.
+          await db.$transaction(async (tx) => {
+            const works = await tx.$queryRaw<
+              { id: string }[]
+            >`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE NOWAIT`;
+            const deliveries = await tx.$queryRaw<
+              { id: string }[]
+            >`SELECT id FROM notification_deliveries WHERE channel_id = ${channelId}::uuid AND status = 'sending' FOR UPDATE NOWAIT`;
+            assert.equal(works.length, 1);
+            assert.equal(deliveries.length, 1);
+          });
+          sent.push({
+            group: payload.group_id,
+            text: payload.message[0]!.data.text,
+          });
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              status: "ok",
+              retcode: 0,
+              data: { message_id: sent.length },
+            }),
+          );
+        } catch (error) {
+          protocolFailure = error;
+          response.writeHead(500, { "content-type": "application/json" });
+          response.end(JSON.stringify({ status: "failed", retcode: 1 }));
+        }
+      });
+      t.after(async () => {
+        if (!botServer.listening) return;
+        botServer.closeAllConnections();
+        await new Promise<void>((resolve, reject) =>
+          botServer.close((error) => (error ? reject(error) : resolve())),
+        );
+      });
+      await new Promise<void>((resolve) =>
+        botServer.listen(0, "127.0.0.1", resolve),
+      );
+      const botPort = (botServer.address() as AddressInfo).port;
       const registry = new NotificationConnectionRegistry({
         env: { NOTIFICATIONS_ENABLED: "true", SYNTHETIC_TOKEN: canaries.token },
         manifest: [
           {
             key: "work-loop",
             name: "Synthetic work loop",
-            endpoint: "http://127.0.0.1:1",
+            endpoint: `http://127.0.0.1:${botPort}`,
             tokenEnv: "SYNTHETIC_TOKEN",
             allowedIps: ["127.0.0.1"],
           },
         ],
       });
-      const sent: { group: string; text: string }[] = [];
-      let workId = "";
-      let channelId = "";
-      const adapter = {
-        async send(
-          _connection: unknown,
-          group: string,
-          text: string,
-        ): Promise<NotificationSendResult> {
-          // At the synthetic network boundary both locks can be acquired NOWAIT.
-          await db.$transaction(async (tx) => {
-            await tx.$queryRaw`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE NOWAIT`;
-            await tx.$queryRaw`SELECT id FROM notification_deliveries WHERE channel_id = ${channelId}::uuid AND status = 'sending' FOR UPDATE NOWAIT`;
-          });
-          sent.push({ group, text });
-          return {
-            status: "accepted",
-            providerMessageId: `synthetic-work-loop-${sent.length}`,
-            sendBoundaryCrossed: true,
-          };
-        },
-        close() {},
-      };
       const moduleRef = await Test.createTestingModule({
         imports: [
           AppModule.forRoot(
@@ -100,8 +142,6 @@ for (const receiverMode of ["legacy", "templates"] as const) {
       })
         .overrideProvider(NotificationConnectionRegistry)
         .useValue(registry)
-        .overrideProvider(OneBotHttpAdapter)
-        .useValue(adapter)
         .compile();
       const app = moduleRef.createNestApplication();
       configureApplication(app);
@@ -732,6 +772,12 @@ for (const receiverMode of ["legacy", "templates"] as const) {
           deliveries.every((delivery) => delivery.status === "accepted"),
         );
         assert.equal(sent.length, expectedSources.length);
+        assert.equal(protocolFailure, null);
+        assert.equal(
+          protocolRequests,
+          sent.length,
+          "real OneBot HTTP transport must be exercised",
+        );
         assert.ok(sent.every((message) => message.group === channel.groupId));
         const jobs = await db.backgroundJob.findMany({
           where: { id: { in: deliveries.map((delivery) => delivery.jobId!) } },
@@ -770,6 +816,8 @@ for (const receiverMode of ["legacy", "templates"] as const) {
           await runtime.maintain();
           await runtime.runNext();
         }
+        assert.equal(protocolFailure, null);
+        assert.equal(protocolRequests, expectedSources.length);
         assert.deepEqual(
           {
             events: await db.notificationEvent.count({
