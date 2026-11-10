@@ -11,6 +11,8 @@ import { createPortal } from "react-dom";
 import type { components } from "@comiku/api-client";
 import { Badge } from "../../components/ui";
 import { fitCandidateTags } from "./candidate-tag-layout";
+import { CandidateInspectionScope } from "./CandidateInspectionScope";
+import { useCandidateInspection } from "./candidate-inspection-context";
 import "./candidates.css";
 
 type Match = components["schemas"]["CandidateDto"]["tagRuleMatches"][number];
@@ -19,15 +21,25 @@ const normalized = (value: string) =>
 const ruleName = (match: Match) =>
   `${match.direction === "priority" ? "优先标签" : "降级标签"} · ${match.groupName}`;
 
-export function CandidateTags({
-  hashtags,
-  matches,
-  model,
-}: {
+type CandidateTagsProps = {
   hashtags: string[];
   matches: Match[];
   model?: ReactNode;
-}) {
+};
+
+export function CandidateTags(props: CandidateTagsProps) {
+  return (
+    <CandidateInspectionScope>
+      <CandidateTagsContent {...props} />
+    </CandidateInspectionScope>
+  );
+}
+
+function CandidateTagsContent({
+  hashtags,
+  matches,
+  model,
+}: CandidateTagsProps) {
   const root = useRef<HTMLDivElement>(null);
   const measurement = useRef<HTMLDivElement>(null);
   const modelRoot = useRef<HTMLDivElement>(null);
@@ -206,10 +218,14 @@ export function CandidateTags({
     },
     [cancelClose],
   );
+  const claimInspection = useCandidateInspection(id, close);
   function show(button: HTMLButtonElement) {
     cancelClose();
     trigger.current = button;
-    if (!suppressFocus.current) setOpen(true);
+    if (!suppressFocus.current) {
+      claimInspection();
+      setOpen(true);
+    }
   }
   function later() {
     cancelClose();
@@ -224,7 +240,13 @@ export function CandidateTags({
   const reposition = useRef(() => {});
   reposition.current = () => {
     if (!trigger.current || !popup.current) return;
-    const anchor = trigger.current.getBoundingClientRect();
+    const buttonRect = trigger.current.getBoundingClientRect();
+    const blockRect = root.current?.getBoundingClientRect();
+    const anchor = {
+      left: buttonRect.left,
+      top: blockRect?.top ?? buttonRect.top,
+      bottom: blockRect?.bottom ?? buttonRect.bottom,
+    };
     const rect = popup.current.getBoundingClientRect();
     const next = {
       left: Math.max(

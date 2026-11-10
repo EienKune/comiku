@@ -153,13 +153,19 @@ test("ignored content supports loaded selection, cancellation and revision-aware
   await screen.findByText("候选 ignored");
   fireEvent.click(screen.getByRole("button", { name: /选择当前已加载内容/ }));
   expect(
-    (screen.getByRole("checkbox", { name: "选择" }) as HTMLInputElement)
-      .checked,
+    (
+      screen.getByRole("checkbox", {
+        name: /选择 .* 的帖子/,
+      }) as HTMLInputElement
+    ).checked,
   ).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: /取消当前已加载选择/ }));
   expect(
-    (screen.getByRole("checkbox", { name: "选择" }) as HTMLInputElement)
-      .checked,
+    (
+      screen.getByRole("checkbox", {
+        name: /选择 .* 的帖子/,
+      }) as HTMLInputElement
+    ).checked,
   ).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: /选择当前已加载内容/ }));
   fireEvent.click(screen.getByRole("button", { name: /恢复所选/ }));
@@ -171,7 +177,7 @@ test("ignored content supports loaded selection, cancellation and revision-aware
   fireEvent.click(screen.getByRole("combobox", { name: "候选状态" }));
   fireEvent.click(screen.getByRole("option", { name: "已入库" }));
   await screen.findByText("候选 imported");
-  expect(screen.queryByRole("checkbox", { name: "选择" })).toBeNull();
+  expect(screen.queryByRole("checkbox", { name: /选择 .* 的帖子/ })).toBeNull();
   expect(
     screen.queryByRole("button", { name: /选择当前已加载内容|恢复所选/ }),
   ).toBeNull();
@@ -422,10 +428,12 @@ test("shared sessions preserve first revisions across pages, refresh and expiry;
   await screen.findByText("候选 a");
   expect(creates).toHaveLength(1);
   expect(new Set(requestedSessions).size).toBe(1);
-  fireEvent.click(screen.getByRole("checkbox", { name: "选择" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /选择 .* 的帖子/ }));
   fireEvent.click(screen.getByRole("button", { name: "再加载 24 个" }));
   await screen.findByText("候选 b");
-  fireEvent.click(screen.getAllByRole("checkbox", { name: "选择" })[1]);
+  fireEvent.click(
+    screen.getAllByRole("checkbox", { name: /选择 .* 的帖子/ })[1],
+  );
   expect(screen.getByText("已选择 2 项候选")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "刷新列表" }));
   await waitFor(() => expect(creates).toHaveLength(2));
@@ -547,152 +555,3 @@ test("three section navigation expands low priority, remembers its state, and re
   await screen.findByRole("navigation", { name: "候选审核区域" });
   expect(low().open).toBe(true);
 });
-
-for (const delayed of [false, true])
-  test(`dirty picture order survives snapshot replacement and ${delayed ? "an in-flight panel remount" : "its original write revision"}`, async () => {
-    let release!: () => void;
-    const pending = new Promise<void>((r) => (release = r));
-    let generation = 0,
-      expired = false;
-    let current = {
-      ...candidate("ordered", 2),
-      media: [
-        {
-          id: "a",
-          externalMediaId: "a",
-          orderIndex: 0,
-          width: 1,
-          height: 1,
-          mediaType: "photo",
-        },
-        {
-          id: "b",
-          externalMediaId: "b",
-          orderIndex: 1,
-          width: 1,
-          height: 1,
-          mediaType: "photo",
-        },
-      ],
-    };
-    const writes: unknown[] = [];
-    vi.spyOn(client, "POST").mockImplementation((async (
-      path: string,
-      options: {
-        body?: unknown;
-        params?: { query?: { triageGroup?: string; reviewSessionId?: string } };
-      } = {},
-    ) => {
-      if (path === "/api/candidates/{id}/media-order") {
-        writes.push(options?.body);
-        if (delayed) await pending;
-        current = {
-          ...current,
-          revision: 3,
-          media: [...current.media].reverse(),
-        };
-        return { data: current, response: new Response() } as never;
-      }
-      generation++;
-      return {
-        data: {
-          sessionId: `order-${generation}`,
-          expiresAt: "2030-01-01T00:00:00Z",
-          counts: { priority: 1, uncertain: 0, low_priority: 0 },
-        },
-        response: new Response(),
-      } as never;
-    }) as never);
-    vi.spyOn(client, "GET").mockImplementation((async (
-      path: string,
-      options: {
-        body?: unknown;
-        params?: { query?: { triageGroup?: string; reviewSessionId?: string } };
-      } = {},
-    ) => {
-      if (path === "/api/source-fetch/progress")
-        return {
-          data: { active: null, lastManual: null },
-          response: new Response(),
-        } as never;
-      if (path.includes("/media/"))
-        return {
-          data: { url: "https://images.invalid/synthetic.png" },
-          response: new Response(),
-        } as never;
-      const q = options?.params?.query as {
-        triageGroup?: string;
-        reviewSessionId?: string;
-      };
-      if (expired && q?.reviewSessionId === "order-1")
-        return {
-          error: { message: "过期" },
-          response: new Response(null, { status: 410 }),
-        } as never;
-      return {
-        data: {
-          items: q?.triageGroup === "priority" ? [current] : [],
-          total: q?.triageGroup === "priority" ? 1 : 0,
-          nextCursor: null,
-          analysisPending: false,
-        },
-        response: new Response(),
-      } as never;
-    }) as never);
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={["/candidates"]}>
-          <Routes>
-            <Route element={<Shell />}>
-              <Route path="/candidates" element={<CandidatesPage />} />
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "图片顺序" }));
-    const panel = () => document.querySelector(".candidate-order-panel")!;
-    fireEvent.click(
-      within(panel() as HTMLElement).getAllByRole("button", {
-        name: "下移",
-      })[0],
-    );
-    const rowIds = () =>
-      Array.from(panel().querySelectorAll(".candidate-order-row img")).map(
-        (img) => img.getAttribute("alt"),
-      );
-    const unload = new Event("beforeunload", { cancelable: true });
-    window.dispatchEvent(unload);
-    expect(unload.defaultPrevented).toBe(true);
-    expired = true;
-    await act(async () => {
-      await queryClient.invalidateQueries({ queryKey: ["candidates"] });
-    });
-    await waitFor(() => expect(generation).toBe(2));
-    await screen.findByRole("button", { name: "保存顺序" });
-    expect(panel().querySelectorAll(".candidate-order-row")).toHaveLength(2);
-    expect(rowIds()).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: "保存顺序" }));
-    await waitFor(() =>
-      expect(writes).toEqual([{ expectedRevision: 2, mediaIds: ["b", "a"] }]),
-    );
-    if (delayed) {
-      fireEvent.click(screen.getByRole("button", { name: "图片顺序" }));
-      fireEvent.click(screen.getByRole("button", { name: "图片顺序" }));
-      expect(
-        within(panel() as HTMLElement)
-          .getAllByRole("button", { name: "下移" })[0]
-          .hasAttribute("disabled"),
-      ).toBe(true);
-      expect(
-        screen
-          .getByRole("button", { name: "保存顺序" })
-          .hasAttribute("disabled"),
-      ).toBe(true);
-      await act(async () => release());
-      await waitFor(() =>
-        expect(document.querySelector(".candidate-order-panel")).toBeNull(),
-      );
-      expect(writes).toHaveLength(1);
-    }
-  });

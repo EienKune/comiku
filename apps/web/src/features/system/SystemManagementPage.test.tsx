@@ -92,7 +92,11 @@ test("collection is the default tab and never requests notification data", async
   ).toBe("true");
   expect(
     get.mock.calls.every((call) =>
-      ["/api/authors/sources", "/api/source-fetch/runs"].includes(call[0]),
+      [
+        "/api/authors/sources",
+        "/api/source-fetch/platforms",
+        "/api/source-fetch/runs",
+      ].includes(call[0]),
     ),
   ).toBe(true);
 });
@@ -166,7 +170,7 @@ test("collection polling pauses while notifications is active and resumes on ret
   expect(count()).toBe(before + 1);
 });
 
-test("connections show only platform availability and expose no second collection switch", async () => {
+test("connections expose pending verification separately from configuration and no second collection switch", async () => {
   vi.spyOn(client, "GET").mockImplementation(
     async (path) =>
       ({
@@ -187,7 +191,7 @@ test("connections show only platform availability and expose no second collectio
       }) as never,
   );
   openPage(["system:manage"]);
-  expect(await screen.findByText("可用")).toBeTruthy();
+  expect(await screen.findByText("待验证")).toBeTruthy();
   expect(screen.getByText("未配置")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /启用|停用/ })).toBeNull();
 });
@@ -208,7 +212,8 @@ test("the source tab uses the notification branch URL contract and safely handle
     get.mock.calls.every(
       (call) =>
         call[0] === "/api/authors/sources" ||
-        call[0] === "/api/source-fetch/runs",
+        call[0] === "/api/source-fetch/runs" ||
+        call[0] === "/api/source-fetch/platforms",
     ),
   ).toBe(true);
 });
@@ -236,6 +241,7 @@ test("an inactive source panel performs no capability reads or history polling, 
   await screen.findByText("暂无同步记录。");
   expect(get.mock.calls.map((call) => call[0]).sort()).toEqual([
     "/api/authors/sources",
+    "/api/source-fetch/platforms",
     "/api/source-fetch/runs",
   ]);
   view.rerender(page(false));

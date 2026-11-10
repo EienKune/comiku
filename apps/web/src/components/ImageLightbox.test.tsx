@@ -1,8 +1,86 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { ImageLightbox } from "./ImageLightbox";
 
 afterEach(() => cleanup());
+
+test("previews inside the active native dialog and consumes Escape before its editor", () => {
+  const host = document.createElement("dialog");
+  host.open = true;
+  document.body.append(host);
+  const trigger = document.createElement("button");
+  host.append(trigger);
+  trigger.focus();
+  const editorEscape = vi.fn();
+  host.addEventListener("keydown", editorEscape);
+  const close = vi.fn();
+  const view = render(
+    <ImageLightbox
+      alt="编辑预览"
+      index={0}
+      count={1}
+      onClose={close}
+      portalContainer={host}
+    />,
+  );
+  const preview = screen.getByRole("dialog", {
+    name: "编辑预览，第 1 张，共 1 张",
+  });
+  expect(preview.parentElement).toBe(host);
+  expect(document.activeElement).toBe(preview);
+  const escape = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+  });
+  fireEvent(preview, escape);
+  expect(escape.defaultPrevented).toBe(true);
+  expect(close).toHaveBeenCalledOnce();
+  expect(editorEscape).not.toHaveBeenCalled();
+  view.unmount();
+  expect(document.activeElement).toBe(trigger);
+  host.remove();
+});
+
+test("only the top preview handles Escape and keeps scroll locked while another remains", () => {
+  const lowerClose = vi.fn();
+  const upperClose = vi.fn();
+  const lower = render(
+    <ImageLightbox alt="下层" index={0} count={1} onClose={lowerClose} />,
+  );
+  const upper = render(
+    <ImageLightbox alt="上层" index={0} count={1} onClose={upperClose} />,
+  );
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(lowerClose).not.toHaveBeenCalled();
+  expect(upperClose).toHaveBeenCalledOnce();
+  upper.unmount();
+  expect(document.documentElement.classList.contains("has-lightbox")).toBe(
+    true,
+  );
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(lowerClose).toHaveBeenCalledOnce();
+  lower.unmount();
+});
+
+test("does not restore focus to a removed preview trigger", () => {
+  const trigger = document.createElement("button");
+  document.body.append(trigger);
+  trigger.focus();
+  const focus = vi.spyOn(trigger, "focus");
+  const view = render(
+    <ImageLightbox alt="预览" index={0} count={1} onClose={vi.fn()} />,
+  );
+  trigger.remove();
+  view.unmount();
+  expect(focus).not.toHaveBeenCalled();
+});
 
 function pointer(
   image: HTMLElement,
@@ -116,6 +194,71 @@ test("Alt wheel zooms around the pointer; mouse drags pan without navigating or 
   fireEvent.pointerDown(viewport);
   fireEvent.click(viewport);
   expect(close).toHaveBeenCalledTimes(1);
+});
+
+test("top preview traps Tab and programmatic focus without reaching the underlying editor", () => {
+  render(
+    <>
+      <button>底层编辑操作</button>
+      <ImageLightbox
+        src="/preview.png"
+        alt="预览"
+        index={0}
+        count={2}
+        onClose={vi.fn()}
+        onNext={vi.fn()}
+      />
+    </>,
+  );
+  const dialog = screen.getByRole("dialog");
+  const first = within(dialog).getByRole("button", { name: "缩小图片" });
+  const last = within(dialog).getByRole("button", { name: "下一张" });
+  last.focus();
+  const forward = new KeyboardEvent("keydown", {
+    key: "Tab",
+    bubbles: true,
+    cancelable: true,
+  });
+  fireEvent(last, forward);
+  expect(forward.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(first);
+  fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+  expect(document.activeElement).toBe(last);
+  screen.getByRole("button", { name: "底层编辑操作" }).focus();
+  expect(document.activeElement).toBe(first);
+});
+
+test("a newer native dialog owns keyboard and focus until it closes", () => {
+  const close = vi.fn();
+  render(
+    <ImageLightbox
+      src="/preview.png"
+      alt="预览"
+      index={0}
+      count={1}
+      onClose={close}
+    />,
+  );
+  const overlay = document.createElement("dialog");
+  overlay.open = true;
+  const stay = document.createElement("button");
+  stay.textContent = "继续编辑";
+  overlay.append(stay);
+  document.body.append(overlay);
+  stay.focus();
+  expect(document.activeElement).toBe(stay);
+  const tab = new KeyboardEvent("keydown", {
+    key: "Tab",
+    bubbles: true,
+    cancelable: true,
+  });
+  fireEvent(stay, tab);
+  expect(tab.defaultPrevented).toBe(false);
+  fireEvent.keyDown(stay, { key: "Escape" });
+  expect(close).not.toHaveBeenCalled();
+  overlay.remove();
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(close).toHaveBeenCalledOnce();
 });
 
 test("zoom is bounded, touch pans when enlarged, and only changing page resets the view", () => {

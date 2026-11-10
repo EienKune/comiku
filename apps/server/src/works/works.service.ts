@@ -49,6 +49,7 @@ import type {
   WorkPageDto,
   WorkQueryDto,
   PersonalWorkTaskDto,
+  WorkSourceDto,
 } from "./works.dto.js";
 import { WorkClaimOutcome, WorkPhase, WorkView } from "./works.dto.js";
 import { proofreadSkipAvailability } from "../workflow/proofread-exemption.js";
@@ -519,6 +520,88 @@ export class WorksService {
     });
     if (!image) throw new NotFoundException("作品图片不存在");
     return this.files.imageUrl(image.originalFileObjectId, variant);
+  }
+
+  async source(workId: string): Promise<WorkSourceDto> {
+    const work = await this.db.work.findUnique({
+      where: { id: workId },
+      select: {
+        sourceText: true,
+        images: {
+          select: { id: true, orderIndex: true, sourceCandidateMediaId: true },
+        },
+        sourceCandidatePost: {
+          select: {
+            id: true,
+            platform: true,
+            externalPostId: true,
+            externalPostUrl: true,
+            text: true,
+            media: {
+              orderBy: { orderIndex: "asc" },
+              select: {
+                id: true,
+                orderIndex: true,
+                width: true,
+                height: true,
+                mediaType: true,
+                fileObject: {
+                  select: { lifecycleStatus: true, deletedAt: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!work) throw new NotFoundException("作品不存在");
+    const candidate = work.sourceCandidatePost;
+    const pages = new Map(
+      work.images.flatMap((image) =>
+        image.sourceCandidateMediaId
+          ? [[image.sourceCandidateMediaId, image] as const]
+          : [],
+      ),
+    );
+    const completeMapping =
+      work.images.length > 0 && pages.size === work.images.length;
+    return {
+      candidateId: candidate.id,
+      platform: candidate.platform,
+      externalPostId: candidate.externalPostId,
+      sourceUrl: candidate.externalPostUrl,
+      sourceText: candidate.text,
+      importedSourceText: work.sourceText,
+      media: candidate.media.map((media) => {
+        const image = pages.get(media.id);
+        return {
+          id: media.id,
+          orderIndex: media.orderIndex,
+          width: media.width,
+          height: media.height,
+          mediaType: media.mediaType,
+          adopted: image ? true : completeMapping ? false : null,
+          workImageId: image?.id ?? null,
+          workOrderIndex: image?.orderIndex ?? null,
+          available:
+            media.fileObject.lifecycleStatus === "active" &&
+            media.fileObject.deletedAt === null,
+        };
+      }),
+    };
+  }
+
+  async sourceMediaUrl(
+    workId: string,
+    mediaId: string,
+    variant: "original" | "thumbnail" = "original",
+  ) {
+    const media = await this.db.candidateMedia.findFirst({
+      where: { id: mediaId, candidatePost: { work: { id: workId } } },
+      select: { fileObjectId: true },
+    });
+    if (!media) throw new NotFoundException("作品来源图片不存在");
+    return this.files.imageUrl(media.fileObjectId, variant);
   }
 
   async update(
