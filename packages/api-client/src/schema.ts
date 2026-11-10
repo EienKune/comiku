@@ -1970,6 +1970,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/notifications/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getNotificationStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listNotificationReceipts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/notifications/configuration": {
         parameters: {
             query?: never;
@@ -3861,6 +3893,67 @@ export interface components {
             pendingCandidates: number | null;
             myParticipatingWorks: number;
             recentActivity: components["schemas"]["DashboardActivityDto"][];
+        };
+        NotificationBoundedMetricDto: {
+            count: number;
+            capped: boolean;
+            /** Format: date-time */
+            oldestAt: string | null;
+        };
+        NotificationStatusCountsDto: {
+            uncaptured: components["schemas"]["NotificationBoundedMetricDto"] | null;
+            pending: components["schemas"]["NotificationBoundedMetricDto"];
+            retryWait: components["schemas"]["NotificationBoundedMetricDto"];
+            invalid: components["schemas"]["NotificationBoundedMetricDto"];
+        };
+        NotificationStatusDto: {
+            enabled: boolean;
+            /**
+             * @description Successful worker maintenance evidence; does not indicate bot connectivity.
+             * @enum {string}
+             */
+            state: "disabled" | "not_started" | "healthy" | "stale" | "error";
+            /** Format: date-time */
+            sourceSince: string | null;
+            /** Format: date-time */
+            expandedSourceSince: string | null;
+            /** Format: date-time */
+            lastMaintenanceAt: string | null;
+            /** Format: date-time */
+            lastCaptureAt: string | null;
+            /** Format: date-time */
+            lastRegistrationAt: string | null;
+            /** Format: date-time */
+            lastErrorAt: string | null;
+            lastErrorCode: string | null;
+            counts: components["schemas"]["NotificationStatusCountsDto"];
+        };
+        NotificationReceiptItemDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            sourceEventId: string;
+            /** Format: uuid */
+            resourceId: string;
+            workNumber: number | null;
+            eventType: string | null;
+            eventLabel: string | null;
+            /** @enum {string} */
+            status: "pending" | "retry_wait" | "invalid" | "recorded" | "skipped";
+            attempts: number;
+            errorCode: string | null;
+            /** Format: date-time */
+            nextAttemptAt: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: uuid */
+            notificationEventId: string | null;
+        };
+        NotificationReceiptPageDto: {
+            items: components["schemas"]["NotificationReceiptItemDto"][];
+            nextCursor: string | null;
         };
         NotificationConnectionDto: {
             key: string;
@@ -15916,6 +16009,174 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DashboardSummaryDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    getNotificationStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationStatusDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    listNotificationReceipts: {
+        parameters: {
+            query?: {
+                limit?: number;
+                status?: "pending" | "retry_wait" | "invalid" | "recorded" | "skipped";
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationReceiptPageDto"];
                 };
             };
             /** @description 请求字段无效 */

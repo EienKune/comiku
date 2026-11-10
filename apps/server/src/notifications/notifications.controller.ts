@@ -40,6 +40,13 @@ import {
   notificationDeliveryStatuses,
 } from "./notifications.dto.js";
 import { NotificationsService } from "./notifications.service.js";
+import { NotificationStatusService } from "./notification-status.service.js";
+import {
+  NotificationReceiptPageDto,
+  NotificationReceiptsQueryDto,
+  NotificationStatusDto,
+  notificationReceiptStatuses,
+} from "./notifications-status.dto.js";
 
 @ApiTags("notifications")
 @ApiCookieAuth()
@@ -48,7 +55,41 @@ export class NotificationsController {
   constructor(
     @Inject(NotificationsService)
     private readonly notifications: NotificationsService,
+    @Inject(NotificationStatusService)
+    private readonly notificationStatus: NotificationStatusService,
   ) {}
+
+  @Get("status")
+  @Access({ permission: "system:manage" })
+  @ApiOperation({ operationId: "getNotificationStatus" })
+  @ApiOkResponse({ type: NotificationStatusDto })
+  status(): Promise<NotificationStatusDto> {
+    return this.notificationStatus.status();
+  }
+
+  @Get("receipts")
+  @Access({ permission: "system:manage" })
+  @ApiOperation({ operationId: "listNotificationReceipts" })
+  @ApiQuery({ name: "cursor", required: false, type: String, maxLength: 512 })
+  @ApiQuery({
+    name: "status",
+    required: false,
+    enum: notificationReceiptStatuses,
+  })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: Number,
+    minimum: 1,
+    maximum: 50,
+  })
+  @ApiOkResponse({ type: NotificationReceiptPageDto })
+  receipts(
+    @Query(bodyValidation(NotificationReceiptsQueryDto))
+    query: NotificationReceiptsQueryDto,
+  ): Promise<NotificationReceiptPageDto> {
+    return this.notificationStatus.receipts(query);
+  }
 
   @Get("configuration")
   @Access({ permission: "system:manage" })

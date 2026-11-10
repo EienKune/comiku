@@ -1758,6 +1758,11 @@ model NotificationTemplate {
 model NotificationWorkEventActivation {
   id String @id @db.VarChar(32)
   sourceSince DateTime @default(now()) @map("source_since") @db.Timestamptz(3)
+  lastMaintenanceAt DateTime? @map("last_maintenance_at") @db.Timestamptz(3)
+  lastCaptureAt DateTime? @map("last_capture_at") @db.Timestamptz(3)
+  lastRegistrationAt DateTime? @map("last_registration_at") @db.Timestamptz(3)
+  lastErrorAt DateTime? @map("last_error_at") @db.Timestamptz(3)
+  lastErrorCode String? @map("last_error_code") @db.VarChar(64)
   @@map("notification_work_event_activation")
 }
 
@@ -1780,6 +1785,7 @@ model NotificationWorkEventReceipt {
   @@unique([resourceId, resourceOrdinal], map: "notification_work_receipt_resource_ordinal_key")
   @@index([status, nextAttemptAt, createdAt], map: "notification_work_receipt_due_idx")
   @@index([resourceId, status, resourceOrdinal], map: "notification_work_receipt_resource_pending_idx")
+  @@index([status, createdAt, id], map: "notification_work_receipt_status_created_idx")
   @@map("notification_work_event_receipts")
 }
 

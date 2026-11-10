@@ -8,6 +8,40 @@ import type { NotificationConnectionRegistry } from "../src/notifications/notifi
 import type { OneBotHttpAdapter } from "../src/notifications/onebot-http.adapter.js";
 import type { Environment } from "../src/config/environment.js";
 
+test("maintenance records bridge evidence once while observation failures cannot stop routing", async () => {
+  for (const observationFails of [false, true]) {
+    const result = { success: true, captured: 2, registered: 1 };
+    const observations: unknown[] = [];
+    let routingReads = 0;
+    const runtime = new NotificationRuntimeService(
+      {
+        notificationEvent: {
+          findMany: async () => {
+            routingReads++;
+            return [];
+          },
+        },
+        notificationDelivery: { findMany: async () => [] },
+        $queryRaw: async () => [],
+      } as never,
+      {} as never,
+      { enabled: true } as never,
+      {} as never,
+      { appOrigin: "https://example.test" } as Environment,
+      { maintain: async () => result } as never,
+      {
+        recordMaintenance: async (evidence: unknown) => {
+          observations.push(evidence);
+          if (observationFails) throw new Error("synthetic monitoring failure");
+        },
+      } as never,
+    );
+    await runtime.maintain();
+    assert.deepEqual(observations, [result]);
+    assert.equal(routingReads, 1);
+  }
+});
+
 test("routing uses recipient frozen text even after event metadata and current template change", async () => {
   let saved!: { text: string };
   const channel = {

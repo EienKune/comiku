@@ -5,6 +5,7 @@ import { JobsModule } from "../jobs/jobs.module.js";
 import { NotificationConnectionRegistry } from "./notification-connections.js";
 import { NotificationPublisherService } from "./notification-publisher.service.js";
 import { NotificationRuntimeService } from "./notification-runtime.service.js";
+import { NotificationStatusService } from "./notification-status.service.js";
 import { NotificationWorkEventBridgeService } from "./notification-work-event-bridge.service.js";
 import { NotificationsController } from "./notifications.controller.js";
 import { NotificationsService } from "./notifications.service.js";
@@ -47,6 +48,7 @@ class NotificationTransportLifecycle implements OnModuleDestroy {
     NotificationPublisherService,
     NotificationWorkEventBridgeService,
     NotificationsService,
+    NotificationStatusService,
     NotificationRuntimeService,
   ],
   exports: [NotificationPublisherService, NotificationRuntimeService],

@@ -12,6 +12,7 @@ import { NotificationConnectionRegistry } from "./notification-connections.js";
 import { OneBotHttpAdapter } from "./onebot-http.adapter.js";
 import { renderNotificationMessage } from "./notification-events.js";
 import { NotificationWorkEventBridgeService } from "./notification-work-event-bridge.service.js";
+import { NotificationStatusService } from "./notification-status.service.js";
 import type {
   NormalizedNotificationEvent,
   NotificationSendResult,
@@ -35,6 +36,9 @@ export class NotificationRuntimeService implements OnModuleInit {
     @Optional()
     @Inject(NotificationWorkEventBridgeService)
     private readonly workEventBridge?: NotificationWorkEventBridgeService,
+    @Optional()
+    @Inject(NotificationStatusService)
+    private readonly status?: NotificationStatusService,
   ) {}
 
   get enabled() {
@@ -54,7 +58,15 @@ export class NotificationRuntimeService implements OnModuleInit {
   /** Bounded durable routing/reconciliation; no request, interval, lease or TTL of its own. */
   async maintain() {
     if (!this.enabled) return;
-    await this.workEventBridge?.maintain();
+    const evidence = await this.workEventBridge?.maintain();
+    if (evidence && this.status) {
+      try {
+        await this.status.recordMaintenance(evidence);
+      } catch {
+        // Observation is independent of durable routing, including injected or
+        // future observer failures outside the status service's own guard.
+      }
+    }
     const events = await this.db.notificationEvent.findMany({
       where: { routedAt: null },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
