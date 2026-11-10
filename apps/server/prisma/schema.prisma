@@ -1721,6 +1721,7 @@ model NotificationEvent {
   deliveries NotificationDelivery[]
   @@index([routedAt, createdAt])
   @@index([resourceId, aggregateVersion, ordinal])
+  @@index([type, id], map: "notification_event_type_id_idx")
   @@map("notification_events")
 }
 
@@ -1826,6 +1827,7 @@ model NotificationDelivery {
   @@index([channelId, status, resolvedAt])
   @@index([createdAt, id])
   @@index([status, createdAt, id])
+  @@index([groupId, createdAt, id], map: "notification_delivery_group_created_idx")
   @@map("notification_deliveries")
 }
 

@@ -38,6 +38,19 @@ export class NotificationStatusCountsDto {
   invalid!: NotificationBoundedMetricDto;
 }
 
+export class NotificationDeliveryCountsDto {
+  @ApiProperty({ type: NotificationBoundedMetricDto })
+  pending!: NotificationBoundedMetricDto;
+  @ApiProperty({ type: NotificationBoundedMetricDto })
+  retryWait!: NotificationBoundedMetricDto;
+  @ApiProperty({ type: NotificationBoundedMetricDto })
+  sending!: NotificationBoundedMetricDto;
+  @ApiProperty({ type: NotificationBoundedMetricDto })
+  failedUnresolved!: NotificationBoundedMetricDto;
+  @ApiProperty({ type: NotificationBoundedMetricDto })
+  unknownUnresolved!: NotificationBoundedMetricDto;
+}
+
 export class NotificationStatusDto {
   @ApiProperty({ type: Boolean }) enabled!: boolean;
   @ApiProperty({
@@ -61,6 +74,8 @@ export class NotificationStatusDto {
   @ApiProperty({ type: String, nullable: true }) lastErrorCode!: string | null;
   @ApiProperty({ type: NotificationStatusCountsDto })
   counts!: NotificationStatusCountsDto;
+  @ApiProperty({ type: NotificationDeliveryCountsDto })
+  deliveries!: NotificationDeliveryCountsDto;
 }
 
 export class NotificationReceiptsQueryDto {

@@ -27,8 +27,17 @@ import {
   assertNotificationAdministrator,
   channelDto,
   deliveryDto,
-  DELIVERY_STATUSES,
+  NOTIFICATION_JOB_KIND,
+  NOTIFICATION_SCOPE,
 } from "./notification-engine.helpers.js";
+import { JobLane, JobStatus } from "../generated/prisma/enums.js";
+import {
+  buildNotificationHistoryQuery,
+  normalizeNotificationHistoryQuery,
+  notificationHistoryCursor,
+  parseNotificationHistoryCursor,
+  type NotificationHistoryQuery,
+} from "./notification-history-query.js";
 import {
   assertNotificationEventType,
   allowedNotificationStages,
@@ -413,61 +422,68 @@ export class NotificationsService {
     };
   }
 
-  async listDeliveries(
-    query: { cursor?: string; status?: string; limit?: number } = {},
-  ) {
-    const limit = Math.min(50, Math.max(1, query.limit ?? 25));
-    if (
-      !Number.isInteger(limit) ||
-      (query.status && !DELIVERY_STATUSES.includes(query.status as never))
-    )
-      throw new BadRequestException("通知筛选无效");
-    let position: { at: string; id: string; status: string | null } | undefined;
-    if (query.cursor) {
-      try {
-        position = JSON.parse(
-          Buffer.from(query.cursor, "base64url").toString(),
-        );
-        if (
-          !position ||
-          position.status !== (query.status ?? null) ||
-          !/^[0-9a-f-]{36}$/i.test(position.id) ||
-          !Number.isFinite(new Date(position.at).getTime())
-        )
-          throw new Error();
-      } catch {
-        throw new BadRequestException("通知分页游标无效");
-      }
-    }
+  async listDeliveries(query: NotificationHistoryQuery = {}) {
+    const filters = normalizeNotificationHistoryQuery(query);
+    const position = parseNotificationHistoryCursor(query.cursor, filters);
+    const work =
+      filters.workNumber === null
+        ? null
+        : await this.db.work.findUnique({
+            where: { workNumber: filters.workNumber },
+            select: { id: true },
+          });
+    if (filters.workNumber !== null && !work)
+      return { items: [], nextCursor: null };
+    const ids = await this.db.$queryRaw<{ id: string }[]>(
+      buildNotificationHistoryQuery(filters, position, work?.id ?? null),
+    );
+    if (!ids.length) return { items: [], nextCursor: null };
     const rows = await this.db.notificationDelivery.findMany({
-      where: {
-        ...(query.status ? { status: query.status } : {}),
-        ...(position
-          ? {
-              OR: [
-                { createdAt: { lt: new Date(position.at) } },
-                { createdAt: new Date(position.at), id: { lt: position.id } },
-              ],
-            }
-          : {}),
-      },
+      where: { id: { in: ids.slice(0, filters.limit).map((row) => row.id) } },
       include: { event: true, channel: true },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: limit + 1,
+      take: filters.limit,
     });
-    const page = rows.slice(0, limit);
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const page = ids
+      .slice(0, filters.limit)
+      .flatMap(({ id }) => (byId.get(id) ? [byId.get(id)!] : []));
+    const jobIds = page
+      .filter((row) => row.status === "pending" || row.status === "retry_wait")
+      .flatMap((row) => (row.jobId ? [row.jobId] : []));
+    const jobs = jobIds.length
+      ? await this.db.backgroundJob.findMany({
+          where: {
+            id: { in: jobIds },
+            kind: NOTIFICATION_JOB_KIND,
+            lane: JobLane.network,
+            executionScope: NOTIFICATION_SCOPE,
+            status: JobStatus.queued,
+            attempts: { lt: 3 },
+          },
+          select: { id: true, resourceId: true, availableAt: true },
+          take: filters.limit,
+        })
+      : [];
+    const scheduled = new Map(jobs.map((job) => [job.id, job]));
     const last = page.at(-1);
     return {
-      items: page.map(deliveryDto),
+      items: page.map((row) => {
+        const job = row.jobId ? scheduled.get(row.jobId) : undefined;
+        const nextEligibleAt =
+          job?.resourceId === row.id &&
+          (row.status === "pending" || row.status === "retry_wait")
+            ? new Date(
+                Math.max(
+                  job.availableAt.getTime(),
+                  row.nextAttemptAt?.getTime() ?? 0,
+                ),
+              )
+            : null;
+        return deliveryDto(row, nextEligibleAt);
+      }),
       nextCursor:
-        rows.length > limit && last
-          ? Buffer.from(
-              JSON.stringify({
-                at: last.createdAt.toISOString(),
-                id: last.id,
-                status: query.status ?? null,
-              }),
-            ).toString("base64url")
+        ids.length > filters.limit && last
+          ? notificationHistoryCursor(filters, last)
           : null,
     };
   }
@@ -597,7 +613,6 @@ export class NotificationsService {
           {
             includeDetails: channel.includeDetails,
             siteUrl: this.environment.appOrigin,
-            synthetic: true,
           },
         );
       const sampleRoute: NotificationFrozenRoute = {

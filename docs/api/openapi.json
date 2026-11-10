@@ -24632,6 +24632,33 @@
           "invalid"
         ]
       },
+      "NotificationDeliveryCountsDto": {
+        "type": "object",
+        "properties": {
+          "pending": {
+            "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+          },
+          "retryWait": {
+            "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+          },
+          "sending": {
+            "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+          },
+          "failedUnresolved": {
+            "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+          },
+          "unknownUnresolved": {
+            "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+          }
+        },
+        "required": [
+          "pending",
+          "retryWait",
+          "sending",
+          "failedUnresolved",
+          "unknownUnresolved"
+        ]
+      },
       "NotificationStatusDto": {
         "type": "object",
         "properties": {
@@ -24685,6 +24712,9 @@
           },
           "counts": {
             "$ref": "#/components/schemas/NotificationStatusCountsDto"
+          },
+          "deliveries": {
+            "$ref": "#/components/schemas/NotificationDeliveryCountsDto"
           }
         },
         "required": [
@@ -24697,7 +24727,8 @@
           "lastRegistrationAt",
           "lastErrorAt",
           "lastErrorCode",
-          "counts"
+          "counts",
+          "deliveries"
         ]
       },
       "NotificationReceiptItemDto": {
@@ -25462,6 +25493,12 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "nextEligibleAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Next queued-job scheduling boundary, not a delivery ETA."
           }
         },
         "required": [
@@ -25483,7 +25520,8 @@
           "providerMessageId",
           "preview",
           "revision",
-          "resolvedAt"
+          "resolvedAt",
+          "nextEligibleAt"
         ]
       },
       "NotificationDeliveryPageDto": {

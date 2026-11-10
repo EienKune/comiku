@@ -3963,6 +3963,13 @@ export interface components {
             retryWait: components["schemas"]["NotificationBoundedMetricDto"];
             invalid: components["schemas"]["NotificationBoundedMetricDto"];
         };
+        NotificationDeliveryCountsDto: {
+            pending: components["schemas"]["NotificationBoundedMetricDto"];
+            retryWait: components["schemas"]["NotificationBoundedMetricDto"];
+            sending: components["schemas"]["NotificationBoundedMetricDto"];
+            failedUnresolved: components["schemas"]["NotificationBoundedMetricDto"];
+            unknownUnresolved: components["schemas"]["NotificationBoundedMetricDto"];
+        };
         NotificationStatusDto: {
             enabled: boolean;
             /**
@@ -3984,6 +3991,7 @@ export interface components {
             lastErrorAt: string | null;
             lastErrorCode: string | null;
             counts: components["schemas"]["NotificationStatusCountsDto"];
+            deliveries: components["schemas"]["NotificationDeliveryCountsDto"];
         };
         NotificationReceiptItemDto: {
             /** Format: uuid */
@@ -4147,6 +4155,11 @@ export interface components {
             revision: number;
             /** Format: date-time */
             resolvedAt: string | null;
+            /**
+             * Format: date-time
+             * @description Next queued-job scheduling boundary, not a delivery ETA.
+             */
+            nextEligibleAt: string | null;
         };
         NotificationDeliveryPageDto: {
             items: components["schemas"]["NotificationDeliveryDto"][];

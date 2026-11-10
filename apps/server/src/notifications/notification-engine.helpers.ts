@@ -57,6 +57,7 @@ export function deliveryDto(
     event: NotificationEvent;
     channel: NotificationChannel;
   },
+  nextEligibleAt: Date | null = null,
 ) {
   const snapshot = row.event.snapshot as { workNumber?: number | null };
   const route = (
@@ -84,6 +85,7 @@ export function deliveryDto(
     preview: row.text,
     revision: row.revision,
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
+    nextEligibleAt: nextEligibleAt?.toISOString() ?? null,
     contentRevision: route?.content?.templatePolicy?.contentRevision ?? null,
     metadataObservedAt: route?.content?.metadataObservedAt ?? null,
     metadataOrigin: route?.content?.metadataOrigin ?? null,
