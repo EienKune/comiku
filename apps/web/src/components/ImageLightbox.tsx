@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { IconButton } from "./ui";
 
+const activePreviews: HTMLElement[] = [];
+
 export function ImageLightbox({
   src,
   alt,
@@ -21,6 +23,7 @@ export function ImageLightbox({
   onClose,
   onPrevious,
   onNext,
+  portalContainer,
 }: {
   src?: string;
   alt: string;
@@ -31,27 +34,77 @@ export function ImageLightbox({
   onClose: () => void;
   onPrevious?: () => void;
   onNext?: () => void;
+  portalContainer?: HTMLElement | null;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const callbacks = useRef({ onClose, onPrevious, onNext });
   callbacks.current = { onClose, onPrevious, onNext };
   useEffect(() => {
     const previousFocus = document.activeElement as HTMLElement | null;
-    dialogRef.current?.focus();
+    const dialog = dialogRef.current!;
+    activePreviews.push(dialog);
+    dialog.focus();
+    const focusable = () =>
+      Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), a[href], input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => !element.closest("[hidden], [inert]"));
+    const coveredByNativeDialog = (target: EventTarget | null) => {
+      const element =
+        target instanceof Element ? target : document.activeElement;
+      const nativeDialog = element?.closest("dialog[open]");
+      return !!nativeDialog && !nativeDialog.contains(dialog);
+    };
+    const onFocusIn = (event: FocusEvent) => {
+      if (
+        activePreviews.at(-1) === dialog &&
+        !coveredByNativeDialog(event.target) &&
+        !dialog.contains(event.target as Node)
+      )
+        (focusable()[0] ?? dialog).focus();
+    };
     const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        activePreviews.at(-1) !== dialog ||
+        coveredByNativeDialog(event.target)
+      )
+        return;
+      if (event.key === "Tab") {
+        const controls = focusable(),
+          first = controls[0],
+          last = controls.at(-1);
+        if (
+          !first ||
+          !dialog.contains(document.activeElement) ||
+          document.activeElement === dialog ||
+          (event.shiftKey
+            ? document.activeElement === first
+            : document.activeElement === last)
+        ) {
+          event.preventDefault();
+          (event.shiftKey ? (last ?? dialog) : (first ?? dialog)).focus();
+        }
+      }
       if (event.key === "Escape") {
         event.preventDefault();
+        event.stopImmediatePropagation();
         callbacks.current.onClose();
       }
       if (event.key === "ArrowLeft") callbacks.current.onPrevious?.();
       if (event.key === "ArrowRight") callbacks.current.onNext?.();
     };
-    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("focusin", onFocusIn, true);
     document.documentElement.classList.add("has-lightbox");
     return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.documentElement.classList.remove("has-lightbox");
-      previousFocus?.focus();
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("focusin", onFocusIn, true);
+      const wasTop = activePreviews.at(-1) === dialog;
+      activePreviews.splice(activePreviews.indexOf(dialog), 1);
+      if (!activePreviews.length)
+        document.documentElement.classList.remove("has-lightbox");
+      if (wasTop && previousFocus?.isConnected) previousFocus.focus();
     };
   }, []);
 
@@ -82,7 +135,7 @@ export function ImageLightbox({
         }}
       />
     </div>,
-    document.body,
+    portalContainer ?? document.body,
   );
 }
 

@@ -4,6 +4,19 @@
   min-width: 0;
   container-type: inline-size;
 }
+.candidate-card.is-selected {
+  border-color: var(--color-brand-500);
+}
+.candidate-card.is-selected .candidate-card-body {
+  background: var(--color-brand-50);
+}
+.candidate-card-body--selectable {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.candidate-card:has(.candidate-card-body--selectable:hover):not(.is-selected) {
+  border-color: var(--color-brand-200);
+}
 .candidate-card .candidate-card-body {
   display: flex;
   flex: 1;
@@ -101,7 +114,7 @@
 }
 .candidate-card .candidate-card-body > .candidate-card-footer {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) 56px;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 6px;
   margin-top: auto;
@@ -113,10 +126,13 @@
   white-space: nowrap;
   gap: 8px;
   font-size: var(--text-xs);
+  min-height: 36px;
+  min-width: 30px;
 }
 .candidate-card-footer .account-checkbox input {
   width: 17px;
   height: 17px;
+  margin: 0;
 }
 .candidate-card-order {
   display: flex;
@@ -137,10 +153,18 @@
 .candidate-card-origin svg {
   flex-shrink: 0;
 }
-@container (max-width: 265px) {
-  .candidate-card-order-label {
-    display: none;
-  }
+.candidate-card-image-summary {
+  min-height: 24px;
+  font-size: var(--text-xs);
+}
+.candidate-card-image-summary button {
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 1px 7px;
+  background: var(--color-brand-50);
+  color: var(--color-brand-700);
+  font: inherit;
+  cursor: pointer;
 }
 .candidate-batch-actions {
   display: flex;
