@@ -15805,6 +15805,1147 @@
           "dashboard"
         ]
       }
+    },
+    "/api/notifications/status": {
+      "get": {
+        "operationId": "getNotificationStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationStatusDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/receipts": {
+      "get": {
+        "operationId": "listNotificationReceipts",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "pending",
+                "retry_wait",
+                "invalid",
+                "recorded",
+                "skipped"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationReceiptPageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/configuration": {
+      "get": {
+        "operationId": "getNotificationConfiguration",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationConfigurationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/templates/{eventType}": {
+      "patch": {
+        "operationId": "updateNotificationTemplate",
+        "parameters": [
+          {
+            "name": "eventType",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationTemplateUpdateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationTemplateDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/channels": {
+      "post": {
+        "operationId": "createNotificationChannel",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationChannelInputDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationChannelDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/channels/{id}": {
+      "patch": {
+        "operationId": "updateNotificationChannel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationChannelUpdateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationChannelDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/preview": {
+      "post": {
+        "operationId": "previewNotification",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationPreviewInputDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreviewDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/deliveries": {
+      "get": {
+        "operationId": "listNotificationDeliveries",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "pending",
+                "sending",
+                "retry_wait",
+                "accepted",
+                "failed",
+                "unknown",
+                "cancelled"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationDeliveryPageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/channels/{id}/test": {
+      "post": {
+        "operationId": "testNotificationChannel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationTestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationDeliveryDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/deliveries/{id}/resolve": {
+      "post": {
+        "operationId": "resolveNotificationDelivery",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationResolveDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationDeliveryDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
     }
   },
   "info": {
@@ -23106,6 +24247,1058 @@
           "pendingCandidates",
           "myParticipatingWorks",
           "recentActivity"
+        ]
+      },
+      "NotificationBoundedMetricDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "capped": {
+            "type": "boolean"
+          },
+          "oldestAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "count",
+          "capped",
+          "oldestAt"
+        ]
+      },
+      "NotificationStatusCountsDto": {
+        "type": "object",
+        "properties": {
+          "uncaptured": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+              }
+            ]
+          },
+          "pending": {
+            "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+          },
+          "retryWait": {
+            "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+          },
+          "invalid": {
+            "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+          }
+        },
+        "required": [
+          "uncaptured",
+          "pending",
+          "retryWait",
+          "invalid"
+        ]
+      },
+      "NotificationStatusDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "not_started",
+              "healthy",
+              "stale",
+              "error"
+            ],
+            "description": "Successful worker maintenance evidence; does not indicate bot connectivity."
+          },
+          "sourceSince": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "expandedSourceSince": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastMaintenanceAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastCaptureAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastRegistrationAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastErrorAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastErrorCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "counts": {
+            "$ref": "#/components/schemas/NotificationStatusCountsDto"
+          }
+        },
+        "required": [
+          "enabled",
+          "state",
+          "sourceSince",
+          "expandedSourceSince",
+          "lastMaintenanceAt",
+          "lastCaptureAt",
+          "lastRegistrationAt",
+          "lastErrorAt",
+          "lastErrorCode",
+          "counts"
+        ]
+      },
+      "NotificationReceiptItemDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceEventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resourceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workNumber": {
+            "type": "number",
+            "nullable": true
+          },
+          "eventType": {
+            "type": "string",
+            "nullable": true
+          },
+          "eventLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "retry_wait",
+              "invalid",
+              "recorded",
+              "skipped"
+            ]
+          },
+          "attempts": {
+            "type": "number"
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "nextAttemptAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "notificationEventId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "sourceEventId",
+          "resourceId",
+          "workNumber",
+          "eventType",
+          "eventLabel",
+          "status",
+          "attempts",
+          "errorCode",
+          "nextAttemptAt",
+          "createdAt",
+          "updatedAt",
+          "notificationEventId"
+        ]
+      },
+      "NotificationReceiptPageDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationReceiptItemDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "NotificationConnectionDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "adapter": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "adapter",
+          "available"
+        ]
+      },
+      "NotificationEventTypeDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "supportsStages": {
+            "type": "boolean"
+          },
+          "allowedStages": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "translate",
+                "proofread",
+                "typeset",
+                "publish"
+              ]
+            }
+          }
+        },
+        "required": [
+          "type",
+          "label",
+          "supportsStages",
+          "allowedStages"
+        ]
+      },
+      "NotificationSubscriptionRuleDto": {
+        "type": "object",
+        "properties": {
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "imported",
+              "stage_joined",
+              "stage_started",
+              "typeset_handoff_started",
+              "stage_left",
+              "stage_assignment_updated",
+              "stage_submitted",
+              "proofreading_skipped",
+              "stage_submission_cancelled",
+              "review_opened",
+              "review_withdrawn",
+              "review_resumed",
+              "archived",
+              "restored",
+              "publish_confirmed",
+              "metadata_updated",
+              "collaboration_mode_updated",
+              "stage_credit_updated",
+              "stage_contribution_completed",
+              "translation_imported",
+              "typeset_version_uploaded",
+              "typeset_version_selected",
+              "typeset_version_deleted",
+              "typeset_version_restored"
+            ]
+          },
+          "stages": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "translate",
+                "proofread",
+                "typeset",
+                "publish"
+              ]
+            }
+          }
+        },
+        "required": [
+          "eventType",
+          "stages"
+        ]
+      },
+      "NotificationChannelDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "connectionKey": {
+            "type": "string"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "eventTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "includeDetails": {
+            "type": "boolean"
+          },
+          "receiverMode": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "templates"
+            ]
+          },
+          "subscriptionRules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationSubscriptionRuleDto"
+            }
+          },
+          "revision": {
+            "type": "number"
+          },
+          "audienceGeneration": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "connectionKey",
+          "groupId",
+          "enabled",
+          "eventTypes",
+          "includeDetails",
+          "receiverMode",
+          "subscriptionRules",
+          "revision",
+          "audienceGeneration"
+        ]
+      },
+      "NotificationTemplateDto": {
+        "type": "object",
+        "properties": {
+          "titleEnabled": {
+            "type": "boolean"
+          },
+          "authorEnabled": {
+            "type": "boolean"
+          },
+          "actorEnabled": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string",
+            "description": "At most 120 Unicode code points"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "number"
+          },
+          "contentRevision": {
+            "type": "number"
+          },
+          "referencedGroupCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "titleEnabled",
+          "authorEnabled",
+          "actorEnabled",
+          "note",
+          "eventType",
+          "revision",
+          "contentRevision",
+          "referencedGroupCount"
+        ]
+      },
+      "NotificationConfigurationDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configurationError": {
+            "type": "string",
+            "nullable": true
+          },
+          "connections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationConnectionDto"
+            }
+          },
+          "eventTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationEventTypeDto"
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationChannelDto"
+            }
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationTemplateDto"
+            }
+          }
+        },
+        "required": [
+          "enabled",
+          "configurationError",
+          "connections",
+          "eventTypes",
+          "channels",
+          "templates"
+        ]
+      },
+      "NotificationTemplateUpdateDto": {
+        "type": "object",
+        "properties": {
+          "titleEnabled": {
+            "type": "boolean"
+          },
+          "authorEnabled": {
+            "type": "boolean"
+          },
+          "actorEnabled": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string",
+            "description": "At most 120 Unicode code points"
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "titleEnabled",
+          "authorEnabled",
+          "actorEnabled",
+          "note",
+          "expectedRevision"
+        ]
+      },
+      "NotificationChannelInputDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "connectionKey": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "groupId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,19}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "eventTypes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "imported",
+                "stage_joined",
+                "stage_started",
+                "typeset_handoff_started",
+                "stage_left",
+                "stage_assignment_updated",
+                "stage_submitted",
+                "proofreading_skipped",
+                "stage_submission_cancelled",
+                "review_opened",
+                "review_withdrawn",
+                "review_resumed",
+                "archived",
+                "restored",
+                "publish_confirmed",
+                "metadata_updated",
+                "collaboration_mode_updated",
+                "stage_credit_updated",
+                "stage_contribution_completed",
+                "translation_imported",
+                "typeset_version_uploaded",
+                "typeset_version_selected",
+                "typeset_version_deleted",
+                "typeset_version_restored"
+              ]
+            }
+          },
+          "includeDetails": {
+            "type": "boolean"
+          },
+          "receiverMode": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "templates"
+            ]
+          },
+          "subscriptionRules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationSubscriptionRuleDto"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "connectionKey",
+          "groupId",
+          "enabled",
+          "eventTypes",
+          "includeDetails"
+        ]
+      },
+      "NotificationTemplateRevisionDto": {
+        "type": "object",
+        "properties": {
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "imported",
+              "stage_joined",
+              "stage_started",
+              "typeset_handoff_started",
+              "stage_left",
+              "stage_assignment_updated",
+              "stage_submitted",
+              "proofreading_skipped",
+              "stage_submission_cancelled",
+              "review_opened",
+              "review_withdrawn",
+              "review_resumed",
+              "archived",
+              "restored",
+              "publish_confirmed",
+              "metadata_updated",
+              "collaboration_mode_updated",
+              "stage_credit_updated",
+              "stage_contribution_completed",
+              "translation_imported",
+              "typeset_version_uploaded",
+              "typeset_version_selected",
+              "typeset_version_deleted",
+              "typeset_version_restored"
+            ]
+          },
+          "revision": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "eventType",
+          "revision"
+        ]
+      },
+      "NotificationChannelUpdateDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "connectionKey": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "groupId": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,19}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "eventTypes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "imported",
+                "stage_joined",
+                "stage_started",
+                "typeset_handoff_started",
+                "stage_left",
+                "stage_assignment_updated",
+                "stage_submitted",
+                "proofreading_skipped",
+                "stage_submission_cancelled",
+                "review_opened",
+                "review_withdrawn",
+                "review_resumed",
+                "archived",
+                "restored",
+                "publish_confirmed",
+                "metadata_updated",
+                "collaboration_mode_updated",
+                "stage_credit_updated",
+                "stage_contribution_completed",
+                "translation_imported",
+                "typeset_version_uploaded",
+                "typeset_version_selected",
+                "typeset_version_deleted",
+                "typeset_version_restored"
+              ]
+            }
+          },
+          "includeDetails": {
+            "type": "boolean"
+          },
+          "receiverMode": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "templates"
+            ]
+          },
+          "subscriptionRules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationSubscriptionRuleDto"
+            }
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "expectedTemplateRevisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationTemplateRevisionDto"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "connectionKey",
+          "groupId",
+          "enabled",
+          "eventTypes",
+          "includeDetails",
+          "expectedRevision"
+        ]
+      },
+      "NotificationTemplateSettingsDto": {
+        "type": "object",
+        "properties": {
+          "titleEnabled": {
+            "type": "boolean"
+          },
+          "authorEnabled": {
+            "type": "boolean"
+          },
+          "actorEnabled": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string",
+            "description": "At most 120 Unicode code points"
+          }
+        },
+        "required": [
+          "titleEnabled",
+          "authorEnabled",
+          "actorEnabled",
+          "note"
+        ]
+      },
+      "NotificationPreviewInputDto": {
+        "type": "object",
+        "properties": {
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "imported",
+              "stage_joined",
+              "stage_started",
+              "typeset_handoff_started",
+              "stage_left",
+              "stage_assignment_updated",
+              "stage_submitted",
+              "proofreading_skipped",
+              "stage_submission_cancelled",
+              "review_opened",
+              "review_withdrawn",
+              "review_resumed",
+              "archived",
+              "restored",
+              "publish_confirmed",
+              "metadata_updated",
+              "collaboration_mode_updated",
+              "stage_credit_updated",
+              "stage_contribution_completed",
+              "translation_imported",
+              "typeset_version_uploaded",
+              "typeset_version_selected",
+              "typeset_version_deleted",
+              "typeset_version_restored"
+            ]
+          },
+          "includeDetails": {
+            "type": "boolean"
+          },
+          "template": {
+            "$ref": "#/components/schemas/NotificationTemplateSettingsDto"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "translate",
+              "proofread",
+              "typeset",
+              "publish"
+            ]
+          },
+          "missingMetadata": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "eventType",
+          "includeDetails"
+        ]
+      },
+      "NotificationPreviewDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "NotificationDeliveryDto": {
+        "type": "object",
+        "properties": {
+          "metadataOrigin": {
+            "type": "string",
+            "enum": [
+              "capture_current"
+            ],
+            "nullable": true
+          },
+          "contentRevision": {
+            "type": "number",
+            "nullable": true
+          },
+          "metadataObservedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "channelId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "channelName": {
+            "type": "string"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "connectionKey": {
+            "type": "string"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "workNumber": {
+            "type": "number",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "sending",
+              "retry_wait",
+              "accepted",
+              "failed",
+              "unknown",
+              "cancelled"
+            ]
+          },
+          "attempts": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "providerMessageId": {
+            "type": "string",
+            "nullable": true
+          },
+          "preview": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "number"
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "metadataOrigin",
+          "contentRevision",
+          "metadataObservedAt",
+          "id",
+          "channelId",
+          "channelName",
+          "groupId",
+          "connectionKey",
+          "eventType",
+          "workNumber",
+          "status",
+          "attempts",
+          "createdAt",
+          "updatedAt",
+          "errorCode",
+          "providerMessageId",
+          "preview",
+          "revision",
+          "resolvedAt"
+        ]
+      },
+      "NotificationDeliveryPageDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationDeliveryDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "NotificationTestDto": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "imported",
+              "stage_joined",
+              "stage_started",
+              "typeset_handoff_started",
+              "stage_left",
+              "stage_assignment_updated",
+              "stage_submitted",
+              "proofreading_skipped",
+              "stage_submission_cancelled",
+              "review_opened",
+              "review_withdrawn",
+              "review_resumed",
+              "archived",
+              "restored",
+              "publish_confirmed",
+              "metadata_updated",
+              "collaboration_mode_updated",
+              "stage_credit_updated",
+              "stage_contribution_completed",
+              "translation_imported",
+              "typeset_version_uploaded",
+              "typeset_version_selected",
+              "typeset_version_deleted",
+              "typeset_version_restored"
+            ]
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "translate",
+              "proofread",
+              "typeset",
+              "publish"
+            ]
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "expectedTemplateRevision": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "idempotencyKey"
+        ]
+      },
+      "NotificationResolveDto": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "imported",
+              "stage_joined",
+              "stage_started",
+              "typeset_handoff_started",
+              "stage_left",
+              "stage_assignment_updated",
+              "stage_submitted",
+              "proofreading_skipped",
+              "stage_submission_cancelled",
+              "review_opened",
+              "review_withdrawn",
+              "review_resumed",
+              "archived",
+              "restored",
+              "publish_confirmed",
+              "metadata_updated",
+              "collaboration_mode_updated",
+              "stage_credit_updated",
+              "stage_contribution_completed",
+              "translation_imported",
+              "typeset_version_uploaded",
+              "typeset_version_selected",
+              "typeset_version_deleted",
+              "typeset_version_restored"
+            ]
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "translate",
+              "proofread",
+              "typeset",
+              "publish"
+            ]
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "expectedTemplateRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "acknowledge",
+              "retry"
+            ]
+          },
+          "confirmPossibleDuplicate": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "idempotencyKey",
+          "action"
         ]
       },
       "ErrorDto": {

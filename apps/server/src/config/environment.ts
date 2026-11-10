@@ -13,6 +13,10 @@ export interface Environment {
   authSessionAbsoluteSeconds: number;
   authorProfileProofSecret?: string;
   trustedProxyCidrs?: string[];
+  notifications?: {
+    enabled: boolean;
+    connectionsFile?: string;
+  };
   galleryDl?: {
     python: string;
     xConfigPath?: string;
@@ -242,6 +246,17 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
   )
     throw new Error("SOURCE_SCHEDULE_ENABLED must be true or false.");
   return {
+    ...(input.NOTIFICATIONS_ENABLED !== undefined ||
+    input.NOTIFICATION_CONNECTIONS_FILE
+      ? {
+          notifications: {
+            enabled: input.NOTIFICATIONS_ENABLED === "true",
+            ...(input.NOTIFICATION_CONNECTIONS_FILE
+              ? { connectionsFile: input.NOTIFICATION_CONNECTIONS_FILE }
+              : {}),
+          },
+        }
+      : {}),
     ...(input.AUTHOR_PROFILE_PROOF_SECRET?.trim()
       ? { authorProfileProofSecret: input.AUTHOR_PROFILE_PROOF_SECRET.trim() }
       : {}),
