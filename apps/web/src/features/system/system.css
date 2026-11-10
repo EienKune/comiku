@@ -29,9 +29,60 @@
   gap: var(--space-5);
   min-width: 0;
 }
-.system-history {
+.system-history,
+.system-connections {
   padding: var(--space-5);
   min-width: 0;
+}
+.system-connection-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+.system-connection-card {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--color-surface-soft);
+}
+.system-connection-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.system-connection-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.system-connection-identity {
+  min-width: 0;
+  flex: 1;
+}
+.system-connection-identity h3 {
+  margin: 0;
+  font-size: var(--text-md);
+}
+.system-connection-identity > span,
+.system-connection-detail,
+.system-connections-error {
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+.system-connection-identity > span,
+.system-connection-detail {
+  color: var(--color-text-muted);
+}
+.system-connection-detail {
+  margin: var(--space-3) 0 0;
+}
+.system-connections-error {
+  color: var(--color-status-danger-text);
 }
 .system-history-heading,
 .system-run-timing,
@@ -123,8 +174,12 @@
   max-width: 480px;
 }
 @media (max-width: 640px) {
-  .system-history {
+  .system-history,
+  .system-connections {
     padding: var(--space-4);
+  }
+  .system-connection-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
   .system-run-summary {
     grid-template-columns: minmax(0, 1fr) auto;

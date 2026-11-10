@@ -4,6 +4,16 @@
   min-width: 0;
   container-type: inline-size;
 }
+.candidate-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-3);
+  margin-inline-start: auto;
+  min-width: 0;
+  max-width: 100%;
+}
 .candidate-card.is-selected {
   border-color: var(--color-brand-500);
 }

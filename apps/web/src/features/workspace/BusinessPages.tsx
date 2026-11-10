@@ -361,9 +361,15 @@ function TranslationAttentionBadge({ work }: { work: Work }) {
     </Badge>
   ) : null;
 }
-function Toolbar({ children }: { children: ReactNode }) {
+function Toolbar({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
   return (
-    <Surface className="workspace-toolbar" variant="soft">
+    <Surface className={`workspace-toolbar ${className}`} variant="soft">
       {children}
     </Surface>
   );
@@ -3305,7 +3311,7 @@ export function CandidatesPage() {
         <SectionHeading title="候选池">
           筛选已抓取的图片组，批量入库为作品。
         </SectionHeading>
-        <Toolbar>
+        <Toolbar className="candidate-toolbar">
           <CandidateAuthorFilter
             value={authorFilter}
             onChange={(value) => {
@@ -3351,31 +3357,37 @@ export function CandidatesPage() {
             <option value="7">最近 7 天</option>
             <option value="30">最近 30 天</option>
           </SelectField>
-          <Button
-            variant="secondary"
-            leadingIcon={<RefreshCw size={16} />}
-            title="纳入新候选与最新排序，保留当前选择"
-            loading={review.refreshing}
-            disabled={review.isPending}
-            onClick={() => void review.refresh()}
+          <div
+            className="candidate-toolbar-actions"
+            role="group"
+            aria-label="候选操作"
           >
-            刷新列表
-          </Button>
-          {user.permissions.includes("candidates:manage") && (
-            <>
-              <Button
-                variant="secondary"
-                leadingIcon={<Upload size={16} />}
-                onClick={() => setShowUpload((value) => !value)}
-              >
-                手动上传
-              </Button>
-              <SourceSyncControl onCompleted={invalidateWorkViews} />
-            </>
-          )}
-          <Button variant="secondary" onClick={() => setShowRules(true)}>
-            审核规则
-          </Button>
+            <Button
+              variant="secondary"
+              leadingIcon={<RefreshCw size={16} />}
+              title="纳入新候选与最新排序，保留当前选择"
+              loading={review.refreshing}
+              disabled={review.isPending}
+              onClick={() => void review.refresh()}
+            >
+              刷新列表
+            </Button>
+            {user.permissions.includes("candidates:manage") && (
+              <>
+                <Button
+                  variant="secondary"
+                  leadingIcon={<Upload size={16} />}
+                  onClick={() => setShowUpload((value) => !value)}
+                >
+                  手动上传
+                </Button>
+                <SourceSyncControl onCompleted={invalidateWorkViews} />
+              </>
+            )}
+            <Button variant="secondary" onClick={() => setShowRules(true)}>
+              审核规则
+            </Button>
+          </div>
         </Toolbar>
         {showRules && (
           <CandidateRulesDialog

@@ -50,6 +50,8 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## Author collection controls
 
+- The system source page reads platform execution/authentication state separately from adapter capabilities; an available adapter is not evidence that credentials are healthy. A failed state refresh must not render cached healthy status as current. Status refresh is GET-only; inactive source panels stop all source queries and polling. Credential generations are internal coordination values, not UI status labels.
+
 - The author account page has one business collection switch (`fetchEnabled`); technical adapter controls require `system:manage` and are not author-page actions. When consolidating legacy disabled gallery states, preserve the pause as `fetchEnabled=false` before normalizing the internal state permission. Increment the affected revisions but do not clear cursors, checkpoints, cooldowns, errors or leases; otherwise the single switch may either restart an intentionally paused account or fail to enable it later.
 - Compare canonical X handles before requiring profile proof: `name`, `@name` and its homepage URL describe the same identity. Ordinary pauses and notes must not submit an unrelated expired profile proof. New binding, real handle changes and reactivation retain trusted identity checks. Source composition validates one available adapter per platform at startup; the registry can retain inactive implementations and isolated legacy adapter tests without enabling runtime fallback.
 
