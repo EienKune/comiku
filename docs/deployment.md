@@ -111,9 +111,9 @@ docker compose --env-file deploy/production.env -f deploy/compose.production.yml
 联调所需配置与样本：
 
 1. **R2 私有测试 Bucket**、Account ID、只授权该桶的 Access Key/Secret；CORS 精确允许实际本地 Origin，例如 `http://localhost:5173`，仅上述临时前缀的一日生命周期。若测试备份，另建私有备份测试桶和独立凭据/加密密钥。
-2. **网页会话使用的 X 账号**：建议专用测试账号，确认能正常登录/查看作者。在本机私有环境文件中填写 X_WEB_BEARER_TOKEN、AUTH_TOKEN、CSRF_TOKEN、当前 UserMedia query ID/features；昵称头像辅助同步还需 UserByScreenName query ID。这些参数来自本人已登录会话，可能过期；不将 Cookie/令牌粘贴进聊天、文档或 Git。
-3. **官方 X API**：如需验证官方通道，准备对应应用 Bearer、核对当前开发者控制台访问/费用能力，确认小额可接受消耗和明确日/月请求上限；若不启用官方通道，将对应日/月请求预算保持为 0 即可。
-4. **2–3 位已授权测试作者**、首次同步不回溯或最近 24 小时的选择，以及少量自制 PNG/JPEG/WebP/ZIP 样本。先分别测两通道，再测重复抓取、失败水位、恢复和完整制作流程；初期只手动抓取，不开启定时器。
+2. **gallery-dl X/Pixiv 配置**：为需要启用的平台准备可用测试账号及私有配置文件，通过 `GALLERY_DL_PYTHON`、`GALLERY_DL_X_CONFIG`、`GALLERY_DL_PIXIV_CONFIG` 指定运行环境和绝对路径。配置及引用的 Cookie 文件按运行时路径挂载；凭据更新按[采集 adapter 说明](adapters/source-ingestion.md)中的受控激活流程执行。
+3. **资料与采集联调**：先验证各平台作者昵称和头像同步，再使用少量授权作者验证作品采集、重复抓取、失败恢复及平台冷却。
+4. **2–3 位已授权测试作者**、仅后续内容或最近 24 小时／7 天的首次同步范围，以及少量自制 PNG/JPEG/WebP/ZIP 样本。初期手动触发采集，随后验证候选审核、上传恢复和完整制作流程。
 5. **网络方式**：确认运行 API/worker 的 Node 进程能访问 X/R2；浏览器能访问不等于服务端出站已可用。代理参数如需支持，先核对当前实现和实际连接方式，不把浏览器插件等同于进程代理。
 
 本地联调无需正式域名、服务器登录或生产备份政策。进入 Linux 生产形态和正式部署前，再准备同主域 app/api、Cloudflare DNS/Origin CA、服务器访问、业务/备份正式 Bucket 及经过确认的备份/对象恢复政策。

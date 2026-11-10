@@ -23,6 +23,8 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## Candidate review editing
 
+- Candidate import locks the observed author with `FOR SHARE` before locking the candidate with `FOR UPDATE`, then re-reads both the binding and business state. Require current authorization and an active author before creating a Work; a concurrent reassignment conflicts rather than checking the old author. Preserve imported-request replay and per-item batch outcomes. PostgreSQL regressions cover mutations after the initial read and author updates blocked by a valid in-flight import.
+
 - Author suggestions debounce their own paginated reads; only explicit single-author confirmation changes the review scope. Keep draft input separate from the selected author ID and consume cancellation signals so late searches cannot replace current suggestions.
 - Keep unsaved per-post media order and its original revision at page scope, independently of membership snapshots and panel mounts. Ordinary model refreshes do not discard drafts; real media/version changes require an explicit reset. Saving locks belong to the page too: an old request must not overwrite a newer panel instance's edits. Warn on route departure or hard refresh, without promising browser-close restoration.
 
