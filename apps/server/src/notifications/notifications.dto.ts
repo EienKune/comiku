@@ -152,7 +152,7 @@ export class NotificationChannelInputDto {
   @ApiPropertyOptional({ type: NotificationSubscriptionRuleDto, isArray: true })
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(15)
+  @ArrayMaxSize(NOTIFICATION_EVENT_KEYS.length)
   @ValidateNested({ each: true })
   @Type(() => NotificationSubscriptionRuleDto)
   subscriptionRules?: NotificationSubscriptionRuleDto[];

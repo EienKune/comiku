@@ -3,6 +3,7 @@ import {
   NOTIFICATION_EVENT_KEYS,
   normalizeNotificationEvent,
 } from "./notification-events.js";
+import { allowedNotificationStages } from "./notification-template-policy.js";
 
 /** Only these source fields may enter durable notification input. Never hydrate current names/revision. */
 export interface WorkEventNotificationSource {
@@ -29,12 +30,23 @@ export function mapWorkEventNotification(
     !Array.isArray(source.detail)
       ? (source.detail as Record<string, unknown>)
       : {};
+  const allowedStages = allowedNotificationStages(source.action);
   const stage =
     source.action === "publish_confirmed"
       ? "publish"
-      : source.action === "typeset_handoff_started"
+      : source.action === "typeset_handoff_started" ||
+          source.action.startsWith("typeset_version_")
         ? "typeset"
-        : detail.stage;
+        : source.action === "metadata_updated" ||
+            source.action === "collaboration_mode_updated"
+          ? undefined
+          : detail.stage;
+  if (
+    stage !== undefined &&
+    allowedStages.length &&
+    !allowedStages.includes(stage as never)
+  )
+    throw new Error("notification_event_invalid");
   const input = {
     eventKey: `work-event:${source.id}`,
     type: source.action,

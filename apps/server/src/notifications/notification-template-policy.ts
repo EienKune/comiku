@@ -26,13 +26,29 @@ export function notificationEventSupportsStages(eventType: string): boolean {
       "typeset_handoff_started",
       "proofreading_skipped",
       "publish_confirmed",
+      "translation_imported",
+      "typeset_version_uploaded",
+      "typeset_version_selected",
+      "typeset_version_deleted",
+      "typeset_version_restored",
     ].includes(eventType)
   );
 }
 export function allowedNotificationStages(eventType: string): WorkStage[] {
   if (eventType.startsWith("stage_"))
     return [WorkStage.translate, WorkStage.proofread, WorkStage.typeset];
-  if (eventType === "typeset_handoff_started") return [WorkStage.typeset];
+  if (
+    [
+      "typeset_handoff_started",
+      "typeset_version_uploaded",
+      "typeset_version_selected",
+      "typeset_version_deleted",
+      "typeset_version_restored",
+    ].includes(eventType)
+  )
+    return [WorkStage.typeset];
+  if (eventType === "translation_imported")
+    return [WorkStage.translate, WorkStage.proofread];
   if (eventType === "proofreading_skipped") return [WorkStage.proofread];
   if (eventType === "publish_confirmed") return [WorkStage.publish];
   return [];

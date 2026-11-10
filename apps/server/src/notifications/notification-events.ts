@@ -30,6 +30,15 @@ export const NOTIFICATION_EVENT_TYPES: readonly {
   { type: "archived", label: "已归档" },
   { type: "restored", label: "已恢复" },
   { type: "publish_confirmed", label: "发布已确认" },
+  { type: "metadata_updated", label: "作品资料已更新" },
+  { type: "collaboration_mode_updated", label: "协作模式已调整" },
+  { type: "stage_credit_updated", label: "阶段署名已更新" },
+  { type: "stage_contribution_completed", label: "个人贡献已完成" },
+  { type: "translation_imported", label: "译文已导入" },
+  { type: "typeset_version_uploaded", label: "成图版本已上传" },
+  { type: "typeset_version_selected", label: "成图版本已选用" },
+  { type: "typeset_version_deleted", label: "成图版本已删除" },
+  { type: "typeset_version_restored", label: "成图版本已恢复" },
   { type: "notification.test", label: "通知测试" },
 ]);
 export const NOTIFICATION_EVENT_KEYS: readonly NotificationWorkEventType[] =
@@ -325,6 +334,14 @@ export function notificationPreviewEvent(
                                   WorkflowStatus.pending_translate,
                               }
                             : {};
+  if (type.startsWith("typeset_version_")) history.stage = WorkStage.typeset;
+  if (type === "translation_imported")
+    history.stage = stage ?? WorkStage.translate;
+  if (
+    type === "stage_credit_updated" ||
+    type === "stage_contribution_completed"
+  )
+    history.stage = WorkStage.translate;
   if (stage && type.startsWith("stage_")) {
     history.stage = stage;
     const states = {

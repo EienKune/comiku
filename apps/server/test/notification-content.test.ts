@@ -72,6 +72,10 @@ test("new content reserves replay budget, retains full URL and original text", (
 });
 test("receipt v1 stays strict and hash stable while v2 explicitly validates capture metadata", () => {
   const oldHash = notificationPayloadHash(input);
+  assert.equal(
+    oldHash,
+    "d065ae6edbbe6a0b1d154d15852021b8718248fbda42b77233cbc6749e600017",
+  );
   assert.equal(validateNotificationReceiptInput(input, 1).type, input.type);
   assert.throws(
     () => validateNotificationReceiptInput({ ...input, title: "name" }, 1),
@@ -84,6 +88,10 @@ test("receipt v1 stays strict and hash stable while v2 explicitly validates capt
     metadataObservedAt: "2026-11-07T00:00:00.000Z",
   };
   assert.equal(validateNotificationReceiptInput(v2, 2).snapshot.title, "name");
+  assert.equal(
+    notificationPayloadHash(v2 as never),
+    "868f201ed7e85049d8d1a7fb5eace29ceafd7e6f66f31f40281a54a3d7f967c6",
+  );
   for (const bad of [
     { ...v2, metadataOrigin: "event_time" },
     { ...v2, metadataObservedAt: "bad" },

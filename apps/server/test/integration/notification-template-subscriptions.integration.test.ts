@@ -152,12 +152,12 @@ test(
     );
     try {
       await t.test(
-        "catalog has 15 conservative independent templates and stale concurrent saves fail",
+        "catalog has 24 conservative independent templates and stale concurrent saves fail",
         async () => {
           const config = await service.configuration();
           assert.equal(
             config.templates?.length,
-            15,
+            24,
             "all public events need shared templates",
           );
           const initial = await template();

@@ -12,7 +12,7 @@ test("disabled bridge never initializes activation, queries sources or registers
     {} as NotificationPublisherService,
     { enabled: false } as NotificationConnectionRegistry,
   );
-  await bridge.maintain();
+  assert.equal(await bridge.maintain(), null);
 });
 
 test("systemic database failure backs off instead of hot-looping and stays outside callers", async () => {
@@ -29,7 +29,56 @@ test("systemic database failure backs off instead of hot-looping and stays outsi
     {} as NotificationPublisherService,
     { enabled: true } as NotificationConnectionRegistry,
   );
-  await bridge.maintain();
+  assert.deepEqual(await bridge.maintain(), {
+    success: false,
+    captured: 0,
+    registered: 0,
+  });
   await bridge.maintain();
   assert.equal(calls, 1);
+});
+
+test("maintenance initializes both persistent boundaries and reports actual completed work", async () => {
+  const activations: string[] = [];
+  const sourceSince = new Date("2026-11-01T00:00:00.000Z");
+  const expandedSourceSince = new Date("2026-11-10T00:00:00.000Z");
+  let selection: { values: unknown[] } | undefined;
+  const bridge = new NotificationWorkEventBridgeService(
+    {
+      notificationWorkEventActivation: {
+        upsert: async ({
+          where,
+          update,
+        }: {
+          where: { id: string };
+          update: object;
+        }) => {
+          assert.deepEqual(update, {});
+          activations.push(where.id);
+          return {
+            sourceSince:
+              where.id === "work-events-v1" ? sourceSince : expandedSourceSince,
+          };
+        },
+      },
+      $transaction: async (operation: (tx: unknown) => Promise<unknown>) =>
+        operation({
+          $queryRaw: async (query: { values: unknown[] }) => {
+            selection = query;
+            return [];
+          },
+        }),
+      $queryRaw: async () => [],
+    } as unknown as PrismaService,
+    {} as NotificationPublisherService,
+    { enabled: true } as NotificationConnectionRegistry,
+  );
+  assert.deepEqual(await bridge.maintain(), {
+    success: true,
+    captured: 0,
+    registered: 0,
+  });
+  assert.deepEqual(activations, ["work-events-v1", "work-events-expanded-v1"]);
+  assert.ok(selection?.values.includes(sourceSince));
+  assert.ok(selection?.values.includes(expandedSourceSince));
 });

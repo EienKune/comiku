@@ -64,7 +64,10 @@ test("start events distinguish participation and use fixed handoff/publish stage
 
 test("unsupported actions and invalid allowlisted facts are deterministic poison", () => {
   assert.equal(
-    mapWorkEventNotification({ ...source, action: "metadata_updated" }, 1),
+    mapWorkEventNotification(
+      { ...source, action: "review_revision_joined" },
+      1,
+    ),
     null,
   );
   assert.throws(

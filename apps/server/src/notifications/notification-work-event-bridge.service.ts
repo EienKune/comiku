@@ -35,14 +35,18 @@ import type {
   NotificationFrozenRoute,
   NormalizedNotificationEvent,
 } from "./notifications.contracts.js";
+import {
+  NOTIFICATION_WORK_EVENT_ACTIVATION_ID,
+  NOTIFICATION_EXPANDED_WORK_EVENT_ACTIVATION_ID,
+  buildNotificationWorkEventSourceBranches,
+} from "./notification-work-event-source.js";
 
-// Keep this literal predicate identical to the migration partial index.
-const supportedActions = Prisma.sql`e.action IN (
-  'imported', 'stage_joined', 'stage_started', 'typeset_handoff_started',
-  'stage_left', 'stage_assignment_updated', 'stage_submitted',
-  'proofreading_skipped', 'stage_submission_cancelled', 'review_opened',
-  'review_withdrawn', 'review_resumed', 'archived', 'restored', 'publish_confirmed')`;
 const activeStatuses = ["pending", "retry_wait"];
+export interface NotificationBridgeMaintenanceResult {
+  success: boolean;
+  captured: number;
+  registered: number;
+}
 
 export function validateNotificationFrozenRoutes(
   value: unknown,
@@ -189,16 +193,32 @@ export class NotificationWorkEventBridgeService {
     @Optional() @Inject(ENVIRONMENT) private readonly environment?: Environment,
   ) {}
 
-  async maintain(): Promise<void> {
-    if (!this.registry.enabled || Date.now() < this.unavailableUntil) return;
+  async maintain(): Promise<NotificationBridgeMaintenanceResult | null> {
+    if (!this.registry.enabled || Date.now() < this.unavailableUntil)
+      return null;
+    let captured = 0;
+    let registered = 0;
     try {
       const activation = await this.db.notificationWorkEventActivation.upsert({
-        where: { id: "work-events-v1" },
+        where: { id: NOTIFICATION_WORK_EVENT_ACTIVATION_ID },
         update: {},
-        create: { id: "work-events-v1" },
+        create: { id: NOTIFICATION_WORK_EVENT_ACTIVATION_ID },
       });
+      const expandedActivation =
+        await this.db.notificationWorkEventActivation.upsert({
+          where: { id: NOTIFICATION_EXPANDED_WORK_EVENT_ACTIVATION_ID },
+          update: {},
+          create: { id: NOTIFICATION_EXPANDED_WORK_EVENT_ACTIVATION_ID },
+        });
       for (let count = 0; count < 50; count++) {
-        if (!(await this.capture(activation.sourceSince))) break;
+        if (
+          !(await this.capture(
+            activation.sourceSince,
+            expandedActivation.sourceSince,
+          ))
+        )
+          break;
+        captured++;
       }
       const due = await this.db.$queryRaw<{ id: string }[]>`
         SELECT head.id FROM (
@@ -209,27 +229,42 @@ export class NotificationWorkEventBridgeService {
         ) head
         WHERE head.next_attempt_at <= clock_timestamp()
         ORDER BY head.next_attempt_at, head.created_at, head.id LIMIT 50`;
-      for (const row of due) await this.register(row.id);
+      for (const row of due) if (await this.register(row.id)) registered++;
+      return { success: true, captured, registered };
     } catch {
       this.unavailableUntil = Date.now() + 1000;
       this.logger.warn("notification_work_bridge_database_unavailable");
+      return { success: false, captured, registered };
     }
   }
 
-  private async capture(sourceSince: Date): Promise<boolean> {
+  private async capture(
+    sourceSince: Date,
+    expandedSourceSince: Date,
+  ): Promise<boolean> {
     return this.db.$transaction(async (tx) => {
-      const sources = await tx.$queryRaw<
-        WorkEventNotificationSource[]
-      >(Prisma.sql`
+      const branches = buildNotificationWorkEventSourceBranches({
+        sourceSince,
+        expandedSourceSince,
+      });
+      const select = (eligibility: Prisma.Sql) =>
+        tx.$queryRaw<WorkEventNotificationSource[]>(Prisma.sql`
         SELECT e.id, e.work_id AS "workId", w.work_number AS "workNumber", e.action,
           e.created_at AS "createdAt", e.from_workflow_status AS "fromWorkflowStatus",
           e.to_workflow_status AS "toWorkflowStatus", e.from_review_status AS "fromReviewStatus",
           e.to_review_status AS "toReviewStatus", e.detail
         FROM work_events e JOIN works w ON w.id = e.work_id
-        WHERE e.notification_captured_at IS NULL AND e.created_at >= ${sourceSince}
-          AND ${supportedActions}
+        WHERE ${eligibility}
         ORDER BY e.created_at, e.id LIMIT 1 FOR UPDATE OF e SKIP LOCKED`);
-      const source = sources[0];
+      // Lock at most one candidate per independent indexed source range. SKIP LOCKED
+      // lets another worker progress even when a source in either range is in flight.
+      const legacy = await select(branches.legacy);
+      const expanded = branches.expanded ? await select(branches.expanded) : [];
+      const source = [...legacy, ...expanded].sort(
+        (a, b) =>
+          a.createdAt.getTime() - b.createdAt.getTime() ||
+          a.id.localeCompare(b.id),
+      )[0];
       if (!source) return false;
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`notification-work:${source.workId}`}, 0))`;
       const prior = await tx.notificationWorkEventReceipt.findFirst({
@@ -392,18 +427,18 @@ export class NotificationWorkEventBridgeService {
     });
   }
 
-  private async register(id: string): Promise<void> {
+  private async register(id: string): Promise<boolean> {
     try {
-      await this.db.$transaction(async (tx) => {
+      return await this.db.$transaction(async (tx) => {
         const due = await tx.$queryRaw<
           { id: string }[]
         >`SELECT id FROM notification_work_event_receipts WHERE id = ${id}::uuid
           AND status IN ('pending', 'retry_wait') AND next_attempt_at <= clock_timestamp() FOR UPDATE`;
-        if (!due.length) return;
+        if (!due.length) return false;
         const row = await tx.notificationWorkEventReceipt.findUniqueOrThrow({
           where: { id },
         });
-        if (!activeStatuses.includes(row.status)) return;
+        if (!activeStatuses.includes(row.status)) return false;
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`notification-work:${row.resourceId}`}, 0))`;
         if (
           await tx.notificationWorkEventReceipt.count({
@@ -414,7 +449,7 @@ export class NotificationWorkEventBridgeService {
             },
           })
         )
-          return;
+          return false;
         const input = row.safeInput as unknown as NotificationEventInput;
         const normalized = validateNotificationReceiptInput(
           input,
@@ -446,6 +481,7 @@ export class NotificationWorkEventBridgeService {
             errorCode: null,
           },
         });
+        return true;
       });
     } catch (error) {
       const invalid =
@@ -482,11 +518,12 @@ export class NotificationWorkEventBridgeService {
         // A failed failure-record write must not starve unrelated receipts in this bounded batch.
         this.unavailableUntil = Date.now() + 1000;
         this.logger.warn(`notification_work_receipt_state_unavailable:${id}`);
-        return;
+        return false;
       }
       this.logger.warn(
         `${invalid ? "notification_work_receipt_invalid" : "notification_work_receipt_retry"}:${id}`,
       );
+      return false;
     }
   }
 }

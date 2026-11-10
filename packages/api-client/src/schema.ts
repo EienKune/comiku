@@ -3876,7 +3876,7 @@ export interface components {
         };
         NotificationSubscriptionRuleDto: {
             /** @enum {string} */
-            eventType: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed";
+            eventType: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed" | "metadata_updated" | "collaboration_mode_updated" | "stage_credit_updated" | "stage_contribution_completed" | "translation_imported" | "typeset_version_uploaded" | "typeset_version_selected" | "typeset_version_deleted" | "typeset_version_restored";
             stages: ("translate" | "proofread" | "typeset" | "publish")[] | null;
         };
         NotificationChannelDto: {
@@ -3926,7 +3926,7 @@ export interface components {
             connectionKey: string;
             groupId: string;
             enabled: boolean;
-            eventTypes: ("imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed")[];
+            eventTypes: ("imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed" | "metadata_updated" | "collaboration_mode_updated" | "stage_credit_updated" | "stage_contribution_completed" | "translation_imported" | "typeset_version_uploaded" | "typeset_version_selected" | "typeset_version_deleted" | "typeset_version_restored")[];
             includeDetails: boolean;
             /** @enum {string} */
             receiverMode?: "legacy" | "templates";
@@ -3934,7 +3934,7 @@ export interface components {
         };
         NotificationTemplateRevisionDto: {
             /** @enum {string} */
-            eventType: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed";
+            eventType: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed" | "metadata_updated" | "collaboration_mode_updated" | "stage_credit_updated" | "stage_contribution_completed" | "translation_imported" | "typeset_version_uploaded" | "typeset_version_selected" | "typeset_version_deleted" | "typeset_version_restored";
             revision: number;
         };
         NotificationChannelUpdateDto: {
@@ -3942,7 +3942,7 @@ export interface components {
             connectionKey: string;
             groupId: string;
             enabled: boolean;
-            eventTypes: ("imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed")[];
+            eventTypes: ("imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed" | "metadata_updated" | "collaboration_mode_updated" | "stage_credit_updated" | "stage_contribution_completed" | "translation_imported" | "typeset_version_uploaded" | "typeset_version_selected" | "typeset_version_deleted" | "typeset_version_restored")[];
             includeDetails: boolean;
             /** @enum {string} */
             receiverMode?: "legacy" | "templates";
@@ -3959,7 +3959,7 @@ export interface components {
         };
         NotificationPreviewInputDto: {
             /** @enum {string} */
-            eventType: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed";
+            eventType: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed" | "metadata_updated" | "collaboration_mode_updated" | "stage_credit_updated" | "stage_contribution_completed" | "translation_imported" | "typeset_version_uploaded" | "typeset_version_selected" | "typeset_version_deleted" | "typeset_version_restored";
             includeDetails: boolean;
             template?: components["schemas"]["NotificationTemplateSettingsDto"];
             /** @enum {string} */
@@ -4006,7 +4006,7 @@ export interface components {
             /** Format: uuid */
             idempotencyKey: string;
             /** @enum {string} */
-            eventType?: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed";
+            eventType?: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed" | "metadata_updated" | "collaboration_mode_updated" | "stage_credit_updated" | "stage_contribution_completed" | "translation_imported" | "typeset_version_uploaded" | "typeset_version_selected" | "typeset_version_deleted" | "typeset_version_restored";
             /** @enum {string} */
             stage?: "translate" | "proofread" | "typeset" | "publish";
             expectedRevision?: number;
@@ -4016,7 +4016,7 @@ export interface components {
             /** Format: uuid */
             idempotencyKey: string;
             /** @enum {string} */
-            eventType?: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed";
+            eventType?: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed" | "metadata_updated" | "collaboration_mode_updated" | "stage_credit_updated" | "stage_contribution_completed" | "translation_imported" | "typeset_version_uploaded" | "typeset_version_selected" | "typeset_version_deleted" | "typeset_version_restored";
             /** @enum {string} */
             stage?: "translate" | "proofread" | "typeset" | "publish";
             expectedRevision?: number;

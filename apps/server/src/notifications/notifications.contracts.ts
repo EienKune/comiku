@@ -22,6 +22,15 @@ export type NotificationWorkEventType = Extract<
   | "archived"
   | "restored"
   | "publish_confirmed"
+  | "metadata_updated"
+  | "collaboration_mode_updated"
+  | "stage_credit_updated"
+  | "stage_contribution_completed"
+  | "translation_imported"
+  | "typeset_version_uploaded"
+  | "typeset_version_selected"
+  | "typeset_version_deleted"
+  | "typeset_version_restored"
 >;
 export type NotificationEventType =
   NotificationWorkEventType | "notification.test";

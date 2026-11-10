@@ -48,7 +48,7 @@ test("notification event snapshot excludes arbitrary business details and hash i
     () =>
       normalizeNotificationEvent({
         ...event,
-        type: "metadata_updated",
+        type: "review_revision_joined",
       } as never),
     /notification_event_invalid/,
   );
@@ -124,7 +124,7 @@ test("event validation rejects invalid DB identifiers and INTEGER overflow befor
 });
 
 test("catalog exposes only approved core events and preview is synthetic", () => {
-  assert.equal(NOTIFICATION_EVENT_TYPES.length, 16);
+  assert.equal(NOTIFICATION_EVENT_TYPES.length, 25);
   assert.ok(
     NOTIFICATION_EVENT_TYPES.some((item) => item.type === "notification.test"),
   );

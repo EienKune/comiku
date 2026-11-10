@@ -24095,7 +24095,16 @@
               "review_resumed",
               "archived",
               "restored",
-              "publish_confirmed"
+              "publish_confirmed",
+              "metadata_updated",
+              "collaboration_mode_updated",
+              "stage_credit_updated",
+              "stage_contribution_completed",
+              "translation_imported",
+              "typeset_version_uploaded",
+              "typeset_version_selected",
+              "typeset_version_deleted",
+              "typeset_version_restored"
             ]
           },
           "stages": {
@@ -24331,7 +24340,16 @@
                 "review_resumed",
                 "archived",
                 "restored",
-                "publish_confirmed"
+                "publish_confirmed",
+                "metadata_updated",
+                "collaboration_mode_updated",
+                "stage_credit_updated",
+                "stage_contribution_completed",
+                "translation_imported",
+                "typeset_version_uploaded",
+                "typeset_version_selected",
+                "typeset_version_deleted",
+                "typeset_version_restored"
               ]
             }
           },
@@ -24381,7 +24399,16 @@
               "review_resumed",
               "archived",
               "restored",
-              "publish_confirmed"
+              "publish_confirmed",
+              "metadata_updated",
+              "collaboration_mode_updated",
+              "stage_credit_updated",
+              "stage_contribution_completed",
+              "translation_imported",
+              "typeset_version_uploaded",
+              "typeset_version_selected",
+              "typeset_version_deleted",
+              "typeset_version_restored"
             ]
           },
           "revision": {
@@ -24433,7 +24460,16 @@
                 "review_resumed",
                 "archived",
                 "restored",
-                "publish_confirmed"
+                "publish_confirmed",
+                "metadata_updated",
+                "collaboration_mode_updated",
+                "stage_credit_updated",
+                "stage_contribution_completed",
+                "translation_imported",
+                "typeset_version_uploaded",
+                "typeset_version_selected",
+                "typeset_version_deleted",
+                "typeset_version_restored"
               ]
             }
           },
@@ -24518,7 +24554,16 @@
               "review_resumed",
               "archived",
               "restored",
-              "publish_confirmed"
+              "publish_confirmed",
+              "metadata_updated",
+              "collaboration_mode_updated",
+              "stage_credit_updated",
+              "stage_contribution_completed",
+              "translation_imported",
+              "typeset_version_uploaded",
+              "typeset_version_selected",
+              "typeset_version_deleted",
+              "typeset_version_restored"
             ]
           },
           "includeDetails": {
@@ -24707,7 +24752,16 @@
               "review_resumed",
               "archived",
               "restored",
-              "publish_confirmed"
+              "publish_confirmed",
+              "metadata_updated",
+              "collaboration_mode_updated",
+              "stage_credit_updated",
+              "stage_contribution_completed",
+              "translation_imported",
+              "typeset_version_uploaded",
+              "typeset_version_selected",
+              "typeset_version_deleted",
+              "typeset_version_restored"
             ]
           },
           "stage": {
@@ -24756,7 +24810,16 @@
               "review_resumed",
               "archived",
               "restored",
-              "publish_confirmed"
+              "publish_confirmed",
+              "metadata_updated",
+              "collaboration_mode_updated",
+              "stage_credit_updated",
+              "stage_contribution_completed",
+              "translation_imported",
+              "typeset_version_uploaded",
+              "typeset_version_selected",
+              "typeset_version_deleted",
+              "typeset_version_restored"
             ]
           },
           "stage": {
