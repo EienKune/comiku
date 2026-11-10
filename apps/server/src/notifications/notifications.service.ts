@@ -407,6 +407,7 @@ export class NotificationsService {
             {
               includeDetails: input.includeDetails,
               siteUrl: this.environment.appOrigin,
+              synthetic: true,
             },
           ),
     };
@@ -577,6 +578,7 @@ export class NotificationsService {
                 {
                   includeDetails: channel.includeDetails,
                   siteUrl: this.environment.appOrigin,
+                  synthetic: true,
                 },
               );
       }
@@ -595,6 +597,7 @@ export class NotificationsService {
           {
             includeDetails: channel.includeDetails,
             siteUrl: this.environment.appOrigin,
+            synthetic: true,
           },
         );
       const sampleRoute: NotificationFrozenRoute = {
