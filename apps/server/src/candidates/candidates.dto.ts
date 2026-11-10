@@ -22,6 +22,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from "class-validator";
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
@@ -323,6 +324,22 @@ export class CandidateActionItemDto {
   @IsInt()
   @Min(0)
   expectedRevision!: number;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    isArray: true,
+    minItems: 1,
+    maxItems: 1000,
+    description: "入库采用的图片及页序；省略则采用全部图片",
+  })
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(1000)
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  mediaIds?: string[];
 }
 
 export class CandidateBatchActionDto {

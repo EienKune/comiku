@@ -48,6 +48,31 @@ export enum WorkView {
   publish = "publish",
 }
 
+export class WorkSourceMediaDto {
+  @ApiProperty({ type: String, format: "uuid" }) id!: string;
+  @ApiProperty({ type: Number }) orderIndex!: number;
+  @ApiProperty({ type: Number, nullable: true }) width!: number | null;
+  @ApiProperty({ type: Number, nullable: true }) height!: number | null;
+  @ApiProperty({ type: String }) mediaType!: string;
+  @ApiProperty({ type: Boolean, nullable: true }) adopted!: boolean | null;
+  @ApiProperty({ type: String, format: "uuid", nullable: true }) workImageId!:
+    string | null;
+  @ApiProperty({ type: Number, nullable: true }) workOrderIndex!: number | null;
+  @ApiProperty({ type: Boolean }) available!: boolean;
+}
+
+export class WorkSourceDto {
+  @ApiProperty({ type: String, format: "uuid" }) candidateId!: string;
+  @ApiProperty({ type: String }) platform!: string;
+  @ApiProperty({ type: String }) externalPostId!: string;
+  @ApiProperty({ type: String, nullable: true }) sourceUrl!: string | null;
+  @ApiProperty({ type: String, nullable: true }) sourceText!: string | null;
+  @ApiProperty({ type: String, nullable: true }) importedSourceText!:
+    string | null;
+  @ApiProperty({ type: WorkSourceMediaDto, isArray: true })
+  media!: WorkSourceMediaDto[];
+}
+
 export class WorkQueryDto {
   @ApiPropertyOptional({ enum: WorkView, enumName: "WorkView" })
   @IsOptional()

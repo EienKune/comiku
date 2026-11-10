@@ -789,6 +789,7 @@ model CandidateMedia {
   mediaType       String        @map("media_type") @db.VarChar(32)
   analyses        CandidateMediaAnalysis[]
   analysisWorkIntents ImageAnalysisWorkIntent[]
+  workImage       WorkImage?
   createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@unique([candidatePostId, externalMediaId])
@@ -835,6 +836,7 @@ model Work {
   uploadPreviews TypesetUploadPreview[]
   sourceCandidatePostId             String                      @unique @map("source_candidate_post_id") @db.Uuid
   sourceCandidatePost               CandidatePost               @relation(fields: [sourceCandidatePostId], references: [id], onDelete: Restrict)
+  candidateImportRevision           Int?                        @map("candidate_import_revision")
   sourcePostUrl                     String?                     @map("source_post_url") @db.VarChar(2048)
   title                             String?                     @db.VarChar(200)
   sourceLanguage                    SourceLanguage              @default(ja) @map("source_language")
@@ -901,6 +903,8 @@ model WorkImage {
   work                      Work                       @relation(fields: [workId], references: [id], onDelete: Cascade)
   originalFileObjectId      String                     @map("original_file_object_id") @db.Uuid
   originalFileObject        FileObject                 @relation(fields: [originalFileObjectId], references: [id], onDelete: Restrict)
+  sourceCandidateMediaId    String?                    @unique @map("source_candidate_media_id") @db.Uuid
+  sourceCandidateMedia      CandidateMedia?            @relation(fields: [sourceCandidateMediaId], references: [id], onDelete: Restrict)
   translationEntries        TranslationEntry[]
   translationVersionEntries TranslationVersionEntry[]
   stageAssignments          WorkStageAssignment[]
