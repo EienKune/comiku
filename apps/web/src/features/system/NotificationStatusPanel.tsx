@@ -100,10 +100,35 @@ export function NotificationStatusPanel({ enabled }: { enabled: boolean }) {
             >
               {statusLabels[data.state]}
             </Badge>
-            <span className="notification-boundary">
-              维护记录不代表 QQ 在线或消息已送达。
-            </span>
           </div>
+          <h3>外发队列</h3>
+          <div className="notification-status-metrics">
+            {(
+              [
+                ["pending", "排队中"],
+                ["retryWait", "等待重试"],
+                ["sending", "发送中"],
+                ["failedUnresolved", "未核对失败"],
+                ["unknownUnresolved", "未核对未知"],
+              ] as const
+            ).map(([key, label]) => {
+              const metric = data.deliveries?.[key];
+              return (
+                <div className="notification-status-metric" key={key}>
+                  <span>{label}</span>
+                  <strong>
+                    {metric
+                      ? `${metric.count}${metric.capped ? "+" : ""}`
+                      : "—"}
+                  </strong>
+                  <span className="notification-boundary">
+                    最老记录 {time(metric?.oldestAt ?? null)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <h3>事件补账</h3>
           <dl className="notification-status-evidence">
             <div>
               <dt>最后完成维护</dt>

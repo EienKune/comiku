@@ -23,6 +23,13 @@ const status = {
   lastRegistrationAt: null,
   lastErrorAt: null,
   lastErrorCode: null,
+  deliveries: {
+    pending: metric,
+    retryWait: metric,
+    sending: metric,
+    failedUnresolved: metric,
+    unknownUnresolved: metric,
+  },
   counts: {
     uncaptured: null,
     pending: metric,
@@ -243,4 +250,22 @@ test.each([
   setup(true, { ...status, state });
   await screen.findByText(label);
   expect(screen.queryByText(/机器人离线|机器人在线/)).toBeNull();
+});
+
+test("shows bounded outgoing metrics separately from source counts without the retired defensive sentence", async () => {
+  setup(true, {
+    ...status,
+    deliveries: {
+      pending: { ...metric, count: 12 },
+      retryWait: metric,
+      sending: metric,
+      failedUnresolved: { ...metric, count: 1000, capped: true },
+      unknownUnresolved: metric,
+    },
+  });
+  await screen.findByText("维护正常");
+  expect(screen.getByRole("heading", { name: "外发队列" })).toBeTruthy();
+  expect(screen.getByText("12")).toBeTruthy();
+  expect(screen.getByText("未核对失败")).toBeTruthy();
+  expect(screen.queryByText("维护记录不代表 QQ 在线或消息已送达。")).toBeNull();
 });

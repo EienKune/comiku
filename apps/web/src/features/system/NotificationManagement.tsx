@@ -1,9 +1,5 @@
-import { useLayoutEffect, useRef, useState } from "react";
-import {
-  useInfiniteQuery,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
 import {
   Badge,
@@ -15,6 +11,7 @@ import {
 import { client, unwrap } from "../account/api";
 import { Feedback } from "../account/forms";
 import "./notifications.css";
+import { localDayBoundary } from "./notification-history";
 import { NotificationStatusPanel } from "./NotificationStatusPanel";
 import {
   TemplateEditor,
@@ -76,9 +73,9 @@ export function NotificationManagement({
   const [adoptionBusy, setAdoptionBusy] = useState(false);
   const configuration = useQuery({
     queryKey: ["notification-configuration"],
-    enabled: enabled && (tab === "groups" || tab === "templates"),
-    queryFn: async () =>
-      unwrap(await client.GET("/api/notifications/configuration")),
+    enabled: enabled && tab !== "status",
+    queryFn: async ({ signal }) =>
+      unwrap(await client.GET("/api/notifications/configuration", { signal })),
     refetchOnWindowFocus: false,
   });
   // The server-owned event catalogue and channel inputs share the same keys.
@@ -89,26 +86,92 @@ export function NotificationManagement({
         templates?: Template[];
       }
     )?.templates ?? [];
-  const [status, setStatus] = useState<Delivery["status"] | "">("");
-  const deliveries = useInfiniteQuery({
-    queryKey: ["notification-deliveries", status],
+  const emptyFilters = {
+    status: "" as Delivery["status"] | "",
+    groupId: "",
+    workNumber: "",
+    eventType: "" as EventType | "notification.test" | "",
+    createdFrom: "",
+    createdThrough: "",
+  };
+  const [filterForm, setFilterForm] = useState(emptyFilters);
+  const [history, setHistory] = useState({
+    filters: emptyFilters,
+    cursors: [""],
+    generation: 0,
+  });
+  const [filterError, setFilterError] = useState("");
+  const applied = history.filters;
+  const cursor = history.cursors.at(-1) || undefined;
+  const deliveries = useQuery({
+    queryKey: ["notification-deliveries", applied, cursor, history.generation],
     enabled: enabled && tab === "history",
-    initialPageParam: undefined as string | undefined,
-    queryFn: async ({ pageParam }) =>
+    queryFn: async ({ signal }) =>
       unwrap(
         await client.GET("/api/notifications/deliveries", {
+          signal,
           params: {
             query: {
-              cursor: pageParam,
-              status: status || undefined,
-              limit: 50,
+              cursor,
+              status: applied.status || undefined,
+              groupId: applied.groupId || undefined,
+              workNumber: applied.workNumber
+                ? Number(applied.workNumber)
+                : undefined,
+              eventType: applied.eventType || undefined,
+              createdFrom: localDayBoundary(applied.createdFrom),
+              createdBefore: localDayBoundary(applied.createdThrough, true),
+              limit: 20,
             },
           },
         }),
       ),
-    getNextPageParam: (last) => last.nextCursor ?? undefined,
     refetchOnWindowFocus: false,
   });
+  useEffect(() => {
+    if (!enabled || tab !== "history")
+      void queryClient.cancelQueries({ queryKey: ["notification-deliveries"] });
+    if (!enabled || tab === "status")
+      void queryClient.cancelQueries({
+        queryKey: ["notification-configuration"],
+      });
+  }, [enabled, tab, queryClient]);
+  function applyFilters(reset = false) {
+    const filters = reset
+      ? emptyFilters
+      : {
+          ...filterForm,
+          groupId: filterForm.groupId.trim(),
+          workNumber: filterForm.workNumber.trim(),
+        };
+    if (filters.groupId && !/^[1-9][0-9]{0,19}$/.test(filters.groupId)) {
+      setFilterError("请输入有效的原目标群号。");
+      return;
+    }
+    if (
+      filters.workNumber &&
+      (!/^[1-9][0-9]*$/.test(filters.workNumber) ||
+        Number(filters.workNumber) > 2147483647)
+    ) {
+      setFilterError("请输入有效的作品编号。");
+      return;
+    }
+    if (
+      filters.createdFrom &&
+      filters.createdThrough &&
+      filters.createdFrom > filters.createdThrough
+    ) {
+      setFilterError("开始日期不能晚于结束日期。");
+      return;
+    }
+    setFilterError("");
+    if (reset) setFilterForm(emptyFilters);
+    setHistory((current) => ({
+      filters,
+      cursors: [""],
+      generation: current.generation + 1,
+    }));
+  }
   const [draft, setDraft] = useState<
     (ChannelInput & { id?: string; expectedRevision?: number }) | null
   >(null);
@@ -970,6 +1033,7 @@ export function NotificationManagement({
         hidden={tab !== "templates"}
       >
         <TemplateEditor
+          enabled={enabled && tab === "templates"}
           templates={templates}
           events={eventTypes}
           onUpdated={() =>
@@ -985,69 +1049,200 @@ export function NotificationManagement({
         aria-labelledby="notification-tab-history"
         hidden={tab !== "history"}
       >
-        <header className="notification-heading">
-          <h3>投递记录</h3>
-          <div className="notification-actions">
-            <SelectField
-              label="投递状态"
-              value={status}
-              onValueChange={(value) =>
-                setStatus(value as Delivery["status"] | "")
-              }
-            >
-              <option value="">全部状态</option>
-              {Object.entries(statusLabels).map(([key, label]) => (
-                <option value={key} key={key}>
-                  {label}
-                </option>
-              ))}
-            </SelectField>
+        <div className="notification-history-toolbar">
+          <header className="notification-heading">
+            <h3>投递记录</h3>
             <Button
               variant="ghost"
               size="sm"
               loading={deliveries.isFetching}
-              onClick={() => void deliveries.refetch()}
+              disabled={!enabled}
+              onClick={() =>
+                setHistory((current) => ({
+                  ...current,
+                  cursors: [""],
+                  generation: current.generation + 1,
+                }))
+              }
             >
               刷新记录
             </Button>
-          </div>
-        </header>
+          </header>
+          <form
+            className="notification-history-filters"
+            onSubmit={(event) => {
+              event.preventDefault();
+              applyFilters();
+            }}
+          >
+            <SelectField
+              label="投递状态"
+              value={filterForm.status}
+              onValueChange={(value) =>
+                setFilterForm((current) => ({
+                  ...current,
+                  status: value as Delivery["status"] | "",
+                }))
+              }
+            >
+              <option value="">全部状态</option>
+              {Object.entries(statusLabels).map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </SelectField>
+            <TextField
+              label="原目标群号"
+              value={filterForm.groupId}
+              onChange={(event) =>
+                setFilterForm((current) => ({
+                  ...current,
+                  groupId: event.target.value,
+                }))
+              }
+              inputMode="numeric"
+            />
+            <TextField
+              label="作品编号"
+              value={filterForm.workNumber}
+              onChange={(event) =>
+                setFilterForm((current) => ({
+                  ...current,
+                  workNumber: event.target.value,
+                }))
+              }
+              inputMode="numeric"
+            />
+            <SelectField
+              label="事件类型"
+              value={filterForm.eventType}
+              onValueChange={(value) =>
+                setFilterForm((current) => ({
+                  ...current,
+                  eventType: value as typeof current.eventType,
+                }))
+              }
+            >
+              <option value="">全部事件</option>
+              {eventTypes.map((event) => (
+                <option key={event.type} value={event.type}>
+                  {event.label}
+                </option>
+              ))}
+              <option value="notification.test">通知测试</option>
+            </SelectField>
+            <TextField
+              label="开始日期"
+              type="date"
+              value={filterForm.createdFrom}
+              onChange={(event) =>
+                setFilterForm((current) => ({
+                  ...current,
+                  createdFrom: event.target.value,
+                }))
+              }
+            />
+            <TextField
+              label="结束日期"
+              type="date"
+              value={filterForm.createdThrough}
+              onChange={(event) =>
+                setFilterForm((current) => ({
+                  ...current,
+                  createdThrough: event.target.value,
+                }))
+              }
+            />
+            <div className="notification-actions">
+              <Button type="submit" disabled={!enabled}>
+                筛选
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={!enabled}
+                onClick={() => applyFilters(true)}
+              >
+                重置
+              </Button>
+            </div>
+          </form>
+          <Feedback error={filterError} />
+          {configuration.isError && (
+            <div className="notification-actions">
+              <p role="alert">事件目录读取失败。</p>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                disabled={!enabled}
+                loading={configuration.isFetching}
+                onClick={() => void configuration.refetch()}
+              >
+                重试事件目录
+              </Button>
+            </div>
+          )}
+        </div>
         {deliveries.isPending && <p role="status">正在读取投递记录…</p>}
         {deliveries.isError && (
           <p role="alert">投递记录读取失败，请刷新重试。</p>
         )}
         <div className="notification-deliveries">
-          {deliveries.data?.pages
-            .flatMap((page) => page.items)
-            .map((delivery) => (
-              <DeliveryRow
-                key={delivery.id}
-                delivery={delivery}
-                eventLabel={
-                  delivery.eventType === "notification.test"
-                    ? "通知测试"
-                    : (eventTypes.find(
-                        (event) => event.type === delivery.eventType,
-                      )?.label ?? delivery.eventType)
-                }
-                onUpdated={() =>
-                  void queryClient.invalidateQueries({
-                    queryKey: ["notification-deliveries"],
-                  })
-                }
-              />
-            ))}
+          {deliveries.data?.items.map((delivery) => (
+            <DeliveryRow
+              key={delivery.id}
+              delivery={delivery}
+              eventLabel={
+                delivery.eventType === "notification.test"
+                  ? "通知测试"
+                  : (eventTypes.find(
+                      (event) => event.type === delivery.eventType,
+                    )?.label ?? delivery.eventType)
+              }
+              onUpdated={() =>
+                void queryClient.invalidateQueries({
+                  queryKey: ["notification-deliveries"],
+                })
+              }
+            />
+          ))}
         </div>
-        {deliveries.data?.pages[0]?.items.length === 0 && <p>暂无投递记录。</p>}
-        {deliveries.hasNextPage && (
+        {deliveries.data?.items.length === 0 && <p>暂无投递记录。</p>}
+        <nav className="notification-pagination" aria-label="投递记录分页">
           <Button
             variant="secondary"
-            loading={deliveries.isFetchingNextPage}
-            onClick={() => void deliveries.fetchNextPage()}
+            disabled={
+              !enabled || deliveries.isFetching || history.cursors.length === 1
+            }
+            onClick={() =>
+              setHistory((current) => ({
+                ...current,
+                cursors: current.cursors.slice(0, -1),
+              }))
+            }
           >
-            加载更多
+            上一页
           </Button>
-        )}
+          <span>第 {history.cursors.length} 页 · 每页 20 条</span>
+          <Button
+            variant="secondary"
+            disabled={
+              !enabled || deliveries.isFetching || !deliveries.data?.nextCursor
+            }
+            onClick={() => {
+              const next = deliveries.data?.nextCursor;
+              if (next)
+                setHistory((current) => ({
+                  ...current,
+                  cursors: [...current.cursors, next],
+                }));
+            }}
+          >
+            下一页
+          </Button>
+        </nav>
       </div>
       <div
         role="tabpanel"
@@ -1107,33 +1302,42 @@ function DeliveryRow({
   }
   return (
     <article className="notification-delivery">
-      <div className="notification-heading">
-        <strong>
-          当前管理名称：{delivery.channelName}
-          {delivery.workNumber !== null
-            ? ` · #${delivery.workNumber}`
-            : " · 合成测试"}
-        </strong>
+      <div className="notification-delivery-summary">
         <Badge tone={tone(delivery.status)}>
           {statusLabels[delivery.status] ?? delivery.status}
         </Badge>
-      </div>
-      <div className="notification-meta">
-        <span>原投递目标：QQ 群 {delivery.groupId}</span>
-        <span>连接标识：{delivery.connectionKey}</span>
-        <span>{eventLabel}</span>
+        <strong>{eventLabel}</strong>
+        <span>
+          {delivery.workNumber !== null
+            ? `#${delivery.workNumber}`
+            : "合成测试"}
+        </span>
         <time dateTime={delivery.createdAt}>
           {new Date(delivery.createdAt).toLocaleString()}
         </time>
-        <span>尝试 {delivery.attempts} 次</span>
-        {delivery.errorCode && <span>{delivery.errorCode}</span>}
-        {delivery.providerMessageId && (
-          <span>平台回执 {delivery.providerMessageId}</span>
-        )}
+        <span>原投递目标：QQ 群 {delivery.groupId}</span>
         {delivery.resolvedAt && <span>已核对</span>}
       </div>
+      {(delivery.status === "pending" || delivery.status === "retry_wait") && (
+        <p className="notification-boundary">
+          {delivery.nextEligibleAt ? (
+            <>下次可调度 {new Date(delivery.nextEligibleAt).toLocaleString()}</>
+          ) : (
+            "等待调度"
+          )}
+        </p>
+      )}
       <details>
-        <summary>查看内容</summary>
+        <summary>查看内容与技术回执</summary>
+        <div className="notification-meta">
+          <span>当前管理名称：{delivery.channelName}</span>
+          <span>连接标识：{delivery.connectionKey}</span>
+          <span>尝试 {delivery.attempts} 次</span>
+          {delivery.errorCode && <span>{delivery.errorCode}</span>}
+          {delivery.providerMessageId && (
+            <span>平台回执 {delivery.providerMessageId}</span>
+          )}
+        </div>
         {"contentRevision" in delivery && delivery.contentRevision != null && (
           <p className="notification-boundary">
             内容修订 {String(delivery.contentRevision)}

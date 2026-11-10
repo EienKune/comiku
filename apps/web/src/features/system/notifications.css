@@ -169,10 +169,12 @@
   display: grid;
   gap: var(--space-5);
   align-items: start;
-  grid-template-columns: minmax(240px, 1fr) minmax(280px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 .notification-templates {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: var(--space-5);
   gap: var(--space-2);
   min-width: 0;
 }
@@ -303,5 +305,55 @@
   }
   .notification-tabs button {
     flex-basis: calc(50% - var(--space-3));
+  }
+}
+
+.notification-template-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 48px);
+  padding: 0;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  overflow: auto;
+}
+.notification-template-dialog::backdrop {
+  background: var(--color-overlay);
+}
+.notification-template-dialog .notification-editor {
+  border: 0;
+}
+.notification-history-toolbar {
+  display: grid;
+  gap: var(--space-4);
+  margin-block: var(--space-5);
+}
+.notification-history-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: var(--space-3);
+}
+.notification-pagination,
+.notification-delivery-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+.notification-pagination {
+  justify-content: space-between;
+  margin-top: var(--space-4);
+}
+.notification-delivery-summary {
+  font-size: 13px;
+}
+@media (max-width: 620px) {
+  .notification-templates,
+  .notification-history-filters {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
