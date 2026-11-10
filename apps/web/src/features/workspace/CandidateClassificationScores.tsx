@@ -11,6 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
 import { Badge } from "../../components/ui";
 import { client, unwrap } from "../account/api";
+import { useCandidateInspection } from "./candidate-inspection-context";
 import "./CandidateClassificationScores.css";
 
 type Category = components["schemas"]["CandidateClassificationTagDto"];
@@ -137,9 +138,13 @@ export function CandidateClassificationScores({
     setOpen(false);
     setPosition(null);
   }, [cancelClose]);
+  const claimInspection = useCandidateInspection(id, close);
   function show() {
     cancelClose();
-    if (!suppressFocus.current) setOpen(true);
+    if (!suppressFocus.current) {
+      claimInspection();
+      setOpen(true);
+    }
   }
   function later() {
     cancelClose();
@@ -155,7 +160,15 @@ export function CandidateClassificationScores({
   const reposition = useRef(() => {});
   reposition.current = () => {
     if (!trigger.current || !popup.current) return;
-    const anchor = trigger.current.getBoundingClientRect();
+    const buttonRect = trigger.current.getBoundingClientRect();
+    const blockRect = trigger.current
+      .closest(".candidate-tags")
+      ?.getBoundingClientRect();
+    const anchor = {
+      left: buttonRect.left,
+      top: blockRect?.top ?? buttonRect.top,
+      bottom: blockRect?.bottom ?? buttonRect.bottom,
+    };
     const rect = popup.current.getBoundingClientRect();
     const left = Math.max(
       12,

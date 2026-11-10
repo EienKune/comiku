@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import type { components } from "@comiku/api-client";
 import { ExternalLink, Images, RotateCcw } from "lucide-react";
 import { Badge, Button, Surface } from "../../components/ui";
@@ -17,6 +17,8 @@ export function CandidateCard({
   canManage,
   selected,
   selectionDisabled,
+  editingDisabled = false,
+  imageSelection,
   onToggle,
   onRetryAnalysis,
   onToggleOrdering,
@@ -29,16 +31,58 @@ export function CandidateCard({
   canManage: boolean;
   selected: boolean;
   selectionDisabled: boolean;
+  editingDisabled?: boolean;
+  imageSelection?: {
+    selectedCount: number;
+    totalCount: number;
+    orderChanged: boolean;
+  };
   onToggle: () => void;
   onRetryAnalysis: () => void;
   onToggleOrdering: () => void;
   children?: ReactNode;
 }) {
   const category = candidate.classificationTags?.[0];
+  const checkbox = useRef<HTMLInputElement>(null);
+  const selectable = canManage && candidate.status !== "imported";
+  const editable = canManage && candidate.status === "pending";
+  const imageSummary =
+    imageSelection &&
+    (imageSelection.selectedCount !== imageSelection.totalCount
+      ? `入库图片：${imageSelection.selectedCount} / ${imageSelection.totalCount} 张`
+      : imageSelection.orderChanged
+        ? "入库顺序已调整"
+        : null);
   return (
-    <Surface as="article" className="workspace-media-card candidate-card">
+    <Surface
+      as="article"
+      className={`workspace-media-card candidate-card${selected ? " is-selected" : ""}`}
+    >
       <CandidateMediaPreview candidate={candidate} />
-      <div className="workspace-card-body candidate-card-body">
+      <div
+        className={`workspace-card-body candidate-card-body${selectable && !selectionDisabled ? " candidate-card-body--selectable" : ""}`}
+        onClick={(event) => {
+          if (
+            !selectable ||
+            selectionDisabled ||
+            event.defaultPrevented ||
+            event.button !== 0
+          )
+            return;
+          const target = event.target;
+          if (
+            !(target instanceof Element) ||
+            !event.currentTarget.contains(target) ||
+            target.closest(
+              'button,a,input,label,select,textarea,[role="button"],[role="link"],[contenteditable],[data-card-action]',
+            )
+          )
+            return;
+          if (window.getSelection()?.toString().trim()) return;
+          onToggle();
+          checkbox.current?.focus({ preventScroll: true });
+        }}
+      >
         <div className="candidate-card-header">
           {author}
           <Badge
@@ -88,36 +132,46 @@ export function CandidateCard({
           )}
         </div>
         {children}
+        <div className="candidate-card-image-summary">
+          {editable && imageSummary && (
+            <button
+              type="button"
+              disabled={editingDisabled}
+              onClick={onToggleOrdering}
+            >
+              {imageSummary}
+            </button>
+          )}
+        </div>
         <footer className="candidate-card-footer">
           <span className="candidate-card-selection">
             {canManage && candidate.status !== "imported" && (
               <label className="account-checkbox">
                 <input
+                  ref={checkbox}
                   type="checkbox"
+                  aria-label={`选择 ${candidate.authorName} 的帖子`}
                   checked={selected}
                   disabled={selectionDisabled}
                   onChange={onToggle}
                 />
-                选择
               </label>
             )}
           </span>
           <span className="candidate-card-order">
-            {candidate.status === "pending" &&
-              candidate.media.length > 1 &&
-              canManage && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  aria-label="图片顺序"
-                  title="图片顺序"
-                  leadingIcon={<Images size={15} />}
-                  onClick={onToggleOrdering}
-                >
-                  <span className="candidate-card-order-label">图片顺序</span>
-                </Button>
-              )}
+            {editable && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={editingDisabled}
+                title="整理图片"
+                leadingIcon={<Images size={15} />}
+                onClick={onToggleOrdering}
+              >
+                <span className="candidate-card-order-label">整理图片</span>
+              </Button>
+            )}
           </span>
           <span className="candidate-card-origin">
             {candidate.externalPostUrl && (

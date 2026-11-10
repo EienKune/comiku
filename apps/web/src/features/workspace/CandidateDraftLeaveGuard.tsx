@@ -26,8 +26,8 @@ function LeaveDialog({
         onStay();
       }}
     >
-      <h2 id={title}>还有未保存的图片顺序</h2>
-      <p>离开此页面将丢弃这些调整。</p>
+      <h2 id={title}>还有尚未入库的图片整理</h2>
+      <p>离开此页面将丢弃本地图片整理；已提交的入库操作仍可能在后台完成。</p>
       <footer>
         <Button type="button" variant="secondary" onClick={onStay}>
           继续编辑

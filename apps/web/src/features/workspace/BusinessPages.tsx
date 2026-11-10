@@ -4,11 +4,15 @@ import {
 } from "./CandidateAuthorFilter";
 import { CandidateDraftLeaveGuard } from "./CandidateDraftLeaveGuard";
 import {
-  candidateOrderDraft,
-  moveCandidateOrder,
-  candidateOrderConflict,
-  type CandidateOrderDraft,
-} from "./candidate-order-drafts";
+  candidateImageDraftChanged,
+  candidateImageSelectionSummary,
+  type CandidateImageDraft,
+} from "./candidate-image-drafts";
+import { CandidateImageEditor } from "./CandidateImageEditor";
+import { CandidateImportConfirmation } from "./CandidateImportConfirmation";
+import { useCandidateImageImport } from "./use-candidate-image-import";
+import { CandidateInspectionScope } from "./CandidateInspectionScope";
+import { WorkSourceRecord } from "./WorkSourceRecord";
 import { AuthorArchiveControl } from "./AuthorArchiveControl";
 import { AuthorEvidenceRemovalDialog } from "./AuthorEvidenceRemovalDialog";
 import {
@@ -26,8 +30,6 @@ import {
   type CandidateBaseFilter,
 } from "./use-candidate-review-session";
 import {
-  settleCandidateSelection,
-  toggleLoadedCandidates,
   CANDIDATE_SELECTION_LIMIT,
   canCancelLoadedCandidates,
 } from "./candidate-selection";
@@ -359,9 +361,15 @@ function TranslationAttentionBadge({ work }: { work: Work }) {
     </Badge>
   ) : null;
 }
-function Toolbar({ children }: { children: ReactNode }) {
+function Toolbar({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
   return (
-    <Surface className="workspace-toolbar" variant="soft">
+    <Surface className={`workspace-toolbar ${className}`} variant="soft">
       {children}
     </Surface>
   );
@@ -2302,118 +2310,6 @@ function CandidateMediaThumbnail({
   );
 }
 
-function CandidateOrderPanel({
-  candidate,
-  draft,
-  saving,
-  onSaveStart,
-  onSaveEnd,
-  onDraftChange,
-  onSaved,
-}: {
-  candidate: Candidate;
-  draft?: CandidateOrderDraft;
-  saving: boolean;
-  onSaveStart: () => boolean;
-  onSaveEnd: () => void;
-  onDraftChange: (draft: CandidateOrderDraft) => void;
-  onSaved: () => Promise<unknown>;
-}) {
-  const action = useAction();
-  const current = candidateOrderDraft(draft, candidate);
-  const media = current.media;
-  const conflict = current.dirty && candidateOrderConflict(current, candidate);
-  function move(index: number, offset: number) {
-    onDraftChange(moveCandidateOrder(current, candidate, index, offset));
-  }
-  async function save() {
-    if (!onSaveStart()) return;
-    await action.run(async () => {
-      try {
-        const saved = await unwrap(
-          await client.POST("/api/candidates/{id}/media-order", {
-            params: { path: { id: candidate.id } },
-            body: {
-              expectedRevision: current.expectedRevision,
-              mediaIds: media.map((item) => item.id),
-            },
-          }),
-        );
-        onDraftChange(candidateOrderDraft(undefined, saved));
-        await onSaved();
-        action.setSuccess("图片顺序已保存");
-      } finally {
-        onSaveEnd();
-      }
-    });
-  }
-  return (
-    <div className="candidate-order-panel">
-      <p>从上到下为入库后的图片顺序。</p>
-      <div className="candidate-order-list">
-        {media.map((item, index) => (
-          <div className="candidate-order-row" key={item.id}>
-            <b>{index + 1}</b>
-            <CandidateMediaThumbnail candidateId={candidate.id} media={item} />
-            <div className="candidate-order-actions">
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                disabled={saving || action.busy || conflict || index === 0}
-                leadingIcon={<ArrowUp size={15} />}
-                onClick={() => move(index, -1)}
-              >
-                上移
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                disabled={
-                  saving ||
-                  action.busy ||
-                  conflict ||
-                  index === media.length - 1
-                }
-                leadingIcon={<ArrowDown size={15} />}
-                onClick={() => move(index, 1)}
-              >
-                下移
-              </Button>
-            </div>
-          </div>
-        ))}
-      </div>
-      {conflict && (
-        <p role="alert" className="account-error">
-          帖子图片或版本已变化，当前调整仍保留。
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={saving}
-            onClick={() =>
-              onDraftChange(candidateOrderDraft(undefined, candidate))
-            }
-          >
-            放弃调整并加载最新顺序
-          </Button>
-        </p>
-      )}
-      <Feedback error={action.error} success={action.success} />
-      <Button
-        size="sm"
-        loading={action.busy}
-        disabled={saving || conflict || !current.dirty}
-        onClick={() => void save()}
-      >
-        保存顺序
-      </Button>
-    </div>
-  );
-}
-
 const pendingCandidateUploadSessionKey =
   "comiku.pending-candidate-upload-session";
 
@@ -3036,14 +2932,8 @@ function CandidateGridSection({
   open = true,
   onOpenChange,
   scopeTotal,
-  orderingCandidateId,
-  orderDrafts,
-  orderSaving,
-  onOrderSaveStart,
-  onOrderSaveEnd,
-  onOrderingSaved,
-  onOrderDraftChange,
-  onToggleOrdering,
+  imageDrafts,
+  onEditImages,
   busy,
 }: {
   status: components["schemas"]["CandidateStatus"];
@@ -3058,14 +2948,8 @@ function CandidateGridSection({
   onOpenChange?: (open: boolean) => void;
   scopeTotal?: number;
   onRetryAnalysis: (candidate: Candidate) => void;
-  orderingCandidateId: string | null;
-  orderDrafts: Record<string, CandidateOrderDraft>;
-  orderSaving: ReadonlySet<string>;
-  onOrderSaveStart: (id: string) => boolean;
-  onOrderSaveEnd: (id: string) => void;
-  onOrderingSaved: (id: string) => void;
-  onOrderDraftChange: (id: string, draft: CandidateOrderDraft) => void;
-  onToggleOrdering: (id: string) => void;
+  imageDrafts: Record<string, CandidateImageDraft>;
+  onEditImages: (candidate: Candidate) => void;
   busy: boolean;
 }) {
   const user = useAccount();
@@ -3157,28 +3041,15 @@ function CandidateGridSection({
               }
               onToggle={() => onToggle(candidate)}
               onRetryAnalysis={() => onRetryAnalysis(candidate)}
-              onToggleOrdering={() => onToggleOrdering(candidate.id)}
-            >
-              {orderingCandidateId === candidate.id &&
-                candidate.status === "pending" && (
-                  <CandidateOrderPanel
-                    candidate={candidate}
-                    draft={orderDrafts[candidate.id]}
-                    saving={orderSaving.has(candidate.id)}
-                    onSaveStart={() => onOrderSaveStart(candidate.id)}
-                    onSaveEnd={() => onOrderSaveEnd(candidate.id)}
-                    onDraftChange={(draft) =>
-                      onOrderDraftChange(candidate.id, draft)
-                    }
-                    onSaved={async () => {
-                      onOrderingSaved(candidate.id);
-                      await queryClient.invalidateQueries({
-                        queryKey: ["candidates"],
-                      });
-                    }}
-                  />
-                )}
-            </CandidateCard>
+              onToggleOrdering={() => onEditImages(candidate)}
+              editingDisabled={busy}
+              imageSelection={
+                imageDrafts[candidate.id] &&
+                candidateImageDraftChanged(imageDrafts[candidate.id])
+                  ? candidateImageSelectionSummary(imageDrafts[candidate.id])
+                  : undefined
+              }
+            />
           ))}
         </div>
       ) : !query.isPending ? (
@@ -3234,28 +3105,26 @@ export function CandidatesPage() {
   const [fetchedRange, setFetchedRange] = useState("all");
   const [authorFilter, setAuthorFilter] =
     useState<CandidateAuthorChoice | null>(null);
-  const [orderDrafts, setOrderDrafts] = useState<
-    Record<string, CandidateOrderDraft>
-  >({});
-  const changeOrderDraft = (id: string, draft: CandidateOrderDraft) =>
-    setOrderDrafts((current) => ({ ...current, [id]: draft }));
-  const orderSaveLocks = useRef(new Set<string>());
-  const [orderSaving, setOrderSaving] = useState<ReadonlySet<string>>(
-    new Set(),
+  const imageImport = useCandidateImageImport(
+    useCallback(
+      () =>
+        Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["candidates"] }),
+          invalidateWorkViews(),
+        ]),
+      [],
+    ),
   );
-  const startOrderSave = (id: string) => {
-    if (orderSaveLocks.current.has(id)) return false;
-    orderSaveLocks.current.add(id);
-    setOrderSaving(new Set(orderSaveLocks.current));
-    return true;
-  };
-  const endOrderSave = (id: string) => {
-    orderSaveLocks.current.delete(id);
-    setOrderSaving(new Set(orderSaveLocks.current));
-  };
-  const [selected, setSelected] = useState<Map<string, number>>(
-    () => new Map(),
-  );
+  const {
+    selected,
+    toggle,
+    toggleLoaded,
+    clearSelection,
+    openEditor,
+    openConfirmation,
+    settleOther,
+  } = imageImport;
+  const candidateBusy = action.busy || imageImport.locked;
   const [showUpload, setShowUpload] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [discardIntent, setDiscardIntent] = useState<Map<
@@ -3298,9 +3167,6 @@ export function CandidatesPage() {
       }),
     );
   }
-  const [orderingCandidateId, setOrderingCandidateId] = useState<string | null>(
-    null,
-  );
   const baseFilter = useMemo<CandidateBaseFilter>(
     () => ({
       status: status as components["schemas"]["CandidateStatus"],
@@ -3331,10 +3197,8 @@ export function CandidatesPage() {
     });
   }
   const batch = useCallback(
-    async (
-      kind: components["schemas"]["CandidateAction"],
-      submitted = selected,
-    ) => {
+    async (kind: "discard" | "restore", submitted = selected) => {
+      if (imageImport.locked) return;
       const items = [...submitted].map(([id, expectedRevision]) => ({
         id,
         expectedRevision,
@@ -3353,9 +3217,7 @@ export function CandidatesPage() {
           queryClient.invalidateQueries({ queryKey: ["candidates"] }),
           invalidateWorkViews(),
         ]);
-        setSelected((current) =>
-          settleCandidateSelection(current, result.results, submitted),
-        );
+        settleOther(result.results, submitted);
         setCandidateSuccess(
           failures.length
             ? `${result.results.length - failures.length} 项成功，${failures.length} 项需重新检查`
@@ -3363,7 +3225,13 @@ export function CandidatesPage() {
         );
       });
     },
-    [runCandidateAction, selected, setCandidateSuccess],
+    [
+      runCandidateAction,
+      selected,
+      setCandidateSuccess,
+      settleOther,
+      imageImport.locked,
+    ],
   );
   const selectedCount = selected.size;
   const topbarRegistration = useMemo(
@@ -3377,35 +3245,39 @@ export function CandidatesPage() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    disabled={action.busy}
-                    onClick={() => setSelected(new Map())}
+                    disabled={candidateBusy}
+                    onClick={clearSelection}
                   >
                     取消选择
                   </Button>
                 </div>
                 <div className="candidate-batch-operations">
-                  {status === "pending" ? (
+                  {status === "pending" || imageImport.uncertain ? (
                     <>
                       <Button
                         size="sm"
                         variant="ghost"
-                        disabled={action.busy}
+                        disabled={candidateBusy}
                         onClick={() => setDiscardIntent(new Map(selected))}
                       >
                         忽略所选（{selectedCount}）
                       </Button>
                       <Button
                         size="sm"
-                        loading={action.busy}
-                        onClick={() => void batch("import")}
+                        loading={imageImport.busy}
+                        disabled={action.busy}
+                        onClick={openConfirmation}
                       >
-                        入库所选（{selectedCount}）
+                        {imageImport.uncertain
+                          ? "查看本次入库"
+                          : `入库所选（${selectedCount}）`}
                       </Button>
                     </>
                   ) : status === "discarded" ? (
                     <Button
                       size="sm"
                       loading={action.busy}
+                      disabled={imageImport.locked}
                       onClick={() => void batch("restore")}
                     >
                       恢复所选（{selectedCount}）
@@ -3417,224 +3289,216 @@ export function CandidatesPage() {
             collapsedLabel: `已选 ${selectedCount}`,
           }
         : null,
-    [action.busy, batch, selectedCount, status, selected],
+    [
+      action.busy,
+      batch,
+      selectedCount,
+      status,
+      selected,
+      candidateBusy,
+      imageImport.busy,
+      imageImport.locked,
+      imageImport.uncertain,
+      clearSelection,
+      openConfirmation,
+    ],
   );
   useTopbarActions(topbarRegistration);
   return (
     <PermissionGate permission="candidates:read">
-      <CandidateDraftLeaveGuard
-        dirty={Object.values(orderDrafts).some((draft) => draft.dirty)}
-      />
-      <SectionHeading title="候选池">
-        筛选已抓取的图片组，批量入库为作品。
-      </SectionHeading>
-      <Toolbar>
-        <CandidateAuthorFilter
-          value={authorFilter}
-          onChange={(value) => {
-            setAuthorFilter(value);
-            setSelected(new Map());
-          }}
-        />
-        <SelectField
-          aria-label="候选状态"
-          value={status}
-          onValueChange={(value) => {
-            setStatus(value);
-            setSelected(new Map());
-          }}
-        >
-          <option value="pending">待处理</option>
-          <option value="imported">已入库</option>
-          <option value="discarded">已忽略</option>
-        </SelectField>
-        <SelectField
-          aria-label="来源语言"
-          value={language}
-          onValueChange={(value) => {
-            setLanguage(value as SourceLanguage | "all");
-            setSelected(new Map());
-          }}
-        >
-          <option value="all">全部语言</option>
-          <option value="ja">日语</option>
-          <option value="ko">韩语</option>
-          <option value="en">英语</option>
-        </SelectField>
-        <SelectField
-          aria-label="抓取时间"
-          value={fetchedRange}
-          onValueChange={(value) => {
-            setFetchedRange(value);
-            setSelected(new Map());
-          }}
-        >
-          <option value="all">全部时间</option>
-          <option value="1">最近 24 小时</option>
-          <option value="7">最近 7 天</option>
-          <option value="30">最近 30 天</option>
-        </SelectField>
-        <Button
-          variant="secondary"
-          leadingIcon={<RefreshCw size={16} />}
-          title="纳入新候选与最新排序，保留当前选择"
-          loading={review.refreshing}
-          disabled={review.isPending}
-          onClick={() => void review.refresh()}
-        >
-          刷新列表
-        </Button>
-        {user.permissions.includes("candidates:manage") && (
-          <>
+      <CandidateInspectionScope>
+        <CandidateDraftLeaveGuard dirty={imageImport.dirty} />
+        <SectionHeading title="候选池">
+          筛选已抓取的图片组，批量入库为作品。
+        </SectionHeading>
+        <Toolbar className="candidate-toolbar">
+          <CandidateAuthorFilter
+            value={authorFilter}
+            onChange={(value) => {
+              setAuthorFilter(value);
+              clearSelection();
+            }}
+          />
+          <SelectField
+            aria-label="候选状态"
+            value={status}
+            onValueChange={(value) => {
+              setStatus(value);
+              clearSelection();
+            }}
+          >
+            <option value="pending">待处理</option>
+            <option value="imported">已入库</option>
+            <option value="discarded">已忽略</option>
+          </SelectField>
+          <SelectField
+            aria-label="来源语言"
+            value={language}
+            onValueChange={(value) => {
+              setLanguage(value as SourceLanguage | "all");
+              clearSelection();
+            }}
+          >
+            <option value="all">全部语言</option>
+            <option value="ja">日语</option>
+            <option value="ko">韩语</option>
+            <option value="en">英语</option>
+          </SelectField>
+          <SelectField
+            aria-label="抓取时间"
+            value={fetchedRange}
+            onValueChange={(value) => {
+              setFetchedRange(value);
+              clearSelection();
+            }}
+          >
+            <option value="all">全部时间</option>
+            <option value="1">最近 24 小时</option>
+            <option value="7">最近 7 天</option>
+            <option value="30">最近 30 天</option>
+          </SelectField>
+          <div
+            className="candidate-toolbar-actions"
+            role="group"
+            aria-label="候选操作"
+          >
             <Button
               variant="secondary"
-              leadingIcon={<Upload size={16} />}
-              onClick={() => setShowUpload((value) => !value)}
+              leadingIcon={<RefreshCw size={16} />}
+              title="纳入新候选与最新排序，保留当前选择"
+              loading={review.refreshing}
+              disabled={review.isPending}
+              onClick={() => void review.refresh()}
             >
-              手动上传
+              刷新列表
             </Button>
-            <SourceSyncControl onCompleted={invalidateWorkViews} />
-          </>
+            {user.permissions.includes("candidates:manage") && (
+              <>
+                <Button
+                  variant="secondary"
+                  leadingIcon={<Upload size={16} />}
+                  onClick={() => setShowUpload((value) => !value)}
+                >
+                  手动上传
+                </Button>
+                <SourceSyncControl onCompleted={invalidateWorkViews} />
+              </>
+            )}
+            <Button variant="secondary" onClick={() => setShowRules(true)}>
+              审核规则
+            </Button>
+          </div>
+        </Toolbar>
+        {showRules && (
+          <CandidateRulesDialog
+            canManage={user.permissions.includes("authors:admin")}
+            onClose={() => setShowRules(false)}
+          />
         )}
-        <Button variant="secondary" onClick={() => setShowRules(true)}>
-          审核规则
-        </Button>
-      </Toolbar>
-      {showRules && (
-        <CandidateRulesDialog
-          canManage={user.permissions.includes("authors:admin")}
-          onClose={() => setShowRules(false)}
+        {status === "pending" && (
+          <nav className="candidate-section-nav" aria-label="候选审核区域">
+            {candidateTriageSections.map((section) => (
+              <button
+                key={section.value}
+                type="button"
+                onClick={() => locateGroup(section.value)}
+              >
+                {section.title}{" "}
+                <span>{review.session?.counts[section.value] ?? 0}</span>
+              </button>
+            ))}
+          </nav>
+        )}
+        {showUpload && (
+          <ManualCandidateUpload
+            onClose={() => setShowUpload(false)}
+            onUploaded={() =>
+              Promise.all([
+                queryClient.invalidateQueries({ queryKey: ["candidates"] }),
+                invalidateWorkViews(),
+              ])
+            }
+          />
+        )}
+        <Feedback
+          error={imageImport.error || review.error || action.error}
+          success={imageImport.success || action.success}
         />
-      )}
-      {status === "pending" && (
-        <nav className="candidate-section-nav" aria-label="候选审核区域">
-          {candidateTriageSections.map((section) => (
-            <button
-              key={section.value}
-              type="button"
-              onClick={() => locateGroup(section.value)}
-            >
-              {section.title}{" "}
-              <span>{review.session?.counts[section.value] ?? 0}</span>
-            </button>
-          ))}
-        </nav>
-      )}
-      {showUpload && (
-        <ManualCandidateUpload
-          onClose={() => setShowUpload(false)}
-          onUploaded={() =>
-            Promise.all([
-              queryClient.invalidateQueries({ queryKey: ["candidates"] }),
-              invalidateWorkViews(),
-            ])
-          }
-        />
-      )}
-      <Feedback error={review.error ?? action.error} success={action.success} />
-      {discardIntent && (
-        <CandidateDiscardDialog
-          count={discardIntent.size}
-          onCancel={() => setDiscardIntent(null)}
-          onConfirm={() => {
-            const submitted = discardIntent;
-            setDiscardIntent(null);
-            void batch("discard", submitted);
-          }}
-        />
-      )}
-      {status === "pending" ? (
-        <div className="workspace-candidate-sections">
-          {candidateTriageSections.map((section) => (
-            <CandidateGridSection
-              key={section.value}
-              status="pending"
-              group={section.value}
-              baseFilter={baseFilter}
-              sessionId={review.session?.sessionId}
-              onExpired={review.refresh}
-              selected={selected}
-              onToggle={(candidate) =>
-                setSelected((current) => {
-                  const next = new Map(current);
-                  if (next.has(candidate.id)) next.delete(candidate.id);
-                  else if (next.size < CANDIDATE_SELECTION_LIMIT)
-                    next.set(candidate.id, candidate.revision);
-                  return next;
-                })
-              }
-              onSelectLoaded={(candidates) =>
-                setSelected((current) =>
-                  toggleLoadedCandidates(current, candidates),
-                )
-              }
-              open={
-                section.value === "low_priority"
-                  ? lowOpen
-                  : expandedGroups[section.value]
-              }
-              onOpenChange={(open) => changeGroupOpen(section.value, open)}
-              scopeTotal={review.session?.counts[section.value]}
-              onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
-              orderDrafts={orderDrafts}
-              orderSaving={orderSaving}
-              onOrderSaveStart={startOrderSave}
-              onOrderSaveEnd={endOrderSave}
-              onOrderingSaved={(id) =>
-                setOrderingCandidateId((current) =>
-                  current === id ? null : current,
-                )
-              }
-              onOrderDraftChange={changeOrderDraft}
-              orderingCandidateId={orderingCandidateId}
-              busy={action.busy}
-              onToggleOrdering={(id) =>
-                setOrderingCandidateId((current) =>
-                  current === id ? null : id,
-                )
-              }
-            />
-          ))}
-        </div>
-      ) : (
-        <CandidateGridSection
-          status={status as components["schemas"]["CandidateStatus"]}
-          baseFilter={baseFilter}
-          sessionId={review.session?.sessionId}
-          onExpired={review.refresh}
-          selected={selected}
-          onToggle={(candidate) =>
-            setSelected((current) => {
-              const next = new Map(current);
-              if (next.has(candidate.id)) next.delete(candidate.id);
-              else if (next.size < CANDIDATE_SELECTION_LIMIT)
-                next.set(candidate.id, candidate.revision);
-              return next;
-            })
-          }
-          onSelectLoaded={(candidates) =>
-            setSelected((current) =>
-              toggleLoadedCandidates(current, candidates),
-            )
-          }
-          onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
-          orderDrafts={orderDrafts}
-          orderSaving={orderSaving}
-          onOrderSaveStart={startOrderSave}
-          onOrderSaveEnd={endOrderSave}
-          onOrderingSaved={(id) =>
-            setOrderingCandidateId((current) =>
-              current === id ? null : current,
-            )
-          }
-          onOrderDraftChange={changeOrderDraft}
-          orderingCandidateId={orderingCandidateId}
-          busy={action.busy}
-          onToggleOrdering={(id) =>
-            setOrderingCandidateId((current) => (current === id ? null : id))
-          }
-        />
-      )}
+        {imageImport.confirmation && (
+          <CandidateImportConfirmation
+            {...imageImport.confirmation}
+            onEdit={(entry) => openEditor(entry.candidate)}
+            onConfirm={() => void imageImport.submit()}
+            onClose={imageImport.closeConfirmation}
+          />
+        )}
+        {imageImport.editor && (
+          <CandidateImageEditor
+            key={`${imageImport.editor.id}:${imageImport.editor.revision}:${imageImport.editorVersion}`}
+            candidate={imageImport.editor}
+            draft={imageImport.state.drafts[imageImport.editor.id]}
+            selectionRevision={selected.get(imageImport.editor.id)}
+            onApply={imageImport.applyEditor}
+            onClose={imageImport.closeEditor}
+            onResetSource={() => void imageImport.resetEditor()}
+            reloading={imageImport.reloading}
+            error={imageImport.error}
+          />
+        )}
+        {discardIntent && (
+          <CandidateDiscardDialog
+            count={discardIntent.size}
+            onCancel={() => setDiscardIntent(null)}
+            onConfirm={() => {
+              const submitted = discardIntent;
+              setDiscardIntent(null);
+              void batch("discard", submitted);
+            }}
+          />
+        )}
+        {status === "pending" ? (
+          <div className="workspace-candidate-sections">
+            {candidateTriageSections.map((section) => (
+              <CandidateGridSection
+                key={section.value}
+                status="pending"
+                group={section.value}
+                baseFilter={baseFilter}
+                sessionId={review.session?.sessionId}
+                onExpired={review.refresh}
+                selected={selected}
+                onToggle={toggle}
+                onSelectLoaded={toggleLoaded}
+                open={
+                  section.value === "low_priority"
+                    ? lowOpen
+                    : expandedGroups[section.value]
+                }
+                onOpenChange={(open) => changeGroupOpen(section.value, open)}
+                scopeTotal={review.session?.counts[section.value]}
+                onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
+                imageDrafts={imageImport.state.drafts}
+                busy={candidateBusy}
+                onEditImages={openEditor}
+              />
+            ))}
+          </div>
+        ) : (
+          <CandidateGridSection
+            status={status as components["schemas"]["CandidateStatus"]}
+            baseFilter={baseFilter}
+            sessionId={review.session?.sessionId}
+            onExpired={review.refresh}
+            selected={selected}
+            onToggle={toggle}
+            onSelectLoaded={toggleLoaded}
+            onRetryAnalysis={(candidate) => void retryAnalysis(candidate)}
+            imageDrafts={imageImport.state.drafts}
+            busy={candidateBusy}
+            onEditImages={openEditor}
+          />
+        )}
+      </CandidateInspectionScope>
     </PermissionGate>
   );
 }
@@ -5622,6 +5486,7 @@ export function WorkDetailPage() {
                       />
                     ))}
                   </div>
+                  <WorkSourceRecord workId={work.id} />
                   {stage === "typeset" && (
                     <section className="workspace-handoff-panel">
                       <div>
