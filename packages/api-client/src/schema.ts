@@ -16921,6 +16921,12 @@ export interface operations {
                 limit?: number;
                 status?: "pending" | "sending" | "retry_wait" | "accepted" | "failed" | "unknown" | "cancelled";
                 cursor?: string;
+                /** @description Exclusive creation-time upper bound. */
+                createdBefore?: string;
+                createdFrom?: string;
+                eventType?: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed" | "metadata_updated" | "collaboration_mode_updated" | "stage_credit_updated" | "stage_contribution_completed" | "translation_imported" | "typeset_version_uploaded" | "typeset_version_selected" | "typeset_version_deleted" | "typeset_version_restored" | "notification.test";
+                workNumber?: number;
+                groupId?: string;
             };
             header?: never;
             path?: never;

@@ -163,7 +163,7 @@ record(event) 在独立事务中登记，并对可重试的数据库事务冲突
 
 原群历史使用群号/创建时间/ID索引，稀少事件使用事件类型/ID索引；未决投递 partial index 排除已核对的终态历史。索引仍有存储、写入和WAL开销，有界查询不等同于任意数据规模或并发下的容量保证。
 
-外发积压与事件登记统计分开：`deliveries` 中的 `pending`、`retryWait`、`sending`、`failedUnresolved`、`unknownUnresolved` 分别最多读取最老1001条，超过1000显示1000+；后两项仅包含 `resolvedAt=null` 的未决记录。最早时间使用投递创建时间。每页投递的 `nextEligibleAt` 通过一次批量排队任务查询计算，取任务 `availableAt` 与投递重试边界的较晚时间；任务未排队、已完成或已耗尽时为空。它表示“下次可调度”，不保证发送或收件时间。接口不返回任务原始 payload 或 lastError。
+外发积压与事件登记统计分开：`deliveries` 中的 `pending`、`retryWait`、`sending`、`failedUnresolved`、`unknownUnresolved` 分别最多读取最老1001条，超过1000显示1000+，只包含 `resolvedAt=null` 的未决记录；活跃投递由状态流转保证尚未核对，已核对的失败和未知结果退出待处理统计。最早时间使用投递创建时间。每页投递的 `nextEligibleAt` 通过一次批量排队任务查询计算，取任务 `availableAt` 与投递重试边界的较晚时间；任务未排队、已完成或已耗尽时为空。它表示“下次可调度”，不保证发送或收件时间。接口不返回任务原始 payload 或 lastError。
 
 预览和已保存样例明确标注为示例，连接测试明确标注为测试，均不生成不存在的作品链接。真实业务消息继续保留原作品地址；历史冻结正文和补发正文不会随新预览文案变化。
 

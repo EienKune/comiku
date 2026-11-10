@@ -41,6 +41,8 @@ import {
 } from "./notifications.dto.js";
 import { NotificationsService } from "./notifications.service.js";
 import { NotificationStatusService } from "./notification-status.service.js";
+import { NOTIFICATION_EVENT_KEYS } from "./notification-events.js";
+import { NOTIFICATION_TIMESTAMP_PATTERN } from "./notification-history-query.js";
 import {
   NotificationReceiptPageDto,
   NotificationReceiptsQueryDto,
@@ -163,6 +165,37 @@ export class NotificationsController {
   @Get("deliveries")
   @Access({ permission: "system:manage" })
   @ApiOperation({ operationId: "listNotificationDeliveries" })
+  @ApiQuery({
+    name: "groupId",
+    required: false,
+    type: String,
+    pattern: "^[1-9][0-9]{0,19}$",
+  })
+  @ApiQuery({
+    name: "workNumber",
+    required: false,
+    schema: { type: "integer", minimum: 1, maximum: 2147483647 },
+  })
+  @ApiQuery({
+    name: "eventType",
+    required: false,
+    enum: [...NOTIFICATION_EVENT_KEYS, "notification.test"],
+  })
+  @ApiQuery({
+    name: "createdFrom",
+    required: false,
+    type: String,
+    format: "date-time",
+    pattern: NOTIFICATION_TIMESTAMP_PATTERN.source,
+  })
+  @ApiQuery({
+    name: "createdBefore",
+    required: false,
+    type: String,
+    format: "date-time",
+    pattern: NOTIFICATION_TIMESTAMP_PATTERN.source,
+    description: "Exclusive creation-time upper bound.",
+  })
   @ApiQuery({ name: "cursor", required: false, type: String, maxLength: 512 })
   @ApiQuery({
     name: "status",
@@ -172,9 +205,7 @@ export class NotificationsController {
   @ApiQuery({
     name: "limit",
     required: false,
-    type: Number,
-    minimum: 1,
-    maximum: 50,
+    schema: { type: "integer", minimum: 1, maximum: 50, default: 20 },
   })
   @ApiOkResponse({ type: NotificationDeliveryPageDto })
   deliveries(
