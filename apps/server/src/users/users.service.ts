@@ -36,6 +36,7 @@ import type {
   UserDto,
   AuthUserDto,
 } from "./users.dto.js";
+import type { UpdateQqBindingDto } from "./user-qq-binding.dto.js";
 
 type UserWithRoles = Prisma.UserGetPayload<{
   include: { roles: true; languageCapabilities: true };
@@ -327,6 +328,44 @@ export class UsersService {
         displayName: updated.displayName,
       });
       return publicUser(updated);
+    });
+  }
+  async qqBinding(actor: Actor) {
+    const user = await this.authorize(this.db, actor, "self");
+    if (user.mustChangePassword)
+      throw new ForbiddenException("请先修改临时密码");
+    return { qqNumber: user.qqNumber, revision: user.revision };
+  }
+  async updateQqBinding(actor: Actor, input: UpdateQqBindingDto) {
+    return this.write(async (tx) => {
+      const user = await this.authorize(tx, actor, "self");
+      if (user.mustChangePassword)
+        throw new ForbiddenException("请先修改临时密码");
+      if (user.revision !== input.expectedRevision)
+        throw new ConflictException("个人资料已更新，请读取当前绑定后重试");
+      if (user.qqNumber === input.qqNumber)
+        return { qqNumber: user.qqNumber, revision: user.revision };
+      let updated;
+      try {
+        updated = await tx.user.update({
+          where: { id: user.id },
+          data: { qqNumber: input.qqNumber, revision: { increment: 1 } },
+          select: { qqNumber: true, revision: true },
+        });
+      } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2002"
+        ) {
+          // This update changes no other unique field; adapter-specific metadata varies.
+          throw new ConflictException("QQ 号已被其他账号使用");
+        }
+        throw error;
+      }
+      await this.audit(tx, user.id, user.id, "account.qq_binding_updated", {
+        bound: updated.qqNumber !== null,
+      });
+      return updated;
     });
   }
   private async avatarUser(tx: Tx, actor: Actor) {

@@ -27,6 +27,7 @@ import { AvatarSettings } from "./AvatarSettings";
 import { refreshMemberProfile } from "./profile-cache";
 import { useAction } from "./use-action";
 import { loginReturnTarget } from "./login-return";
+import { QqBindingSettings } from "./QqBindingSettings";
 
 const profileSchema = z.object({
   displayName: z.string().trim().min(1, "请输入成员昵称").max(100),
@@ -223,6 +224,7 @@ export function ProfilePage() {
             保存资料
           </Button>
         </form>
+        <QqBindingSettings />
         <Button
           variant="secondary"
           disabled={action.busy}
