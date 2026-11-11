@@ -45,17 +45,20 @@ test("a source user cannot open technical management or request its history", ()
 
 test("a system administrator can read collection history in the dedicated page", async () => {
   vi.spyOn(client, "GET").mockImplementation((async (path: string) => ({
-    data: path.endsWith("/configuration")
-      ? {
-          enabled: false,
-          configurationError: null,
-          connections: [],
-          eventTypes: [],
-          channels: [],
-        }
-      : path.endsWith("/deliveries")
-        ? { items: [], nextCursor: null }
-        : [],
+    data:
+      path === "/api/source-fetch/runs"
+        ? { items: [], nextCursor: null, observedAt: "2026-11-10T00:00:00Z" }
+        : path.endsWith("/configuration")
+          ? {
+              enabled: false,
+              configurationError: null,
+              connections: [],
+              eventTypes: [],
+              channels: [],
+            }
+          : path.endsWith("/deliveries")
+            ? { items: [], nextCursor: null }
+            : [],
     response: new Response(),
   })) as never);
   openPage(["system:manage"]);
@@ -68,17 +71,20 @@ test("a system administrator can read collection history in the dedicated page",
 
 function mockManagement() {
   return vi.spyOn(client, "GET").mockImplementation((async (path: string) => ({
-    data: path.endsWith("/configuration")
-      ? {
-          enabled: false,
-          configurationError: null,
-          connections: [{ key: "bot", name: "测试连接", available: true }],
-          eventTypes: [{ type: "imported", label: "导入作品" }],
-          channels: [],
-        }
-      : path.endsWith("/deliveries")
-        ? { items: [], nextCursor: null }
-        : [],
+    data:
+      path === "/api/source-fetch/runs"
+        ? { items: [], nextCursor: null, observedAt: "2026-11-10T00:00:00Z" }
+        : path.endsWith("/configuration")
+          ? {
+              enabled: false,
+              configurationError: null,
+              connections: [{ key: "bot", name: "测试连接", available: true }],
+              eventTypes: [{ type: "imported", label: "导入作品" }],
+              channels: [],
+            }
+          : path.endsWith("/deliveries")
+            ? { items: [], nextCursor: null }
+            : [],
     response: new Response(),
   })) as never);
 }
@@ -167,7 +173,8 @@ test("collection polling pauses while notifications is active and resumes on ret
   vi.useRealTimers();
   fireEvent.click(screen.getByRole("tab", { name: "图源采集" }));
   await act(async () => {});
-  expect(count()).toBe(before + 1);
+  // Historical pages remain cached; only active summaries poll after returning.
+  expect(count()).toBe(before);
 });
 
 test("connections expose pending verification separately from configuration and no second collection switch", async () => {
@@ -197,9 +204,15 @@ test("connections expose pending verification separately from configuration and 
 });
 
 test("the source tab uses the notification branch URL contract and safely handles unknown tabs", async () => {
-  const get = vi
-    .spyOn(client, "GET")
-    .mockResolvedValue({ data: [], response: new Response() } as never);
+  const get = vi.spyOn(client, "GET").mockImplementation((async (
+    path: string,
+  ) => ({
+    data:
+      path === "/api/source-fetch/runs"
+        ? { items: [], nextCursor: null, observedAt: "2026-11-10T00:00:00Z" }
+        : [],
+    response: new Response(),
+  })) as never);
   openPage(["system:manage"], "/settings/system?tab=future&keep=yes");
   expect(
     screen.getByRole("tab", { name: "图源采集" }).getAttribute("aria-selected"),
@@ -219,9 +232,15 @@ test("the source tab uses the notification branch URL contract and safely handle
 });
 
 test("an inactive source panel performs no capability reads or history polling, then resumes when enabled", async () => {
-  const get = vi
-    .spyOn(client, "GET")
-    .mockResolvedValue({ data: [], response: new Response() } as never);
+  const get = vi.spyOn(client, "GET").mockImplementation((async (
+    path: string,
+  ) => ({
+    data:
+      path === "/api/source-fetch/runs"
+        ? { items: [], nextCursor: null, observedAt: "2026-11-10T00:00:00Z" }
+        : [],
+    response: new Response(),
+  })) as never);
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });

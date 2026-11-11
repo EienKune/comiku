@@ -4,6 +4,7 @@ import { ErrorToast } from "../components/ErrorToast";
 import { useEffect, useRef, useState } from "react";
 import { OptionalSection } from "../components/OptionalSection";
 import { PlatformLinks } from "../components/PlatformLinks";
+import { SourceManagementPattern } from "./SourceManagementPattern";
 import {
   AlertCircle,
   Archive,
@@ -823,6 +824,7 @@ export function DesignSystemPlayground() {
               </div>
               <p>私有头像读取失败时显示昵称首字，不替代作品署名。</p>
               <WorkViewsDemo />
+              <SourceManagementPattern />
               <ImageLightboxDemo />
               <h3>作者平台主页</h3>
               <p>

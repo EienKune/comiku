@@ -196,15 +196,17 @@ export function SourceSyncControl({
       <div className="source-sync-summary">
         <strong>
           {title} ·{" "}
-          {run.waitingReason === "credential_unavailable"
-            ? "等待凭据复验"
-            : run.waitingReason === "platform_cooldown"
-              ? "等待平台冷却"
-              : run.waitingReason
-                ? "等待执行空位"
-                : run.nextRetryAt
-                  ? "等待重试"
-                  : statusLabels[run.status]}
+          {run.waitingReason === "platform_maintenance"
+            ? "平台维护中"
+            : run.waitingReason === "credential_unavailable"
+              ? "等待凭据复验"
+              : run.waitingReason === "platform_cooldown"
+                ? "等待平台冷却"
+                : run.waitingReason
+                  ? "等待执行空位"
+                  : run.nextRetryAt
+                    ? "等待重试"
+                    : statusLabels[run.status]}
         </strong>
         <time dateTime={run.completedAt ?? run.startedAt}>
           {when(run.completedAt ?? run.startedAt)}

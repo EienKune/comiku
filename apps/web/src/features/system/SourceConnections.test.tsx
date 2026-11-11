@@ -114,3 +114,14 @@ test("unavailable current configuration takes precedence over old healthy observ
   expect(await screen.findByText("接入不可用")).toBeTruthy();
   expect(screen.queryByText("正常", { exact: true })).toBeNull();
 });
+
+test("maintenance is the primary platform state and credentials remain discoverable", async () => {
+  mock([source("x")], [state("x", "auth_paused", { maintenancePaused: true })]);
+  mount();
+  const card = await screen.findByRole("article", { name: "X 图源接入" });
+  expect(await within(card).findByText("维护中")).toBeTruthy();
+  expect(within(card).queryByText("认证暂停", { exact: true })).toBeNull();
+  expect(
+    within(card).getByRole("button", { name: "管理 X 凭据" }),
+  ).toBeTruthy();
+});
