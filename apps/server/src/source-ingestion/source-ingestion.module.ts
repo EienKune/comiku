@@ -6,6 +6,7 @@ import { FilesModule } from "../files/files.module.js";
 import { HttpMediaDownloader, MEDIA_DOWNLOADER } from "./media-downloader.js";
 import { SourceFetchController } from "./source-fetch.controller.js";
 import { SourceFetchService } from "./source-fetch.service.js";
+import { SourceHistoryService } from "./source-history.service.js";
 import { ContentSourceRegistry } from "./source-registry.js";
 
 @Module({
@@ -45,6 +46,7 @@ import { ContentSourceRegistry } from "./source-registry.js";
         new HttpMediaDownloader(fetch, environment.sourceMediaMaxBytes),
     },
     SourceFetchService,
+    SourceHistoryService,
   ],
   exports: [ContentSourceRegistry, MEDIA_DOWNLOADER, SourceFetchService],
 })

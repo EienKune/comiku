@@ -546,6 +546,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/source-fetch/runs/{id}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSourceFetchTasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/source-fetch/runs/{id}/tasks/{taskId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getSourceFetchTask"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/source-fetch/runs/{id}/tasks/{taskId}/executions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSourceFetchTaskExecutions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/source-fetch/runs/{id}/tasks/{taskId}/gaps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSourceFetchTaskGaps"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/authors": {
         parameters: {
             query?: never;
@@ -2402,6 +2466,8 @@ export interface components {
             currentPassword: string;
         };
         SourcePlatformStateDto: {
+            maintenancePaused?: boolean;
+            maintenanceEpoch?: number;
             platform: string;
             status: string;
             credentialGeneration: string;
@@ -2441,53 +2507,193 @@ export interface components {
             active: components["schemas"]["SourceFetchProgressSnapshotDto"] | null;
             lastManual: components["schemas"]["SourceFetchProgressSnapshotDto"] | null;
         };
-        /** @enum {string} */
-        SourceAdapterHealth: "idle" | "healthy" | "degraded" | "cooling_down" | "unavailable" | "disabled";
-        /** @enum {string} */
-        SourceFetchItemStatus: "running" | "succeeded" | "failed" | "skipped";
-        SourceFetchRunItemDto: {
+        SourceRunSummaryDto: {
             /** Format: uuid */
             id: string;
+            trigger: components["schemas"]["SourceFetchTrigger"];
+            status: components["schemas"]["SourceFetchRunStatus"];
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            completedAt: string | null;
+            legacy: boolean;
+            targetCount: number;
+            completedTargets: number;
+            succeededTargets: number;
+            failedTargets: number;
+            runningTargets: number;
+            queuedTargets: number;
+            waitingTargets: number;
+            anomalyTargets: number;
+            pagesFetched: number;
+            candidatesCreated: number;
+            mediaStored: number;
+        };
+        SourceRunPageDto: {
+            items: components["schemas"]["SourceRunSummaryDto"][];
+            nextCursor: string | null;
+            /** Format: date-time */
+            observedAt: string;
+        };
+        SourceTaskRowDto: {
+            /**
+             * Format: uuid
+             * @description Task ID, or result-item ID for legacy runs
+             */
+            id: string;
             /** Format: uuid */
-            externalAccountId: string;
+            accountId: string;
             authorName: string;
             platform: string;
-            adapterKey: string;
-            adapterHealth: components["schemas"]["SourceAdapterHealth"];
-            status: components["schemas"]["SourceFetchItemStatus"];
+            handle: string | null;
+            externalUserId: string;
+            /** @enum {string} */
+            status: "queued" | "running" | "waiting" | "succeeded" | "failed" | "skipped";
+            /** @description Controlled reason only; arbitrary upstream text is omitted */
+            failureCode: string | null;
+            /** Format: date-time */
+            startedAt: string | null;
+            /** Format: date-time */
+            completedAt: string | null;
+            /** Format: date-time */
+            deferredUntil: string | null;
+            legacy: boolean;
             pagesFetched: number;
-            itemsSeen: number;
             candidatesCreated: number;
-            candidatesExisting: number;
             mediaStored: number;
-            apiRequests: number;
-            errorCode: string | null;
-            errorMessage: string | null;
+        };
+        SourceTaskPageDto: {
+            items: components["schemas"]["SourceTaskRowDto"][];
+            nextCursor: string | null;
+            /** Format: date-time */
+            observedAt: string;
+            legacy: boolean;
+        };
+        /** @enum {string} */
+        SourceAdapterHealth: "idle" | "healthy" | "degraded" | "cooling_down" | "unavailable" | "disabled";
+        SourceAccountCurrentDto: {
+            fetchEnabled: boolean;
+            /** Format: date-time */
+            deletedAt: string | null;
+            adapterHealth: components["schemas"]["SourceAdapterHealth"] | null;
+            /** @description All current unresolved known posts for this account; not attributed to the selected run */
+            unresolvedGapCount: number;
+            excludedGapCount: number;
+        };
+        SourceFollowupSuccessDto: {
+            /** Format: uuid */
+            taskId: string;
+            /** Format: uuid */
+            runId: string;
+            /** Format: date-time */
+            completedAt: string;
+        };
+        SourceTaskJobDto: {
+            status: components["schemas"]["JobStatus"];
+            /** @description This task's consumed job budget; never a batch retry count */
+            attempts: number;
+            /**
+             * Format: date-time
+             * @description Earliest queued execution time; not a promise that a source gate will admit it
+             */
+            nextAvailableAt: string | null;
+            /** Format: date-time */
+            nextRetryAt: string | null;
+        };
+        SourceTaskDetailDto: {
+            original: components["schemas"]["SourceTaskRowDto"];
+            current: components["schemas"]["SourceAccountCurrentDto"] | null;
+            followupSuccess: components["schemas"]["SourceFollowupSuccessDto"] | null;
+            job: components["schemas"]["SourceTaskJobDto"] | null;
+            /** @description False for legacy summary-only history */
+            executionHistoryAvailable: boolean;
+            /** Format: date-time */
+            observedAt: string;
+        };
+        SourceDiagnosticSampleDto: {
+            stage: string;
+            reason: string;
+            scope: string;
+            /** Format: date-time */
+            occurredAt: string | null;
+            httpStatus?: number;
+            limitBytes?: number;
+            declaredBytes?: number;
+            observedBytes?: number;
+            durationMs?: number;
+            timeout?: boolean;
+        };
+        SourceExecutionDiagnosticsDto: {
+            samples: components["schemas"]["SourceDiagnosticSampleDto"][];
+            omitted: number;
+        };
+        SourceExecutionDto: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            kind: "scan";
+            budgetAttempt: number;
+            budgetRefunded: boolean;
+            /** Format: date-time */
+            admittedAt: string;
+            /** @enum {string|null} */
+            businessOutcome: "succeeded" | "partial_failed" | "failed" | "deferred" | null;
+            /** Format: date-time */
+            businessFinishedAt: string | null;
+            /** Format: date-time */
+            settledAt: string | null;
+            diagnostics: components["schemas"]["SourceExecutionDiagnosticsDto"];
+        };
+        SourceExecutionPageDto: {
+            items: components["schemas"]["SourceExecutionDto"][];
+            nextCursor: string | null;
+            /** Format: date-time */
+            observedAt: string;
+            /**
+             * @description Only directly linked scan executions; recovery is not inferred from account identity
+             * @enum {string}
+             */
+            scope: "scan";
+            legacy: boolean;
+        };
+        SourceGapCampaignDto: {
+            number: number;
+            state: string;
+            failureCode: string | null;
             /** Format: date-time */
             startedAt: string;
             /** Format: date-time */
             completedAt: string | null;
         };
-        SourceFetchRunDto: {
-            targetCount?: number;
-            completedTargets?: number;
-            waitingTargets?: number;
-            waitingReason?: string | null;
-            attempts: number;
-            jobStatus: components["schemas"]["JobStatus"] | null;
-            /** Format: date-time */
-            nextRetryAt: string | null;
+        SourceGapDto: {
             /** Format: uuid */
             id: string;
-            trigger: components["schemas"]["SourceFetchTrigger"];
-            status: components["schemas"]["SourceFetchRunStatus"];
-            /** Format: uuid */
-            requestedById: string | null;
-            items: components["schemas"]["SourceFetchRunItemDto"][];
+            /** @description Public source post identity, not a download URL */
+            postId: string;
+            platform: string;
+            state: string;
+            failureCode: string | null;
+            /** @description Completed failed recovery campaigns recorded on this known post */
+            attempts: number;
             /** Format: date-time */
-            startedAt: string;
+            nextRetryAt: string | null;
             /** Format: date-time */
-            completedAt: string | null;
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            campaign: components["schemas"]["SourceGapCampaignDto"] | null;
+        };
+        SourceGapPageDto: {
+            items: components["schemas"]["SourceGapDto"][];
+            nextCursor: string | null;
+            /** Format: date-time */
+            observedAt: string;
+            /**
+             * @description Current unresolved known posts for the account across all runs; no selected-run attribution
+             * @enum {string}
+             */
+            scope: "current_account";
+            legacy: boolean;
         };
         RunSourceFetchDto: {
             accountIds?: string[];
@@ -6993,7 +7199,12 @@ export interface operations {
     };
     listSourceFetchRuns: {
         parameters: {
-            query?: never;
+            query?: {
+                status?: "queued" | "running" | "succeeded" | "partial_failed" | "failed";
+                trigger?: "manual" | "scheduled";
+                cursor?: string;
+                limit?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -7005,7 +7216,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SourceFetchRunDto"][];
+                    "application/json": components["schemas"]["SourceRunPageDto"];
                 };
             };
             /** @description 请求字段无效 */
@@ -7175,7 +7386,358 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SourceFetchRunDto"];
+                    "application/json": components["schemas"]["SourceRunSummaryDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    listSourceFetchTasks: {
+        parameters: {
+            query?: {
+                search?: string;
+                status?: "all" | "anomalies" | "active" | "queued" | "running" | "waiting" | "succeeded" | "failed" | "skipped";
+                platform?: string;
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceTaskPageDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    getSourceFetchTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                taskId: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceTaskDetailDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    listSourceFetchTaskExecutions: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                taskId: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceExecutionPageDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    listSourceFetchTaskGaps: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                taskId: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceGapPageDto"];
                 };
             };
             /** @description 请求字段无效 */
