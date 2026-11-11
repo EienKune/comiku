@@ -97,6 +97,16 @@ Size-limit and forbidden-URL rejections retain controlled media reasons and put 
 
 Transient post gaps first become eligible after 5 minutes; after the first failed recovery campaign they wait 10 minutes, then 30 minutes between remaining campaigns, up to eight campaigns. Each campaign uses the normal job executor (at most three executions, 5/10-second delays). Platform gates, the shared per-platform queue and the maintenance scan determine execution after eligibility. Account cooldown uses `SOURCE_COOLDOWN_MINUTES`.
 
+## Online source credential maintenance
+
+Online editing is opt-in: set `SOURCE_CREDENTIALS_STATE_DIRECTORY` to an existing absolute private directory (0700) outside the checkout and Docker build context. The configured gallery JSON and referenced Cookie files must be owned by the service user (0600), with private writable parent directories. Native Windows online editing is read-only because POSIX mode bits do not establish a Windows ACL.
+
+All participating API and worker processes must see the **same files**, not merely matching path strings. Use a shared writable private directory; independent hosts and read-only single-file Docker mounts do not meet this contract. Do not externally edit these files while an update operation is active. Platforms sharing configuration or referenced Cookie material cannot be edited independently.
+
+The administrator flow is pause, wait for confirmed execution completion, save, optional bounded authentication verification, then explicitly resume. Pausing preserves queued jobs and account settings. Closing the dialog does not resume the platform. A lease deadline is not proof that a subprocess or network stream has stopped. New credentials must still respect a trusted platform cooldown.
+
+The directory contains private recovery material, including previous credentials. It must have restricted access and an appropriate private backup policy. Unresolved operations retain their material; do not delete it to unlock the UI. See [source-ingestion maintenance](adapters/source-ingestion.md) for explicit recovery boundaries. X accepts paired `auth_token`/`ct0` fields; Pixiv accepts an application refresh token. A browser `PHPSESSID` Cookie is a different credential and is not an application refresh token.
+
 ## 登录期限
 
 `AUTH_SESSION_IDLE_SECONDS`（默认 1800）控制没有实际操作的空闲期限；`AUTH_SESSION_ABSOLUTE_SECONDS`（默认 28800）控制每次登录的固定上限。两项为可安全表示的正整数秒数，空闲期限不能大于绝对期限。私有协作环境可分别设置为 `604800` 和 `2592000`，即空闲 7 天、登录满 30 天重登。

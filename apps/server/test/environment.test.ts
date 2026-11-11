@@ -4,6 +4,33 @@ import { parseEnvironment } from "../src/config/environment.js";
 
 const databaseUrl = "postgresql://test:secret@127.0.0.1:5432/comiku_test";
 
+test("online source credentials are opt-in with a literal absolute state directory", () => {
+  const configured = parseEnvironment({
+    DATABASE_URL: databaseUrl,
+    SOURCE_CREDENTIALS_STATE_DIRECTORY: process.cwd(),
+  });
+  assert.equal(configured.sourceCredentialsStateDirectory, process.cwd());
+  assert.equal(
+    parseEnvironment({ DATABASE_URL: databaseUrl })
+      .sourceCredentialsStateDirectory,
+    undefined,
+  );
+  for (const value of [
+    "relative/private",
+    "https://example.invalid",
+    "bad\0path",
+  ]) {
+    assert.throws(
+      () =>
+        parseEnvironment({
+          DATABASE_URL: databaseUrl,
+          SOURCE_CREDENTIALS_STATE_DIRECTORY: value,
+        }),
+      /SOURCE_CREDENTIALS_STATE_DIRECTORY/,
+    );
+  }
+});
+
 test("validates configuration and uses explicit development defaults", () => {
   assert.deepEqual(parseEnvironment({ DATABASE_URL: databaseUrl }), {
     nodeEnv: "development",

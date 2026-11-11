@@ -8,10 +8,12 @@ import { SourceFetchController } from "./source-fetch.controller.js";
 import { SourceFetchService } from "./source-fetch.service.js";
 import { SourceHistoryService } from "./source-history.service.js";
 import { ContentSourceRegistry } from "./source-registry.js";
+import { SourceCredentialsController } from "./source-credentials.controller.js";
+import { SourceCredentialsService } from "./source-credentials.service.js";
 
 @Module({
   imports: [DatabaseModule, FilesModule],
-  controllers: [SourceFetchController],
+  controllers: [SourceFetchController, SourceCredentialsController],
   providers: [
     {
       provide: ContentSourceRegistry,
@@ -46,6 +48,7 @@ import { ContentSourceRegistry } from "./source-registry.js";
         new HttpMediaDownloader(fetch, environment.sourceMediaMaxBytes),
     },
     SourceFetchService,
+    SourceCredentialsService,
     SourceHistoryService,
   ],
   exports: [ContentSourceRegistry, MEDIA_DOWNLOADER, SourceFetchService],
