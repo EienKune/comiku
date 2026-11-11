@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-comiku}
@@ -14,10 +14,10 @@ services:
       timeout: 5s
       retries: 10
     volumes:
-      - comiku_postgres_data:/var/lib/postgresql/data
+      - comiku_postgres_data:/var/lib/postgresql
 
   postgres-test:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     profiles: ["test"]
     environment:
       POSTGRES_DB: comiku_test
@@ -31,7 +31,7 @@ services:
       timeout: 5s
       retries: 10
     tmpfs:
-      - /var/lib/postgresql/data
+      - /var/lib/postgresql
 
 volumes:
   comiku_postgres_data:

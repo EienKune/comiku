@@ -26,6 +26,8 @@ X/Pixiv 资料解析返回有效期十分钟的 `profileProof`，绑定操作人
 
 已有卷不会因更改 `POSTGRES_PASSWORD` 自动改密。使用 `docker compose -f docker-compose.dev.yml stop` 停止开发数据库；不要删卷重建来修复配置。
 
+开发、测试与生产模板使用 PostgreSQL 18，小版本随所选 18 系列官方镜像更新；主版本不自动升级。18 的数据卷挂载到 `/var/lib/postgresql`，默认 `PGDATA=/var/lib/postgresql/18/docker`。旧 17 数据卷不能直接交给 18 启动，升级步骤见[部署说明](deployment.md#postgresql-主版本升级)。
+
 ## R2
 
 显式使用 r2 时完整配置下列四项：
