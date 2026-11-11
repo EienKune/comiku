@@ -100,6 +100,59 @@ test("fixed renderer includes history and signed-in link without opt-out details
   assert.ok([...long].length <= 1000);
 });
 
+test("legacy first rendering retains exact original action copy when the management catalog changes", () => {
+  const expected = new Map([
+    ["imported", "已导入"],
+    ["stage_joined", "已加入阶段"],
+    ["stage_started", "已开始阶段"],
+    ["typeset_handoff_started", "已开始嵌字交接"],
+    ["stage_left", "已退出阶段"],
+    ["stage_assignment_updated", "阶段分工已调整"],
+    ["stage_submitted", "阶段已提交"],
+    ["proofreading_skipped", "已跳过校对"],
+    ["stage_submission_cancelled", "阶段提交已撤销"],
+    ["review_opened", "审核已开启"],
+    ["review_withdrawn", "审核已撤回"],
+    ["review_resumed", "审核已恢复"],
+    ["archived", "已归档"],
+    ["restored", "已恢复"],
+    ["publish_confirmed", "发布已确认"],
+    ["metadata_updated", "作品资料已更新"],
+    ["collaboration_mode_updated", "协作模式已调整"],
+    ["stage_credit_updated", "阶段署名已更新"],
+    ["stage_contribution_completed", "个人贡献已完成"],
+    ["translation_imported", "译文已导入"],
+    ["typeset_version_uploaded", "成图版本已上传"],
+    ["typeset_version_selected", "成图版本已选用"],
+    ["typeset_version_deleted", "成图版本已删除"],
+    ["typeset_version_restored", "成图版本已恢复"],
+    ["notification.test", "通知测试"],
+  ]);
+  for (const { type } of NOTIFICATION_EVENT_TYPES) {
+    assert.equal(
+      renderNotificationMessage(
+        normalizeNotificationEvent({ ...event, type }),
+        {
+          includeDetails: false,
+          siteUrl: "https://comiku.example",
+        },
+      ),
+      [
+        "【Comiku 通知】",
+        `#12 · ${expected.get(type)}`,
+        "发生时间：2026-11-06T08:00:00.000Z",
+        type === "notification.test"
+          ? "连接测试消息，不对应真实作品"
+          : "登录后查看：https://comiku.example/works/00000000-0000-4000-8000-000000000001",
+      ].join("\n"),
+    );
+  }
+  assert.equal(
+    NOTIFICATION_EVENT_TYPES.find(({ type }) => type === "imported")!.label,
+    "作品已入库",
+  );
+});
+
 test("event validation rejects invalid DB identifiers and INTEGER overflow before SQL", () => {
   for (const patch of [
     { resourceId: "not-a-uuid" },

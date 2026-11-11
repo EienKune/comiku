@@ -113,7 +113,7 @@ test("capture freezes per-recipient mode, rule and template without leaking meta
   await (
     bridge as unknown as { capture(since: Date): Promise<boolean> }
   ).capture(new Date("2026-01-01"));
-  assert.equal(saved.inputVersion, 2);
+  assert.equal(saved.inputVersion, 3);
   assert.equal(saved.safeInput.title, "捕获标题");
   assert.equal(saved.safeInput.metadataOrigin, "capture_current");
   assert.equal(saved.routeRefs.length, 2);
@@ -142,6 +142,26 @@ test("capture freezes per-recipient mode, rule and template without leaking meta
     ).length,
     2,
   );
+  assert.equal(
+    validateNotificationFrozenRoutes(
+      saved.routeRefs,
+      3,
+      normalizeNotificationEvent(saved.safeInput),
+    ).length,
+    2,
+  );
+  assert.throws(
+    () =>
+      validateNotificationFrozenRoutes(
+        saved.routeRefs.map((route) => {
+          const withoutContent = { ...route };
+          delete withoutContent.content;
+          return withoutContent;
+        }),
+        3,
+      ),
+    /notification_routes_invalid/,
+  );
   const policy = saved.routeRefs[1].content!.templatePolicy!;
   const corruptions = [
     { templatePolicy: { ...policy, contentRevision: -1 } },
@@ -158,14 +178,15 @@ test("capture freezes per-recipient mode, rule and template without leaking meta
         ? { ...route, content: { ...route.content, ...corrupt } }
         : route,
     );
-    assert.throws(
-      () =>
-        validateNotificationFrozenRoutes(
-          routes,
-          2,
-          normalizeNotificationEvent(saved.safeInput),
-        ),
-      /notification_routes_invalid/,
-    );
+    for (const version of [2, 3])
+      assert.throws(
+        () =>
+          validateNotificationFrozenRoutes(
+            routes,
+            version,
+            normalizeNotificationEvent(saved.safeInput),
+          ),
+        /notification_routes_invalid/,
+      );
   }
 });
