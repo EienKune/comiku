@@ -131,7 +131,7 @@ test("encrypted backups round-trip and reject tampering, wrong keys and overwrit
       format: 1 as const,
       createdAt: new Date().toISOString(),
       release: "test-fixture",
-      postgresMajor: 17 as const,
+      postgresMajor: 18 as const,
     };
     await encryptBackup(Readable.from([source]), archive, key, metadata);
     assert.ok(!(await readFile(archive)).includes(source.subarray(0, 64)));
@@ -152,6 +152,43 @@ test("encrypted backups round-trip and reject tampering, wrong keys and overwrit
       /EEXIST/,
     );
     assert.throws(() => parseEncryptionKey("short"));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("PostgreSQL 18 backup tooling retains legacy 17 archives and rejects unsupported majors", async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), "comiku-backup-upgrade-test-"),
+  );
+  try {
+    const source = randomBytes(1024),
+      key = randomBytes(32);
+    const archive = join(directory, "legacy.comikubak"),
+      output = join(directory, "legacy.dump");
+    const metadata = {
+      format: 1 as const,
+      createdAt: new Date().toISOString(),
+      release: "legacy-test-fixture",
+      postgresMajor: 17 as const,
+    };
+    await encryptBackup(Readable.from([source]), archive, key, metadata);
+    assert.deepEqual(await decryptBackup(archive, output, key), metadata);
+    assert.deepEqual(await readFile(output), source);
+    const bytes = await readFile(archive);
+    const length = bytes.readUInt32BE(20);
+    const unsupported = Buffer.from(
+      JSON.stringify({ ...metadata, postgresMajor: 19 }),
+    );
+    assert.equal(unsupported.length, length);
+    unsupported.copy(bytes, 24);
+    await writeFile(archive, bytes);
+    const rejected = join(directory, "unsupported.dump");
+    await assert.rejects(
+      decryptBackup(archive, rejected, key),
+      /Unsupported backup format/,
+    );
+    await assert.rejects(stat(rejected), /ENOENT/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

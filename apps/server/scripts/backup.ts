@@ -125,7 +125,7 @@ export async function runBackupCommand(args: string[]) {
             format: 1,
             createdAt: new Date().toISOString(),
             release,
-            postgresMajor: 17,
+            postgresMajor: 18,
           }),
           dump.done,
         ]);
