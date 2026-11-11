@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Avatar } from "../../components/Avatar";
+import { ImagePicker } from "../../components/ImagePicker";
 import { Button } from "../../components/ui";
 import { MemberAvatar } from "./MemberAvatar";
 import { refreshMemberProfile } from "./profile-cache";
@@ -12,17 +13,7 @@ export function AvatarSettings() {
   const user = useAccount();
   const action = useAction();
   const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string>();
   const [validationError, setValidationError] = useState("");
-  useEffect(() => {
-    if (!file) {
-      setPreview(undefined);
-      return;
-    }
-    const url = URL.createObjectURL(file);
-    setPreview(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
   async function upload() {
     if (!file) return;
     await action.run(async () => {
@@ -72,35 +63,25 @@ export function AvatarSettings() {
   }
   return (
     <section className="account-avatar-settings" aria-label="个人头像">
-      <div className="account-actions">
-        {preview ? (
-          <Avatar name={user.displayName} src={preview} size="lg" />
-        ) : (
-          <MemberAvatar member={user} size="lg" />
-        )}
-        <div>
-          <strong>个人头像</strong>
-          <p>PNG、JPEG、WebP 或 GIF，最多 5 MiB。</p>
-        </div>
-      </div>
-      <label className="ui-field">
-        <span className="ui-field__label">选择头像</span>
-        <input
-          type="file"
-          accept="image/png,image/jpeg,image/webp,image/gif"
-          disabled={action.busy}
-          onChange={(event) => {
-            const next = event.currentTarget.files?.[0];
-            event.currentTarget.value = "";
-            if (next && (!next.size || next.size > 5 * 1024 * 1024)) {
-              setValidationError("头像为空或超过 5 MiB");
-              return;
-            }
-            setFile(next ?? null);
-            setValidationError("");
-          }}
-        />
-      </label>
+      <ImagePicker
+        label="个人头像"
+        variant="avatar"
+        formats="avatar"
+        currentAvatar={<MemberAvatar member={user} size="lg" />}
+        avatarFallback={<Avatar name={user.displayName} size="lg" />}
+        files={file ? [file] : []}
+        maxFileSize={5 * 1024 * 1024}
+        disabled={action.busy}
+        onChange={(files) => {
+          const next = files[0];
+          if (next && !next.size) {
+            setValidationError("头像为空或超过 5 MiB");
+            return;
+          }
+          setFile(next ?? null);
+          setValidationError("");
+        }}
+      />
       <div className="account-actions">
         <Button
           disabled={!file}
@@ -109,15 +90,6 @@ export function AvatarSettings() {
         >
           保存头像
         </Button>
-        {file && (
-          <Button
-            variant="ghost"
-            disabled={action.busy}
-            onClick={() => setFile(null)}
-          >
-            取消选择
-          </Button>
-        )}
         {user.avatarVersion && (
           <Button
             variant="secondary"
