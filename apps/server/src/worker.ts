@@ -13,11 +13,9 @@ import { SourceFetchService } from "./source-ingestion/source-fetch.service.js";
 import { PrismaService } from "./database/prisma.service.js";
 import { writeWorkerHealth } from "./ops/worker-health.js";
 import { NotificationRuntimeService } from "./notifications/notification-runtime.service.js";
-import {
-  BirthdaysService,
-  BIRTHDAY_SCOPE,
-} from "./birthdays/birthdays.service.js";
+import { BirthdaysService } from "./birthdays/birthdays.service.js";
 import { BirthdayReminderService } from "./birthdays/birthday-reminder.service.js";
+import { runBirthdayWorker } from "./birthdays/birthday-worker.js";
 
 const environment = loadEnvironment();
 const app = await NestFactory.createApplicationContext(
@@ -109,43 +107,15 @@ async function notificationLoop() {
   }
 }
 async function birthdayLoop() {
-  const birthdays = app.get(BirthdaysService),
-    reminders = app.get(BirthdayReminderService);
-  let nextCatalogCleanup = 0;
-  while (!stopping.signal.aborted) {
-    // Reminder maintenance is DB-only and must survive independent source failures.
-    if (notifications.enabled) {
-      try {
-        await reminders.maintain();
-      } catch {
-        console.error("生日提醒维护未完成，将在下一轮恢复");
-      }
-    }
-    try {
-      await birthdays.schedule();
-    } catch {
-      console.error("生日主源调度未完成，将在下一轮恢复");
-    }
-    try {
-      await birthdays.scheduleSupplement();
-    } catch {
-      console.error("生日补充来源调度未完成，将在下一轮恢复");
-    }
-    try {
-      await jobs.runNext("network", stopping.signal, BIRTHDAY_SCOPE);
-    } catch {
-      console.error("生日资料处理未完成，将按任务状态恢复");
-    }
-    try {
-      if (Date.now() >= nextCatalogCleanup) {
-        await birthdays.cleanupCatalogs();
-        nextCatalogCleanup = Date.now() + 86_400_000;
-      }
-    } catch {
-      console.error("生日后台处理未完成，将按任务状态恢复");
-    }
-    await delay(60_000, undefined, { signal: stopping.signal }).catch(() => {});
-  }
+  await runBirthdayWorker(
+    {
+      birthdays: app.get(BirthdaysService),
+      reminders: app.get(BirthdayReminderService),
+      jobs,
+      notificationsEnabled: notifications.enabled,
+    },
+    stopping.signal,
+  );
 }
 try {
   await Promise.all([

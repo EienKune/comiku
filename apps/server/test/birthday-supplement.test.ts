@@ -304,6 +304,9 @@ test("declining indexes retain last good details and do not starve their indepen
   await f.supplement.synchronize(f.job("index"), new AbortController().signal);
   assert.deepEqual([...f.entries.values()], before);
   assert.equal(f.state.lastErrorCode, "birthday_kivo_index_decline");
+  const retryAt = Date.parse(f.state.sourceCounts.indexRetryAt as string);
+  assert.ok(retryAt >= f.now.getTime() + 300_000);
+  assert.ok(retryAt <= Date.now() + 300_000);
   f.state.jobId = null;
   assert.deepEqual(await f.supplement.schedule(), { queued: true });
   assert.equal(f.enqueued[0]?.payload.phase, "profiles");
@@ -330,7 +333,8 @@ test("profile failures preserve old facts while sibling successes publish atomic
   assert.equal(failed.profileHash, old.profileHash);
   assert.equal(failed.lastCheckedAt!.getTime(), old.lastCheckedAt!.getTime());
   assert.equal(failed.lastErrorCode, "birthday_kivo_failed");
-  assert.ok(failed.nextCheckAt.getTime() >= f.now.getTime() + HOUR);
+  assert.ok(failed.nextCheckAt.getTime() >= f.now.getTime() + 300_000);
+  assert.ok(failed.nextCheckAt.getTime() <= Date.now() + 300_000);
   assert.equal(success.profileHash, kivoProfileHash(success.profile as never));
   assert.equal(success.personKey, "kivo:2");
   assert.deepEqual(success.gameEntryIds, [90002]);

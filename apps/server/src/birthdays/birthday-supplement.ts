@@ -13,9 +13,9 @@ import {
   kivoProfileHash,
   type KivoProfile,
 } from "./providers/kivo.js";
+import { BIRTHDAY_RETRY_MS, BIRTHDAY_SCOPE } from "./birthday-scheduling.js";
 
 export const KIVO_SYNC_KIND = "birthday_kivo_sync";
-const SCOPE = "birthdays";
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const ERROR_CODES = new Set(
@@ -88,8 +88,10 @@ export class BirthdaySupplement {
     private readonly publish: (tx: Prisma.TransactionClient) => Promise<void>,
     private readonly lock: (tx: Prisma.TransactionClient) => Promise<void>,
   ) {
-    jobs.register(KIVO_SYNC_KIND, (job, signal) =>
-      this.synchronize(job, signal),
+    jobs.register(
+      KIVO_SYNC_KIND,
+      (job, signal) => this.synchronize(job, signal),
+      { retryDelayMs: BIRTHDAY_RETRY_MS },
     );
   }
 
@@ -119,7 +121,7 @@ export class BirthdaySupplement {
         )
       )
         return { queued: false };
-      await this.jobs.lockScope(tx, "network", SCOPE);
+      await this.jobs.lockScope(tx, "network", BIRTHDAY_SCOPE);
       await tx.birthdaySyncState.upsert({
         where: { id: "kivo" },
         create: { id: "kivo", nextCheckAt: now },
@@ -134,6 +136,8 @@ export class BirthdaySupplement {
           where: { id: state.jobId },
         });
         if (job && ["queued", "running"].includes(job.status))
+          return { queued: false };
+        if (job?.status === "failed" && job.availableAt > now)
           return { queued: false };
       }
       if (state.nextCheckAt > now) return { queued: false };
@@ -151,7 +155,7 @@ export class BirthdaySupplement {
           kind: KIVO_SYNC_KIND,
           resourceId: randomUUID(),
           lane: "network",
-          executionScope: SCOPE,
+          executionScope: BIRTHDAY_SCOPE,
           idempotencyKey: `birthday-kivo:${phase}:${now.toISOString()}`,
           payload: { phase },
         },
@@ -159,7 +163,10 @@ export class BirthdaySupplement {
       );
       await tx.birthdaySyncState.update({
         where: { id: state.id },
-        data: { jobId: job.id, nextCheckAt: new Date(now.getTime() + HOUR) },
+        data: {
+          jobId: job.id,
+          nextCheckAt: new Date(now.getTime() + BIRTHDAY_RETRY_MS),
+        },
       });
       return { queued: true };
     });
@@ -229,7 +236,9 @@ export class BirthdaySupplement {
         if (code || !entries) {
           const metadata = {
             index: counts(current).count,
-            indexRetryAt: new Date(now.getTime() + HOUR).toISOString(),
+            indexRetryAt: new Date(
+              now.getTime() + BIRTHDAY_RETRY_MS,
+            ).toISOString(),
           };
           const failed = { ...current, sourceCounts: metadata };
           await tx.birthdaySyncState.update({
@@ -323,13 +332,12 @@ export class BirthdaySupplement {
         });
       }
       if (deadline.aborted) break;
-      if (outcomes.length < due.length) {
-        try {
-          await delay(250, undefined, { signal: network });
-        } catch {
-          signal.throwIfAborted();
-          break;
-        }
+      // Include the last request: another due batch may now start immediately.
+      try {
+        await delay(250, undefined, { signal: network });
+      } catch {
+        signal.throwIfAborted();
+        break;
       }
     }
     signal.throwIfAborted();
@@ -355,7 +363,9 @@ export class BirthdaySupplement {
               }
             : {
                 lastErrorCode: outcome.code,
-                nextCheckAt: new Date(outcome.checkedAt.getTime() + HOUR),
+                nextCheckAt: new Date(
+                  outcome.checkedAt.getTime() + BIRTHDAY_RETRY_MS,
+                ),
               };
         await tx.birthdayExternalEntry.update({
           where: {

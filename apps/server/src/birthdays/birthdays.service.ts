@@ -14,9 +14,11 @@ import { birthdayCalendar } from "./birthday-calendar.js";
 import { isBirthdayIdentityStatus } from "./providers/schaledb.js";
 import { combineBirthdayCatalog } from "./providers/combined.js";
 import { BirthdaySupplement } from "./birthday-supplement.js";
+import { BIRTHDAY_RETRY_MS, BIRTHDAY_SCOPE } from "./birthday-scheduling.js";
+
+export { BIRTHDAY_SCOPE } from "./birthday-scheduling.js";
 
 export const BIRTHDAY_SYNC_KIND = "birthday_catalog_sync";
-export const BIRTHDAY_SCOPE = "birthdays";
 const HOUR = 3_600_000;
 const unsafeText = (text: string) => /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(text);
 
@@ -150,8 +152,10 @@ export class BirthdaysService {
     @Inject(ENVIRONMENT) environment: Environment,
   ) {
     this.enabled = environment.birthdays?.enabled ?? false;
-    this.jobs.register(BIRTHDAY_SYNC_KIND, (job, signal) =>
-      this.synchronize(job, signal),
+    this.jobs.register(
+      BIRTHDAY_SYNC_KIND,
+      (job, signal) => this.synchronize(job, signal),
+      { retryDelayMs: BIRTHDAY_RETRY_MS },
     );
     this.supplement = new BirthdaySupplement(
       db,
@@ -279,6 +283,8 @@ export class BirthdaysService {
         });
         if (job && ["queued", "running"].includes(job.status))
           return { queued: false };
+        if (job?.status === "failed" && job.availableAt > now)
+          return { queued: false };
       }
       if (
         manualActorId &&
@@ -300,7 +306,10 @@ export class BirthdaysService {
       );
       await tx.birthdaySyncState.update({
         where: { id: state.id },
-        data: { jobId: job.id, nextCheckAt: new Date(now.getTime() + HOUR) },
+        data: {
+          jobId: job.id,
+          nextCheckAt: new Date(now.getTime() + BIRTHDAY_RETRY_MS),
+        },
       });
       return { queued: true };
     });
@@ -576,7 +585,7 @@ export class BirthdaysService {
           where: { id: state.id, jobId: job.id },
           data: {
             lastErrorCode: code,
-            nextCheckAt: new Date(Date.now() + HOUR),
+            nextCheckAt: new Date(Date.now() + BIRTHDAY_RETRY_MS),
           },
         });
       });
