@@ -34,9 +34,11 @@ This tracked document records reusable implementation constraints. Business rule
 - OneBot HTTP 200, async status and an absent message_id are not successful delivery receipts. Encode user text as text segments, restrict connection destinations at DNS and dial time, retain HTTPS validation and never follow credential-bearing redirects. Protocol receipt is not member read confirmation.
 - Keep optional configuration isolated from offline OpenAPI export and normal application construction. Disabled notification loops perform no notification polling or bot probes; close adapter pools when the application closes. Test only synthetic endpoints unless a dedicated real destination is explicitly authorized.
 
-## Author creation
+## Dashboard visibility
 
 - Dashboard `totalWorks` counts non-archived works, including published works, matching the default reading list. Personal todo/recommendation cards still require actual participation and role/language eligibility; an administrator alone is not a production role. Historical participation and other aggregate fields retain their own existing scope.
+
+## Author creation
 
 - Submit the base author fields and distinct-platform account identities in one database transaction. A failed account binding must roll back the author, tags and earlier account inserts. Keep provider/profile requests and image transfers outside the transaction; X identities require server-verifiable profile evidence.
 - Creation retries use an actor-scoped UUID and a canonical hash of the saved business fields. Commit the request record and author together, serialize concurrent requests, reject changed payloads under the same key, and recheck current source/admin permissions inside the transaction. A committed replay must not depend on the original profile proof's expiry or provider timestamps.

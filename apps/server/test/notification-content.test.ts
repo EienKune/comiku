@@ -106,6 +106,53 @@ test("all eight masks keep title in the heading and note independent", () => {
   assert.equal(missing.split("\n")[1], "#12 · 阶段已提交");
 });
 
+test("template workflow shows equal states once while changes, single-sided facts and history stay intact", () => {
+  for (const [patch, expected] of [
+    [
+      {
+        fromWorkflowStatus: "pending_publish",
+        toWorkflowStatus: "pending_publish",
+      },
+      "待发布",
+    ],
+    [
+      { fromWorkflowStatus: "published", toWorkflowStatus: "published" },
+      "已发布",
+    ],
+    [
+      { fromWorkflowStatus: "pending_publish", toWorkflowStatus: "published" },
+      "待发布 → 已发布",
+    ],
+    [{ fromWorkflowStatus: "pending_publish" }, "此前为待发布"],
+    [{ toWorkflowStatus: "published" }, "已发布"],
+  ] as const) {
+    const event = normalizeNotificationEvent({
+      ...input,
+      type: "metadata_updated",
+      ...patch,
+    });
+    const text = renderTemplateNotificationMessage(event, settings);
+    assert.equal(
+      text.split("\n").find((line) => line.startsWith("流程：")),
+      `流程：${expected}`,
+    );
+    assert.equal(buildHistoricalReplayText(text), `【历史补发】\n${text}`);
+  }
+  const missing = renderTemplateNotificationMessage(
+    normalizeNotificationEvent(input),
+    settings,
+  );
+  assert.doesNotMatch(missing, /流程：/);
+  const event = normalizeNotificationEvent({
+    ...input,
+    fromWorkflowStatus: "pending_publish",
+    toWorkflowStatus: "pending_publish",
+  });
+  const legacy = renderNotificationMessage(event, { includeDetails: false });
+  assert.match(legacy, /流程：待发布 → 待发布/);
+  assert.equal(buildHistoricalReplayText(legacy), `【历史补发】\n${legacy}`);
+});
+
 test("content review suppresses equal states while retaining changes and one-sided facts", () => {
   for (const status of ["normal", "needs_review", "blocked"] as const) {
     const text = renderTemplateNotificationMessage(

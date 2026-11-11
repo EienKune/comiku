@@ -54,7 +54,7 @@ function transition<T extends string>(
   to: T | undefined,
   names: Record<T, string>,
 ): string | null {
-  return from && to
+  return from && to && from !== to
     ? `${names[from]} → ${names[to]}`
     : to
       ? names[to]
