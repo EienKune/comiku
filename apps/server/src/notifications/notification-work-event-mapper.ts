@@ -47,6 +47,20 @@ export function mapWorkEventNotification(
     !allowedStages.includes(stage as never)
   )
     throw new Error("notification_event_invalid");
+  // Credit names are free text and may contain colons. Match only the fixed
+  // producer prefix; neither names nor the claim target enter the snapshot.
+  const operation =
+    source.action === "stage_joined" && typeof detail.operation === "string"
+      ? (/^(claim):([^:]+):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[\s\S]*$/i.exec(
+          detail.operation,
+        ) ?? /^(join):([^:]+):[\s\S]*$/.exec(detail.operation))
+      : null;
+  const participationKind =
+    operation &&
+    operation[2] === stage &&
+    (operation[1] === "claim" || operation[1] === "join")
+      ? operation[1]
+      : undefined;
   const input = {
     eventKey: `work-event:${source.id}`,
     type: source.action,
@@ -56,6 +70,7 @@ export function mapWorkEventNotification(
     ordinal: resourceOrdinal,
     occurredAt: source.createdAt,
     ...(stage !== undefined && { stage }),
+    ...(participationKind !== undefined && { participationKind }),
     ...(source.fromWorkflowStatus !== null && {
       fromWorkflowStatus: source.fromWorkflowStatus,
     }),

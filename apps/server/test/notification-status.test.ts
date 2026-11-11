@@ -164,7 +164,7 @@ test("receipt pages whitelist fields, validate event types and bind opaque curso
     return [row, { ...row, id: randomUUID(), eventType: "PRIVATE_CANARY" }];
   });
   const page = await service.receipts({ limit: 1 });
-  assert.equal(page.items[0]?.eventLabel, "已导入");
+  assert.equal(page.items[0]?.eventLabel, "作品已入库");
   assert.equal(page.items[0]?.workNumber, 42);
   assert.equal(page.items[0]?.errorCode, null);
   assert.deepEqual(

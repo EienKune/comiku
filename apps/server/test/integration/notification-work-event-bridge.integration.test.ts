@@ -9,6 +9,8 @@ import { NotificationPublisherService } from "../../src/notifications/notificati
 import { NotificationWorkEventBridgeService } from "../../src/notifications/notification-work-event-bridge.service.js";
 import { NotificationsService } from "../../src/notifications/notifications.service.js";
 import { Prisma } from "../../src/generated/prisma/client.js";
+import { notificationPayloadHash } from "../../src/notifications/notification-events.js";
+import type { NotificationEventInput } from "../../src/notifications/notifications.contracts.js";
 
 const url = process.env.TEST_DATABASE_URL;
 if (url && !new URL(url).pathname.endsWith("_test"))
@@ -135,6 +137,85 @@ test(
             0,
           );
           assert.ok(activation.sourceSince.getTime() > 0);
+        },
+      );
+      await t.test(
+        "v3 captures exact durable participation kinds and registers the frozen facts without exposing operation details",
+        async () => {
+          for (const [operation, expectedKind] of [
+            [`claim:translate:${actor.id}:PRIVATE_CREDIT:WITH_COLON`, "claim"],
+            ["join:translate:PRIVATE_CREDIT:WITH_COLON", "join"],
+            [`claim:typeset:${actor.id}:PRIVATE_CREDIT`, undefined],
+          ] as const) {
+            const w = await work();
+            const source = await event(w.id, {
+              action: "stage_joined",
+              actorId: actor.id,
+              fromWorkflowStatus: "pending_translate",
+              toWorkflowStatus: "pending_translate",
+              detail: {
+                stage: "translate",
+                operation,
+                reason: "PRIVATE_REASON",
+                note: "PRIVATE_NOTE",
+              },
+            });
+            await bridge().maintain();
+            const captured = await receipt(source.id);
+            assert.equal(captured.inputVersion, 3);
+            assert.equal(captured.status, "recorded");
+            const safeInput =
+              captured.safeInput as unknown as NotificationEventInput;
+            assert.equal(safeInput.participationKind, expectedKind);
+            assert.equal(
+              "participationKind" in safeInput,
+              expectedKind !== undefined,
+            );
+            assert.equal(safeInput.stage, "translate");
+            assert.equal(safeInput.fromWorkflowStatus, "pending_translate");
+            assert.equal(safeInput.toWorkflowStatus, "pending_translate");
+            assert.equal(
+              captured.payloadHash,
+              notificationPayloadHash(safeInput),
+            );
+            const registered = await db.notificationEvent.findUniqueOrThrow({
+              where: { id: captured.notificationEventId! },
+            });
+            assert.equal(
+              (registered.snapshot as { participationKind?: string })
+                .participationKind,
+              expectedKind,
+            );
+            assert.deepEqual(registered.routeRefs, captured.routeRefs);
+            assert.equal(registered.payloadHash, captured.payloadHash);
+            assert.doesNotMatch(
+              JSON.stringify([
+                safeInput,
+                registered.snapshot,
+                registered.routeRefs,
+              ]),
+              /PRIVATE_CREDIT|PRIVATE_REASON|PRIVATE_NOTE|operation/,
+            );
+            assert.doesNotMatch(
+              JSON.stringify(safeInput),
+              new RegExp(actor.id),
+            );
+            // Changing the source after capture cannot rewrite registered facts or text.
+            await db.workEvent.update({
+              where: { id: source.id },
+              data: {
+                detail: {
+                  stage: "translate",
+                  operation: "join:translate:CHANGED",
+                },
+              },
+            });
+            await bridge().maintain();
+            const retained = await receipt(source.id);
+            assert.deepEqual(retained.safeInput, captured.safeInput);
+            assert.deepEqual(retained.routeRefs, captured.routeRefs);
+            assert.equal(retained.payloadHash, captured.payloadHash);
+          }
         },
       );
       await t.test(
