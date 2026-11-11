@@ -276,9 +276,9 @@ test("global and fixed-stage preview samples reject impossible selected stages",
       note: "🙂".repeat(120),
     },
   });
-  assert.match(sample.text, /职责：嵌字/);
+  assert.match(sample.text, /嵌字已完成，待发布/);
   assert.match(sample.text, /作者：/);
-  assert.doesNotMatch(sample.text, /标题：|操作：/);
+  assert.doesNotMatch(sample.text, /标题：|提交人：|职责：|流程：/);
 });
 test("draft previews omit missing metadata without inventing names", () => {
   const f = fixture();
@@ -294,8 +294,8 @@ test("draft previews omit missing metadata without inventing names", () => {
       note: "",
     },
   });
-  assert.match(sample.text, /职责：校对/);
-  assert.doesNotMatch(sample.text, /标题：|作者：|操作：/);
+  assert.match(sample.text, /校对已提交，待嵌字/);
+  assert.doesNotMatch(sample.text, /标题：|作者：|提交人：|职责：|流程：/);
 });
 
 test("saved sample history and replay retain the confirmed template revision after template edits", async () => {
