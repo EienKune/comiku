@@ -34,7 +34,6 @@ import {
   TopbarActionsContext,
   type TopbarActionRegistration,
 } from "./topbar-actions";
-import { settingsLinkState, useSettingsNavigation } from "./settings-routing";
 import { MemberAvatar } from "./MemberAvatar";
 import { loginReturnState } from "./login-return";
 import "./account.css";
@@ -45,6 +44,7 @@ interface NavItem {
   label: string;
   icon: Icon;
   permission?: string;
+  anyPermission?: string[];
 }
 const navigation: { label: string; items: NavItem[] }[] = [
   {
@@ -86,16 +86,10 @@ const navigation: { label: string; items: NavItem[] }[] = [
         permission: "members:read",
       },
       {
-        to: "/settings/users",
-        label: "账号管理",
-        icon: Settings,
-        permission: "accounts:manage",
-      },
-      {
         to: "/settings/system",
         label: "系统管理",
         icon: Settings2,
-        permission: "system:manage",
+        anyPermission: ["system:manage", "accounts:manage"],
       },
     ],
   },
@@ -119,8 +113,7 @@ export function AccountLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const action = useAction();
-  const settings = useSettingsNavigation();
-  const visiblePath = settings.background?.pathname ?? location.pathname;
+  const visiblePath = location.pathname;
   const editorMode = /^\/works\/[^/]+\/editor$/.test(visiblePath);
   const initial = readLayoutPreference();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
@@ -220,8 +213,12 @@ export function AccountLayout() {
                 {navigation.map((group) => {
                   const items = group.items.filter(
                     (item) =>
-                      !item.permission ||
-                      user.permissions.includes(item.permission),
+                      (!item.permission ||
+                        user.permissions.includes(item.permission)) &&
+                      (!item.anyPermission ||
+                        item.anyPermission.some((permission) =>
+                          user.permissions.includes(permission),
+                        )),
                   );
                   if (!items.length) return null;
                   return (
@@ -263,13 +260,9 @@ export function AccountLayout() {
                 })}
               </nav>
               <div className="workspace-sidebar-footer">
-                <Link
-                  to="/settings"
-                  state={settingsLinkState(location)}
-                  title="外观与个人设置"
-                >
+                <Link to="/settings" title="个人设置">
                   <Settings size={18} />
-                  <span>外观与个人设置</span>
+                  <span>个人设置</span>
                 </Link>
                 <div
                   className="workspace-user-summary"
@@ -299,17 +292,12 @@ export function AccountLayout() {
                 <span className="workspace-topbar-title">共同完成每一页</span>
               )}
             </div>
-            <Link
-              className="workspace-topbar-user"
-              to="/settings"
-              state={settingsLinkState(location)}
-              aria-label={`个人设置：${user.displayName}`}
-            >
+            <div className="workspace-topbar-user">
               <MemberAvatar member={user} size="sm" />
               <span className="workspace-topbar-user-name">
                 {user.displayName}
               </span>
-            </Link>
+            </div>
             <IconButton
               label="收起顶部栏"
               onClick={() => setTopbarCollapsed(true)}

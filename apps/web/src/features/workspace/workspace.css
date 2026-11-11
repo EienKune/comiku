@@ -2004,60 +2004,6 @@
   background: var(--color-overlay);
   backdrop-filter: blur(3px);
 }
-.workspace-settings {
-  padding: 0;
-  margin: auto;
-  width: min(42rem, calc(100% - var(--space-8)));
-  max-height: calc(100dvh - var(--space-8));
-  overflow: auto;
-  border-color: var(--color-brand-200);
-  background: color-mix(
-    in srgb,
-    var(--color-surface-glass) 88%,
-    var(--color-brand-100)
-  );
-  box-shadow: var(--shadow-md);
-  backdrop-filter: blur(24px);
-}
-.workspace-settings-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-5) var(--space-6) var(--space-4);
-}
-.workspace-settings-heading span {
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-}
-.workspace-settings-heading h1 {
-  font-size: var(--text-xl);
-}
-.workspace-settings-tabs {
-  display: flex;
-  gap: var(--space-2);
-  padding: 0 var(--space-6) var(--space-4);
-  border-bottom: 1px solid var(--color-border);
-}
-.workspace-settings-tabs a {
-  flex-shrink: 0;
-  white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: var(--control-height-sm);
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-button);
-  color: var(--color-text-soft);
-  font-weight: var(--font-weight-control);
-}
-.workspace-settings-tabs a:hover {
-  background: var(--color-brand-50);
-  color: var(--color-brand-700);
-}
-.workspace-settings-body {
-  padding: var(--space-6);
-}
 .settings-pane {
   display: grid;
   gap: var(--space-5);
@@ -2231,13 +2177,6 @@
   .workspace-review-list section > div:last-child {
     justify-items: start;
   }
-  .workspace-settings-tabs {
-    overflow-x: auto;
-    padding-inline: var(--space-4);
-  }
-  .workspace-settings-body {
-    padding: var(--space-5);
-  }
   .workspace-theme-presets {
     grid-template-columns: repeat(2, 1fr);
   }
@@ -2346,11 +2285,6 @@
 .workspace-upload-checks input {
   flex-shrink: 0;
   margin-top: 0.25rem;
-}
-
-.workspace-settings::backdrop {
-  background: var(--color-overlay);
-  backdrop-filter: blur(3px);
 }
 
 .workspace-revision-panel {

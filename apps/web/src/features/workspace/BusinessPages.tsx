@@ -129,7 +129,6 @@ import {
   type ClaimStage,
   type WorkTab,
 } from "./work-views";
-import { useSettingsNavigation } from "../account/settings-routing";
 
 type Author = components["schemas"]["AuthorDto"];
 type AuthorImportPreview = components["schemas"]["AuthorImportPreviewDto"];
@@ -3508,7 +3507,6 @@ export function CandidatesPage() {
 export function WorksPage() {
   const user = useAccount();
   const [params, setParams] = useSearchParams();
-  const settings = useSettingsNavigation();
   const { view, tab, tabs } = workViewState(params, user);
   const qualificationKey = `${user.roles.join(",")}:${user.languageCapabilities.join(",")}:${user.permissions.join(",")}`;
   const isTodo = view === "work" && tab === "todo";
@@ -3536,11 +3534,7 @@ export function WorksPage() {
     });
   }
   useEffect(() => {
-    if (
-      !settings.background &&
-      params.get("tab") &&
-      params.get("tab") !== tab
-    ) {
+    if (params.get("tab") && params.get("tab") !== tab) {
       setParams(
         (current) => {
           const next = new URLSearchParams(current);
@@ -3550,7 +3544,7 @@ export function WorksPage() {
         { replace: true },
       );
     }
-  }, [params, setParams, settings.background, tab]);
+  }, [params, setParams, tab]);
   const query = useInfiniteQuery({
     queryKey: [
       "works",
