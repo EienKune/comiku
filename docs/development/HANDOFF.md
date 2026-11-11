@@ -9,6 +9,9 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## Notifications
 
+- Quarantined accepted SchaleDB entries retain display facts but must disable new reminders even after the source check succeeds. Recompute eligibility from accepted membership; pending unaccepted outfits must not veto a trusted person. An outfit's old hint for an already accepted pending original is not a fresh review and must not reject the entire source. A reverted source stays held until explicit review.
+- Birthday summary/calendar caches also expire when a hidden or disabled panel resumes on a new Shanghai date within the normal stale window. Keep each key lazy and avoid restarting an in-flight read; same-day resumes retain fresh data. Exercise short hidden-midnight transitions as well as the visible midnight timer.
+
 - Birthday workers drain due Kivo checkpoints without batch sleeps, while reminder maintenance, primary-source scheduling and failed cleanup retain independent one-minute cadences. Source/job retry eligibility is persisted for five minutes; a terminal job's future eligibility must also fence replacement scheduling. Register the birthday handlers' retry delay with Jobs: changing only source `nextCheckAt` does not delay retries of an existing queued job. Keep ordinary Jobs backoff unchanged, preserve attempt limits and test restart/reclaim behavior against PostgreSQL.
 
 - Birthday source evidence is independent: a successful Kivo index cannot renew profile birthdays, and a successful SchaleDB check cannot renew Kivo people. Publish source facts and the combined catalog under the same combined-state mutex; profile hashes bind freshness to the exact persisted evidence. Every source writer, including index membership registration, takes job lease then combined lock then source-state lock. Keep source raw catalogs separate from public projections.

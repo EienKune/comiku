@@ -1,7 +1,9 @@
+import "reflect-metadata";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fetchBirthdayCatalog } from "../src/birthdays/providers/schaledb.js";
 import { reviewedRegistry } from "../src/birthdays/providers/reviewed-registry.js";
+import { birthdayReminderCheckedAt } from "../src/birthdays/birthday-reminder.service.js";
 
 const jp = (
   id: number,
@@ -96,6 +98,86 @@ test("every reviewed original and outfit resolves from synthetic source data wit
       [...seed.entryIds].sort((a, b) => a - b),
     );
   }
+});
+
+test("accepted birthday conflicts retain display facts but cannot renew reminders until explicitly reviewed", async () => {
+  const now = new Date("2026-03-12T01:00:00Z");
+  const source = (originalDate = "3/12") =>
+    fixture([
+      jp(10000, originalDate, [10031]),
+      jp(10031, "3/12", [10000]),
+      jp(90001, "4/4"),
+    ]);
+  const initial = await fetchBirthdayCatalog(source());
+  assert.equal(initial.people[0].notificationEligible, true);
+  const conflict = await fetchBirthdayCatalog({
+    ...source("3/13"),
+    previousPeople: initial.people,
+    identities: initial.identities,
+  });
+  assert.deepEqual([conflict.people[0].month, conflict.people[0].day], [3, 12]);
+  assert.equal(conflict.people[0].originalEntryId, 10000);
+  assert.equal(
+    conflict.identities.find((i) => i.entryId === 10000)?.status,
+    "pending",
+  );
+  assert.equal(conflict.people[0].notificationEligible, false);
+  assert.deepEqual(
+    conflict.people.find((p) => p.key === "schaledb:90001"),
+    initial.people.find((p) => p.key === "schaledb:90001"),
+  );
+  assert.equal(
+    birthdayReminderCheckedAt(conflict.people[0], now, undefined, now),
+    null,
+  );
+  const reverted = await fetchBirthdayCatalog({
+    ...source(),
+    previousPeople: conflict.people,
+    identities: conflict.identities,
+  });
+  assert.equal(reverted.people[0].notificationEligible, false);
+  assert.deepEqual(
+    reverted.people.find((p) => p.key === "schaledb:90001"),
+    initial.people.find((p) => p.key === "schaledb:90001"),
+  );
+  assert.equal(
+    reverted.identities.find((i) => i.entryId === 10000)?.status,
+    "pending",
+  );
+  assert.equal(
+    birthdayReminderCheckedAt(reverted.people[0], now, undefined, now),
+    null,
+  );
+  const reviewed = await fetchBirthdayCatalog({
+    ...source(),
+    previousPeople: reverted.people,
+    identities: reverted.identities.map((identity) => ({
+      ...identity,
+      status: "confirmed" as const,
+    })),
+  });
+  assert.equal(reviewed.people[0].notificationEligible, true);
+  assert.equal(
+    birthdayReminderCheckedAt(reviewed.people[0], now, undefined, now),
+    now,
+  );
+});
+
+test("an unaccepted conflicting outfit does not suspend a confirmed original's reminders", async () => {
+  const initial = await fetchBirthdayCatalog(fixture([jp(10000, "3/12")]));
+  const result = await fetchBirthdayCatalog({
+    ...fixture([jp(10000, "3/12"), jp(90000, "3/13", [10000])]),
+    previousPeople: initial.people,
+    identities: initial.identities,
+  });
+  assert.deepEqual(result.pendingEntryIds, [90000]);
+  assert.deepEqual(result.people[0].entryIds, [10000]);
+  assert.equal(result.people[0].notificationEligible, true);
+  const now = new Date("2026-03-12T01:00:00Z");
+  assert.equal(
+    birthdayReminderCheckedAt(result.people[0], now, undefined, now),
+    now,
+  );
 });
 
 test("JP region flag governs release; exact BirthDay preserves unknown and real leap day", async () => {

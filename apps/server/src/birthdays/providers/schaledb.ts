@@ -456,6 +456,15 @@ async function fetchCatalog(
       continue;
     const p = people.get(identity.personKey)!;
     const original = mapping.get(identity.originalEntryId);
+    // An outfit's old original hint is not a new review. Retain an already
+    // accepted original under quarantine without blocking unrelated people.
+    if (
+      original?.personKey === p.key &&
+      original.status === "pending" &&
+      p.originalEntryId === identity.originalEntryId &&
+      p.entryIds.includes(identity.originalEntryId)
+    )
+      continue;
     if (
       !original ||
       original.personKey !== p.key ||
@@ -686,6 +695,16 @@ async function fetchCatalog(
       (alias) => alias !== name,
     );
     p.name = name;
+    // Accepted facts under review stay visible, but a successful source check
+    // must not renew their eligibility. Unaccepted new outfits do not veto them.
+    p.notificationEligible =
+      p.month !== null &&
+      p.day !== null &&
+      p.entryIds.length > 0 &&
+      p.entryIds.every((id) => {
+        const identity = mapping.get(id);
+        return identity?.personKey === p.key && identity.status === "confirmed";
+      });
   }
   const result = {
     people: [...people.values()].sort((a, b) => a.key.localeCompare(b.key)),
