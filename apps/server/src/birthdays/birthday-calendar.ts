@@ -32,10 +32,11 @@ export function birthdayCalendar(people: readonly BirthdayPerson[], now: Date) {
         nextDate: null,
         daysUntil: null,
         avatarUrl:
-          person.originalEntryId !== null &&
+          person.avatarUrl ??
+          (person.originalEntryId !== null &&
           person.entryIds.includes(person.originalEntryId)
             ? `https://schaledb.com/images/student/icon/${person.originalEntryId}.webp`
-            : null,
+            : null),
       };
       if (person.month === null || person.day === null) return p;
       for (

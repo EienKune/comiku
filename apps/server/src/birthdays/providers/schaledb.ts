@@ -10,6 +10,11 @@ export interface BirthdayPerson {
   originalEntryId: number | null;
   entryIds: number[];
   notificationEligible: boolean;
+  /** Optional additions keep previously frozen SchaleDB catalogs byte-compatible. */
+  avatarUrl?: string | null;
+  birthdaySource?:
+    | { source: "schaledb" }
+    | { source: "kivo"; entryId: number; profileHash: string };
 }
 
 const birthdayIdentityStatuses = [
@@ -91,7 +96,10 @@ const positiveId = (value: unknown): value is number =>
 
 // Keep the deadline active through body streaming, rather than only until headers arrive.
 async function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  signal.throwIfAborted();
+  if (signal.aborted) {
+    void work.catch(() => {});
+    signal.throwIfAborted();
+  }
   let onAbort: () => void = () => {};
   const aborted = new Promise<never>((_, reject) => {
     onAbort = () =>

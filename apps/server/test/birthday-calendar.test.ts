@@ -102,3 +102,27 @@ test("calendar projection does not mutate its persisted snapshot", () => {
   result.people[0].entryIds.push(10031);
   assert.deepEqual(source, before);
 });
+
+test("supplemental avatars work without a Schale original and preserve the legacy fallback", () => {
+  const avatarUrl = "https://static.kivo.wiki/images/students/example.png";
+  const result = birthdayCalendar(
+    [
+      {
+        ...person("kivo:123", 11, 11),
+        originalEntryId: null,
+        entryIds: [],
+        avatarUrl,
+      },
+      { ...person("legacy", 11, 11), avatarUrl: null },
+    ],
+    new Date("2026-11-11T00:00:00Z"),
+  );
+  assert.equal(
+    result.people.find((p) => p.key === "kivo:123")?.avatarUrl,
+    avatarUrl,
+  );
+  assert.equal(
+    result.people.find((p) => p.key === "legacy")?.avatarUrl,
+    "https://schaledb.com/images/student/icon/10000.webp",
+  );
+});
