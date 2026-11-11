@@ -2,6 +2,11 @@
 
 This tracked document records reusable implementation constraints. Business rules live in [architecture](../architecture.md), configuration in [configuration](../configuration.md), and visual rules in [DESIGN](../../DESIGN.md). Keep machine addresses, credentials, real samples, local experiments and deployment session notes outside the public repository.
 
+## CI and regression scope
+
+- Full CI runs on pushes to `main`/`dev` and on pull requests to any branch. Keep PR targets unfiltered so stacked reviews retain checks; ordinary feature pushes do not duplicate the PR run. Run affected tests during small iterations and complete the required checks before review or release.
+- Consolidating overlapping tests must retain distinct behavior: the notification mask matrix also checks exact heading placement, actor labels and missing metadata; history pagination also checks explicit filter application, refresh with an unsubmitted draft, page reset, back navigation and stale-request cancellation. Keep permission, concurrency, retry, compatibility and database-plan regressions.
+
 ## Notifications
 
 - Birthday digests use their own resource kind, UUID occurrence, hash and frozen content. Never add a default discriminator to legacy work receipt JSON: v1/v2/v3 identity and key order must stay unchanged. Birthday global/offset/group-subscription generations cancel only birthday deliveries; they must not mutate the shared channel's work generation. Check global, offset, group scope and channel activation cutoffs against the frozen due time, including routing, pre-send and explicit replay. The deployment feature flag must guard all three paths.
