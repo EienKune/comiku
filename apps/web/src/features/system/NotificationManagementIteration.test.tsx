@@ -231,6 +231,8 @@ const historyRow = (
   groupId: "987",
   connectionKey: "bot",
   eventType: "imported",
+  resourceKind: "work",
+  birthday: null,
   workNumber,
   status: "pending" as const,
   attempts: 0,

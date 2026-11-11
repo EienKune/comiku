@@ -23,6 +23,11 @@ import {
   NOTIFICATION_JOB_KIND,
   NOTIFICATION_SCOPE,
 } from "./notification-engine.helpers.js";
+import {
+  birthdayDeliveryInvalidReason,
+  lockBirthdaySettings,
+  lockBirthdaySubscription,
+} from "./notification-birthday-policy.js";
 
 @Injectable()
 export class NotificationRuntimeService implements OnModuleInit {
@@ -88,12 +93,38 @@ export class NotificationRuntimeService implements OnModuleInit {
           connectionFingerprint?: string;
           includeDetails?: boolean;
           content?: NotificationFrozenContent;
+          birthdayGlobalGeneration?: number;
+          birthdayOffsetGeneration?: number;
+          birthdayScopeGeneration?: number;
         }[];
+        const birthdaySettings =
+          event.resourceKind === "birthday_digest" &&
+          this.environment.birthdays?.enabled
+            ? await lockBirthdaySettings(tx)
+            : null;
         for (const ref of refs) {
+          if (event.resourceKind === "birthday_digest")
+            await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${ref.id}::uuid FOR SHARE`;
           const channel = await tx.notificationChannel.findUnique({
             where: { id: ref.id },
           });
           if (!channel) throw new Error("notification_channel_missing");
+          const birthdayInvalid =
+            event.resourceKind === "birthday_digest"
+              ? ((!this.environment.birthdays?.enabled
+                  ? "birthday_feature_disabled"
+                  : birthdayDeliveryInvalidReason(
+                      event.snapshot,
+                      ref,
+                      birthdaySettings,
+                      await lockBirthdaySubscription(tx, channel.id),
+                    )) ??
+                (typeof ref.content?.text === "string" &&
+                ref.content.text.trim() &&
+                [...ref.content.text].length <= 1000
+                  ? null
+                  : "birthday_frozen_content_invalid"))
+              : null;
           const current =
             !!ref.groupId &&
             !!ref.connectionKey &&
@@ -102,7 +133,8 @@ export class NotificationRuntimeService implements OnModuleInit {
             channel.audienceGeneration === ref.generation &&
             channel.groupId === ref.groupId &&
             channel.connectionKey === ref.connectionKey &&
-            channel.connectionFingerprint === ref.connectionFingerprint;
+            channel.connectionFingerprint === ref.connectionFingerprint &&
+            !birthdayInvalid;
           await tx.notificationDelivery.createMany({
             data: {
               eventId: event.id,
@@ -114,16 +146,25 @@ export class NotificationRuntimeService implements OnModuleInit {
               channelRevision: ref.revision,
               groupId: ref.groupId ?? channel.groupId,
               status: current ? "pending" : "cancelled",
-              errorCode: current ? null : "channel_configuration_changed",
+              errorCode: current
+                ? null
+                : (birthdayInvalid ?? "channel_configuration_changed"),
+              ...(event.resourceKind === "birthday_digest" && {
+                birthdayGlobalGeneration: ref.birthdayGlobalGeneration,
+                birthdayOffsetGeneration: ref.birthdayOffsetGeneration,
+                birthdayScopeGeneration: ref.birthdayScopeGeneration,
+              }),
               text:
                 ref.content?.text ??
-                renderNotificationMessage(
-                  event as unknown as NormalizedNotificationEvent,
-                  {
-                    includeDetails: ref.includeDetails ?? false,
-                    siteUrl: this.environment.appOrigin,
-                  },
-                ),
+                (event.resourceKind === "birthday_digest"
+                  ? ""
+                  : renderNotificationMessage(
+                      event as unknown as NormalizedNotificationEvent,
+                      {
+                        includeDetails: ref.includeDetails ?? false,
+                        siteUrl: this.environment.appOrigin,
+                      },
+                    )),
             },
             skipDuplicates: true,
           });
@@ -266,7 +307,19 @@ export class NotificationRuntimeService implements OnModuleInit {
         where: { id: job.resourceId },
       });
       if (!initial) return null;
+      // Only birthday deliveries query birthday policy tables. Lock them before
+      // the shared channel row so settings changes fence the send reservation.
+      const birthdaySettings =
+        initial.birthdayGlobalGeneration != null &&
+        this.environment.birthdays?.enabled
+          ? await lockBirthdaySettings(tx)
+          : null;
       await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${initial.channelId}::uuid FOR UPDATE`;
+      const birthdaySubscription =
+        initial.birthdayGlobalGeneration != null &&
+        this.environment.birthdays?.enabled
+          ? await lockBirthdaySubscription(tx, initial.channelId)
+          : null;
       await tx.$queryRaw`SELECT id FROM notification_deliveries WHERE id = ${initial.id}::uuid FOR UPDATE`;
       const row = await tx.notificationDelivery.findUniqueOrThrow({
         where: { id: initial.id },
@@ -313,6 +366,18 @@ export class NotificationRuntimeService implements OnModuleInit {
         channel.connectionKey !== row.connectionKey
       )
         return cancel("channel_configuration_changed");
+      if (row.event.resourceKind === "birthday_digest") {
+        if (!this.environment.birthdays?.enabled)
+          return cancel("birthday_feature_disabled");
+        const invalid = birthdayDeliveryInvalidReason(
+          row.event.snapshot,
+          row,
+          birthdaySettings,
+          birthdaySubscription,
+          now,
+        );
+        if (invalid) return cancel(invalid);
+      }
       const connection = this.registry.get(row.connectionKey);
       if (!connection)
         return {
@@ -341,7 +406,10 @@ export class NotificationRuntimeService implements OnModuleInit {
           channelId: row.channelId,
           groupId: row.groupId,
           id: { not: row.id },
-          event: { resourceId: row.event.resourceId },
+          event: {
+            resourceKind: row.event.resourceKind ?? "work",
+            resourceId: row.event.resourceId,
+          },
           OR: [
             { status: "unknown", resolvedAt: null },
             {
@@ -362,6 +430,7 @@ export class NotificationRuntimeService implements OnModuleInit {
       });
       const earlierUnrouted = await tx.notificationEvent.findFirst({
         where: {
+          resourceKind: row.event.resourceKind ?? "work",
           resourceId: row.event.resourceId,
           routedAt: null,
           routeRefs: {

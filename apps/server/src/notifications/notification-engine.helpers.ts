@@ -59,7 +59,16 @@ export function deliveryDto(
   },
   nextEligibleAt: Date | null = null,
 ) {
-  const snapshot = row.event.snapshot as { workNumber?: number | null };
+  const snapshot = row.event.snapshot as {
+    workNumber?: number | null;
+    sendLocalDate?: string;
+    targetLocalDate?: string;
+    offsetDays?: number;
+    count?: number;
+  };
+  const resourceKind =
+    row.event.resourceKind ??
+    (row.event.type === "notification.test" ? "notification_test" : "work");
   const route = (
     Array.isArray(row.event.routeRefs)
       ? (row.event.routeRefs as unknown as NotificationFrozenRoute[])
@@ -75,6 +84,20 @@ export function deliveryDto(
     groupId: row.groupId,
     connectionKey: row.connectionKey,
     eventType: row.event.type,
+    resourceKind,
+    birthday:
+      resourceKind === "birthday_digest" &&
+      typeof snapshot.sendLocalDate === "string" &&
+      typeof snapshot.targetLocalDate === "string" &&
+      typeof snapshot.offsetDays === "number" &&
+      typeof snapshot.count === "number"
+        ? {
+            sendLocalDate: snapshot.sendLocalDate,
+            targetLocalDate: snapshot.targetLocalDate,
+            offsetDays: snapshot.offsetDays,
+            count: snapshot.count,
+          }
+        : null,
     workNumber: snapshot.workNumber ?? null,
     status: row.status as (typeof DELIVERY_STATUSES)[number],
     attempts: row.attempts,

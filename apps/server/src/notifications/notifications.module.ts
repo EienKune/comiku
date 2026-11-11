@@ -51,6 +51,10 @@ class NotificationTransportLifecycle implements OnModuleDestroy {
     NotificationStatusService,
     NotificationRuntimeService,
   ],
-  exports: [NotificationPublisherService, NotificationRuntimeService],
+  exports: [
+    NotificationPublisherService,
+    NotificationRuntimeService,
+    NotificationConnectionRegistry,
+  ],
 })
 export class NotificationsModule {}

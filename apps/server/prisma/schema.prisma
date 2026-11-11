@@ -1712,6 +1712,7 @@ model NotificationEvent {
   eventKey String @unique @map("event_key") @db.VarChar(255)
   payloadHash String @map("payload_hash") @db.Char(64)
   type String @db.VarChar(64)
+  resourceKind String @default("work") @map("resource_kind") @db.VarChar(32)
   resourceId String @map("resource_id") @db.Uuid
   aggregateVersion Int @map("aggregate_version")
   ordinal Int @default(0)
@@ -1723,6 +1724,7 @@ model NotificationEvent {
   deliveries NotificationDelivery[]
   @@index([routedAt, createdAt])
   @@index([resourceId, aggregateVersion, ordinal])
+  @@index([resourceKind, resourceId, aggregateVersion, ordinal], map: "notification_event_resource_kind_idx")
   @@index([type, id], map: "notification_event_type_id_idx")
   @@map("notification_events")
 }
@@ -1747,6 +1749,7 @@ model NotificationChannel {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
   deliveries NotificationDelivery[]
+  birthdaySubscription BirthdayChannelSubscription?
   @@map("notification_channels")
 }
 
@@ -1803,6 +1806,9 @@ model NotificationDelivery {
   channelId String @map("channel_id") @db.Uuid
   channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Restrict)
   audienceGeneration Int @map("audience_generation")
+  birthdayGlobalGeneration Int? @map("birthday_global_generation")
+  birthdayOffsetGeneration Int? @map("birthday_offset_generation")
+  birthdayScopeGeneration Int? @map("birthday_scope_generation")
   replayGeneration Int @default(0) @map("replay_generation")
   sourceDeliveryId String? @map("source_delivery_id") @db.Uuid
   requestKey String? @unique @map("request_key") @db.VarChar(255)
@@ -1896,4 +1902,95 @@ model SourceCredentialChangeOperation {
   @@unique([actorId, requestId])
   @@index([platform, createdAt, id], map: "source_credential_operation_platform_idx")
   @@map("source_credential_change_operations")
+}
+
+model BirthdaySettings {
+  id String @id @default("global") @db.VarChar(32)
+  revision Int @default(0)
+  displayEnabled Boolean @default(true) @map("display_enabled")
+  remindersEnabled Boolean @default(false) @map("reminders_enabled")
+  sendTime String @default("09:00") @map("send_time") @db.VarChar(5)
+  offsetDays Int[] @default([0]) @map("offset_days")
+  reminderGeneration Int @default(1) @map("reminder_generation")
+  reminderAcceptAfter DateTime? @map("reminder_accept_after") @db.Timestamptz(3)
+  offsetStates Json @default("{}") @map("offset_states")
+  templateNote String @default("") @map("template_note") @db.VarChar(480)
+  templateRevision Int @default(0) @map("template_revision")
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@map("birthday_settings")
+}
+
+model BirthdayIdentity {
+  entryId Int @id @map("entry_id")
+  personKey String @map("person_key") @db.VarChar(128)
+  originalEntryId Int? @map("original_entry_id")
+  status String @default("confirmed") @db.VarChar(16)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@index([personKey])
+  @@map("birthday_identities")
+}
+
+model BirthdayNameOverride {
+  personKey String @id @map("person_key") @db.VarChar(128)
+  name String @db.VarChar(128)
+  aliases String[] @default([])
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@map("birthday_name_overrides")
+}
+
+model BirthdayCatalog {
+  id String @id @default(uuid()) @db.Uuid
+  contentHash String @unique @map("content_hash") @db.Char(64)
+  people Json
+  sourceCounts Json @map("source_counts")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  syncStates BirthdaySyncState[]
+  occurrences BirthdayReminderOccurrence[]
+  @@index([createdAt])
+  @@map("birthday_catalogs")
+}
+
+model BirthdaySyncState {
+  id String @id @default("schaledb") @db.VarChar(32)
+  catalogId String? @map("catalog_id") @db.Uuid
+  catalog BirthdayCatalog? @relation(fields: [catalogId], references: [id], onDelete: Restrict)
+  lastCheckedAt DateTime? @map("last_checked_at") @db.Timestamptz(3)
+  lastAttemptAt DateTime? @map("last_attempt_at") @db.Timestamptz(3)
+  nextCheckAt DateTime @default(now()) @map("next_check_at") @db.Timestamptz(3)
+  lastErrorCode String? @map("last_error_code") @db.VarChar(64)
+  sourceCounts Json @default("{}") @map("source_counts")
+  jobId String? @map("job_id") @db.Uuid
+  @@index([nextCheckAt])
+  @@map("birthday_sync_states")
+}
+
+model BirthdayReminderOccurrence {
+  id String @id @default(uuid()) @db.Uuid
+  namespace String @default("schaledb") @db.VarChar(32)
+  sendLocalDate String @map("send_local_date") @db.Char(10)
+  targetLocalDate String @map("target_local_date") @db.Char(10)
+  offsetDays Int @map("offset_days")
+  dueAt DateTime @map("due_at") @db.Timestamptz(3)
+  validBefore DateTime @map("valid_before") @db.Timestamptz(3)
+  catalogId String @map("catalog_id") @db.Uuid
+  catalog BirthdayCatalog @relation(fields: [catalogId], references: [id], onDelete: Restrict)
+  snapshot Json
+  globalGeneration Int @map("global_generation")
+  offsetGeneration Int @map("offset_generation")
+  eventId String? @unique @map("event_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@unique([namespace, sendLocalDate, offsetDays], map: "birthday_occurrence_date_offset_key")
+  @@index([validBefore])
+  @@map("birthday_reminder_occurrences")
+}
+
+model BirthdayChannelSubscription {
+  channelId String @id @map("channel_id") @db.Uuid
+  channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Restrict)
+  enabled Boolean @default(false)
+  revision Int @default(0)
+  audienceGeneration Int @default(1) @map("audience_generation")
+  acceptAfter DateTime @default(now()) @map("accept_after") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@map("birthday_channel_subscriptions")
 }

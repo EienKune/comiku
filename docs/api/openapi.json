@@ -18465,7 +18465,8 @@
                 "typeset_version_selected",
                 "typeset_version_deleted",
                 "typeset_version_restored",
-                "notification.test"
+                "notification.test",
+                "birthday.reminder"
               ],
               "type": "string"
             }
@@ -18814,6 +18815,1029 @@
         "summary": "",
         "tags": [
           "notifications"
+        ]
+      }
+    },
+    "/api/birthdays/summary": {
+      "get": {
+        "operationId": "getBirthdaySummary",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BirthdayCalendarDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "birthdays"
+        ]
+      }
+    },
+    "/api/birthdays/calendar": {
+      "get": {
+        "operationId": "getBirthdayCalendar",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BirthdayCalendarDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "birthdays"
+        ]
+      }
+    },
+    "/api/birthdays/settings": {
+      "get": {
+        "operationId": "getBirthdaySettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BirthdayManagementDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "birthdays"
+        ]
+      },
+      "patch": {
+        "operationId": "updateBirthdaySettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BirthdaySettingsInputDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BirthdaySettingsDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "birthdays"
+        ]
+      }
+    },
+    "/api/birthdays/sync": {
+      "post": {
+        "operationId": "synchronizeBirthdayCatalog",
+        "parameters": [],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BirthdaySyncDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "birthdays"
+        ]
+      }
+    },
+    "/api/birthdays/subscriptions": {
+      "get": {
+        "operationId": "getBirthdaySubscriptions",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BirthdayChannelDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "birthdays"
+        ]
+      }
+    },
+    "/api/birthdays/subscriptions/{id}": {
+      "patch": {
+        "operationId": "updateBirthdaySubscription",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BirthdaySubscriptionInputDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BirthdayChannelDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "birthdays"
+        ]
+      }
+    },
+    "/api/birthdays/template": {
+      "get": {
+        "operationId": "getBirthdayTemplate",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BirthdayTemplateDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "birthdays"
+        ]
+      },
+      "patch": {
+        "operationId": "updateBirthdayTemplate",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BirthdayTemplateInputDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BirthdayTemplateDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "birthdays"
+        ]
+      }
+    },
+    "/api/birthdays/preview": {
+      "get": {
+        "operationId": "previewBirthdayReminder",
+        "parameters": [
+          {
+            "name": "offsetDays",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                0,
+                1,
+                7
+              ],
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BirthdayPreviewDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "birthdays"
         ]
       }
     }
@@ -27764,9 +28788,57 @@
           "text"
         ]
       },
+      "NotificationBirthdaySummaryDto": {
+        "type": "object",
+        "properties": {
+          "sendLocalDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "targetLocalDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "offsetDays": {
+            "type": "number",
+            "enum": [
+              0,
+              1,
+              7
+            ]
+          },
+          "count": {
+            "type": "number",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "sendLocalDate",
+          "targetLocalDate",
+          "offsetDays",
+          "count"
+        ]
+      },
       "NotificationDeliveryDto": {
         "type": "object",
         "properties": {
+          "resourceKind": {
+            "type": "string",
+            "enum": [
+              "work",
+              "notification_test",
+              "birthday_digest"
+            ]
+          },
+          "birthday": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NotificationBirthdaySummaryDto"
+              }
+            ]
+          },
           "metadataOrigin": {
             "type": "string",
             "enum": [
@@ -27857,6 +28929,8 @@
           }
         },
         "required": [
+          "resourceKind",
+          "birthday",
           "metadataOrigin",
           "contentRevision",
           "metadataObservedAt",
@@ -28023,6 +29097,292 @@
         "required": [
           "idempotencyKey",
           "action"
+        ]
+      },
+      "BirthdayPersonDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "month": {
+            "type": "number",
+            "nullable": true
+          },
+          "day": {
+            "type": "number",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "nextDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "daysUntil": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "aliases",
+          "month",
+          "day",
+          "avatarUrl",
+          "nextDate",
+          "daysUntil"
+        ]
+      },
+      "BirthdayCalendarDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "today": {
+            "type": "string"
+          },
+          "windowEnd": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BirthdayPersonDto"
+            }
+          }
+        },
+        "required": [
+          "enabled",
+          "today",
+          "windowEnd",
+          "timezone",
+          "people"
+        ]
+      },
+      "BirthdaySettingsDto": {
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "number"
+          },
+          "displayEnabled": {
+            "type": "boolean"
+          },
+          "remindersEnabled": {
+            "type": "boolean"
+          },
+          "sendTime": {
+            "type": "string"
+          },
+          "offsetDays": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "revision",
+          "displayEnabled",
+          "remindersEnabled",
+          "sendTime",
+          "offsetDays"
+        ]
+      },
+      "BirthdayManagementDto": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/BirthdaySettingsDto"
+          },
+          "personCount": {
+            "type": "number"
+          },
+          "lastCheckedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "dataUpdatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "available",
+          "settings",
+          "personCount",
+          "lastCheckedAt",
+          "dataUpdatedAt"
+        ]
+      },
+      "BirthdaySettingsInputDto": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "displayEnabled": {
+            "type": "boolean"
+          },
+          "remindersEnabled": {
+            "type": "boolean"
+          },
+          "sendTime": {
+            "type": "string"
+          },
+          "offsetDays": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "enum": [
+                0,
+                1,
+                7
+              ]
+            }
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "displayEnabled",
+          "remindersEnabled",
+          "sendTime",
+          "offsetDays"
+        ]
+      },
+      "BirthdaySyncDto": {
+        "type": "object",
+        "properties": {
+          "queued": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "queued"
+        ]
+      },
+      "BirthdayChannelDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "connectionKey": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "number"
+          },
+          "birthdayEnabled": {
+            "type": "boolean"
+          },
+          "birthdayRevision": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "groupId",
+          "connectionKey",
+          "enabled",
+          "revision",
+          "birthdayEnabled",
+          "birthdayRevision"
+        ]
+      },
+      "BirthdaySubscriptionInputDto": {
+        "type": "object",
+        "properties": {
+          "expectedChannelRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "expectedScopeRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "expectedChannelRevision",
+          "expectedScopeRevision",
+          "enabled"
+        ]
+      },
+      "BirthdayTemplateDto": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "note",
+          "revision"
+        ]
+      },
+      "BirthdayTemplateInputDto": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "note": {
+            "type": "string",
+            "description": "At most 120 Unicode code points"
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "note"
+        ]
+      },
+      "BirthdayPreviewDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
         ]
       },
       "ErrorDto": {

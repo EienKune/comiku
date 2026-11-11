@@ -1,3 +1,8 @@
+// Independent birthday panel contracts are exercised in BirthdaysIntegration.test.tsx.
+vi.mock("../birthdays/BirthdayNotificationPanels", () => ({
+  BirthdaySubscriptions: () => null,
+  BirthdayTemplate: () => null,
+}));
 // @vitest-environment jsdom
 import { afterEach, expect, test, vi } from "vitest";
 import {

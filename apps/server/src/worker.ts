@@ -13,6 +13,11 @@ import { SourceFetchService } from "./source-ingestion/source-fetch.service.js";
 import { PrismaService } from "./database/prisma.service.js";
 import { writeWorkerHealth } from "./ops/worker-health.js";
 import { NotificationRuntimeService } from "./notifications/notification-runtime.service.js";
+import {
+  BirthdaysService,
+  BIRTHDAY_SCOPE,
+} from "./birthdays/birthdays.service.js";
+import { BirthdayReminderService } from "./birthdays/birthday-reminder.service.js";
 
 const environment = loadEnvironment();
 const app = await NestFactory.createApplicationContext(
@@ -103,6 +108,25 @@ async function notificationLoop() {
     await delay(5_000, undefined, { signal: stopping.signal }).catch(() => {});
   }
 }
+async function birthdayLoop() {
+  const birthdays = app.get(BirthdaysService),
+    reminders = app.get(BirthdayReminderService);
+  let nextCatalogCleanup = 0;
+  while (!stopping.signal.aborted) {
+    try {
+      await birthdays.schedule();
+      await jobs.runNext("network", stopping.signal, BIRTHDAY_SCOPE);
+      if (notifications.enabled) await reminders.maintain();
+      if (Date.now() >= nextCatalogCleanup) {
+        await birthdays.cleanupCatalogs();
+        nextCatalogCleanup = Date.now() + 86_400_000;
+      }
+    } catch {
+      console.error("生日后台处理未完成，将按任务状态恢复");
+    }
+    await delay(60_000, undefined, { signal: stopping.signal }).catch(() => {});
+  }
+}
 try {
   await Promise.all([
     maintenanceLoop(),
@@ -112,6 +136,7 @@ try {
     loop("network", "source:x"),
     loop("network", "source:pixiv"),
     ...(notifications.enabled ? [notificationLoop()] : []),
+    ...(environment.birthdays?.enabled ? [birthdayLoop()] : []),
   ]);
 } finally {
   clearInterval(healthTimer);

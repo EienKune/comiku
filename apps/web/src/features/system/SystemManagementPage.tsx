@@ -1,3 +1,4 @@
+import { BirthdaySettings } from "../birthdays/BirthdaySettings";
 import { useSearchParams } from "react-router";
 import { useAccount } from "../account/account-context";
 import { SectionHeading } from "../account/forms";
@@ -7,6 +8,7 @@ import "./system.css";
 
 const tabs = [
   { value: "collection", label: "图源采集" },
+  { value: "birthdays", label: "角色生日" },
   { value: "notifications", label: "推送通知" },
 ] as const;
 
@@ -14,7 +16,11 @@ export function SystemManagementPage() {
   const user = useAccount();
   const [params, setParams] = useSearchParams();
   const active =
-    params.get("tab") === "notifications" ? "notifications" : "collection";
+    params.get("tab") === "notifications"
+      ? "notifications"
+      : params.get("tab") === "birthdays"
+        ? "birthdays"
+        : "collection";
   if (!user.permissions.includes("system:manage"))
     return (
       <SectionHeading title="无权访问">系统管理仅向管理员开放。</SectionHeading>
@@ -22,7 +28,7 @@ export function SystemManagementPage() {
   function select(value: string) {
     setParams((current) => {
       const next = new URLSearchParams(current);
-      if (value === "notifications") next.set("tab", value);
+      if (value !== "collection") next.set("tab", value);
       else next.delete("tab");
       return next;
     });
@@ -78,6 +84,15 @@ export function SystemManagementPage() {
         tabIndex={0}
       >
         <SourceManagement enabled={active === "collection"} />
+      </div>
+      <div
+        id="system-panel-birthdays"
+        role="tabpanel"
+        aria-labelledby="system-tab-birthdays"
+        hidden={active !== "birthdays"}
+        tabIndex={0}
+      >
+        <BirthdaySettings enabled={active === "birthdays"} />
       </div>
       <div
         id="system-panel-notifications"

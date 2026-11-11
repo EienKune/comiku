@@ -4,6 +4,33 @@ import { parseEnvironment } from "../src/config/environment.js";
 
 const databaseUrl = "postgresql://test:secret@127.0.0.1:5432/comiku_test";
 
+test("birthday integration is explicitly opt-in", () => {
+  assert.equal(
+    parseEnvironment({ DATABASE_URL: databaseUrl }).birthdays,
+    undefined,
+  );
+  assert.deepEqual(
+    parseEnvironment({ DATABASE_URL: databaseUrl, BIRTHDAYS_ENABLED: "true" })
+      .birthdays,
+    { enabled: true },
+  );
+  assert.deepEqual(
+    parseEnvironment({ DATABASE_URL: databaseUrl, BIRTHDAYS_ENABLED: "false" })
+      .birthdays,
+    { enabled: false },
+  );
+  for (const value of ["", "1", "TRUE", "false "]) {
+    assert.throws(
+      () =>
+        parseEnvironment({
+          DATABASE_URL: databaseUrl,
+          BIRTHDAYS_ENABLED: value,
+        }),
+      /BIRTHDAYS_ENABLED/,
+    );
+  }
+});
+
 test("online source credentials are opt-in with a literal absolute state directory", () => {
   const configured = parseEnvironment({
     DATABASE_URL: databaseUrl,
