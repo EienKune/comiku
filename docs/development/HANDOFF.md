@@ -4,6 +4,7 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## Notifications
 
+- Event-template messages use an explicit Asia/Shanghai clock to seconds, place an enabled title beside the work number, and show content-review facts only when changed or known on one side. Reserve fixed facts, the complete URL and replay prefix before truncating optional Unicode metadata. Legacy messages and already-frozen text retain their original layout; previews and new captures share the new formatter.
 - Supported PostgreSQL versions may choose different bounded index or bitmap/skip scans. History performance assertions should constrain the indexed status predicate and actual scan/sort work rather than require a sparse query's index name. Include removed filter/recheck rows and loops, and test heap work and sort inputs hidden behind LIMIT; accepting another valid plan must not permit sequential scans or increase the original budgets.
 
 - Template auto-preview shares the server formatter and runs only for the visible editor. Cancel timers/requests and fence success, error and finalization by the same draft epoch; same-value selection must not invalidate a preview without retriggering it. Keep drafts and observed revisions separate from refreshed configuration. A nested open selector consumes Escape before the native editor closes; focus and background scroll return to their original state.
@@ -34,6 +35,8 @@ This tracked document records reusable implementation constraints. Business rule
 - Keep optional configuration isolated from offline OpenAPI export and normal application construction. Disabled notification loops perform no notification polling or bot probes; close adapter pools when the application closes. Test only synthetic endpoints unless a dedicated real destination is explicitly authorized.
 
 ## Author creation
+
+- Dashboard `totalWorks` counts non-archived works, including published works, matching the default reading list. Personal todo/recommendation cards still require actual participation and role/language eligibility; an administrator alone is not a production role. Historical participation and other aggregate fields retain their own existing scope.
 
 - Submit the base author fields and distinct-platform account identities in one database transaction. A failed account binding must roll back the author, tags and earlier account inserts. Keep provider/profile requests and image transfers outside the transaction; X identities require server-verifiable profile evidence.
 - Creation retries use an actor-scoped UUID and a canonical hash of the saved business fields. Commit the request record and author together, serialize concurrent requests, reject changed payloads under the same key, and recheck current source/admin permissions inside the transaction. A committed replay must not depend on the original profile proof's expiry or provider timestamps.
