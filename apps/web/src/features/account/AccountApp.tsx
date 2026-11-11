@@ -139,7 +139,7 @@ export function AccountLayout() {
       /* Layout preferences may remain session-only. */
     }
   }, [sidebarCollapsed, topbarCollapsed]);
-  useLayoutEffect(() => setMobileOpen(false), [location.pathname]);
+  useLayoutEffect(() => setMobileOpen(false), [location.key]);
 
   if (me.isPending) return <LoadingState />;
   if (me.isError) return <ErrorState retry={() => void me.refetch()} />;
