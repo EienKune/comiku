@@ -13,6 +13,7 @@ import {
   type ProfileAvatarStage,
 } from "./profile-avatar-diagnostic.js";
 import { sourceDiagnostic } from "../source-ingestion/source-diagnostics.js";
+import { SourceResponseError } from "../source-ingestion/source-response.js";
 import {
   BadRequestException,
   ConflictException,
@@ -1401,6 +1402,19 @@ export class AuthorsService {
         avatarUrl = (await this.files.signedReadUrl(file.id)).url;
       } catch (error) {
         /* Optional avatar failure must not erase a verified identity. */
+        this.sourceFetch.platforms.executions?.record(
+          error instanceof SourceResponseError
+            ? error
+            : new SourceResponseError("temporary_failure", {
+                reason:
+                  stage === "store" || stage === "sign"
+                    ? "storage_failure"
+                    : "media_network_error",
+                scope:
+                  stage === "store" || stage === "sign" ? "storage" : "media",
+              }),
+          stage,
+        );
         logFailure(error);
       }
     } else logFailure();
@@ -1437,34 +1451,37 @@ export class AuthorsService {
     let failed = false;
     for (const client of available) {
       try {
-        const profile = await this.sourceFetch.platforms.profileNetwork(
-          actorId,
-          async () => {
-            if (client.metered)
-              await this.sourceFetch.consumeMeteredBudget(client.adapterKey);
-            const resolved = await client.checkAccount({ externalUserId });
-            if (resolved.externalUserId !== externalUserId)
-              throw new ConflictException(
-                "Pixiv 资料与绑定身份不一致，请核实账号",
+        const { profile, avatar } =
+          await this.sourceFetch.platforms.profileNetwork(
+            actorId,
+            async () => {
+              if (client.metered)
+                await this.sourceFetch.consumeMeteredBudget(client.adapterKey);
+              const resolved = await client.checkAccount({ externalUserId });
+              if (resolved.externalUserId !== externalUserId)
+                throw new ConflictException(
+                  "Pixiv 资料与绑定身份不一致，请核实账号",
+                );
+              const conflict = await this.db.authorExternalAccount.findFirst({
+                where: { platform: "pixiv", externalUserId, deletedAt: null },
+                include: {
+                  author: { select: { id: true, displayName: true } },
+                },
+              });
+              if (conflict && conflict.author.id !== authorId)
+                throw new ConflictException(
+                  `该 Pixiv 账号已绑定作者“${conflict.author.displayName}”`,
+                );
+              const avatar = await this.profileAvatar(
+                actorId,
+                resolved.avatarUrl,
+                client.allowedProfileAvatarHosts ?? client.allowedMediaHosts,
+                { platform: "pixiv", adapter: client.adapterKey },
               );
-            return resolved;
-          },
-          "pixiv",
-        );
-        const conflict = await this.db.authorExternalAccount.findFirst({
-          where: { platform: "pixiv", externalUserId, deletedAt: null },
-          include: { author: { select: { id: true, displayName: true } } },
-        });
-        if (conflict && conflict.author.id !== authorId)
-          throw new ConflictException(
-            `该 Pixiv 账号已绑定作者“${conflict.author.displayName}”`,
+              return { profile: resolved, avatar };
+            },
+            "pixiv",
           );
-        const avatar = await this.profileAvatar(
-          actorId,
-          profile.avatarUrl,
-          client.allowedProfileAvatarHosts ?? client.allowedMediaHosts,
-          { platform: "pixiv", adapter: client.adapterKey },
-        );
         const identity = {
           externalUserId,
           handle: null,
@@ -1534,9 +1551,8 @@ export class AuthorsService {
     for (const client of available) {
       if (!bound && !client.resolveProfileByHandle) continue;
       try {
-        const profile = await this.sourceFetch.platforms.profileNetwork(
-          actorId,
-          async () => {
+        const { profile, avatar } =
+          await this.sourceFetch.platforms.profileNetwork(actorId, async () => {
             if (client.metered)
               await this.sourceFetch.consumeMeteredBudget(client.adapterKey);
             const resolved = await (bound
@@ -1553,28 +1569,28 @@ export class AuthorsService {
               (!bound && returnedHandle.toLowerCase() !== handle.toLowerCase())
             )
               throw new ConflictException("X 资料与绑定身份不一致，请核实账号");
-            return resolved;
-          },
-        );
+            const conflict = await this.db.authorExternalAccount.findFirst({
+              where: {
+                platform: "x",
+                externalUserId: resolved.externalUserId,
+                deletedAt: null,
+              },
+              include: { author: { select: { id: true, displayName: true } } },
+            });
+            if (conflict && conflict.author.id !== authorId)
+              throw new ConflictException(
+                `该 X 账号已绑定作者“${conflict.author.displayName}”`,
+              );
+            const avatar = await this.profileAvatar(
+              actorId,
+              resolved.avatarUrl,
+              client.allowedProfileAvatarHosts ?? client.allowedMediaHosts,
+              { platform: "x", adapter: client.adapterKey },
+            );
+            return { profile: resolved, avatar };
+          });
         const normalizedHandle = this.normalizeXHandle(profile.handle!);
-        const conflict = await this.db.authorExternalAccount.findFirst({
-          where: {
-            platform: "x",
-            externalUserId: profile.externalUserId,
-            deletedAt: null,
-          },
-          include: { author: { select: { id: true, displayName: true } } },
-        });
-        if (conflict && conflict.author.id !== authorId)
-          throw new ConflictException(
-            `该 X 账号已绑定作者“${conflict.author.displayName}”`,
-          );
-        const { avatarFileObjectId, avatarUrl } = await this.profileAvatar(
-          actorId,
-          profile.avatarUrl,
-          client.allowedProfileAvatarHosts ?? client.allowedMediaHosts,
-          { platform: "x", adapter: client.adapterKey },
-        );
+        const { avatarFileObjectId, avatarUrl } = avatar;
         const syncedAt = new Date().toISOString();
         const identity = {
           externalUserId: profile.externalUserId,

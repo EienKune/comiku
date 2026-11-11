@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
@@ -16,6 +16,10 @@ import type {
   SourceAccountProfile,
 } from "../../content-source.js";
 import { jsonObject, SourceResponseError } from "../../source-response.js";
+import {
+  sourceResourceUnconfirmed,
+  waitForSourceChildClose,
+} from "../../source-executions.js";
 import {
   sanitizeSourceDiagnostic,
   type SourceFailureScope,
@@ -290,9 +294,10 @@ export class GalleryDlContentSource implements ContentSourceClient {
             request,
           ];
           const started = Date.now();
-          return await new Promise<Record<string, unknown>>(
+          let child!: ChildProcess;
+          const result = new Promise<Record<string, unknown>>(
             (resolve, reject) => {
-              execFile(
+              child = execFile(
                 config.python,
                 [bridge, request],
                 {
@@ -320,8 +325,14 @@ export class GalleryDlContentSource implements ContentSourceClient {
               );
             },
           );
+          return await waitForSourceChildClose(child, result);
         } finally {
-          await rm(directory, { recursive: true, force: true });
+          await rm(directory, { recursive: true, force: true }).catch(
+            (error) => {
+              sourceResourceUnconfirmed();
+              throw error;
+            },
+          );
         }
       });
   }
