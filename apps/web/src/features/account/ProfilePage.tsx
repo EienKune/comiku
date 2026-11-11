@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { Palette, UserRound, KeyRound, X } from "lucide-react";
+import { Palette, UserRound, MessageCircle, KeyRound, X } from "lucide-react";
 import {
   Button,
   IconButton,
@@ -89,6 +89,10 @@ function SettingsFrame({
           <Link to="/settings?tab=profile">
             <UserRound size={16} />
             个人资料
+          </Link>
+          <Link to="/settings?tab=qq">
+            <MessageCircle size={16} />
+            QQ 绑定
           </Link>
           <Link to="/settings/password">
             <KeyRound size={16} />
@@ -185,6 +189,15 @@ export function ProfilePage() {
     return (
       <SettingsFrame>
         <AppearanceSettings />
+      </SettingsFrame>
+    );
+  if (tab === "qq")
+    return (
+      <SettingsFrame>
+        <section className="settings-pane">
+          <h2>QQ 绑定</h2>
+          <QqBindingSettings />
+        </section>
       </SettingsFrame>
     );
   return (

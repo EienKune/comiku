@@ -5,11 +5,13 @@ import { useQuery } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { Link, useLocation } from "react-router";
 import type { CurrentUser, Role, components } from "@comiku/api-client";
 import { Button, Surface, TextField, Badge } from "../../components/ui";
 import { useAccount } from "./account-context";
 import { client, queryClient, unwrap, useRoles } from "./api";
 import { ErrorState, Feedback, LoadingState, SectionHeading } from "./forms";
+import { settingsLinkState } from "./settings-routing";
 
 type Credential = components["schemas"]["CredentialDto"];
 type RoleOption = components["schemas"]["RoleOptionDto"];
@@ -467,6 +469,7 @@ function CredentialDialog({
 }
 export function AccountsPage() {
   const me = useAccount();
+  const location = useLocation();
   const allowed = me.permissions.includes("accounts:manage");
   const roles = useRoles(allowed);
   const users = useQuery({
@@ -504,6 +507,15 @@ export function AccountsPage() {
       <SectionHeading title="账号管理">
         由管理员统一分发账号。重要操作需要确认当前管理员密码，并写入账号审计。
       </SectionHeading>
+      <div className="account-actions">
+        <Link
+          className="ui-button ui-button--secondary ui-button--md"
+          to="/settings?tab=qq"
+          state={settingsLinkState(location)}
+        >
+          我的 QQ 绑定
+        </Link>
+      </div>
       <CreateAccount roles={roles.data} onCreated={setCredential} />
       <Surface className="account-card account-content-boundary">
         <h2>团队账号 · {users.data.length}</h2>
