@@ -5,7 +5,6 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./features/account/api";
 import { AccountLayout } from "./features/account/AccountApp";
 import { LoginPage } from "./features/account/LoginPage";
-import { SettingsRoutingProvider } from "./features/account/SettingsRoutingProvider";
 import { WorkspaceRoutes } from "./features/account/WorkspaceRoutes";
 import { DesignSystemPlayground } from "./playground/DesignSystemPlayground";
 import "./styles/tokens.css";
@@ -15,11 +14,7 @@ import "./features/workspace/workspace.css";
 const router = createBrowserRouter([
   { path: "/login", element: <LoginPage /> },
   {
-    element: (
-      <SettingsRoutingProvider>
-        <AccountLayout />
-      </SettingsRoutingProvider>
-    ),
+    element: <AccountLayout />,
     children: [{ path: "*", element: <WorkspaceRoutes /> }],
   },
   {
