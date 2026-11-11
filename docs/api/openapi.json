@@ -20348,6 +20348,40 @@
           },
           "timeout": {
             "type": "boolean"
+          },
+          "exceptionType": {
+            "type": "string"
+          },
+          "missingField": {
+            "type": "string"
+          },
+          "responseBytes": {
+            "type": "number"
+          },
+          "responseFormat": {
+            "type": "string",
+            "enum": [
+              "empty",
+              "json",
+              "html",
+              "text",
+              "binary"
+            ]
+          },
+          "requestOperation": {
+            "type": "string"
+          },
+          "runtimeVersion": {
+            "type": "string"
+          },
+          "exitCode": {
+            "type": "number"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "transportError": {
+            "type": "string"
           }
         },
         "required": [

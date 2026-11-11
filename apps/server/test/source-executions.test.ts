@@ -39,6 +39,59 @@ test("execution diagnostics admit only controlled stages and numeric evidence", 
   assert.doesNotMatch(JSON.stringify(sample), /SECRET|COOKIE|https/);
 });
 
+test("execution diagnostics preserve useful empty HTTP response and missing-field evidence without raw logs", () => {
+  const sample = executionDiagnosticSample(
+    new SourceResponseError("invalid_response", {
+      reason: "invalid_response",
+      scope: "protocol",
+      diagnostic: {
+        exception_type: "KeyError",
+        field: "result",
+        runtime_version: "1.32.11",
+        http_status: "404",
+        http_response_bytes: "0",
+        http_endpoint:
+          "https://x.com/i/api/graphql/public-query/UserTweets?token=SECRET",
+        http_response_headers: { "content-type": "application/json" },
+        message: "SECRET",
+        traceback: "SECRET",
+        upstream_logs: "SECRET",
+      },
+    }),
+    "fetch_page",
+  );
+  assert.equal(sample.exceptionType, "KeyError");
+  assert.equal(sample.missingField, "result");
+  assert.equal(sample.responseBytes, 0);
+  assert.equal(sample.responseFormat, "empty");
+  assert.equal(sample.requestOperation, "UserTweets");
+  assert.equal(sample.runtimeVersion, "1.32.11");
+  assert.doesNotMatch(
+    JSON.stringify(sample),
+    /SECRET|https|token|traceback|upstream_logs/,
+  );
+});
+
+test("TLS EOF becomes a controlled transport fact without inventing an HTTP status", () => {
+  const sample = executionDiagnosticSample(
+    new SourceResponseError("invalid_response", {
+      reason: "connector_failed",
+      scope: "protocol",
+      diagnostic: {
+        exception_type: "HttpError",
+        runtime_version: "1.32.11",
+        message:
+          "SSLError: UNEXPECTED_EOF_WHILE_READING at SECRET_PATH token=SECRET",
+      },
+    }),
+    "fetch_page",
+  );
+  assert.equal(sample.transportError, "tls_unexpected_eof");
+  assert.equal(sample.httpStatus, undefined);
+  assert.equal(sample.responseBytes, undefined);
+  assert.doesNotMatch(JSON.stringify(sample), /SECRET|token|message/);
+});
+
 test("refunded attempts retain unique lease identity and settlement cannot change business facts", async () => {
   const rows: Record<string, any>[] = [];
   const tx = {

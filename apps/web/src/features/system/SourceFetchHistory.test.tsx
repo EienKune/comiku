@@ -75,25 +75,33 @@ const detail: components["schemas"]["SourceTaskDetailDto"] = {
   executionHistoryAvailable: false,
   observedAt,
 };
-function mockHistory(runs = [run()]) {
+function mockHistory(runs = [run()], executions: unknown[] = []) {
   return vi.spyOn(client, "GET").mockImplementation((async (
     path: string,
     options: {
       params?: { query?: Record<string, unknown>; path?: { id: string } };
     },
   ) => {
-    const data = path.endsWith("/{taskId}")
-      ? detail
-      : path.endsWith("/tasks")
-        ? {
-            items: [task],
-            nextCursor: options.params?.query?.cursor ? null : "tasks-next",
-            observedAt,
-            legacy: false,
-          }
-        : path.endsWith("/{id}")
-          ? runs.find((item) => item.id === options.params?.path?.id)
-          : { items: runs, nextCursor: null, observedAt };
+    const data = path.endsWith("/executions")
+      ? {
+          items: executions,
+          nextCursor: null,
+          observedAt,
+          scope: "scan",
+          legacy: false,
+        }
+      : path.endsWith("/{taskId}")
+        ? detail
+        : path.endsWith("/tasks")
+          ? {
+              items: [task],
+              nextCursor: options.params?.query?.cursor ? null : "tasks-next",
+              observedAt,
+              legacy: false,
+            }
+          : path.endsWith("/{id}")
+            ? runs.find((item) => item.id === options.params?.path?.id)
+            : { items: runs, nextCursor: null, observedAt };
     return { data, response: new Response() };
   }) as never);
 }
@@ -112,6 +120,80 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+test("failure badge reads only scan diagnostics on demand and exposes concrete protocol facts", async () => {
+  const get = mockHistory(
+    [run()],
+    [
+      {
+        id: "execution",
+        kind: "scan",
+        budgetAttempt: 3,
+        budgetRefunded: false,
+        admittedAt: observedAt,
+        businessOutcome: "failed",
+        businessFinishedAt: observedAt,
+        settledAt: observedAt,
+        diagnostics: {
+          samples: [
+            {
+              stage: "fetch_page",
+              reason: "invalid_response",
+              scope: "protocol",
+              occurredAt: observedAt,
+              httpStatus: 404,
+              exceptionType: "KeyError",
+              missingField: "result",
+              responseBytes: 0,
+              responseFormat: "empty",
+              requestOperation: "UserTweets",
+              runtimeVersion: "1.32.11",
+            },
+            {
+              stage: "fetch_page",
+              reason: "connector_failed",
+              scope: "protocol",
+              occurredAt: observedAt,
+              exceptionType: "HttpError",
+              transportError: "tls_unexpected_eof",
+              responseFormat: "html",
+            },
+          ],
+          omitted: 0,
+        },
+      },
+    ],
+  );
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: /查看批次详情/ }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "查看错误详情 Fixture author" }),
+  );
+  expect(await screen.findByText("HTTP 404")).toBeTruthy();
+  expect(screen.getByText("响应缺少 result 字段（KeyError）")).toBeTruthy();
+  expect(screen.getByText("返回 0 字节 · 空响应")).toBeTruthy();
+  expect(screen.getByText("请求 UserTweets")).toBeTruthy();
+  expect(screen.getByText("TLS 连接提前关闭（EOF）")).toBeTruthy();
+  expect(screen.getByText("响应格式 HTML")).toBeTruthy();
+  expect(
+    get.mock.calls.some((call) => String(call[0]).endsWith("/{taskId}")),
+  ).toBe(false);
+  expect(
+    get.mock.calls.filter((call) => String(call[0]).endsWith("/executions")),
+  ).toHaveLength(1);
+});
+
+test("old failures explicitly report missing diagnostics instead of inventing a cause", async () => {
+  mockHistory();
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: /查看批次详情/ }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "查看错误详情 Fixture author" }),
+  );
+  expect(
+    await screen.findByText("该批未保留详细诊断，只有历史结果摘要。"),
+  ).toBeTruthy();
 });
 
 test("entry reads ten summaries and loads one server-filtered account page only on opening", async () => {

@@ -4,6 +4,8 @@ import { Badge, Button, SearchField, SelectField } from "../../components/ui";
 import { PlatformIcon } from "../../components/PlatformIcon";
 import { client, unwrap } from "../account/api";
 import { SourceHistoryTaskDetail } from "./SourceHistoryTaskDetail";
+import { SourceHistoryExecutions } from "./SourceHistoryDiagnostics";
+import { ChevronDown } from "lucide-react";
 import {
   defaultTaskFilter,
   failureLabel,
@@ -32,6 +34,9 @@ function SourceTaskPage({
 }) {
   const page = useHistoryPage();
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [expandedView, setExpandedView] = useState<"account" | "failure">(
+    "account",
+  );
   const query = useQuery({
     queryKey: [
       "source-history",
@@ -92,7 +97,24 @@ function SourceTaskPage({
       <div className="source-history-accounts">
         {query.data?.items.map((task) => {
           const opened = expanded === task.id;
+          const failureOpened = opened && expandedView === "failure";
+          const accountOpened = opened && expandedView === "account";
           const reason = failureLabel(task.failureCode);
+          const status = (
+            <Badge
+              tone={
+                task.failureCode === "discovery_gaps"
+                  ? "warning"
+                  : statusTone(task.status)
+              }
+            >
+              {taskStatusLabel(task)}
+              {(task.status === "failed" ||
+                task.failureCode === "discovery_gaps") && (
+                <ChevronDown size={12} aria-hidden="true" />
+              )}
+            </Badge>
+          );
           return (
             <article className="source-history-account" key={task.id}>
               <div className="source-history-account-row">
@@ -106,15 +128,24 @@ function SourceTaskPage({
                   </span>
                 </div>
                 <div className="source-history-account-state">
-                  <Badge
-                    tone={
-                      task.failureCode === "discovery_gaps"
-                        ? "warning"
-                        : statusTone(task.status)
-                    }
-                  >
-                    {taskStatusLabel(task)}
-                  </Badge>
+                  {task.status === "failed" ||
+                  task.failureCode === "discovery_gaps" ? (
+                    <button
+                      type="button"
+                      className="source-history-status-button"
+                      aria-label={`查看错误详情 ${task.authorName}`}
+                      aria-expanded={failureOpened}
+                      aria-controls={`source-task-${task.id}`}
+                      onClick={() => {
+                        setExpanded(failureOpened ? null : task.id);
+                        setExpandedView("failure");
+                      }}
+                    >
+                      {status}
+                    </button>
+                  ) : (
+                    status
+                  )}
                   {reason && reason !== taskStatusLabel(task) && (
                     <p className="source-history-reason">{reason}</p>
                   )}
@@ -133,9 +164,12 @@ function SourceTaskPage({
                   variant="ghost"
                   size="sm"
                   aria-label={`查看账号详情 ${task.authorName}`}
-                  aria-expanded={opened}
+                  aria-expanded={accountOpened}
                   aria-controls={`source-task-${task.id}`}
-                  onClick={() => setExpanded(opened ? null : task.id)}
+                  onClick={() => {
+                    setExpanded(accountOpened ? null : task.id);
+                    setExpandedView("account");
+                  }}
                 >
                   详情
                 </Button>
@@ -145,11 +179,19 @@ function SourceTaskPage({
                   id={`source-task-${task.id}`}
                   className="source-history-task-detail"
                 >
-                  <SourceHistoryTaskDetail
-                    runId={run.id}
-                    taskId={task.id}
-                    enabled={enabled}
-                  />
+                  {failureOpened ? (
+                    <SourceHistoryExecutions
+                      runId={run.id}
+                      taskId={task.id}
+                      enabled={enabled}
+                    />
+                  ) : (
+                    <SourceHistoryTaskDetail
+                      runId={run.id}
+                      taskId={task.id}
+                      enabled={enabled}
+                    />
+                  )}
                 </div>
               )}
             </article>

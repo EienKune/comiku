@@ -448,9 +448,21 @@ export function SourceCredentialDialog({
     >
       <header>
         <h2 id={title}>{platform === "x" ? "X" : "Pixiv"} 凭据管理</h2>
-        <Button type="button" variant="ghost" size="sm" onClick={close}>
-          关闭
-        </Button>
+        <div className="source-credential-toolbar">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={!!busy || !visible}
+            loading={status.isFetching}
+            onClick={() => void status.refetch()}
+          >
+            刷新状态
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={close}>
+            关闭
+          </Button>
+        </div>
       </header>
       <p id={note}>
         关闭窗口后仍保持平台当前维护状态。凭据只用于本次更新，不回显旧值。
@@ -496,14 +508,16 @@ export function SourceCredentialDialog({
               <p role="status">平台尚未确认排空，请刷新状态后再试。</p>
             )}
           {writable && !state.maintenancePaused && (
-            <Button
-              type="button"
-              loading={busy === "pause"}
-              disabled={!!busy || outcomeUnknown || unresolved}
-              onClick={() => void maintenanceAction("pause")}
-            >
-              暂停平台
-            </Button>
+            <div className="source-credential-actions">
+              <Button
+                type="button"
+                loading={busy === "pause"}
+                disabled={!!busy || outcomeUnknown || unresolved}
+                onClick={() => void maintenanceAction("pause")}
+              >
+                暂停平台
+              </Button>
+            </div>
           )}
           {state.maintenancePaused &&
             !activated &&
@@ -682,17 +696,6 @@ export function SourceCredentialDialog({
           {error}
         </p>
       )}
-      <footer>
-        <Button
-          type="button"
-          variant="ghost"
-          disabled={!!busy || !visible}
-          loading={status.isFetching}
-          onClick={() => void status.refetch()}
-        >
-          刷新状态
-        </Button>
-      </footer>
     </dialog>
   );
 }

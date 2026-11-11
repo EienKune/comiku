@@ -9,6 +9,10 @@ import {
 } from "../jobs/jobs.service.js";
 import { SourceResponseError } from "./source-response.js";
 import { controlledFailureDetails } from "./source-diagnostics.js";
+import {
+  nativeExecutionEvidence,
+  type SourceExecutionEvidence,
+} from "./source-execution-evidence.js";
 
 export type SourceExecutionOutcome =
   "succeeded" | "partial_failed" | "failed" | "deferred";
@@ -25,7 +29,11 @@ const numericFields = {
   duration: "durationMs",
 } as const;
 /** Persisted/API-safe diagnostics deliberately exclude all upstream free text. */
-export function executionDiagnosticSample(error: unknown, stage = "execution") {
+export function executionDiagnosticSample(
+  error: unknown,
+  stage = "execution",
+): Record<string, string | number | boolean | undefined> &
+  SourceExecutionEvidence {
   const details =
     error instanceof SourceResponseError ? error.details : undefined;
   const safe = controlledFailureDetails(
@@ -59,7 +67,7 @@ export function executionDiagnosticSample(error: unknown, stage = "execution") {
     sample.reason = error.reason;
     sample.scope = "configuration";
   }
-  return sample;
+  return { ...sample, ...nativeExecutionEvidence(diagnostic) };
 }
 
 interface DiagnosticBuffer {

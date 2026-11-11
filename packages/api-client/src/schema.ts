@@ -2734,6 +2734,16 @@ export interface components {
             observedBytes?: number;
             durationMs?: number;
             timeout?: boolean;
+            exceptionType?: string;
+            missingField?: string;
+            responseBytes?: number;
+            /** @enum {string} */
+            responseFormat?: "empty" | "json" | "html" | "text" | "binary";
+            requestOperation?: string;
+            runtimeVersion?: string;
+            exitCode?: number;
+            signal?: string;
+            transportError?: string;
         };
         SourceExecutionDiagnosticsDto: {
             samples: components["schemas"]["SourceDiagnosticSampleDto"][];

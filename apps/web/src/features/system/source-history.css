@@ -141,6 +141,23 @@
   font-size: 13px;
   color: var(--color-status-warning-text);
 }
+.source-history-status-button {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.source-history-status-button .ui-badge {
+  gap: var(--space-1);
+}
+.source-history-status-button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 3px;
+}
 .source-history-task-detail {
   background: var(--color-surface-soft);
   border-radius: var(--radius-md);

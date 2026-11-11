@@ -236,6 +236,16 @@ export class SourceDiagnosticSampleDto {
   @ApiPropertyOptional({ type: Number }) observedBytes?: number;
   @ApiPropertyOptional({ type: Number }) durationMs?: number;
   @ApiPropertyOptional({ type: Boolean }) timeout?: boolean;
+  @ApiPropertyOptional({ type: String }) exceptionType?: string;
+  @ApiPropertyOptional({ type: String }) missingField?: string;
+  @ApiPropertyOptional({ type: Number }) responseBytes?: number;
+  @ApiPropertyOptional({ enum: ["empty", "json", "html", "text", "binary"] })
+  responseFormat?: string;
+  @ApiPropertyOptional({ type: String }) requestOperation?: string;
+  @ApiPropertyOptional({ type: String }) runtimeVersion?: string;
+  @ApiPropertyOptional({ type: Number }) exitCode?: number;
+  @ApiPropertyOptional({ type: String }) signal?: string;
+  @ApiPropertyOptional({ type: String }) transportError?: string;
 }
 export class SourceExecutionDiagnosticsDto {
   @ApiProperty({ type: SourceDiagnosticSampleDto, isArray: true, maxItems: 8 })

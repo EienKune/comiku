@@ -33,6 +33,22 @@ const scopes: Record<string, string> = {
   protocol: "协议",
   configuration: "配置",
 };
+const transportErrors: Record<string, string> = {
+  tls_unexpected_eof: "TLS 连接提前关闭（EOF）",
+  tls_certificate: "TLS 证书验证失败",
+  connection_reset: "连接被重置",
+  connection_refused: "连接被拒绝",
+  dns_error: "域名解析失败",
+  connect_timeout: "建立连接超时",
+  read_timeout: "读取响应超时",
+};
+const responseFormats: Record<string, string> = {
+  empty: "空响应",
+  json: "JSON",
+  html: "HTML",
+  text: "文本",
+  binary: "二进制",
+};
 function bytes(value: number) {
   return `${Number((value / 1048576).toFixed(2))} MiB（${value} 字节）`;
 }
@@ -44,8 +60,19 @@ function DiagnosticSample({
   return (
     <li className="source-history-diagnostic">
       <p>
-        <strong>{failureLabel(sample.reason)}</strong>
+        <strong>
+          {(sample.transportError && transportErrors[sample.transportError]) ||
+            failureLabel(sample.reason)}
+        </strong>
       </p>
+      {sample.missingField ? (
+        <p>
+          响应缺少 {sample.missingField} 字段
+          {sample.exceptionType ? `（${sample.exceptionType}）` : ""}
+        </p>
+      ) : (
+        sample.exceptionType && <p>异常类型 {sample.exceptionType}</p>
+      )}
       <div className="source-history-fact-line">
         <span>
           {stages[sample.stage] ?? "执行"} · {scopes[sample.scope] ?? "图源"}
@@ -69,6 +96,25 @@ function DiagnosticSample({
           <span>耗时 {sample.durationMs / 1000} 秒</span>
         )}
         {sample.timeout && <span>发生超时</span>}
+        {sample.responseBytes !== undefined && (
+          <span>
+            返回 {sample.responseBytes} 字节
+            {sample.responseFormat && responseFormats[sample.responseFormat]
+              ? ` · ${responseFormats[sample.responseFormat]}`
+              : ""}
+          </span>
+        )}
+        {sample.responseBytes === undefined &&
+          sample.responseFormat &&
+          responseFormats[sample.responseFormat] && (
+            <span>响应格式 {responseFormats[sample.responseFormat]}</span>
+          )}
+        {sample.requestOperation && <span>请求 {sample.requestOperation}</span>}
+        {sample.runtimeVersion && (
+          <span>gallery-dl {sample.runtimeVersion}</span>
+        )}
+        {sample.exitCode !== undefined && <span>退出码 {sample.exitCode}</span>}
+        {sample.signal && <span>退出信号 {sample.signal}</span>}
       </div>
     </li>
   );
@@ -129,7 +175,9 @@ export function SourceHistoryExecutions({
       </div>
       {query.isPending && enabled && <p role="status">正在读取扫描记录…</p>}
       {query.isError && <p role="alert">扫描记录读取失败，请刷新重试。</p>}
-      {query.data?.items.length === 0 && <p>该时段仅保留结果摘要</p>}
+      {query.data?.items.length === 0 && (
+        <p>该批未保留详细诊断，只有历史结果摘要。</p>
+      )}
       {query.data?.items.map((execution) => (
         <article className="source-history-execution" key={execution.id}>
           <div className="source-history-fact-line">

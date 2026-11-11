@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
@@ -109,6 +110,18 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+test("running platform groups refresh and close in the header, separate from maintenance actions", async () => {
+  const { post } = setup(state({ maintenancePaused: false, canSave: false }));
+  const pause = await screen.findByRole("button", { name: "暂停平台" });
+  const dialog = screen.getByRole("dialog");
+  const header = dialog.querySelector("header")!;
+  expect(within(header).getByRole("button", { name: "刷新状态" })).toBeTruthy();
+  expect(within(header).getByRole("button", { name: "关闭" })).toBeTruthy();
+  expect(dialog.querySelector("footer")).toBeNull();
+  expect(pause.closest(".source-credential-actions")).toBeTruthy();
+  expect(post).not.toHaveBeenCalled();
 });
 
 test("readonly maintenance shows a safe reason without credentials or mutating actions", async () => {

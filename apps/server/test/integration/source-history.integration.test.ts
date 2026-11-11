@@ -377,6 +377,9 @@ test("source history HTTP reads bounded summaries and task pages without writes,
               scope: "transport",
               occurredAt: origin.toISOString(),
               httpStatus: 503,
+              exceptionType: "HttpError",
+              transportError: "tls_unexpected_eof",
+              runtimeVersion: "1.32.11",
               durationMs: 20000,
               timeout: true,
               traceback: "Cookie: must-not-leak",
@@ -516,6 +519,14 @@ test("source history HTTP reads bounded summaries and task pages without writes,
       20000,
     );
     assert.equal(executions.data.items[0].diagnostics.samples[0].timeout, true);
+    assert.equal(
+      executions.data.items[0].diagnostics.samples[0].transportError,
+      "tls_unexpected_eof",
+    );
+    assert.equal(
+      executions.data.items[0].diagnostics.samples[0].exceptionType,
+      "HttpError",
+    );
     const executions2 = await request<SourceExecutionPageDto>(
       admin,
       `/source-fetch/runs/${runIds[0]}/tasks/${taskIds[398]}/executions?cursor=${encodeURIComponent(executions.data.nextCursor!)}`,

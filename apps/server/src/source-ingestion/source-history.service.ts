@@ -16,6 +16,7 @@ import {
   type SourceFailureScope,
 } from "./source-diagnostics.js";
 import { ContentSourceRegistry } from "./source-registry.js";
+import { sourceExecutionEvidence } from "./source-execution-evidence.js";
 import type {
   SourceRunPageDto,
   SourceRunQueryDto,
@@ -226,7 +227,7 @@ function diagnostics(value: unknown): SourceExecutionDiagnosticsDto {
         sample[field] = number;
     }
     if (typeof entry.timeout === "boolean") sample.timeout = entry.timeout;
-    samples.push(sample);
+    samples.push({ ...sample, ...sourceExecutionEvidence(entry) });
   }
   const omitted =
     typeof input.omitted === "number" &&
