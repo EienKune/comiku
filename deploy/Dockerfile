@@ -1,5 +1,5 @@
 ARG NODE_IMAGE=node:24.22.1-bookworm-slim
-ARG POSTGRES_IMAGE=postgres:17-bookworm
+ARG POSTGRES_IMAGE=postgres:18-bookworm
 FROM ${NODE_IMAGE} AS build
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssl && rm -rf /var/lib/apt/lists/* \
     && npm install --global pnpm@9.1.2

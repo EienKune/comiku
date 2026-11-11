@@ -37,7 +37,7 @@ pnpm api:check
 
 ### 数据库测试
 
-使用独立、可丢弃的 `_test` 数据库；集成测试会写入/清理 fixture，绝不指向业务库。
+开发、CI 与生产模板统一使用 PostgreSQL 18。使用独立、可丢弃的 `_test` 数据库；集成测试会写入/清理 fixture，绝不指向业务库。已有旧主版本数据卷先按[数据库升级说明](docs/deployment.md#postgresql-主版本升级)迁移，不直接更换镜像启动。
 
 ```sh
 docker compose -f docker-compose.dev.yml --profile test up -d --wait postgres-test

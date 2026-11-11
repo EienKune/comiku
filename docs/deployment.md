@@ -78,7 +78,7 @@ df -h
 
 ## 6. 加密备份与隔离恢复
 
-`backup` 镜像使用 PostgreSQL 17 的 pg_dump/pg_restore 与固定 Node。pg_dump custom 输出直接流式进入 AES-256-GCM，先得到加密归档才上传独立私有 R2；不把数据库密码放进命令参数，也不向日志转发 pg_dump/SDK 的原始错误。归档包含认证保护的格式、时间、软件 commit 元信息，Prisma 迁移记录包含在数据库内。错误密钥、篡改或截断归档不能作为恢复输入，未通过认证的解密临时输出会清理。
+`backup` 镜像使用 PostgreSQL 18 的 pg_dump/pg_restore 与固定 Node。pg_dump custom 输出直接流式进入 AES-256-GCM，先得到加密归档才上传独立私有 R2；不把数据库密码放进命令参数，也不向日志转发 pg_dump/SDK 的原始错误。新归档标记 PostgreSQL 18，读取仍兼容原有 17 归档；这不代表允许把 18 的数据库恢复到 17。归档包含认证保护的格式、时间、软件 commit 元信息，Prisma 迁移记录包含在数据库内。错误密钥、篡改或截断归档不能作为恢复输入，未通过认证的解密临时输出会清理。
 
 备份使用数据库只读账号 comiku_backup；为备份 Bucket 使用单独的对象读写凭据，不向备份容器提供业务 R2/X 凭据。加密密钥在服务器受限文件之外保存一份离线副本，恢复时需密钥和归档两者；不要把唯一解密密钥只留在待备份服务器或仅存于同一 Bucket。
 
@@ -104,6 +104,12 @@ docker compose --env-file deploy/production.env -f deploy/compose.production.yml
 
 离线 Linux 验证使用 `pnpm test:production`（先构建 CI 同名三类 test 镜像），创建随机命名的独立网络、数据卷和合成账号，验证迁移重放/漂移、非超级用户与只读备份权限、API/worker 健康、HTTPS/CORS/Cookie/CSRF、加密备份恢复和空库保护以及重建持久性，结束后清理测试创建的资源，不读取本机 `.env`。`backup --test --local-only --output /绝对路径/文件.comikubak` 只允许 `_test` 库，跳过真实 R2，用于同一备份实现的离线演练；不代替真实 Bucket 验收。
 
+### PostgreSQL 主版本升级
+
+开发、CI、生产数据库和备份/恢复工具统一采用 PostgreSQL 18。模板保留 `18-alpine` / `18-bookworm` 主版本标签，小版本更新后仍需运行数据库与镜像恢复测试。生产及开发持久卷挂载 `/var/lib/postgresql`，18 镜像默认在其下的 `18/docker` 保存数据；测试和恢复 tmpfs 也挂载父目录，避免写入未受控的匿名卷。
+
+已有 17 数据库属于独立的数据升级，不能只替换镜像或挪目录后启动 18。升级前保留旧镜像、配置和数据卷，停止写入并确认可读取的加密备份；用独立项目/卷创建 18 隔离目标，使用 18 的客户端完成逻辑导出/恢复或按官方流程执行 `pg_upgrade`，再核对迁移、关键数据和应用回归后切换。不要删旧卷、执行 `down -v` 或覆盖旧目录来解决启动失败。前述应用恢复命令只接受空的 `_restore_test` 库，不能直接用来覆盖正式库；正式切换需另外制定操作步骤。已经运行 18 的外部数据库无需因为模板更新重新建库。
+
 ## 7. 本地真实 R2 / X 联调准备
 
 本地联调可使用 `pnpm dev`，不需要域名或正式服务器；Linux/HTTPS/代理链需另行验证。使用独立测试库和测试桶，新建测试作者/作品，不把原有 local 文件记录直接切换为 R2，也不要在真实 R2 环境运行只支持 local 的 demo:init。
@@ -118,4 +124,4 @@ docker compose --env-file deploy/production.env -f deploy/compose.production.yml
 
 本地联调无需正式域名、服务器登录或生产备份政策。进入 Linux 生产形态和正式部署前，再准备同主域 app/api、Cloudflare DNS/Origin CA、服务器访问、业务/备份正式 Bucket 及经过确认的备份/对象恢复政策。
 
-参考：[Caddy 可信代理](https://caddyserver.com/docs/caddyfile/options#servers)、[Cloudflare IP 清单](https://www.cloudflare.com/ips/)、[Origin CA](https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/)、[R2 CORS](https://developers.cloudflare.com/r2/buckets/cors/)、[PostgreSQL 17 pg_dump](https://www.postgresql.org/docs/17/app-pgdump.html)。
+参考：[Caddy 可信代理](https://caddyserver.com/docs/caddyfile/options#servers)、[Cloudflare IP 清单](https://www.cloudflare.com/ips/)、[Origin CA](https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/)、[R2 CORS](https://developers.cloudflare.com/r2/buckets/cors/)、[PostgreSQL 18 pg_dump](https://www.postgresql.org/docs/18/app-pgdump.html)、[PostgreSQL 升级](https://www.postgresql.org/docs/18/upgrading.html)、[官方镜像数据目录](https://hub.docker.com/_/postgres#pgdata)。

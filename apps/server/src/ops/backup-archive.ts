@@ -22,7 +22,7 @@ export type BackupMetadata = {
   format: 1;
   createdAt: string;
   release: string;
-  postgresMajor: 17;
+  postgresMajor: 17 | 18;
 };
 
 export function parseEncryptionKey(value: string): Buffer {
@@ -86,7 +86,7 @@ export async function decryptBackup(
     ) as BackupMetadata;
     if (
       metadata.format !== 1 ||
-      metadata.postgresMajor !== 17 ||
+      (metadata.postgresMajor !== 17 && metadata.postgresMajor !== 18) ||
       typeof metadata.release !== "string" ||
       typeof metadata.createdAt !== "string"
     )
