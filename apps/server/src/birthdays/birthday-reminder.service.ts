@@ -34,6 +34,48 @@ import {
   type BirthdayNotificationSnapshot,
 } from "./birthday-notification.js";
 import { readBirthdayPeople } from "./birthdays.service.js";
+import type { BirthdayPerson } from "./providers/schaledb.js";
+
+interface ExternalBirthdayEvidence {
+  personKey: string | null;
+  status: string;
+  profileHash: string | null;
+  lastCheckedAt: Date | null;
+}
+
+/** A refreshed index or an unrelated source cannot renew a frozen birthday fact. */
+export function birthdayReminderCheckedAt(
+  person: BirthdayPerson,
+  schaleCheckedAt: Date | null,
+  external: ExternalBirthdayEvidence | undefined,
+  now: Date,
+): Date | null {
+  if (!person.notificationEligible) return null;
+  const source = person.birthdaySource;
+  let checkedAt: Date | null;
+  if (source?.source === "kivo") {
+    if (
+      !external ||
+      external.status !== "confirmed" ||
+      external.personKey !== person.key ||
+      external.profileHash !== source.profileHash
+    )
+      return null;
+    checkedAt = external.lastCheckedAt;
+  } else {
+    // SchaleDB still requires a reviewed original; Kivo identity is separate.
+    if (person.originalEntryId === null) return null;
+    checkedAt = schaleCheckedAt;
+  }
+  if (
+    !checkedAt ||
+    !Number.isFinite(checkedAt.getTime()) ||
+    checkedAt > now ||
+    checkedAt.getTime() + BIRTHDAY_SOURCE_MAX_AGE_MS <= now.getTime()
+  )
+    return null;
+  return checkedAt;
+}
 
 type SettingsInput = {
   expectedRevision: number;
@@ -324,39 +366,76 @@ export class BirthdayReminderService {
           })
         )
           return;
-        await tx.$queryRaw`SELECT id FROM birthday_sync_states WHERE id = 'schaledb' FOR SHARE`;
-        const source = await tx.birthdaySyncState.findUnique({
-          where: { id: "schaledb" },
+        await tx.$queryRaw`SELECT id FROM birthday_sync_states WHERE id = 'combined' FOR SHARE`;
+        let source = await tx.birthdaySyncState.findUnique({
+          where: { id: "combined" },
           include: { catalog: true },
         });
-        if (
-          !source?.catalog ||
-          !source.lastCheckedAt ||
-          source.lastCheckedAt > now ||
-          now.getTime() - source.lastCheckedAt.getTime() >
-            BIRTHDAY_SOURCE_MAX_AGE_MS
-        )
-          return;
+        if (!source?.catalog) {
+          await tx.$queryRaw`SELECT id FROM birthday_sync_states WHERE id = 'schaledb' FOR SHARE`;
+          source = await tx.birthdaySyncState.findUnique({
+            where: { id: "schaledb" },
+            include: { catalog: true },
+          });
+        }
+        if (!source?.catalog) return;
         const targetLocalDate = birthdayAddDays(sendLocalDate, offset);
-        const people: BirthdayNotificationPerson[] = readBirthdayPeople(
-          source.catalog.people,
-        )
-          .filter(
-            (person) =>
-              person.notificationEligible &&
-              person.originalEntryId !== null &&
-              person.month === Number(targetLocalDate.slice(5, 7)) &&
-              person.day === Number(targetLocalDate.slice(8, 10)),
-          )
+        const candidates = readBirthdayPeople(source.catalog.people).filter(
+          (person) =>
+            person.notificationEligible &&
+            person.month === Number(targetLocalDate.slice(5, 7)) &&
+            person.day === Number(targetLocalDate.slice(8, 10)),
+        );
+        const kivoIds = candidates.flatMap((person) =>
+          person.birthdaySource?.source === "kivo"
+            ? [person.birthdaySource.entryId]
+            : [],
+        );
+        const [schale, external] = await Promise.all([
+          source.id === "schaledb"
+            ? Promise.resolve(source)
+            : tx.birthdaySyncState.findUnique({ where: { id: "schaledb" } }),
+          kivoIds.length
+            ? tx.birthdayExternalEntry.findMany({
+                where: { source: "kivo", entryId: { in: kivoIds } },
+                select: {
+                  entryId: true,
+                  personKey: true,
+                  status: true,
+                  profileHash: true,
+                  lastCheckedAt: true,
+                },
+              })
+            : Promise.resolve([]),
+        ]);
+        const externalById = new Map(
+          external.map((entry) => [entry.entryId, entry]),
+        );
+        const eligible = candidates.flatMap((person) => {
+          const checkedAt = birthdayReminderCheckedAt(
+            person,
+            schale?.lastCheckedAt ?? null,
+            person.birthdaySource?.source === "kivo"
+              ? externalById.get(person.birthdaySource.entryId)
+              : undefined,
+            now,
+          );
+          return checkedAt ? [{ person, checkedAt }] : [];
+        });
+        const people: BirthdayNotificationPerson[] = eligible
+          .map(({ person }) => person)
           .map(({ key, name, month, day, originalEntryId }) => ({
             key,
             name,
             month: month!,
             day: day!,
-            originalEntryId: originalEntryId!,
+            originalEntryId,
           }))
           .sort((a, b) => a.key.localeCompare(b.key));
         if (!people.length) return;
+        const checkedAt = new Date(
+          Math.min(...eligible.map((entry) => entry.checkedAt.getTime())),
+        );
         const routes = [];
         const subscriptions = await tx.birthdayChannelSubscription.findMany({
           where: {
@@ -402,7 +481,7 @@ export class BirthdayReminderService {
         const validBefore = new Date(
           Math.min(
             birthdayDueAt(birthdayAddDays(sendLocalDate, 1), "00:00").getTime(),
-            source.lastCheckedAt.getTime() + BIRTHDAY_SOURCE_MAX_AGE_MS,
+            checkedAt.getTime() + BIRTHDAY_SOURCE_MAX_AGE_MS,
           ),
         );
         if (validBefore <= now) return;
@@ -415,7 +494,7 @@ export class BirthdayReminderService {
           validBefore: validBefore.toISOString(),
           catalogId: source.catalog.id,
           catalogVersion: source.catalog.contentHash,
-          checkedAt: source.lastCheckedAt.toISOString(),
+          checkedAt: checkedAt.toISOString(),
           people,
           count: people.length,
         };

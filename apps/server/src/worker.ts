@@ -113,10 +113,30 @@ async function birthdayLoop() {
     reminders = app.get(BirthdayReminderService);
   let nextCatalogCleanup = 0;
   while (!stopping.signal.aborted) {
+    // Reminder maintenance is DB-only and must survive independent source failures.
+    if (notifications.enabled) {
+      try {
+        await reminders.maintain();
+      } catch {
+        console.error("生日提醒维护未完成，将在下一轮恢复");
+      }
+    }
     try {
       await birthdays.schedule();
+    } catch {
+      console.error("生日主源调度未完成，将在下一轮恢复");
+    }
+    try {
+      await birthdays.scheduleSupplement();
+    } catch {
+      console.error("生日补充来源调度未完成，将在下一轮恢复");
+    }
+    try {
       await jobs.runNext("network", stopping.signal, BIRTHDAY_SCOPE);
-      if (notifications.enabled) await reminders.maintain();
+    } catch {
+      console.error("生日资料处理未完成，将按任务状态恢复");
+    }
+    try {
       if (Date.now() >= nextCatalogCleanup) {
         await birthdays.cleanupCatalogs();
         nextCatalogCleanup = Date.now() + 86_400_000;

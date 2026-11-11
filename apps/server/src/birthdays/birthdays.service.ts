@@ -12,6 +12,8 @@ import type {
 } from "./providers/schaledb.js";
 import { birthdayCalendar } from "./birthday-calendar.js";
 import { isBirthdayIdentityStatus } from "./providers/schaledb.js";
+import { combineBirthdayCatalog } from "./providers/combined.js";
+import { BirthdaySupplement } from "./birthday-supplement.js";
 
 export const BIRTHDAY_SYNC_KIND = "birthday_catalog_sync";
 export const BIRTHDAY_SCOPE = "birthdays";
@@ -53,6 +55,53 @@ export function readBirthdayPeople(value: unknown): BirthdayPerson[] {
       )
     )
       throw new Error("birthday_invalid_catalog");
+    if (p.avatarUrl !== undefined && p.avatarUrl !== null) {
+      if (
+        typeof p.avatarUrl !== "string" ||
+        p.avatarUrl.length > 2048 ||
+        unsafeText(p.avatarUrl)
+      )
+        throw new Error("birthday_invalid_catalog");
+      let avatar: URL;
+      try {
+        avatar = new URL(p.avatarUrl);
+      } catch {
+        throw new Error("birthday_invalid_catalog");
+      }
+      if (
+        avatar.origin !== "https://static.kivo.wiki" ||
+        avatar.username ||
+        avatar.password ||
+        avatar.search ||
+        avatar.hash ||
+        !avatar.pathname.startsWith("/images/students/")
+      )
+        throw new Error("birthday_invalid_catalog");
+    }
+    let birthdaySource: BirthdayPerson["birthdaySource"];
+    if (p.birthdaySource !== undefined) {
+      if (
+        !p.birthdaySource ||
+        typeof p.birthdaySource !== "object" ||
+        Array.isArray(p.birthdaySource)
+      )
+        throw new Error("birthday_invalid_catalog");
+      const source = p.birthdaySource as Record<string, unknown>;
+      if (source.source === "schaledb") birthdaySource = { source: "schaledb" };
+      else if (
+        source.source === "kivo" &&
+        Number.isSafeInteger(source.entryId) &&
+        Number(source.entryId) > 0 &&
+        typeof source.profileHash === "string" &&
+        /^[a-f0-9]{64}$/.test(source.profileHash)
+      )
+        birthdaySource = {
+          source: "kivo",
+          entryId: Number(source.entryId),
+          profileHash: source.profileHash,
+        };
+      else throw new Error("birthday_invalid_catalog");
+    }
     const month = p.month as number | null,
       day = p.day as number | null;
     if (
@@ -77,6 +126,10 @@ export function readBirthdayPeople(value: unknown): BirthdayPerson[] {
       originalEntryId: p.originalEntryId as number | null,
       entryIds: p.entryIds as number[],
       notificationEligible: p.notificationEligible,
+      ...(p.avatarUrl !== undefined
+        ? { avatarUrl: p.avatarUrl as string | null }
+        : {}),
+      ...(birthdaySource ? { birthdaySource } : {}),
     };
   });
 }
@@ -90,6 +143,7 @@ export function nextBirthdaySync(now: Date): Date {
 @Injectable()
 export class BirthdaysService {
   readonly enabled: boolean;
+  private readonly supplement: BirthdaySupplement;
   constructor(
     @Inject(PrismaService) private readonly db: PrismaService,
     @Inject(JobsService) private readonly jobs: JobsService,
@@ -99,6 +153,30 @@ export class BirthdaysService {
     this.jobs.register(BIRTHDAY_SYNC_KIND, (job, signal) =>
       this.synchronize(job, signal),
     );
+    this.supplement = new BirthdaySupplement(
+      db,
+      jobs,
+      this.enabled,
+      (tx) => this.publishCombined(tx),
+      (tx) => this.lockCombined(tx),
+    );
+  }
+
+  scheduleSupplement(now = new Date()) {
+    return this.supplement.schedule(now);
+  }
+
+  private async currentCatalog() {
+    const combined = await this.db.birthdaySyncState.findUnique({
+      where: { id: "combined" },
+      include: { catalog: true },
+    });
+    return combined?.catalog
+      ? combined
+      : this.db.birthdaySyncState.findUnique({
+          where: { id: "schaledb" },
+          include: { catalog: true },
+        });
   }
 
   async calendar(now = new Date(), summary = false) {
@@ -113,10 +191,7 @@ export class BirthdaysService {
       };
     const [settings, state] = await Promise.all([
       this.db.birthdaySettings.findUnique({ where: { id: "global" } }),
-      this.db.birthdaySyncState.findUnique({
-        where: { id: "schaledb" },
-        include: { catalog: true },
-      }),
+      this.currentCatalog(),
     ]);
     if (settings?.displayEnabled === false || !state?.catalog)
       return {
@@ -159,10 +234,7 @@ export class BirthdaysService {
         lastCheckedAt: null,
         dataUpdatedAt: null,
       };
-    const state = await this.db.birthdaySyncState.findUnique({
-      where: { id: "schaledb" },
-      include: { catalog: true },
-    });
+    const state = await this.currentCatalog();
     return {
       available: true,
       personCount: state?.catalog
@@ -249,6 +321,113 @@ export class BirthdaysService {
       )`;
   }
 
+  /** Every source writer takes this mutex before changing evidence or publishing. */
+  private async lockCombined(tx: Prisma.TransactionClient) {
+    await tx.birthdaySyncState.upsert({
+      where: { id: "combined" },
+      create: { id: "combined" },
+      update: {},
+    });
+    await tx.$queryRaw`SELECT id FROM birthday_sync_states WHERE id = 'combined' FOR UPDATE`;
+  }
+
+  private async publishCombined(tx: Prisma.TransactionClient) {
+    const [raw, current, entries, overrides] = await Promise.all([
+      tx.birthdaySyncState.findUnique({
+        where: { id: "schaledb" },
+        include: { catalog: true },
+      }),
+      tx.birthdaySyncState.findUnique({
+        where: { id: "combined" },
+        include: { catalog: true },
+      }),
+      tx.birthdayExternalEntry.findMany({
+        where: { source: "kivo" },
+        orderBy: { entryId: "asc" },
+        take: 2001,
+      }),
+      tx.birthdayNameOverride.findMany(),
+    ]);
+    const result = combineBirthdayCatalog(
+      raw?.catalog ? readBirthdayPeople(raw.catalog.people) : [],
+      entries,
+      current?.catalog
+        ? readBirthdayPeople(current.catalog.people)
+        : raw?.catalog
+          ? readBirthdayPeople(raw.catalog.people)
+          : [],
+    );
+    const byId = new Map(entries.map((e) => [e.entryId, e]));
+    const now = new Date();
+    const added = result.identities.filter((r) => !byId.has(r.entryId));
+    if (added.length)
+      await tx.birthdayExternalEntry.createMany({
+        data: added.map((row) => ({
+          ...row,
+          source: "kivo",
+          listedAt: now,
+          nextCheckAt: now,
+        })),
+      });
+    for (const row of result.identities) {
+      const old = byId.get(row.entryId);
+      if (
+        old &&
+        (old.personKey !== row.personKey ||
+          old.status !== row.status ||
+          JSON.stringify(old.blockedKeys) !== JSON.stringify(row.blockedKeys) ||
+          JSON.stringify(old.gameEntryIds) !== JSON.stringify(row.gameEntryIds))
+      )
+        await tx.birthdayExternalEntry.update({
+          where: { source_entryId: { source: "kivo", entryId: row.entryId } },
+          data: row,
+        });
+    }
+    const byKey = new Map(overrides.map((row) => [row.personKey, row]));
+    const people = readBirthdayPeople(
+      result.people.map((person) => {
+        const override = byKey.get(person.key);
+        return override
+          ? {
+              ...person,
+              name: override.name,
+              aliases: [
+                ...new Set([
+                  ...person.aliases,
+                  person.name,
+                  ...override.aliases,
+                ]),
+              ]
+                .filter((alias) => alias !== override.name)
+                .sort(),
+            }
+          : person;
+      }),
+    );
+    const contentHash = createHash("sha256")
+      .update(JSON.stringify(people))
+      .digest("hex");
+    const counts = raw?.sourceCounts ?? {};
+    const catalog = await tx.birthdayCatalog.upsert({
+      where: { contentHash },
+      update: {},
+      create: {
+        contentHash,
+        people: people as unknown as Prisma.InputJsonValue,
+        sourceCounts: counts as Prisma.InputJsonValue,
+      },
+    });
+    await tx.birthdaySyncState.update({
+      where: { id: "combined" },
+      data: {
+        catalogId: catalog.id,
+        lastCheckedAt: raw?.lastCheckedAt ?? null,
+        lastErrorCode: null,
+        sourceCounts: counts as Prisma.InputJsonValue,
+      },
+    });
+  }
+
   async synchronize(job: BackgroundJob, signal: AbortSignal) {
     if (!this.enabled) return;
     const settings = await this.db.birthdaySettings.findUnique({
@@ -308,6 +487,7 @@ export class BirthdaysService {
       signal.throwIfAborted();
       await this.db.$transaction(async (tx) => {
         await this.jobs.assertLease(tx, job);
+        await this.lockCombined(tx);
         await tx.$queryRaw`SELECT id FROM birthday_sync_states WHERE id = 'schaledb' FOR UPDATE`;
         const current = await tx.birthdaySyncState.findUniqueOrThrow({
           where: { id: state.id },
@@ -383,6 +563,7 @@ export class BirthdaysService {
               result.sourceCounts as unknown as Prisma.InputJsonValue,
           },
         });
+        await this.publishCombined(tx);
       });
     } catch (error) {
       const code =

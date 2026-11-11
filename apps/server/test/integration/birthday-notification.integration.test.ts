@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { BirthdayReminderService } from "../../src/birthdays/birthday-reminder.service.js";
 import {
   birthdayAddDays,
+  birthdayDueAt,
   birthdayLocalDate,
 } from "../../src/birthdays/birthday-policy.js";
 import { parseEnvironment } from "../../src/config/environment.js";
@@ -38,6 +39,10 @@ test(
     const previousSource = await db.birthdaySyncState.findUnique({
       where: { id: "schaledb" },
     });
+    const previousCombined = await db.birthdaySyncState.findUnique({
+      where: { id: "combined" },
+    });
+    const externalIds: number[] = [];
     const now = new Date();
     const date = birthdayLocalDate(now);
     const before = new Date(now.getTime() - 2 * 86_400_000);
@@ -94,6 +99,7 @@ test(
         sourceCounts: { jp: people.length, cn: people.length },
       },
     });
+    const ownedCatalogIds = [catalog.id];
     const work = await publisher.record({
       eventKey: `birthday-integration:${token}`,
       type: "imported",
@@ -160,6 +166,7 @@ test(
     };
     const runtime = worker();
     async function reset() {
+      await db.birthdaySyncState.deleteMany({ where: { id: "combined" } });
       await db.birthdaySettings.upsert({
         where: { id: "global" },
         create: { id: "global" },
@@ -208,7 +215,7 @@ test(
     }
     async function clearBirthdays() {
       const occurrences = await db.birthdayReminderOccurrence.findMany({
-        where: { catalogId: catalog.id },
+        where: { catalogId: { in: ownedCatalogIds } },
       });
       const ids = occurrences.flatMap((row) =>
         row.eventId ? [row.eventId] : [],
@@ -230,7 +237,7 @@ test(
         },
       });
       await db.birthdayReminderOccurrence.deleteMany({
-        where: { catalogId: catalog.id },
+        where: { catalogId: { in: ownedCatalogIds } },
       });
       await db.notificationEvent.deleteMany({ where: { id: { in: ids } } });
     }
@@ -249,6 +256,33 @@ test(
       );
     }
     try {
+      await reset();
+      await t.test(
+        "an empty combined state does not suppress fresh primary reminders during supplement bootstrap failure",
+        async () => {
+          await db.birthdaySyncState.create({
+            data: { id: "combined", catalogId: null },
+          });
+          await reminders.maintain(now);
+          const occurrences = await db.birthdayReminderOccurrence.findMany({
+            where: { catalogId: catalog.id },
+          });
+          assert.equal(occurrences.length, 3);
+          assert.deepEqual(
+            occurrences.map((row) => row.offsetDays).sort((a, b) => a - b),
+            [0, 1, 7],
+          );
+          assert.ok(
+            occurrences.every(
+              (row) =>
+                row.namespace === "schaledb" &&
+                (row.snapshot as { checkedAt: string }).checkedAt ===
+                  now.toISOString(),
+            ),
+          );
+        },
+      );
+      await clearBirthdays();
       await reset();
       await t.test(
         "stale suppression keeps the slot free; two workers freeze a single occurrence per offset",
@@ -583,6 +617,155 @@ test(
           );
         },
       );
+      await clearBirthdays();
+      await reset();
+      await t.test(
+        "mixed-source evidence expires independently and catalog changes do not reopen a frozen daily digest",
+        async () => {
+          await db.birthdaySettings.update({
+            where: { id: "global" },
+            data: { offsetDays: [0] },
+          });
+          const checkedAt = new Date(now.getTime() - 47 * 3_600_000);
+          const stale = new Date(now.getTime() - 49 * 3_600_000);
+          const primary = people[0]!;
+          const entryId = 2_000_000_000 + Math.floor(Math.random() * 1_000_000);
+          externalIds.push(entryId, entryId + 1, entryId + 2);
+          const supplemental = externalIds.map((id, index) => ({
+            ...primary,
+            key: `kivo:${id}`,
+            name: `合成未实装人物${index}`,
+            originalEntryId: null,
+            entryIds: [],
+            birthdaySource: {
+              source: "kivo",
+              entryId: id,
+              profileHash: "a".repeat(64),
+            },
+          }));
+          await db.birthdayExternalEntry.createMany({
+            data: supplemental.map((person, index) => ({
+              source: "kivo",
+              entryId: person.birthdaySource.entryId,
+              personKey: person.key,
+              status: "confirmed",
+              profileHash:
+                index === 2
+                  ? "b".repeat(64)
+                  : person.birthdaySource.profileHash,
+              lastCheckedAt: index === 1 ? stale : checkedAt,
+              listedAt: now,
+              nextCheckAt: now,
+            })),
+          });
+          const merged = await db.birthdayCatalog.create({
+            data: {
+              contentHash: randomUUID().replaceAll("-", "").repeat(2),
+              people: [primary, ...supplemental],
+              sourceCounts: {},
+            },
+          });
+          ownedCatalogIds.push(merged.id);
+          await db.birthdaySyncState.create({
+            data: {
+              id: "combined",
+              catalogId: merged.id,
+              lastCheckedAt: stale,
+            },
+          });
+          await db.birthdaySyncState.update({
+            where: { id: "schaledb" },
+            data: { lastCheckedAt: stale },
+          });
+          await Promise.all([
+            reminders.maintain(now),
+            new BirthdayReminderService(db, registry).maintain(now),
+          ]);
+          const occurrence =
+            await db.birthdayReminderOccurrence.findFirstOrThrow({
+              where: { catalogId: merged.id },
+            });
+          const frozen = occurrence.snapshot as {
+            checkedAt: string;
+            validBefore: string;
+            people: { key: string; originalEntryId: number | null }[];
+          };
+          assert.equal(occurrence.namespace, "schaledb");
+          assert.deepEqual(
+            frozen.people.map((person) => [person.key, person.originalEntryId]),
+            [[supplemental[0]!.key, null]],
+          );
+          assert.equal(frozen.checkedAt, checkedAt.toISOString());
+          assert.equal(
+            frozen.validBefore,
+            new Date(
+              Math.min(
+                birthdayDueAt(birthdayAddDays(date, 1), "00:00").getTime(),
+                checkedAt.getTime() + 48 * 3_600_000,
+              ),
+            ).toISOString(),
+          );
+          await db.birthdaySyncState.update({
+            where: { id: "schaledb" },
+            data: { lastCheckedAt: now },
+          });
+          await db.birthdayExternalEntry.updateMany({
+            where: { source: "kivo", entryId: { in: externalIds } },
+            data: { lastCheckedAt: now, profileHash: "a".repeat(64) },
+          });
+          const refreshed = await db.birthdayCatalog.create({
+            data: {
+              contentHash: randomUUID().replaceAll("-", "").repeat(2),
+              people: [
+                primary,
+                ...supplemental.map((person) => ({
+                  ...person,
+                  name: person.name + "新名称",
+                })),
+              ],
+              sourceCounts: {},
+            },
+          });
+          ownedCatalogIds.push(refreshed.id);
+          await db.birthdaySyncState.update({
+            where: { id: "combined" },
+            data: { catalogId: refreshed.id, lastCheckedAt: now },
+          });
+          await reminders.maintain(now);
+          assert.equal(
+            await db.birthdayReminderOccurrence.count({
+              where: { catalogId: { in: ownedCatalogIds } },
+            }),
+            1,
+          );
+          assert.deepEqual(
+            (
+              await db.birthdayReminderOccurrence.findUniqueOrThrow({
+                where: { id: occurrence.id },
+              })
+            ).snapshot,
+            occurrence.snapshot,
+            "recovered people must not rewrite or duplicate an already frozen digest",
+          );
+          await clearBirthdays();
+          await db.birthdayExternalEntry.updateMany({
+            where: { source: "kivo", entryId: { in: externalIds } },
+            data: { lastCheckedAt: stale },
+          });
+          await reminders.maintain(now);
+          const primaryOnly =
+            await db.birthdayReminderOccurrence.findFirstOrThrow({
+              where: { catalogId: refreshed.id },
+            });
+          assert.deepEqual(
+            (primaryOnly.snapshot as { people: { key: string }[] }).people.map(
+              (person) => person.key,
+            ),
+            [primary.key],
+            "stale supplemental evidence must not block the fresh primary source",
+          );
+        },
+      );
     } finally {
       await clearBirthdays();
       await db.notificationDelivery.delete({ where: { id: workDelivery.id } });
@@ -597,7 +780,17 @@ test(
           data: previousSource as unknown as Prisma.BirthdaySyncStateUncheckedUpdateInput,
         });
       else await db.birthdaySyncState.deleteMany({ where: { id: "schaledb" } });
-      await db.birthdayCatalog.delete({ where: { id: catalog.id } });
+      await db.birthdaySyncState.deleteMany({ where: { id: "combined" } });
+      if (previousCombined)
+        await db.birthdaySyncState.create({
+          data: previousCombined as unknown as Prisma.BirthdaySyncStateUncheckedCreateInput,
+        });
+      await db.birthdayExternalEntry.deleteMany({
+        where: { source: "kivo", entryId: { in: externalIds } },
+      });
+      await db.birthdayCatalog.deleteMany({
+        where: { id: { in: ownedCatalogIds } },
+      });
       if (previousSettings)
         await db.birthdaySettings.update({
           where: { id: "global" },

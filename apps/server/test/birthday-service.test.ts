@@ -155,6 +155,11 @@ function fixture(enabled = true) {
         return overrides;
       },
     },
+    birthdayExternalEntry: {
+      async findMany() {
+        return [];
+      },
+    },
     birthdayCatalog: {
       async upsert({ create }: { create: Omit<Catalog, "id" | "createdAt"> }) {
         if (!catalogs.has(create.contentHash))

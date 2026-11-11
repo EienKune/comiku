@@ -6,7 +6,7 @@ export interface BirthdayNotificationPerson {
   name: string;
   month: number;
   day: number;
-  originalEntryId: number;
+  originalEntryId: number | null;
 }
 export interface BirthdayNotificationSnapshot {
   kind: "birthday_digest";

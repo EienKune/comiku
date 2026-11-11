@@ -1938,6 +1938,28 @@ model BirthdayNameOverride {
   @@map("birthday_name_overrides")
 }
 
+// External source identities and minimal profile evidence are kept separate from
+// SchaleDB's reviewed integer entry mapping. A published personKey never changes.
+model BirthdayExternalEntry {
+  source String @db.VarChar(32)
+  entryId Int @map("entry_id")
+  personKey String? @map("person_key") @db.VarChar(128)
+  status String @default("confirmed") @db.VarChar(16)
+  blockedKeys String[] @default([]) @map("blocked_keys")
+  gameEntryIds Int[] @default([]) @map("game_entry_ids")
+  profile Json?
+  profileHash String? @map("profile_hash") @db.Char(64)
+  listedAt DateTime @map("listed_at") @db.Timestamptz(3)
+  lastCheckedAt DateTime? @map("last_checked_at") @db.Timestamptz(3)
+  nextCheckAt DateTime @default(now()) @map("next_check_at") @db.Timestamptz(3)
+  lastErrorCode String? @map("last_error_code") @db.VarChar(64)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@id([source, entryId])
+  @@index([source, nextCheckAt, entryId], map: "birthday_external_due_idx")
+  @@index([personKey], map: "birthday_external_person_idx")
+  @@map("birthday_external_entries")
+}
+
 model BirthdayCatalog {
   id String @id @default(uuid()) @db.Uuid
   contentHash String @unique @map("content_hash") @db.Char(64)

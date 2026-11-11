@@ -22,6 +22,8 @@ import {
 } from "../src/notifications/notification-events.js";
 import { NotificationRuntimeService } from "../src/notifications/notification-runtime.service.js";
 import type { Environment } from "../src/config/environment.js";
+import { birthdayReminderCheckedAt } from "../src/birthdays/birthday-reminder.service.js";
+import type { BirthdayPerson } from "../src/birthdays/providers/schaledb.js";
 
 test("birthday calendar uses Shanghai calendar addition without moving leap birthdays", () => {
   assert.equal(
@@ -241,6 +243,103 @@ test("birthday support does not broaden work normalization or change legacy work
         type: "birthday.reminder",
       } as never),
     /notification_event_invalid/,
+  );
+});
+
+test("reminders validate each birthday's own evidence and keep Schale original review protection", () => {
+  const now = new Date("2026-11-11T02:00:00Z");
+  const fresh = new Date(now.getTime() - 47 * 3_600_000);
+  const stale = new Date(now.getTime() - 49 * 3_600_000);
+  const base: BirthdayPerson = {
+    key: "synthetic",
+    name: "合成人物",
+    aliases: [],
+    month: 11,
+    day: 11,
+    originalEntryId: 1,
+    entryIds: [1],
+    notificationEligible: true,
+  };
+  const kivo: BirthdayPerson = {
+    ...base,
+    originalEntryId: null,
+    entryIds: [],
+    birthdaySource: {
+      source: "kivo",
+      entryId: 123,
+      profileHash: "a".repeat(64),
+    },
+  };
+  const evidence = {
+    personKey: base.key,
+    status: "confirmed",
+    profileHash: "a".repeat(64),
+    lastCheckedAt: fresh,
+  };
+  assert.equal(birthdayReminderCheckedAt(base, fresh, undefined, now), fresh);
+  assert.equal(
+    birthdayReminderCheckedAt(
+      { ...base, originalEntryId: null },
+      fresh,
+      undefined,
+      now,
+    ),
+    null,
+  );
+  assert.equal(
+    birthdayReminderCheckedAt(kivo, stale, evidence, now),
+    fresh,
+    "Schale failure must not block a fresh supplemental birthday",
+  );
+  assert.equal(
+    birthdayReminderCheckedAt(
+      kivo,
+      now,
+      { ...evidence, lastCheckedAt: stale },
+      now,
+    ),
+    null,
+    "a primary-source success must not refresh a supplemental birthday",
+  );
+  for (const changed of [
+    { status: "pending" },
+    { personKey: "another-person" },
+    { profileHash: "b".repeat(64) },
+    { lastCheckedAt: null },
+    { lastCheckedAt: new Date(now.getTime() + 1) },
+    { lastCheckedAt: new Date(now.getTime() - 48 * 3_600_000) },
+  ]) {
+    assert.equal(
+      birthdayReminderCheckedAt(kivo, now, { ...evidence, ...changed }, now),
+      null,
+    );
+  }
+  assert.equal(birthdayReminderCheckedAt(kivo, now, undefined, now), null);
+  assert.equal(
+    birthdayReminderCheckedAt(
+      { ...kivo, notificationEligible: false },
+      now,
+      evidence,
+      now,
+    ),
+    null,
+  );
+  const mixed = {
+    ...snapshot,
+    people: [
+      ...people,
+      {
+        ...people[0]!,
+        key: "kivo",
+        name: "合成未实装人物",
+        originalEntryId: null,
+      },
+    ],
+  };
+  assert.match(renderBirthdayNotification(mixed, ""), /合成未实装人物/);
+  assert.equal(
+    birthdayNotificationHash("legacy", snapshot),
+    "d2d782c1dadfa755c31cc6b33ae359111d76e176047a797c9b8ba54c6ffd4105",
   );
 });
 
