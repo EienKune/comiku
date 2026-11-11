@@ -168,6 +168,11 @@ test("every event respects all masks and preview uses the delivery renderer", ()
             }),
             policy,
           );
+          assert.equal(
+            text.split("\n")[1],
+            `#12${titleEnabled ? " PRIVATE_TITLE" : ""}`,
+            type,
+          );
           assert.equal(text.includes("PRIVATE_TITLE"), titleEnabled, type);
           assert.equal(text.includes("PRIVATE_AUTHOR"), authorEnabled, type);
           assert.equal(text.includes("PRIVATE_ACTOR"), actorEnabled, type);
@@ -176,7 +181,9 @@ test("every event respects all masks and preview uses the delivery renderer", ()
             actorEnabled ? 1 : 0,
             type,
           );
-          assert.ok(text.includes("独立提示"));
+          if (type === "stage_submitted")
+            assert.equal(text.includes("提交人：PRIVATE_ACTOR"), actorEnabled);
+          assert.ok(text.includes("\n独立提示\n"));
           assert.equal(
             notificationTemplatePreview(type, policy, "https://example.test"),
             renderTemplateNotificationMessage(
@@ -196,8 +203,9 @@ test("every event respects all masks and preview uses the delivery renderer", ()
     );
     assert.doesNotMatch(
       missing,
-      /undefined|null|作者：|操作人：|保存人：|提交人：/,
+      /undefined|null|标题：|作者：|操作人：|保存人：|提交人：/,
     );
+    assert.equal(missing.split("\n")[1], "#1001", type);
   }
 });
 
@@ -230,38 +238,6 @@ test("claim and join keep full action and link under every tight Unicode budget"
       );
       assert.equal(Buffer.from(text).toString("utf8"), text);
     }
-});
-
-test("all eight masks are independent and missing metadata is omitted", () => {
-  const event = normalizeNotificationEvent({
-    ...input,
-    title: "作品标题",
-    authorName: "作者姓名",
-    actorName: "操作姓名",
-  });
-  for (const titleEnabled of [false, true])
-    for (const authorEnabled of [false, true])
-      for (const actorEnabled of [false, true]) {
-        const text = renderTemplateNotificationMessage(event, {
-          titleEnabled,
-          authorEnabled,
-          actorEnabled,
-          note: "独立提示语",
-        });
-        assert.equal(
-          text.split("\n")[1],
-          `#12${titleEnabled ? " 作品标题" : ""}`,
-        );
-        assert.equal(text.includes("作者：作者姓名"), authorEnabled);
-        assert.equal(text.includes("提交人：操作姓名"), actorEnabled);
-        assert.equal(text.includes("作品标题"), titleEnabled);
-        assert.ok(text.includes("\n独立提示语\n"));
-      }
-  const text = renderTemplateNotificationMessage(
-    normalizeNotificationEvent(input),
-    settings,
-  );
-  assert.doesNotMatch(text, /标题：|作者：|提交人：|undefined|null/);
 });
 
 test("import places author before action and metadata only confirms saving", () => {

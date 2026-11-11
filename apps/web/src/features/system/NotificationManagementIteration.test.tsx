@@ -131,96 +131,6 @@ test("preview debounces notes and rejects stale errors/finally after edit and hi
   expect(post).toHaveBeenCalledTimes(2);
   expect(screen.queryByRole("dialog")).toBeNull();
 });
-test("history fetches twenty rows, applies filters explicitly and replaces pages with a back stack", async () => {
-  const get = vi.spyOn(client, "GET").mockImplementation(
-    async (path: string, options?: ReadOptions) =>
-      ({
-        data: path.endsWith("configuration")
-          ? {
-              enabled: true,
-              connections: [],
-              channels: [],
-              templates: [template],
-              eventTypes: events,
-            }
-          : {
-              items: [],
-              nextCursor:
-                options?.params?.query &&
-                "cursor" in options.params.query &&
-                options.params.query.cursor
-                  ? null
-                  : "second",
-            },
-        response: new Response(),
-      }) as never,
-  );
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  render(
-    <QueryClientProvider client={queryClient}>
-      <NotificationManagement />
-    </QueryClientProvider>,
-  );
-  fireEvent.click(screen.getByRole("tab", { name: "投递记录" }));
-  await waitFor(() =>
-    expect(get).toHaveBeenCalledWith(
-      "/api/notifications/deliveries",
-      expect.objectContaining({
-        params: { query: expect.objectContaining({ limit: 20 }) },
-      }),
-    ),
-  );
-  const before = get.mock.calls.length;
-  fireEvent.change(screen.getByLabelText("原目标群号"), {
-    target: { value: "987" },
-  });
-  expect(get).toHaveBeenCalledTimes(before);
-  fireEvent.click(screen.getByRole("button", { name: "筛选" }));
-  await waitFor(() =>
-    expect(get).toHaveBeenLastCalledWith(
-      "/api/notifications/deliveries",
-      expect.objectContaining({
-        params: {
-          query: expect.objectContaining({
-            groupId: "987",
-            cursor: undefined,
-            limit: 20,
-          }),
-        },
-      }),
-    ),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "下一页" }));
-  await waitFor(() =>
-    expect(get).toHaveBeenLastCalledWith(
-      "/api/notifications/deliveries",
-      expect.objectContaining({
-        params: { query: expect.objectContaining({ cursor: "second" }) },
-      }),
-    ),
-  );
-  fireEvent.change(screen.getByLabelText("原目标群号"), {
-    target: { value: "555" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "刷新记录" }));
-  await waitFor(() =>
-    expect(get).toHaveBeenLastCalledWith(
-      "/api/notifications/deliveries",
-      expect.objectContaining({
-        params: {
-          query: expect.objectContaining({ cursor: undefined, groupId: "987" }),
-        },
-      }),
-    ),
-  );
-  expect(
-    (screen.getByRole("button", { name: "上一页" }) as HTMLButtonElement)
-      .disabled,
-  ).toBe(true);
-});
-
 const historyRow = (
   id: string,
   workNumber: number,
@@ -246,7 +156,7 @@ const historyRow = (
   contentRevision: 0,
   metadataObservedAt: null,
 });
-test("history replaces twenty rows, back navigates, combines all filters, resets and ignores cancelled requests", async () => {
+test("history replaces twenty rows, applies filters explicitly, refreshes without losing drafts and ignores cancelled requests", async () => {
   const get = vi.spyOn(client, "GET").mockImplementation(
     async (path: string, options?: ReadOptions) =>
       ({
@@ -292,6 +202,12 @@ test("history replaces twenty rows, back navigates, combines all filters, resets
   fireEvent.click(screen.getByRole("tab", { name: "投递记录" }));
   await screen.findByText("#1");
   expect(document.querySelectorAll(".notification-delivery")).toHaveLength(20);
+  expect(get).toHaveBeenCalledWith(
+    "/api/notifications/deliveries",
+    expect.objectContaining({
+      params: { query: expect.objectContaining({ limit: 20 }) },
+    }),
+  );
   fireEvent.click(screen.getByRole("button", { name: "下一页" }));
   await screen.findByText("#101");
   expect(screen.queryByText("#1")).toBeNull();
@@ -299,6 +215,7 @@ test("history replaces twenty rows, back navigates, combines all filters, resets
   fireEvent.click(screen.getByRole("button", { name: "上一页" }));
   await screen.findByText("#1");
   expect(screen.queryByText("#101")).toBeNull();
+  const beforeFilter = get.mock.calls.length;
   fireEvent.change(screen.getByLabelText("原目标群号"), {
     target: { value: "987" },
   });
@@ -315,6 +232,7 @@ test("history replaces twenty rows, back navigates, combines all filters, resets
   fireEvent.click(screen.getByRole("option", { name: "通知测试" }));
   fireEvent.click(screen.getByRole("combobox", { name: "投递状态" }));
   fireEvent.click(screen.getByRole("option", { name: "排队中" }));
+  expect(get).toHaveBeenCalledTimes(beforeFilter);
   fireEvent.click(screen.getByRole("button", { name: "筛选" }));
   await waitFor(() =>
     expect(get).toHaveBeenLastCalledWith(
@@ -327,6 +245,7 @@ test("history replaces twenty rows, back navigates, combines all filters, resets
             eventType: "notification.test",
             status: "pending",
             cursor: undefined,
+            limit: 20,
             createdFrom: new Date("2026-03-08T00:00:00").toISOString(),
             createdBefore: new Date("2026-03-09T00:00:00").toISOString(),
           }),
@@ -334,6 +253,43 @@ test("history replaces twenty rows, back navigates, combines all filters, resets
       }),
     ),
   );
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "下一页" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+  await screen.findByText("#101");
+  const beforeDraft = get.mock.calls.length;
+  fireEvent.change(screen.getByLabelText("原目标群号"), {
+    target: { value: "555" },
+  });
+  expect(get).toHaveBeenCalledTimes(beforeDraft);
+  fireEvent.click(screen.getByRole("button", { name: "刷新记录" }));
+  await screen.findByText("#1");
+  expect(get).toHaveBeenLastCalledWith(
+    "/api/notifications/deliveries",
+    expect.objectContaining({
+      params: {
+        query: expect.objectContaining({
+          groupId: "987",
+          workNumber: 42,
+          status: "pending",
+          eventType: "notification.test",
+          cursor: undefined,
+          limit: 20,
+        }),
+      },
+    }),
+  );
+  expect((screen.getByLabelText("原目标群号") as HTMLInputElement).value).toBe(
+    "555",
+  );
+  expect(
+    (screen.getByRole("button", { name: "上一页" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "重置" }));
   await waitFor(() =>
     expect(get).toHaveBeenLastCalledWith(
@@ -355,6 +311,12 @@ test("history replaces twenty rows, back navigates, combines all filters, resets
   );
   expect((screen.getByLabelText("原目标群号") as HTMLInputElement).value).toBe(
     "",
+  );
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "刷新记录" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
   );
   let complete!: (value: never) => void;
   get.mockImplementationOnce(

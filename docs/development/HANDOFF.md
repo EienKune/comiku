@@ -2,6 +2,11 @@
 
 This tracked document records reusable implementation constraints. Business rules live in [architecture](../architecture.md), configuration in [configuration](../configuration.md), and visual rules in [DESIGN](../../DESIGN.md). Keep machine addresses, credentials, real samples, local experiments and deployment session notes outside the public repository.
 
+## CI and regression scope
+
+- Full CI runs on pushes to `main`/`dev` and on pull requests to any branch. Keep PR targets unfiltered so stacked reviews retain checks; ordinary feature pushes do not duplicate the PR run. Run affected tests during small iterations and complete the required checks before review or release.
+- Consolidating overlapping tests must retain distinct behavior: the notification mask matrix also checks exact heading placement, actor labels and missing metadata; history pagination also checks explicit filter application, refresh with an unsubmitted draft, page reset, back navigation and stale-request cancellation. Keep permission, concurrency, retry, compatibility and database-plan regressions.
+
 ## Notifications
 
 - Event-template messages use an explicit Asia/Shanghai clock to seconds and place an enabled title beside the work number. Describe each event's action instead of appending generic workflow/review-state rows. Content review decides whether production should continue; it is separate from proofreading quality or returning a translation. Whole-stage submission, personal completion and saving a typeset version must remain distinct. Reserve the complete action, URL and replay prefix before truncating optional Unicode metadata. Legacy messages and already-frozen text retain their original layout; previews and new captures share the formatter.
