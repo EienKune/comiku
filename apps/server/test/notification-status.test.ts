@@ -53,7 +53,7 @@ for (const enabled of [false, true]) {
       capped: false,
       oldestAt: null,
     });
-    assert.equal(sqls.length, 4);
+    assert.equal(sqls.length, 9);
   });
 }
 
@@ -63,7 +63,10 @@ test("status uses bounded oldest-first queries and reports failed maintenance be
       return [
         activation({ lastErrorAt: date, lastErrorCode: "maintenance_failed" }),
       ];
-    assert.match(sql.text, /ORDER BY (?:e\.)?created_at ASC, (?:e\.)?id ASC/);
+    assert.match(
+      sql.text,
+      /ORDER BY (?:status ASC, )?(?:e\.)?created_at ASC, (?:e\.)?id ASC/,
+    );
     assert.match(sql.text, /LIMIT 1001/);
     assert.doesNotMatch(sql.text, /COUNT\(|GROUP BY/i);
     return Array.from({ length: 1001 }, (_, index) => ({

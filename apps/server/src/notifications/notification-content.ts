@@ -83,10 +83,12 @@ export function renderTemplateNotificationMessage(
   event: NormalizedNotificationEvent,
   template: NotificationTemplateSettings,
   siteUrl?: string,
+  synthetic = false,
 ): string {
   const base = renderNotificationMessage(event, {
     includeDetails: false,
     siteUrl,
+    synthetic,
   });
   const lines = base.split("\n");
   const link = lines.pop()!;
@@ -129,5 +131,6 @@ export function notificationTemplatePreview(
     notificationPreviewEvent(type, stage, missingMetadata),
     template,
     siteUrl,
+    true,
   );
 }

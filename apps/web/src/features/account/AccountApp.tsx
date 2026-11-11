@@ -36,6 +36,7 @@ import {
 } from "./topbar-actions";
 import { settingsLinkState, useSettingsNavigation } from "./settings-routing";
 import { MemberAvatar } from "./MemberAvatar";
+import { loginReturnState } from "./login-return";
 import "./account.css";
 
 type Icon = ComponentType<{ size?: number; "aria-hidden"?: boolean }>;
@@ -149,10 +150,17 @@ export function AccountLayout() {
 
   if (me.isPending) return <LoadingState />;
   if (me.isError) return <ErrorState retry={() => void me.refetch()} />;
-  if (!me.data) return <Navigate to="/login" replace />;
+  if (!me.data)
+    return <Navigate to="/login" state={loginReturnState(location)} replace />;
   const user = me.data;
   if (user.mustChangePassword && location.pathname !== "/settings/password")
-    return <Navigate to="/settings/password" replace />;
+    return (
+      <Navigate
+        to="/settings/password"
+        state={loginReturnState(location)}
+        replace
+      />
+    );
   const restricted = user.mustChangePassword;
 
   async function logout() {

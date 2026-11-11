@@ -2,12 +2,13 @@ import { useAction } from "./use-action";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Navigate, useNavigate } from "react-router";
+import { Navigate, useLocation, useNavigate } from "react-router";
 import { BookOpen } from "lucide-react";
 import { Button, Surface, TextField } from "../../components/ui";
 import { client, queryClient, unwrap, useMe } from "./api";
 import { ErrorState, Feedback, LoadingState } from "./forms";
 import "./account.css";
+import { loginReturnTarget } from "./login-return";
 
 const schema = z.object({
   username: z.string().trim().min(3, "请输入至少 3 位账户名").max(64),
@@ -16,6 +17,8 @@ const schema = z.object({
 export function LoginPage() {
   const me = useMe();
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = loginReturnTarget(location.state);
   const action = useAction();
   const {
     register,
@@ -28,7 +31,8 @@ export function LoginPage() {
   if (me.data)
     return (
       <Navigate
-        to={me.data.mustChangePassword ? "/settings/password" : "/"}
+        to={me.data.mustChangePassword ? "/settings/password" : returnTo}
+        state={me.data.mustChangePassword ? { returnTo } : undefined}
         replace
       />
     );
@@ -51,9 +55,13 @@ export function LoginPage() {
               resetField("password");
               queryClient.clear();
               queryClient.setQueryData(["me"], user);
-              navigate(user.mustChangePassword ? "/settings/password" : "/", {
-                replace: true,
-              });
+              navigate(
+                user.mustChangePassword ? "/settings/password" : returnTo,
+                {
+                  replace: true,
+                  state: user.mustChangePassword ? { returnTo } : undefined,
+                },
+              );
             }),
           )}
         >

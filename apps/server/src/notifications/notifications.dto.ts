@@ -7,6 +7,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsISO8601,
   IsOptional,
   IsString,
   IsUUID,
@@ -20,16 +21,10 @@ import {
 } from "class-validator";
 import { NOTIFICATION_EVENT_KEYS } from "./notification-events.js";
 import { WorkStage } from "../generated/prisma/enums.js";
+import { NOTIFICATION_TIMESTAMP_PATTERN } from "./notification-history-query.js";
+import { DELIVERY_STATUSES } from "./notification-engine.helpers.js";
 
-export const notificationDeliveryStatuses = [
-  "pending",
-  "sending",
-  "retry_wait",
-  "accepted",
-  "failed",
-  "unknown",
-  "cancelled",
-] as const;
+export const notificationDeliveryStatuses = DELIVERY_STATUSES;
 
 export class NotificationConnectionDto {
   @ApiProperty({ type: String }) key!: string;
@@ -237,6 +232,13 @@ export class NotificationDeliveryDto {
   @ApiProperty({ type: Number }) revision!: number;
   @ApiProperty({ type: String, format: "date-time", nullable: true })
   resolvedAt!: string | null;
+  @ApiProperty({
+    type: String,
+    format: "date-time",
+    nullable: true,
+    description: "Next queued-job scheduling boundary, not a delivery ETA.",
+  })
+  nextEligibleAt!: string | null;
 }
 
 export class NotificationDeliveryPageDto {
@@ -246,6 +248,39 @@ export class NotificationDeliveryPageDto {
 }
 
 export class NotificationDeliveryQueryDto {
+  @ApiPropertyOptional({ type: String, pattern: "^[1-9][0-9]{0,19}$" })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[1-9][0-9]{0,19}$/)
+  groupId?: string;
+  @ApiPropertyOptional({ type: Number, minimum: 1, maximum: 2147483647 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  workNumber?: number;
+  @ApiPropertyOptional({
+    type: String,
+    enum: [...NOTIFICATION_EVENT_KEYS, "notification.test"],
+  })
+  @IsOptional()
+  @IsIn([...NOTIFICATION_EVENT_KEYS, "notification.test"])
+  eventType?: string;
+  @ApiPropertyOptional({ type: String, format: "date-time" })
+  @IsOptional()
+  @IsISO8601({ strict: true, strictSeparator: true })
+  @Matches(NOTIFICATION_TIMESTAMP_PATTERN)
+  createdFrom?: string;
+  @ApiPropertyOptional({
+    type: String,
+    format: "date-time",
+    description: "Exclusive creation-time upper bound.",
+  })
+  @IsOptional()
+  @IsISO8601({ strict: true, strictSeparator: true })
+  @Matches(NOTIFICATION_TIMESTAMP_PATTERN)
+  createdBefore?: string;
   @ApiPropertyOptional({ type: String, maxLength: 512 })
   @IsOptional()
   @IsString()
@@ -256,12 +291,12 @@ export class NotificationDeliveryQueryDto {
   @IsOptional()
   @IsIn(notificationDeliveryStatuses)
   status?: (typeof notificationDeliveryStatuses)[number];
-  @ApiPropertyOptional({ type: Number, minimum: 1, maximum: 50, default: 25 })
+  @ApiPropertyOptional({ type: Number, minimum: 1, maximum: 50, default: 20 })
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(50)
-  limit: number = 25;
+  limit: number = 20;
 }
 
 export class NotificationTestDto {

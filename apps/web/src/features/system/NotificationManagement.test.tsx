@@ -409,7 +409,7 @@ test("group comparison without manual refresh updates the audience warning witho
   expect(get).toHaveBeenCalledTimes(4); // Initial load, two comparisons, successful-save invalidation.
 });
 
-test("explicit template Edit focuses and reveals its heading without stealing focus on refresh or tab revisit", async () => {
+test("explicit template Edit opens a modal without page scrolling and refresh retains input focus", async () => {
   const scroll = vi.fn();
   const previous = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
@@ -422,37 +422,26 @@ test("explicit template Edit focuses and reveals its heading without stealing fo
   try {
     const { get } = setup();
     fireEvent.click(await screen.findByRole("tab", { name: "消息模板" }));
-    const open = screen.getByRole("button", { name: "编辑模板 阶段提交" });
-    open.focus();
-    fireEvent.click(open);
-    const heading = screen.getByRole("heading", { name: "阶段提交模板" });
-    expect(document.activeElement).toBe(heading);
-    expect(scroll).toHaveBeenCalledTimes(1);
+    const opener = screen.getByRole("button", { name: "编辑模板 阶段提交" });
+    opener.focus();
+    fireEvent.click(opener);
+    expect(screen.getByRole("dialog", { name: "阶段提交模板" })).toBeTruthy();
+    expect(document.activeElement).toBe(
+      screen.getByRole("heading", { name: "阶段提交模板" }),
+    );
     const input = screen.getByLabelText("事件提示语");
     input.focus();
     fireEvent.change(input, { target: { value: "保留输入焦点" } });
-    expect(document.activeElement).toBe(input);
     fireEvent.click(screen.getByRole("button", { name: "刷新配置" }));
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
     expect(document.activeElement).toBe(input);
-    const groups = screen.getByRole("tab", { name: "群订阅" });
-    groups.focus();
-    fireEvent.click(groups);
-    const templates = screen.getByRole("tab", { name: "消息模板" });
-    templates.focus();
-    fireEvent.click(templates);
-    expect(document.activeElement).toBe(templates);
-    expect(scroll).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "编辑模板 导入作品" }));
-    expect(document.activeElement).toBe(
-      screen.getByRole("heading", { name: "导入作品模板" }),
-    );
-    expect(scroll).toHaveBeenCalledTimes(2);
-    fireEvent.click(screen.getByRole("button", { name: "编辑模板 导入作品" }));
-    expect(document.activeElement).toBe(
-      screen.getByRole("heading", { name: "导入作品模板" }),
-    );
-    expect(scroll).toHaveBeenCalledTimes(3);
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    expect(document.activeElement).toBe(opener);
+    fireEvent.click(opener);
+    expect(
+      (screen.getByLabelText("事件提示语") as HTMLInputElement).value,
+    ).toBe("保留输入焦点");
+    expect(scroll).not.toHaveBeenCalled();
   } finally {
     if (previous)
       Object.defineProperty(HTMLElement.prototype, "scrollIntoView", previous);
@@ -702,7 +691,9 @@ test("template fields are independent and conflicts preserve Unicode draft", asy
   expect((screen.getByLabelText("事件提示语") as HTMLInputElement).value).toBe(
     "😀".repeat(120),
   );
-  expect(post).not.toHaveBeenCalled();
+  expect(
+    post.mock.calls.every((call) => call[0] === "/api/notifications/preview"),
+  ).toBe(true);
 });
 
 test("stage rules save real selected stages and warn about every old unsent message", async () => {
@@ -816,7 +807,6 @@ test("template sample selects stage and missing metadata without saving and clea
   // Native SelectField is custom; choose through its accessible options.
   fireEvent.click(screen.getByLabelText("样例职责"));
   fireEvent.click(await screen.findByRole("option", { name: "嵌字" }));
-  fireEvent.click(screen.getByRole("button", { name: "预览草稿" }));
   await screen.findByText("缺少资料样例");
   expect(post).toHaveBeenCalledWith(
     "/api/notifications/preview",
@@ -1381,7 +1371,7 @@ test.each([false, true])(
 );
 
 test.each(["history", "outer panel"])(
-  "a late adoption conflict while hidden by %s defers configuration reads until reactivation",
+  "a late adoption conflict retains the draft with the active catalogue boundary for %s",
   async (hiddenBy) => {
     const { get, post, setActive } = setup();
     post.mockResolvedValue({
@@ -1437,7 +1427,7 @@ test.each(["history", "outer panel"])(
         (call) => call[0] === "/api/notifications/configuration",
       ).length;
     await screen.findByText(/事件模板已变更/);
-    expect(configurationReads()).toBe(1);
+    expect(configurationReads()).toBe(hiddenBy === "history" ? 2 : 1);
     if (hiddenBy === "history")
       fireEvent.click(screen.getByRole("tab", { name: "群订阅" }));
     else setActive(true);

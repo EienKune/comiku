@@ -348,7 +348,7 @@ test(
       );
 
       await t.test(
-        "retained-history default and status pages use their time-keyset indexes",
+        "retained-history default and sparse-status pages use bounded indexed reads",
         async () => {
           const event = await publish("history-index");
           await first.runtime.maintain();
@@ -380,6 +380,7 @@ test(
           type Plan = {
             "Node Type": string;
             "Index Name"?: string;
+            "Index Cond"?: string;
             "Actual Rows": number;
             "Actual Loops": number;
             "Rows Removed by Filter"?: number;
@@ -396,6 +397,8 @@ test(
           const timeIndex = "notification_deliveries_created_at_id_idx";
           const statusIndex =
             "notification_deliveries_status_created_at_id_idx";
+          const channelStatusIndex =
+            "notification_deliveries_channel_id_status_resolved_at_idx";
           const nodes = (plan: Plan): Plan[] => [
             plan,
             ...(plan.Plans ?? []).flatMap(nodes),
@@ -406,6 +409,7 @@ test(
             allowedIndexes: string[],
             maxScanned: number,
             boundedSort = false,
+            requiredIndexCondition?: RegExp,
           ) => {
             const evidence = JSON.stringify({ label, explain });
             const root = explain[0]?.["QUERY PLAN"][0]?.Plan;
@@ -431,6 +435,12 @@ test(
             assert.equal(scans.length, 1, evidence);
             const scan = scans[0]!;
             assert.ok(allowedIndexes.includes(scan["Index Name"]!), evidence);
+            if (requiredIndexCondition)
+              assert.match(
+                scan["Index Cond"] ?? "",
+                requiredIndexCondition,
+                evidence,
+              );
             const scanned =
               (scan["Actual Rows"] +
                 (scan["Rows Removed by Filter"] ?? 0) +
@@ -456,8 +466,17 @@ test(
             [timeIndex, statusIndex],
             150,
           );
-          // A sparse bitmap range may sort its few matches; never the entire history.
-          assertBoundedPage("sparse-status", sparse, [statusIndex], 75, true);
+          // PostgreSQL can skip-scan the channel/status index for the same small
+          // status range. Require status in the index condition and keep the
+          // identical scan/sort bounds; the exact winning index is not the goal.
+          assertBoundedPage(
+            "sparse-status",
+            sparse,
+            [statusIndex, channelStatusIndex],
+            75,
+            true,
+            /\bstatus\b.*=.*'cancelled'/,
+          );
         },
       );
 

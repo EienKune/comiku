@@ -18382,9 +18382,10 @@
             "required": false,
             "in": "query",
             "schema": {
+              "type": "integer",
               "minimum": 1,
               "maximum": 50,
-              "type": "number"
+              "default": 20
             }
           },
           {
@@ -18410,6 +18411,81 @@
             "in": "query",
             "schema": {
               "maxLength": 512,
+              "type": "string"
+            }
+          },
+          {
+            "name": "createdBefore",
+            "required": false,
+            "in": "query",
+            "description": "Exclusive creation-time upper bound.",
+            "schema": {
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$",
+              "type": "string"
+            }
+          },
+          {
+            "name": "createdFrom",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$",
+              "type": "string"
+            }
+          },
+          {
+            "name": "eventType",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "imported",
+                "stage_joined",
+                "stage_started",
+                "typeset_handoff_started",
+                "stage_left",
+                "stage_assignment_updated",
+                "stage_submitted",
+                "proofreading_skipped",
+                "stage_submission_cancelled",
+                "review_opened",
+                "review_withdrawn",
+                "review_resumed",
+                "archived",
+                "restored",
+                "publish_confirmed",
+                "metadata_updated",
+                "collaboration_mode_updated",
+                "stage_credit_updated",
+                "stage_contribution_completed",
+                "translation_imported",
+                "typeset_version_uploaded",
+                "typeset_version_selected",
+                "typeset_version_deleted",
+                "typeset_version_restored",
+                "notification.test"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "workNumber",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          {
+            "name": "groupId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "pattern": "^[1-9][0-9]{0,19}$",
               "type": "string"
             }
           }
@@ -26877,6 +26953,33 @@
           "invalid"
         ]
       },
+      "NotificationDeliveryCountsDto": {
+        "type": "object",
+        "properties": {
+          "pending": {
+            "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+          },
+          "retryWait": {
+            "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+          },
+          "sending": {
+            "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+          },
+          "failedUnresolved": {
+            "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+          },
+          "unknownUnresolved": {
+            "$ref": "#/components/schemas/NotificationBoundedMetricDto"
+          }
+        },
+        "required": [
+          "pending",
+          "retryWait",
+          "sending",
+          "failedUnresolved",
+          "unknownUnresolved"
+        ]
+      },
       "NotificationStatusDto": {
         "type": "object",
         "properties": {
@@ -26930,6 +27033,9 @@
           },
           "counts": {
             "$ref": "#/components/schemas/NotificationStatusCountsDto"
+          },
+          "deliveries": {
+            "$ref": "#/components/schemas/NotificationDeliveryCountsDto"
           }
         },
         "required": [
@@ -26942,7 +27048,8 @@
           "lastRegistrationAt",
           "lastErrorAt",
           "lastErrorCode",
-          "counts"
+          "counts",
+          "deliveries"
         ]
       },
       "NotificationReceiptItemDto": {
@@ -27707,6 +27814,12 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "nextEligibleAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Next queued-job scheduling boundary, not a delivery ETA."
           }
         },
         "required": [
@@ -27728,7 +27841,8 @@
           "providerMessageId",
           "preview",
           "revision",
-          "resolvedAt"
+          "resolvedAt",
+          "nextEligibleAt"
         ]
       },
       "NotificationDeliveryPageDto": {

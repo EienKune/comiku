@@ -178,6 +178,7 @@ export function renderNotificationMessage(
     includeDetails: boolean;
     siteUrl?: string;
     historicalReplay?: boolean;
+    synthetic?: boolean;
   },
 ): string {
   const lines = [
@@ -233,7 +234,12 @@ export function renderNotificationMessage(
       throw new Error("notification_site_url_invalid");
     base = parsed.origin + parsed.pathname.replace(/\/$/, "");
   }
-  const link = `登录后查看：${base}/works/${encodeURIComponent(event.resourceId)}`;
+  const link =
+    event.type === "notification.test"
+      ? "连接测试消息，不对应真实作品"
+      : options.synthetic
+        ? "示例消息，不对应真实作品"
+        : `登录后查看：${base}/works/${encodeURIComponent(event.resourceId)}`;
   const fixedLength = [...[...lines, link].join("\n")].length;
   if (fixedLength > 1000) throw new Error("notification_message_too_long");
   // Preserve every historical fact and the complete URL; only optional personal details spend the remaining budget.
@@ -258,6 +264,7 @@ export function notificationPreview(
   return renderNotificationMessage(notificationPreviewEvent(type), {
     includeDetails,
     siteUrl,
+    synthetic: true,
   });
 }
 

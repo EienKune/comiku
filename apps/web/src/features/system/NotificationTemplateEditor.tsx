@@ -1,6 +1,19 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { X } from "lucide-react";
 import type { components } from "@comiku/api-client";
-import { Button, SelectField, TextField } from "../../components/ui";
+import {
+  Button,
+  IconButton,
+  SelectField,
+  TextField,
+} from "../../components/ui";
 import { Feedback } from "../account/forms";
 import { client, unwrap } from "../account/api";
 
@@ -71,7 +84,9 @@ export function TemplateEditor({
   templates,
   events,
   onUpdated,
+  enabled = true,
 }: {
+  enabled?: boolean;
   templates: Template[];
   events: EventOption[];
   onUpdated: () => void;
@@ -81,17 +96,39 @@ export function TemplateEditor({
   );
   const [active, setActive] = useState<EventType | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
-  const [editRequest, setEditRequest] = useState(0);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const headingId = useId();
+  const [search, setSearch] = useState("");
+  const [visible, setVisible] = useState(!document.hidden);
+  useEffect(() => {
+    const update = () => setVisible(!document.hidden);
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
   useLayoutEffect(() => {
-    if (!editRequest) return;
+    if (!active || !enabled) return;
+    const element = dialog.current;
+    if (!element) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    if (typeof element.showModal === "function") element.showModal();
+    else element.setAttribute("open", "");
     heading.current?.focus({ preventScroll: true });
-    heading.current?.scrollIntoView?.({ block: "start" });
-  }, [editRequest]);
+    return () => {
+      if (typeof element.close === "function") element.close();
+      else element.removeAttribute("open");
+      document.body.style.overflow = previousOverflow;
+      if (opener.current?.isConnected)
+        opener.current.focus({ preventScroll: true });
+    };
+  }, [active, enabled]);
   const [stage, setStage] = useState<Stage>("translate");
   const [missing, setMissing] = useState(false);
   const [preview, setPreview] = useState("");
   const [busy, setBusy] = useState(false);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewError, setPreviewError] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const epoch = useRef(0);
@@ -121,7 +158,9 @@ export function TemplateEditor({
         },
       );
       if (result.response.status === 409)
-        throw new Error("模板已被其他管理员修改。草稿已保留，请刷新后核对。");
+        throw new Error(
+          "模板已被其他管理员修改。草稿已保留，请比较当前版本后核对。",
+        );
       const saved = await unwrap(result);
       setDrafts((d) => ({ ...d, [draft.eventType]: saved }));
       setSuccess("模板已保存，只影响之后首次捕获的通知。");
@@ -151,227 +190,331 @@ export function TemplateEditor({
       setBusy(false);
     }
   }
-  async function showPreview() {
-    if (!draft) return;
-    const current = ++epoch.current;
-    setPreviewBusy(true);
-    setError("");
-    try {
-      const result = await unwrap(
-        await client.POST("/api/notifications/preview", {
-          body: {
+  const previewInput = useMemo(
+    () =>
+      draft
+        ? {
             eventType: draft.eventType,
             includeDetails: false,
             template: fields(draft),
-            ...(events.find((e) => e.type === draft.eventType)?.supportsStages
+            ...(events.find((event) => event.type === draft.eventType)
+              ?.supportsStages
               ? { stage }
               : {}),
             missingMetadata: missing,
-          },
-        }),
-      );
-      if (current === epoch.current) setPreview(result.text);
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setPreviewBusy(false);
-    }
+          }
+        : null,
+    [draft, events, stage, missing],
+  );
+  const previousNote = useRef("");
+  useEffect(() => {
+    const current = ++epoch.current;
+    const controller = new AbortController();
+    const note = previewInput?.template.note ?? "";
+    const delay = note !== previousNote.current ? 300 : 0;
+    previousNote.current = note;
+    setPreview("");
+    setPreviewError("");
+    setPreviewBusy(false);
+    if (
+      !active ||
+      !enabled ||
+      !visible ||
+      !previewInput ||
+      Array.from(note).length > 120
+    )
+      return;
+    setPreviewBusy(true);
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const result = await unwrap(
+            await client.POST("/api/notifications/preview", {
+              signal: controller.signal,
+              body: previewInput,
+            }),
+          );
+          if (!controller.signal.aborted && current === epoch.current)
+            setPreview(result.text);
+        } catch (caught) {
+          if (!controller.signal.aborted && current === epoch.current)
+            setPreviewError(errorMessage(caught));
+        } finally {
+          if (!controller.signal.aborted && current === epoch.current)
+            setPreviewBusy(false);
+        }
+      })();
+    }, delay);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [previewInput, active, enabled, visible]);
+  function close() {
+    epoch.current++;
+    setActive(null);
+  }
+  function dismissExpandedSelector() {
+    const selector = dialog.current?.querySelector<HTMLButtonElement>(
+      'button[role="combobox"][aria-expanded="true"]',
+    );
+    if (!selector) return false;
+    // SelectControl owns its open state. Its trigger closes it without changing the selected value.
+    selector.click();
+    selector.focus({ preventScroll: true });
+    return true;
   }
   return (
     <div className="notification-template-layout">
+      <TextField
+        label="搜索事件名称"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+      />
       <div className="notification-templates">
-        {templates.map((t) => (
-          <article className="notification-template-row" key={t.eventType}>
-            <div>
-              <strong>
-                {events.find((e) => e.type === t.eventType)?.label ??
-                  t.eventType}
-              </strong>
-              <span className="notification-boundary">
-                {[
-                  t.titleEnabled && "标题",
-                  t.authorEnabled && "作者",
-                  t.actorEnabled && "操作人",
-                ]
-                  .filter(Boolean)
-                  .join(" · ") || "仅固定事实"}{" "}
-                · {t.referencedGroupCount} 群引用
-              </span>
-            </div>
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={busy}
-              aria-label={`编辑模板 ${events.find((e) => e.type === t.eventType)?.label ?? t.eventType}`}
-              onClick={() => {
-                epoch.current++;
-                setEditRequest((request) => request + 1);
-                setActive(t.eventType);
-                setComparison(null);
-                setStage(
-                  events.find((e) => e.type === t.eventType)
-                    ?.allowedStages?.[0] ?? "translate",
-                );
-                setDrafts((d) => ({
-                  ...d,
-                  [t.eventType]: d[t.eventType] ?? { ...t },
-                }));
-                setPreview("");
-                setError("");
-                setSuccess("");
-              }}
-            >
-              编辑
-            </Button>
-          </article>
-        ))}
-      </div>
-      {draft && (
-        <form
-          className="notification-editor"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void save();
-          }}
-        >
-          <h3 ref={heading} tabIndex={-1}>
-            {events.find((e) => e.type === active)?.label}模板
-          </h3>
-          <fieldset disabled={busy}>
-            <div className="notification-actions">
-              {(
-                [
-                  ["titleEnabled", "作品标题"],
-                  ["authorEnabled", "作者"],
-                  ["actorEnabled", "操作人"],
-                ] as const
-              ).map(([key, label]) => (
-                <label className="notification-check" key={key}>
-                  <input
-                    type="checkbox"
-                    checked={draft[key]}
-                    onChange={(e) => change({ [key]: e.target.checked })}
-                  />
-                  {label}
-                </label>
-              ))}
-            </div>
-            <TextField
-              label="事件提示语"
-              value={draft.note}
-              onChange={(e) => change({ note: e.target.value })}
-            />
-            <p className="notification-boundary">
-              {Array.from(draft.note).length}/120 · 保存将影响引用此事件模板的{" "}
-              {draft.referencedGroupCount} 个群，已有待发保留原文。
-            </p>
-            <div className="notification-preview-controls">
-              {events.find((e) => e.type === active)?.supportsStages && (
-                <StageSelect
-                  allowedStages={
-                    events.find((e) => e.type === active)?.allowedStages ?? []
-                  }
-                  value={stage}
-                  onChange={(s) => {
-                    epoch.current++;
-                    setStage(s);
-                    setPreview("");
-                  }}
-                />
-              )}
-              <SelectField
-                label="样例资料"
-                value={missing ? "missing" : "full"}
-                onValueChange={(v) => {
-                  epoch.current++;
-                  setMissing(v === "missing");
-                  setPreview("");
-                }}
-              >
-                <option value="full">完整资料</option>
-                <option value="missing">缺少资料</option>
-              </SelectField>
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={Array.from(draft.note).length > 120}
-                loading={previewBusy}
-                onClick={() => void showPreview()}
-              >
-                预览草稿
-              </Button>
-            </div>
-            {preview && <pre className="notification-preview">{preview}</pre>}
-            <div className="notification-actions">
-              <Button
-                type="submit"
-                loading={busy}
-                disabled={Array.from(draft.note).length > 120}
-              >
-                保存模板
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setDrafts((d) => ({ ...d, [active!]: undefined }));
-                  setActive(null);
-                }}
-              >
-                取消
-              </Button>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => void compareCurrent()}
-            >
-              比较当前版本
-            </Button>
-            {comparison && (
-              <div className="notification-content">
-                <strong>当前服务器版本 {comparison.revision}</strong>
-                <p className="notification-boundary">
+        {templates
+          .filter((template) =>
+            (
+              events.find((event) => event.type === template.eventType)
+                ?.label ?? template.eventType
+            )
+              .toLocaleLowerCase()
+              .includes(search.trim().toLocaleLowerCase()),
+          )
+          .map((t) => (
+            <article className="notification-template-row" key={t.eventType}>
+              <div>
+                <strong>
+                  {events.find((e) => e.type === t.eventType)?.label ??
+                    t.eventType}
+                </strong>
+                <span className="notification-boundary">
                   {[
-                    comparison.titleEnabled && "标题",
-                    comparison.authorEnabled && "作者",
-                    comparison.actorEnabled && "操作人",
+                    t.titleEnabled && "标题",
+                    t.authorEnabled && "作者",
+                    t.actorEnabled && "操作人",
                   ]
                     .filter(Boolean)
-                    .join(" · ") || "仅固定事实"}
-                </p>
-                <pre className="notification-preview">
-                  {comparison.note || "无事件提示语"}
-                </pre>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => {
+                    .join(" · ") || "仅固定事实"}{" "}
+                  · {t.referencedGroupCount} 群引用
+                </span>
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy}
+                aria-label={`编辑模板 ${events.find((e) => e.type === t.eventType)?.label ?? t.eventType}`}
+                onClick={(event) => {
+                  opener.current = event.currentTarget;
+                  epoch.current++;
+                  setActive(t.eventType);
+                  setComparison(null);
+                  setStage(
+                    events.find((e) => e.type === t.eventType)
+                      ?.allowedStages?.[0] ?? "translate",
+                  );
+                  setDrafts((d) => ({
+                    ...d,
+                    [t.eventType]: d[t.eventType] ?? { ...t },
+                  }));
+                  setPreview("");
+                  setError("");
+                  setSuccess("");
+                }}
+              >
+                编辑
+              </Button>
+            </article>
+          ))}
+      </div>
+      {draft && enabled && (
+        <dialog
+          ref={dialog}
+          className="notification-template-dialog"
+          aria-labelledby={headingId}
+          onCancel={(event) => {
+            event.preventDefault();
+            if (!dismissExpandedSelector()) close();
+          }}
+          onKeyDownCapture={(event) => {
+            if (event.key === "Escape" && dismissExpandedSelector()) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              close();
+              return;
+            }
+            if (event.key !== "Tab") return;
+            const controls = Array.from(
+              event.currentTarget.querySelectorAll<HTMLElement>(
+                'button:not(:disabled), input:not(:disabled), [tabindex="0"]',
+              ),
+            ).filter((element) => !element.closest("[hidden]"));
+            const first = controls[0];
+            const last = controls.at(-1);
+            if (
+              event.shiftKey &&
+              (document.activeElement === first ||
+                document.activeElement === heading.current)
+            ) {
+              event.preventDefault();
+              last?.focus({ preventScroll: true });
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault();
+              first?.focus({ preventScroll: true });
+            }
+          }}
+        >
+          <form
+            className="notification-editor"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void save();
+            }}
+          >
+            <header className="notification-heading">
+              <h3 id={headingId} ref={heading} tabIndex={-1}>
+                {events.find((e) => e.type === active)?.label}模板
+              </h3>
+              <IconButton type="button" label="关闭" onClick={close}>
+                <X size={18} aria-hidden="true" />
+              </IconButton>
+            </header>
+            <fieldset disabled={busy}>
+              <div className="notification-actions">
+                {(
+                  [
+                    ["titleEnabled", "作品标题"],
+                    ["authorEnabled", "作者"],
+                    ["actorEnabled", "操作人"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label className="notification-check" key={key}>
+                    <input
+                      type="checkbox"
+                      checked={draft[key]}
+                      onChange={(e) => change({ [key]: e.target.checked })}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <TextField
+                label="事件提示语"
+                value={draft.note}
+                onChange={(e) => change({ note: e.target.value })}
+              />
+              <p className="notification-boundary">
+                {Array.from(draft.note).length}/120 · 保存将影响引用此事件模板的{" "}
+                {draft.referencedGroupCount} 个群，已有待发保留原文。
+              </p>
+              <div className="notification-preview-controls">
+                {events.find((e) => e.type === active)?.supportsStages && (
+                  <StageSelect
+                    allowedStages={
+                      events.find((e) => e.type === active)?.allowedStages ?? []
+                    }
+                    value={stage}
+                    onChange={(s) => {
+                      if (s === stage) return;
+                      epoch.current++;
+                      setStage(s);
+                      setPreview("");
+                    }}
+                  />
+                )}
+                <SelectField
+                  label="样例资料"
+                  value={missing ? "missing" : "full"}
+                  onValueChange={(v) => {
+                    if ((v === "missing") === missing) return;
                     epoch.current++;
+                    setMissing(v === "missing");
                     setPreview("");
-                    setDrafts((d) => ({
-                      ...d,
-                      [active!]: {
-                        ...d[active!]!,
-                        revision: comparison.revision,
-                        contentRevision: comparison.contentRevision,
-                        referencedGroupCount: comparison.referencedGroupCount,
-                      },
-                    }));
-                    setComparison(null);
-                    setError("");
-                    setSuccess(
-                      "已采用当前版本号，草稿字段保留。请核对后保存。",
-                    );
                   }}
                 >
-                  保留草稿并以当前版本重试
+                  <option value="full">完整资料</option>
+                  <option value="missing">缺少资料</option>
+                </SelectField>
+              </div>
+              {previewBusy && <p role="status">正在预览…</p>}
+              {preview && <pre className="notification-preview">{preview}</pre>}
+              <Feedback error={previewError} />
+              <div className="notification-actions">
+                <Button
+                  type="submit"
+                  loading={busy}
+                  disabled={Array.from(draft.note).length > 120}
+                >
+                  保存模板
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    setDrafts((d) => ({ ...d, [active!]: undefined }));
+                    close();
+                  }}
+                >
+                  放弃草稿
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => void compareCurrent()}
+                >
+                  比较当前版本
                 </Button>
               </div>
-            )}
-            <Feedback error={error} success={success} />
-          </fieldset>
-        </form>
+              {comparison && (
+                <div className="notification-content">
+                  <strong>当前服务器版本 {comparison.revision}</strong>
+                  <p className="notification-boundary">
+                    {[
+                      comparison.titleEnabled && "标题",
+                      comparison.authorEnabled && "作者",
+                      comparison.actorEnabled && "操作人",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "仅固定事实"}
+                  </p>
+                  <pre className="notification-preview">
+                    {comparison.note || "无事件提示语"}
+                  </pre>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      epoch.current++;
+                      setPreview("");
+                      setDrafts((d) => ({
+                        ...d,
+                        [active!]: {
+                          ...d[active!]!,
+                          revision: comparison.revision,
+                          contentRevision: comparison.contentRevision,
+                          referencedGroupCount: comparison.referencedGroupCount,
+                        },
+                      }));
+                      setComparison(null);
+                      setError("");
+                      setSuccess(
+                        "已采用当前版本号，草稿字段保留。请核对后保存。",
+                      );
+                    }}
+                  >
+                    保留草稿并以当前版本重试
+                  </Button>
+                </div>
+              )}
+              <Feedback error={error} success={success} />
+            </fieldset>
+          </form>
+        </dialog>
       )}
     </div>
   );

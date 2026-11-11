@@ -132,6 +132,34 @@ export class NotificationStatusService {
       receiptMetric("retry_wait"),
       receiptMetric("invalid"),
     ]);
+    // Active states cannot be resolved: resolution only acknowledges terminal
+    // records or creates a distinct replay. The equal-ended status range keeps
+    // status as an ordering prefix. A scalar equality lets PostgreSQL erase that
+    // constant prefix and choose the global time index under status/resolution
+    // correlation, scanning unrelated history before reaching LIMIT.
+    // Terminal samples also state the partial index's literal predicate so its
+    // eligibility is provable even when the particular status is parameterized.
+    const deliveryMetric = async (status: string) =>
+      metric(
+        await this.db.$queryRaw<{ createdAt: Date }[]>(Prisma.sql`
+        SELECT created_at AS "createdAt" FROM notification_deliveries
+        WHERE status BETWEEN ${status} AND ${status} AND resolved_at IS NULL
+          ${status === "failed" || status === "unknown" ? Prisma.sql`AND status IN ('failed', 'unknown')` : Prisma.empty}
+        ORDER BY status ASC, created_at ASC, id ASC LIMIT 1001`),
+      );
+    const [
+      deliveryPending,
+      deliveryRetryWait,
+      sending,
+      failedUnresolved,
+      unknownUnresolved,
+    ] = await Promise.all([
+      deliveryMetric("pending"),
+      deliveryMetric("retry_wait"),
+      deliveryMetric("sending"),
+      deliveryMetric("failed"),
+      deliveryMetric("unknown"),
+    ]);
     let uncaptured: NotificationBoundedMetricDto | null = null;
     if (this.registry.enabled && activation) {
       const branches = buildNotificationWorkEventSourceBranches({
@@ -183,6 +211,13 @@ export class NotificationStatusService {
           ? maintenanceError
           : null,
       counts: { uncaptured, pending, retryWait, invalid },
+      deliveries: {
+        pending: deliveryPending,
+        retryWait: deliveryRetryWait,
+        sending,
+        failedUnresolved,
+        unknownUnresolved,
+      },
     };
   }
 

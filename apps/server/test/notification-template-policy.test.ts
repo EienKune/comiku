@@ -402,6 +402,8 @@ test("saved sample history and replay retain the confirmed template revision aft
   assert.equal(saved.contentRevision, 3);
   assert.equal(saved.metadataOrigin, null);
   assert.equal(saved.metadataObservedAt, null);
+  assert.match(saved.preview, /示例消息，不对应真实作品/);
+  assert.doesNotMatch(saved.preview, /\/works\//);
   const frozen = (
     event!.routeRefs as { content: { formatVersion: number } }[]
   )[0]!;

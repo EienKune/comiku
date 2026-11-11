@@ -4332,6 +4332,13 @@ export interface components {
             retryWait: components["schemas"]["NotificationBoundedMetricDto"];
             invalid: components["schemas"]["NotificationBoundedMetricDto"];
         };
+        NotificationDeliveryCountsDto: {
+            pending: components["schemas"]["NotificationBoundedMetricDto"];
+            retryWait: components["schemas"]["NotificationBoundedMetricDto"];
+            sending: components["schemas"]["NotificationBoundedMetricDto"];
+            failedUnresolved: components["schemas"]["NotificationBoundedMetricDto"];
+            unknownUnresolved: components["schemas"]["NotificationBoundedMetricDto"];
+        };
         NotificationStatusDto: {
             enabled: boolean;
             /**
@@ -4353,6 +4360,7 @@ export interface components {
             lastErrorAt: string | null;
             lastErrorCode: string | null;
             counts: components["schemas"]["NotificationStatusCountsDto"];
+            deliveries: components["schemas"]["NotificationDeliveryCountsDto"];
         };
         NotificationReceiptItemDto: {
             /** Format: uuid */
@@ -4516,6 +4524,11 @@ export interface components {
             revision: number;
             /** Format: date-time */
             resolvedAt: string | null;
+            /**
+             * Format: date-time
+             * @description Next queued-job scheduling boundary, not a delivery ETA.
+             */
+            nextEligibleAt: string | null;
         };
         NotificationDeliveryPageDto: {
             items: components["schemas"]["NotificationDeliveryDto"][];
@@ -18333,6 +18346,12 @@ export interface operations {
                 limit?: number;
                 status?: "pending" | "sending" | "retry_wait" | "accepted" | "failed" | "unknown" | "cancelled";
                 cursor?: string;
+                /** @description Exclusive creation-time upper bound. */
+                createdBefore?: string;
+                createdFrom?: string;
+                eventType?: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed" | "metadata_updated" | "collaboration_mode_updated" | "stage_credit_updated" | "stage_contribution_completed" | "translation_imported" | "typeset_version_uploaded" | "typeset_version_selected" | "typeset_version_deleted" | "typeset_version_restored" | "notification.test";
+                workNumber?: number;
+                groupId?: string;
             };
             header?: never;
             path?: never;
