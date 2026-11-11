@@ -2040,6 +2040,8 @@
   border-bottom: 1px solid var(--color-border);
 }
 .workspace-settings-tabs a {
+  flex-shrink: 0;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
