@@ -12,6 +12,10 @@ import { NotificationRuntimeService } from "../../src/notifications/notification
 import { NotificationsService } from "../../src/notifications/notifications.service.js";
 import type { NotificationSendResult } from "../../src/notifications/notifications.contracts.js";
 import type { OneBotHttpAdapter } from "../../src/notifications/onebot-http.adapter.js";
+import {
+  assertNotificationHistoryPlan,
+  type QueryExplain,
+} from "../support/notification-history-plan.js";
 
 const url = process.env.TEST_DATABASE_URL;
 if (url && !new URL(url).pathname.endsWith("_test"))
@@ -377,106 +381,23 @@ test(
             })),
           });
           await db.$executeRaw`ANALYZE notification_deliveries`;
-          type Plan = {
-            "Node Type": string;
-            "Index Name"?: string;
-            "Index Cond"?: string;
-            "Actual Rows": number;
-            "Actual Loops": number;
-            "Rows Removed by Filter"?: number;
-            "Rows Removed by Index Recheck"?: number;
-            Plans?: Plan[];
-          };
-          type Explain = { "QUERY PLAN": { Plan: Plan }[] }[];
           const unfiltered =
-            await db.$queryRaw<Explain>`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT id FROM notification_deliveries ORDER BY created_at DESC, id DESC LIMIT 50`;
+            await db.$queryRaw<QueryExplain>`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT id FROM notification_deliveries ORDER BY created_at DESC, id DESC LIMIT 50`;
           const filtered =
-            await db.$queryRaw<Explain>`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT id FROM notification_deliveries WHERE status = 'accepted' ORDER BY created_at DESC, id DESC LIMIT 50`;
+            await db.$queryRaw<QueryExplain>`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT id FROM notification_deliveries WHERE status = 'accepted' ORDER BY created_at DESC, id DESC LIMIT 50`;
           const sparse =
-            await db.$queryRaw<Explain>`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT id FROM notification_deliveries WHERE status = 'cancelled' ORDER BY created_at DESC, id DESC LIMIT 50`;
-          const timeIndex = "notification_deliveries_created_at_id_idx";
-          const statusIndex =
-            "notification_deliveries_status_created_at_id_idx";
-          const channelStatusIndex =
-            "notification_deliveries_channel_id_status_resolved_at_idx";
-          const nodes = (plan: Plan): Plan[] => [
-            plan,
-            ...(plan.Plans ?? []).flatMap(nodes),
-          ];
-          const assertBoundedPage = (
-            label: string,
-            explain: Explain,
-            allowedIndexes: string[],
-            maxScanned: number,
-            boundedSort = false,
-            requiredIndexCondition?: RegExp,
-          ) => {
-            const evidence = JSON.stringify({ label, explain });
-            const root = explain[0]?.["QUERY PLAN"][0]?.Plan;
-            assert.ok(root, evidence);
-            const all = nodes(root);
-            assert.equal(root["Node Type"], "Limit", evidence);
-            assert.equal(root["Actual Rows"], 50, evidence);
-            assert.ok(
-              all.every((plan) => !/Seq Scan/.test(plan["Node Type"])),
-              evidence,
-            );
-            const sorts = all.filter((plan) => /Sort/.test(plan["Node Type"]));
-            assert.ok(
-              sorts.length === 0 ||
-                (boundedSort &&
-                  all.every(
-                    (plan) =>
-                      plan["Actual Rows"] * plan["Actual Loops"] <= maxScanned,
-                  )),
-              evidence,
-            );
-            const scans = all.filter((plan) => plan["Index Name"]);
-            assert.equal(scans.length, 1, evidence);
-            const scan = scans[0]!;
-            assert.ok(allowedIndexes.includes(scan["Index Name"]!), evidence);
-            if (requiredIndexCondition)
-              assert.match(
-                scan["Index Cond"] ?? "",
-                requiredIndexCondition,
-                evidence,
-              );
-            const scanned =
-              (scan["Actual Rows"] +
-                (scan["Rows Removed by Filter"] ?? 0) +
-                (scan["Rows Removed by Index Recheck"] ?? 0)) *
-              scan["Actual Loops"];
-            assert.ok(scanned >= 50 && scanned <= maxScanned, evidence);
+            await db.$queryRaw<QueryExplain>`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT id FROM notification_deliveries WHERE status = 'cancelled' ORDER BY created_at DESC, id DESC LIMIT 50`;
+          // PostgreSQL 17 may choose a bounded bitmap range; PostgreSQL 18
+          // may use a skip scan. Constrain actual work and the indexed status
+          // predicate rather than one optimizer's preferred index name.
+          for (const [label, plan] of [
+            ["unfiltered", unfiltered],
+            ["common-status", filtered],
+            ["sparse-status", sparse],
+          ] as const)
             t.diagnostic(
-              JSON.stringify({
-                label,
-                index: scan["Index Name"],
-                node: scan["Node Type"],
-                rows: scan["Actual Rows"],
-                filtered: scan["Rows Removed by Filter"] ?? 0,
-                scanned,
-              }),
+              JSON.stringify(assertNotificationHistoryPlan(label, plan)),
             );
-          };
-          assertBoundedPage("unfiltered", unfiltered, [timeIndex], 75);
-          // With roughly 50% accepted rows, filtering a backward time index is also bounded.
-          assertBoundedPage(
-            "common-status",
-            filtered,
-            [timeIndex, statusIndex],
-            150,
-          );
-          // PostgreSQL can skip-scan the channel/status index for the same small
-          // status range. Require status in the index condition and keep the
-          // identical scan/sort bounds; the exact winning index is not the goal.
-          assertBoundedPage(
-            "sparse-status",
-            sparse,
-            [statusIndex, channelStatusIndex],
-            75,
-            true,
-            /\bstatus\b.*=.*'cancelled'/,
-          );
         },
       );
 

@@ -62,6 +62,7 @@ function fixture(
     };
   }
   const registry = new ContentSourceRegistry();
+  let inProfile = false;
   registry.register(client);
   const db = { authorExternalAccount: { findFirst: async () => null } };
   const files = {
@@ -88,8 +89,14 @@ function fixture(
     downloader,
     {
       platforms: {
-        profileNetwork: async (_actor: string, run: () => Promise<unknown>) =>
-          run(),
+        profileNetwork: async (_actor: string, run: () => Promise<unknown>) => {
+          inProfile = true;
+          try {
+            return await run();
+          } finally {
+            inProfile = false;
+          }
+        },
       },
     },
   ] as unknown as ConstructorParameters<typeof AuthorsService>;
@@ -97,12 +104,37 @@ function fixture(
   return {
     client,
     downloader,
+    inProfile: () => inProfile,
     resolve: () =>
       platform === "x"
         ? service.resolveXProfile("actor", "fixture")
         : service.resolvePixivProfile("actor", "42"),
   };
 }
+
+test("profile execution remains admitted until the avatar body and storage finish", async () => {
+  for (const platform of ["x", "pixiv"] as const) {
+    let observed = false;
+    const f = fixture({
+      platform,
+      avatar:
+        platform === "pixiv" ? "https://i.pximg.net/avatar.png" : undefined,
+      fetch: async () => {
+        observed = f.inProfile();
+        return new Response("synthetic image", {
+          headers: { "Content-Type": "image/png" },
+        });
+      },
+    });
+    await f.resolve();
+    assert.equal(
+      observed,
+      true,
+      "avatar network must stay inside the profile execution boundary",
+    );
+    assert.equal(f.inProfile(), false);
+  }
+});
 
 test("gallery default avatars use profile-only CDN hosts without widening post downloads", async () => {
   for (const [platform, avatar] of [

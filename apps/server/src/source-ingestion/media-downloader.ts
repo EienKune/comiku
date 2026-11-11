@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { SourceResponseError } from "./source-response.js";
+import { sourceResourceUnconfirmed } from "./source-executions.js";
 
 export interface DownloadedMedia {
   body: Uint8Array;
@@ -113,11 +114,21 @@ export class HttpMediaDownloader implements MediaDownloader {
         checksum: checksum.digest("hex"),
       };
     } catch (error) {
-      if (reader) await reader.cancel().catch(() => undefined);
-      else await response.body?.cancel().catch(() => undefined);
+      if (reader)
+        await reader.cancel().catch(() => sourceResourceUnconfirmed());
+      else
+        await response.body?.cancel().catch(() => sourceResourceUnconfirmed());
       throw error;
     } finally {
-      reader?.releaseLock();
+      const release = () => {
+        try {
+          reader?.releaseLock();
+        } catch (error) {
+          sourceResourceUnconfirmed();
+          throw error;
+        }
+      };
+      release();
     }
   }
 }

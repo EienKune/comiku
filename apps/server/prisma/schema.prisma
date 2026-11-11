@@ -1614,6 +1614,8 @@ model SourceFetchAccountTask {
 }
 
 model SourcePlatformState {
+  maintenancePaused Boolean @default(false) @map("maintenance_paused")
+  maintenanceEpoch Int @default(0) @map("maintenance_epoch")
   platform String @id @db.VarChar(32)
   credentialGeneration String @map("credential_generation") @db.VarChar(64)
   status SourcePlatformStatus @default(unverified)
@@ -1847,4 +1849,51 @@ model NotificationAttempt {
   @@unique([deliveryId, number])
   @@index([jobId, status])
   @@map("notification_attempts")
+}
+
+model SourcePlatformExecution {
+  id String @id @default(uuid()) @db.Uuid
+  platform String @db.VarChar(32)
+  kind String @db.VarChar(24)
+  ownerId String @map("owner_id") @db.Uuid
+  jobId String @map("job_id") @db.Uuid
+  leaseId String @map("lease_id") @db.Uuid
+  taskId String? @map("task_id") @db.Uuid
+  campaignId String? @map("campaign_id") @db.Uuid
+  credentialGeneration String @map("credential_generation") @db.VarChar(64)
+  budgetAttempt Int @map("budget_attempt")
+  budgetRefunded Boolean @default(false) @map("budget_refunded")
+  admittedAt DateTime @default(now()) @map("admitted_at") @db.Timestamptz(3)
+  businessOutcome String? @map("business_outcome") @db.VarChar(24)
+  businessFinishedAt DateTime? @map("business_finished_at") @db.Timestamptz(3)
+  settledAt DateTime? @map("settled_at") @db.Timestamptz(3)
+  diagnosticJson Json @default("{}") @map("diagnostic_json")
+  @@unique([jobId, leaseId])
+  @@index([taskId, admittedAt, id], map: "source_execution_task_idx")
+  @@index([campaignId, admittedAt, id], map: "source_execution_campaign_idx")
+  @@index([platform, settledAt, id], map: "source_execution_unsettled_idx")
+  @@index([settledAt, id], map: "source_execution_retention_idx")
+  @@map("source_platform_executions")
+}
+
+model SourceCredentialChangeOperation {
+  id String @id @default(uuid()) @db.Uuid
+  platform String @db.VarChar(20)
+  actorId String @map("actor_id") @db.Uuid
+  requestId String @map("request_id") @db.Uuid
+  inputHash String @map("input_hash") @db.Char(64)
+  expectedEpoch Int @map("expected_epoch")
+  expectedGeneration String @map("expected_generation") @db.VarChar(64)
+  targetGeneration String? @map("target_generation") @db.VarChar(64)
+  phase String @db.VarChar(24)
+  failureCode String? @map("failure_code") @db.VarChar(64)
+  verificationOutcome String? @map("verification_outcome") @db.VarChar(20)
+  verificationCode String? @map("verification_code") @db.VarChar(64)
+  verifiedAt DateTime? @map("verified_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  @@unique([actorId, requestId])
+  @@index([platform, createdAt, id], map: "source_credential_operation_platform_idx")
+  @@map("source_credential_change_operations")
 }

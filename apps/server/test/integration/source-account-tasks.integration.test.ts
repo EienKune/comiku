@@ -4,7 +4,7 @@ import "reflect-metadata";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -15,6 +15,7 @@ import {
 } from "../../src/config/environment.js";
 import { PrismaService } from "../../src/database/prisma.service.js";
 import { JobsService } from "../../src/jobs/jobs.service.js";
+import { JobDeferred } from "../../src/jobs/jobs.service.js";
 import { SourceFetchService } from "../../src/source-ingestion/source-fetch.service.js";
 import { ContentSourceRegistry } from "../../src/source-ingestion/source-registry.js";
 import { SourceResponseError } from "../../src/source-ingestion/source-response.js";
@@ -196,6 +197,9 @@ async function fixture() {
         ],
       },
     });
+    await db.sourcePlatformExecution.deleteMany({
+      where: { ownerId: { in: [jobs.ownerId, peerJobs.ownerId] } },
+    });
     await deleteOwnedSetup();
     await db.sourcePlatformState.deleteMany({
       where: { platform: { in: ["x", "pixiv"] } },
@@ -228,6 +232,728 @@ async function fixture() {
     environment,
   };
 }
+
+test("maintenance sees the claim-to-handler admission even after lease expiry and isolates the other platform", async () => {
+  const f = await fixture();
+  try {
+    await f.db.userRole.create({ data: { userId: f.actor.id, role: "admin" } });
+    await f.manual();
+    const x = await f.jobs.claim("network", new Date(), "source:x");
+    assert.ok(x);
+    const execution = await f.db.sourcePlatformExecution.findUniqueOrThrow({
+      where: { jobId_leaseId: { jobId: x.id, leaseId: x.leaseId! } },
+    });
+    assert.equal(execution.taskId, x.resourceId);
+    assert.equal(execution.budgetAttempt, 1);
+    assert.equal(execution.settledAt, null);
+    const initial = await f.service.platforms.maintenanceStatus("x");
+    const paused = await f.service.platforms.pauseMaintenance("x", f.actor.id, {
+      expectedEpoch: initial.maintenanceEpoch,
+      expectedGeneration: initial.credentialGeneration!,
+    });
+    assert.equal(paused.unsettledExecutions, 1);
+    const expected = {
+      expectedEpoch: paused.maintenanceEpoch,
+      expectedGeneration: paused.credentialGeneration!,
+    };
+    await f.db.backgroundJob.update({
+      where: { id: x.id },
+      data: { leaseUntil: new Date(0) },
+    });
+    await assert.rejects(
+      f.service.platforms.resumeMaintenance("x", f.actor.id, expected),
+      /not confirmed/,
+    );
+    assert.equal(await f.jobs.claim("network", new Date(), "source:x"), null);
+    assert.equal(
+      await f.db.sourcePlatformExecution.count({ where: { jobId: x.id } }),
+      1,
+      "gate polling cannot manufacture executions",
+    );
+    const p = await f.peerJobs.claim("network", new Date(), "source:pixiv");
+    assert.ok(p);
+    await f.peerJobs.execute(p);
+    assert.equal(f.calls.pixiv, 1);
+    assert.equal(f.calls.x, 0);
+    // This local owner has not contacted a source; returning it now confirms its
+    // own resource boundary without reviving the replaced job lease.
+    await f.jobs.execute(x);
+    assert.equal(
+      (await f.service.platforms.maintenanceStatus("x")).unsettledExecutions,
+      0,
+    );
+    const after = await f.db.backgroundJob.findUniqueOrThrow({
+      where: { id: x.id },
+    });
+    assert.equal(after.lastError, "platform_maintenance");
+    await f.service.platforms.resumeMaintenance("x", f.actor.id, expected);
+    const resumed = await f.db.backgroundJob.findUniqueOrThrow({
+      where: { id: x.id },
+    });
+    assert.equal(resumed.attempts, 1);
+    assert.ok(resumed.availableAt <= new Date());
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("an in-flight profile avatar boundary blocks maintenance despite an expired interactive lease", async () => {
+  const f = await fixture(),
+    entered = pause(),
+    release = pause();
+  let running: Promise<string> | undefined;
+  try {
+    await f.db.userRole.create({ data: { userId: f.actor.id, role: "admin" } });
+    running = f.service.platforms.profileNetwork(f.actor.id, async () => {
+      entered.release();
+      await release.promise;
+      return "profile plus avatar";
+    });
+    await entered.promise;
+    const initial = await f.service.platforms.maintenanceStatus("x");
+    const paused = await f.service.platforms.pauseMaintenance("x", f.actor.id, {
+      expectedEpoch: initial.maintenanceEpoch,
+      expectedGeneration: initial.credentialGeneration!,
+    });
+    await f.db.backgroundJob.updateMany({
+      where: { actorId: f.actor.id, kind: "source_profile_resolve" },
+      data: { leaseUntil: new Date(0) },
+    });
+    const expected = {
+      expectedEpoch: paused.maintenanceEpoch,
+      expectedGeneration: paused.credentialGeneration!,
+    };
+    await assert.rejects(
+      f.service.platforms.resumeMaintenance("x", f.actor.id, expected),
+      /not confirmed/,
+    );
+    release.release();
+    await assert.rejects(running, /过期/);
+    await f.service.platforms.resumeMaintenance("x", f.actor.id, expected);
+    assert.equal(
+      (await f.service.platforms.maintenanceStatus("x")).maintenancePaused,
+      false,
+    );
+  } finally {
+    release.release();
+    await Promise.allSettled([running]);
+    await f.cleanup();
+  }
+});
+
+test("a real profile job renews during a virtual 63-second profile and avatar without sleeping its lease duration", async (t) => {
+  const f = await fixture(),
+    start = new Date();
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: start });
+  try {
+    const result = await f.service.platforms.profileNetwork(
+      f.actor.id,
+      async () => {
+        for (let step = 0; step < 4; step++) {
+          t.mock.timers.tick(15_000);
+          const expected = Math.min(
+            Date.now() + 60_000,
+            start.getTime() + 120_000,
+          );
+          let renewed = false;
+          for (let attempt = 0; attempt < 80; attempt++) {
+            const job = await f.db.backgroundJob.findFirstOrThrow({
+              where: {
+                actorId: f.actor.id,
+                kind: "source_profile_resolve",
+                status: "running",
+              },
+            });
+            if (job.leaseUntil?.getTime() === expected) {
+              renewed = true;
+              break;
+            }
+            await delay(2);
+          }
+          assert.ok(
+            renewed,
+            "the actual heartbeat transaction must extend the PostgreSQL lease",
+          );
+        }
+        t.mock.timers.tick(3_000);
+        assert.equal(
+          await f.db.sourcePlatformExecution.count({
+            where: { ownerId: f.jobs.ownerId, settledAt: null },
+          }),
+          1,
+        );
+        return "verified profile plus avatar";
+      },
+    );
+    assert.equal(result, "verified profile plus avatar");
+    const job = await f.db.backgroundJob.findFirstOrThrow({
+      where: { actorId: f.actor.id, kind: "source_profile_resolve" },
+    });
+    assert.equal(job.status, "succeeded");
+    assert.equal(
+      await f.db.sourcePlatformExecution.count({
+        where: { ownerId: f.jobs.ownerId, settledAt: null },
+      }),
+      0,
+    );
+  } finally {
+    t.mock.timers.reset();
+    await f.cleanup();
+  }
+});
+
+test("a configured platform can enter maintenance before its first run without any GET or platform write", async () => {
+  const f = await fixture();
+  try {
+    await f.db.userRole.create({ data: { userId: f.actor.id, role: "admin" } });
+    const status = await f.service.platforms.maintenanceStatus("pixiv");
+    assert.ok(
+      status.credentialGeneration,
+      "a readable empty config can be maintained before adding its token",
+    );
+    assert.equal(status.maintenanceEpoch, 0);
+    assert.equal(
+      await f.db.sourcePlatformState.count({ where: { platform: "pixiv" } }),
+      0,
+    );
+    assert.equal(
+      await f.db.sourcePlatformExecution.count({
+        where: { ownerId: f.jobs.ownerId },
+      }),
+      0,
+    );
+    const paused = await f.service.platforms.pauseMaintenance(
+      "pixiv",
+      f.actor.id,
+      { expectedEpoch: 0, expectedGeneration: status.credentialGeneration! },
+    );
+    assert.equal(paused.maintenancePaused, true);
+    assert.equal(paused.maintenanceEpoch, 1);
+    const state = await f.db.sourcePlatformState.findUniqueOrThrow({
+      where: { platform: "pixiv" },
+    });
+    assert.equal(state.status, "unverified");
+    assert.equal(state.credentialGeneration, status.credentialGeneration);
+    assert.equal(f.calls.pixiv, 0);
+    assert.equal(f.calls.x, 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("first-use maintenance refuses an unknown execution and a changed or unreadable config without initializing state", async () => {
+  const f = await fixture();
+  try {
+    await f.db.userRole.create({ data: { userId: f.actor.id, role: "admin" } });
+    const status = await f.service.platforms.maintenanceStatus("x"),
+      expected = {
+        expectedEpoch: 0,
+        expectedGeneration: status.credentialGeneration!,
+      };
+    const unknown = await f.db.sourcePlatformExecution.create({
+      data: {
+        platform: "x",
+        kind: "profile",
+        ownerId: f.jobs.ownerId,
+        jobId: randomUUID(),
+        leaseId: randomUUID(),
+        credentialGeneration: status.credentialGeneration!,
+        budgetAttempt: 1,
+      },
+    });
+    await assert.rejects(
+      f.service.platforms.pauseMaintenance("x", f.actor.id, expected),
+      /not confirmed/,
+    );
+    assert.equal(
+      await f.db.sourcePlatformState.count({ where: { platform: "x" } }),
+      0,
+    );
+    await f.db.sourcePlatformExecution.delete({ where: { id: unknown.id } });
+    await writeFile(f.xConfigPath, '{"synthetic":"changed before pause"}');
+    await assert.rejects(
+      f.service.platforms.pauseMaintenance("x", f.actor.id, expected),
+      /changed/,
+    );
+    assert.equal(
+      await f.db.sourcePlatformState.count({ where: { platform: "x" } }),
+      0,
+    );
+    await writeFile(f.xConfigPath, "{");
+    assert.equal(
+      (await f.service.platforms.maintenanceStatus("x")).credentialGeneration,
+      null,
+    );
+    await assert.rejects(
+      f.service.platforms.pauseMaintenance("x", f.actor.id, expected),
+      /changed/,
+    );
+    assert.equal(
+      await f.db.sourcePlatformState.count({ where: { platform: "x" } }),
+      0,
+    );
+    assert.equal(f.calls.x, 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("maintenance and claim share the actual PostgreSQL scope barrier", async () => {
+  const f = await fixture(),
+    locked = pause(),
+    release = pause(),
+    attempted = pause();
+  let claim: Promise<unknown> | undefined;
+  try {
+    await f.db.userRole.create({ data: { userId: f.actor.id, role: "admin" } });
+    await f.manual([f.accounts[0].id]);
+    const generation = await f.service.platforms.fingerprint("x");
+    assert.ok(generation);
+    await f.db.sourcePlatformState.create({
+      data: { platform: "x", credentialGeneration: generation },
+    });
+    const maintenance = f.db.$transaction(async (tx) => {
+      await f.service.platforms.lockMaintenance(tx, "x");
+      locked.release();
+      await release.promise;
+      await tx.sourcePlatformState.update({
+        where: { platform: "x" },
+        data: { maintenancePaused: true, maintenanceEpoch: { increment: 1 } },
+      });
+    });
+    await locked.promise;
+    const original = f.peerJobs.lockScope.bind(f.peerJobs);
+    let waitingPid = 0;
+    f.peerJobs.lockScope = async (tx, lane, scope) => {
+      if (scope === "source:x") {
+        const [backend] = await tx.$queryRaw<
+          { pid: number }[]
+        >`SELECT pg_backend_pid() AS pid`;
+        waitingPid = backend.pid;
+        attempted.release();
+      }
+      await original(tx, lane, scope);
+    };
+    claim = f.peerJobs.claim("network", new Date(), "source:x");
+    await attempted.promise;
+    let blocked = false;
+    for (let i = 0; i < 50; i++) {
+      const [row] = await f.db.$queryRaw<
+        { blocked: boolean }[]
+      >`SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=${waitingPid} AND locktype='advisory' AND NOT granted) AS blocked`;
+      if (row.blocked) {
+        blocked = true;
+        break;
+      }
+      await delay(10);
+    }
+    assert.ok(
+      blocked,
+      "claim must actually wait for the maintenance advisory lock",
+    );
+    release.release();
+    await maintenance;
+    assert.equal(await claim, null);
+    assert.equal(
+      await f.db.sourcePlatformExecution.count({
+        where: { ownerId: f.peerJobs.ownerId },
+      }),
+      0,
+    );
+  } finally {
+    release.release();
+    await Promise.allSettled([claim]);
+    await f.cleanup();
+  }
+});
+
+test("execution registration and the running job roll back together", async () => {
+  const f = await fixture();
+  const original = f.service.platforms.executions.admit.bind(
+    f.service.platforms.executions,
+  );
+  try {
+    await f.manual([f.accounts[0].id]);
+    f.service.platforms.executions.admit = async (tx, input) => {
+      await original(tx, input);
+      throw new Error("synthetic transaction fault after execution insert");
+    };
+    await assert.rejects(
+      f.jobs.claim("network", new Date(), "source:x"),
+      /synthetic transaction fault/,
+    );
+    const task = await f.db.sourceFetchAccountTask.findFirstOrThrow({
+      where: { accountId: f.accounts[0].id },
+    });
+    const job = await f.db.backgroundJob.findUniqueOrThrow({
+      where: { id: task.jobId! },
+    });
+    assert.equal(job.status, "queued");
+    assert.equal(job.attempts, 0);
+    assert.equal(task.status, "queued");
+    assert.equal(
+      await f.db.sourcePlatformExecution.count({ where: { jobId: job.id } }),
+      0,
+    );
+    assert.equal(
+      await f.db.sourcePlatformState.count({ where: { platform: "x" } }),
+      0,
+    );
+  } finally {
+    f.service.platforms.executions.admit = original;
+    await f.cleanup();
+  }
+});
+
+test("a refunded third attempt has its own immutable lease execution before another third attempt", async () => {
+  const f = await fixture();
+  const original = f.service.platforms.beforeNetwork.bind(f.service.platforms);
+  try {
+    await f.manual([f.accounts[0].id]);
+    const task = await f.db.sourceFetchAccountTask.findFirstOrThrow({
+      where: { accountId: f.accounts[0].id },
+    });
+    await f.db.backgroundJob.update({
+      where: { id: task.jobId! },
+      data: { attempts: 2 },
+    });
+    const first = await f.jobs.claim("network", new Date(), "source:x");
+    assert.ok(first);
+    f.service.platforms.beforeNetwork = async () => {
+      throw new JobDeferred(
+        new Date(Date.now() + 60_000),
+        "platform_maintenance",
+      );
+    };
+    await f.jobs.execute(first);
+    const refunded = await f.db.backgroundJob.findUniqueOrThrow({
+      where: { id: first.id },
+    });
+    const fact = await f.db.sourcePlatformExecution.findUniqueOrThrow({
+      where: { jobId_leaseId: { jobId: first.id, leaseId: first.leaseId! } },
+    });
+    assert.equal(refunded.attempts, 2);
+    assert.equal(refunded.status, "queued");
+    assert.equal(fact.budgetRefunded, true);
+    assert.equal(fact.businessOutcome, "deferred");
+    assert.ok(fact.settledAt);
+    f.service.platforms.beforeNetwork = original;
+    await f.db.backgroundJob.update({
+      where: { id: first.id },
+      data: { availableAt: new Date(0) },
+    });
+    const second = await f.jobs.claim("network", new Date(), "source:x");
+    assert.ok(second);
+    assert.equal(second.attempts, 3);
+    assert.notEqual(second.leaseId, first.leaseId);
+    await f.jobs.execute(second);
+    await f.jobs.execute(first); // A stale local return may settle only its own immutable fact.
+    const facts = await f.db.sourcePlatformExecution.findMany({
+      where: { jobId: first.id },
+      orderBy: { admittedAt: "asc" },
+    });
+    assert.equal(facts.length, 2);
+    assert.deepEqual(
+      facts.map((row) => row.budgetAttempt),
+      [3, 3],
+    );
+    const newer = facts.find((row) => row.leaseId === second.leaseId)!;
+    assert.equal(newer.businessOutcome, "succeeded");
+    assert.ok(newer.settledAt);
+  } finally {
+    f.service.platforms.beforeNetwork = original;
+    await f.cleanup();
+  }
+});
+
+test("maintenance validation records its bounded execution and leaves the platform paused and unverified", async () => {
+  const f = await fixture();
+  try {
+    await f.db.userRole.create({ data: { userId: f.actor.id, role: "admin" } });
+    await f.service.platforms.profileNetwork(
+      f.actor.id,
+      async () => "bootstrap",
+    );
+    const initial = await f.service.platforms.maintenanceStatus("x");
+    const paused = await f.service.platforms.pauseMaintenance("x", f.actor.id, {
+      expectedEpoch: initial.maintenanceEpoch,
+      expectedGeneration: initial.credentialGeneration!,
+    });
+    await f.db.sourcePlatformState.update({
+      where: { platform: "x" },
+      data: { status: "unverified" },
+    });
+    let calls = 0;
+    assert.equal(
+      await f.service.platforms.runMaintenanceValidation(
+        "x",
+        f.actor.id,
+        {
+          expectedEpoch: paused.maintenanceEpoch,
+          expectedGeneration: paused.credentialGeneration!,
+        },
+        async () => {
+          calls++;
+          return "bounded auth";
+        },
+      ),
+      "bounded auth",
+    );
+    assert.equal(calls, 1);
+    assert.equal(f.calls.x, 0);
+    const state = await f.db.sourcePlatformState.findUniqueOrThrow({
+      where: { platform: "x" },
+    });
+    assert.equal(state.status, "unverified");
+    assert.equal(state.maintenancePaused, true);
+    const facts = await f.db.sourcePlatformExecution.findMany({
+      where: { ownerId: f.jobs.ownerId, kind: "credential_validation" },
+    });
+    assert.equal(facts.length, 1);
+    assert.ok(facts[0].settledAt);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+for (const change of ["drift", "invalid"] as const)
+  test(`maintenance resume rejects ${change} in the real credential file without changing platform or queued work`, async () => {
+    const f = await fixture();
+    try {
+      await f.db.userRole.create({
+        data: { userId: f.actor.id, role: "admin" },
+      });
+      await f.manual([f.accounts[0].id]);
+      await f.service.platforms.profileNetwork(
+        f.actor.id,
+        async () => "bounded bootstrap",
+      );
+      const initial = await f.service.platforms.maintenanceStatus("x");
+      const paused = await f.service.platforms.pauseMaintenance(
+        "x",
+        f.actor.id,
+        {
+          expectedEpoch: initial.maintenanceEpoch,
+          expectedGeneration: initial.credentialGeneration!,
+        },
+      );
+      assert.equal(await f.jobs.claim("network", new Date(), "source:x"), null);
+      const expected = {
+        expectedEpoch: paused.maintenanceEpoch,
+        expectedGeneration: paused.credentialGeneration!,
+      };
+      const task = await f.db.sourceFetchAccountTask.findFirstOrThrow({
+        where: { accountId: f.accounts[0].id },
+      });
+      const job = await f.db.backgroundJob.findUniqueOrThrow({
+        where: { id: task.jobId! },
+      });
+      const state = await f.db.sourcePlatformState.findUniqueOrThrow({
+        where: { platform: "x" },
+      });
+      const original = await readFile(f.xConfigPath);
+      await writeFile(
+        f.xConfigPath,
+        change === "drift" ? '{"synthetic":"externally changed"}' : "{",
+      );
+      const actual = await f.service.platforms.fingerprint("x");
+      if (change === "invalid") assert.equal(actual, null);
+      else assert.notEqual(actual, expected.expectedGeneration);
+      await assert.rejects(
+        f.service.platforms.resumeMaintenance("x", f.actor.id, expected),
+        (error: any) =>
+          error.getStatus?.() === 409 &&
+          /configuration changed or unavailable/.test(error.message),
+      );
+      assert.deepEqual(
+        await f.db.sourcePlatformState.findUniqueOrThrow({
+          where: { platform: "x" },
+        }),
+        state,
+      );
+      assert.deepEqual(
+        await f.db.backgroundJob.findUniqueOrThrow({ where: { id: job.id } }),
+        job,
+      );
+      assert.deepEqual(
+        await f.db.sourceFetchAccountTask.findUniqueOrThrow({
+          where: { id: task.id },
+        }),
+        task,
+      );
+      // Restoring the exact material makes a subsequent explicit resume eligible;
+      // a rejected resume itself never changes generation or repairs the file.
+      await writeFile(f.xConfigPath, original);
+      await f.service.platforms.resumeMaintenance("x", f.actor.id, expected);
+      assert.equal(
+        (await f.service.platforms.maintenanceStatus("x")).maintenancePaused,
+        false,
+      );
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+test("settled execution retention removes at most 100 old rows and never ages out an unconfirmed owner", async () => {
+  const f = await fixture();
+  try {
+    const now = new Date(),
+      cutoff = new Date(now.getTime() - 30 * 86400_000),
+      old = new Date(now.getTime() - 31 * 86400_000);
+    const rows = Array.from({ length: 104 }, (_, index) => ({
+      id: randomUUID(),
+      platform: "x",
+      kind: "scan",
+      ownerId: f.jobs.ownerId,
+      jobId: randomUUID(),
+      leaseId: randomUUID(),
+      credentialGeneration: "a".repeat(64),
+      budgetAttempt: 1,
+      admittedAt: new Date(now.getTime() - 40 * 86400_000),
+      settledAt:
+        index < 101 ? old : index === 101 ? cutoff : index === 102 ? now : null,
+    }));
+    await f.db.sourcePlatformExecution.createMany({ data: rows });
+    assert.equal(await f.service.platforms.executions.pruneSettled(now), 100);
+    assert.equal(
+      await f.db.sourcePlatformExecution.count({
+        where: { ownerId: f.jobs.ownerId },
+      }),
+      4,
+    );
+    assert.equal(await f.service.platforms.executions.pruneSettled(now), 1);
+    const remaining = await f.db.sourcePlatformExecution.findMany({
+      where: { ownerId: f.jobs.ownerId },
+    });
+    assert.deepEqual(
+      new Set(remaining.map((row) => row.id)),
+      new Set(rows.slice(101).map((row) => row.id)),
+    );
+    assert.equal(
+      remaining.find((row) => row.id === rows[103].id)?.settledAt,
+      null,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("operator-confirmed stopped owner is generation scoped, audited, bounded and never rewrites business or jobs", async () => {
+  const f = await fixture();
+  try {
+    await f.db.userRole.create({ data: { userId: f.actor.id, role: "admin" } });
+    await f.manual([f.accounts[0].id]);
+    const job = await f.jobs.claim("network", new Date(), "source:x");
+    assert.ok(job);
+    const initial = await f.service.platforms.maintenanceStatus("x");
+    await f.service.platforms.pauseMaintenance("x", f.actor.id, {
+      expectedEpoch: initial.maintenanceEpoch,
+      expectedGeneration: initial.credentialGeneration!,
+    });
+    const generation = initial.credentialGeneration!;
+    await assert.rejects(
+      f.service.platforms.confirmStoppedOwner(
+        "x",
+        f.jobs.ownerId,
+        generation,
+        false,
+      ),
+      /stopped/,
+    );
+    await assert.rejects(
+      f.service.platforms.confirmStoppedOwner(
+        "x",
+        f.jobs.ownerId,
+        generation,
+        true,
+      ),
+      /lease/,
+    );
+    // The fixture never started a handler/child. Expiring its lease models the
+    // database refusal boundary, not evidence that an actual process stopped.
+    await f.db.backgroundJob.update({
+      where: { id: job.id },
+      data: { leaseUntil: new Date(0) },
+    });
+    const unchanged = await f.db.backgroundJob.findUniqueOrThrow({
+      where: { id: job.id },
+    });
+    const extra = (ownerId: string, credentialGeneration: string) => ({
+      platform: "x",
+      kind: "scan",
+      ownerId,
+      credentialGeneration,
+      jobId: randomUUID(),
+      leaseId: randomUUID(),
+      budgetAttempt: 1,
+    });
+    const otherOwner = await f.db.sourcePlatformExecution.create({
+      data: extra(f.peerJobs.ownerId, generation),
+    });
+    const otherGeneration = await f.db.sourcePlatformExecution.create({
+      data: extra(f.jobs.ownerId, "f".repeat(64)),
+    });
+    await assert.rejects(
+      f.service.platforms.confirmStoppedOwner(
+        "x",
+        f.jobs.ownerId,
+        "0".repeat(64),
+        true,
+      ),
+      /changed/,
+    );
+    const confirmed = await f.service.platforms.confirmStoppedOwner(
+      "x",
+      f.jobs.ownerId,
+      generation,
+      true,
+    );
+    assert.equal(confirmed.settledCount, 1);
+    assert.equal(confirmed.remainingUnsettled, 0);
+    const fact = await f.db.sourcePlatformExecution.findUniqueOrThrow({
+      where: { jobId_leaseId: { jobId: job.id, leaseId: job.leaseId! } },
+    });
+    assert.ok(fact.settledAt);
+    assert.equal(fact.businessOutcome, null);
+    assert.equal(fact.businessFinishedAt, null);
+    assert.equal(
+      (fact.diagnosticJson as Record<string, unknown>).settlementCode,
+      "operator_confirmed_stopped",
+    );
+    for (const row of [otherOwner, otherGeneration])
+      assert.equal(
+        (
+          await f.db.sourcePlatformExecution.findUniqueOrThrow({
+            where: { id: row.id },
+          })
+        ).settledAt,
+        null,
+      );
+    assert.deepEqual(
+      await f.db.backgroundJob.findUniqueOrThrow({ where: { id: job.id } }),
+      unchanged,
+    );
+    assert.equal(
+      (await f.service.platforms.maintenanceStatus("x")).maintenancePaused,
+      true,
+    );
+    await f.db.sourcePlatformExecution.createMany({
+      data: Array.from({ length: 101 }, () =>
+        extra(f.jobs.ownerId, generation),
+      ),
+    });
+    const batch = await f.service.platforms.confirmStoppedOwner(
+      "x",
+      f.jobs.ownerId,
+      generation,
+      true,
+    );
+    assert.equal(batch.settledCount, 100);
+    assert.equal(batch.remainingUnsettled, 1);
+  } finally {
+    await f.cleanup();
+  }
+});
 
 for (const platform of ["x", "pixiv"] as const)
   for (const profileFirst of [false, true])
@@ -517,6 +1243,29 @@ test("D6 trusted 429 defers without spending attempt, isolates platform, never s
     assert.equal((await f.service.get(run.id)).completedAt, null);
     await writeFile(join(f.dir, "x.cookies"), "synthetic-replacement");
     await f.service.platforms.activate("x", state.credentialGeneration);
+    assert.equal(
+      (
+        await f.db.sourcePlatformState.findUniqueOrThrow({
+          where: { platform: "x" },
+        })
+      ).cooldownUntil?.getTime(),
+      state.cooldownUntil?.getTime(),
+    );
+    assert.equal(
+      await f.jobs.claim("network", new Date(), "source:x"),
+      null,
+      "credential activation cannot shorten trusted cooldown",
+    );
+    // Expire only this synthetic clock boundary before testing a source-scoped
+    // failure. Production activation itself must preserve the trusted deadline.
+    await f.db.sourcePlatformState.update({
+      where: { platform: "x" },
+      data: { cooldownUntil: new Date(0) },
+    });
+    await f.db.backgroundJob.update({
+      where: { id: x.id },
+      data: { availableAt: new Date(0) },
+    });
     f.fail.x = new SourceResponseError("authentication", {
       scope: "source",
       reason: "source_forbidden",

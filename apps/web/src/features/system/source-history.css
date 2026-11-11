@@ -1,0 +1,277 @@
+.source-history {
+  padding: var(--space-5);
+  min-width: 0;
+}
+.source-history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.source-history h2 {
+  font-size: 20px;
+  margin: 0;
+}
+.source-history h3 {
+  font-size: 17px;
+  margin: 0;
+}
+.source-history h4 {
+  font-size: 15px;
+  margin: 0;
+}
+.source-history h5 {
+  font-size: 13px;
+  margin: 0 0 var(--space-2);
+}
+.source-history .ui-button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.source-history-filters {
+  display: grid;
+  gap: var(--space-3);
+  margin-block: var(--space-4);
+}
+.source-history-run-filters {
+  grid-template-columns: repeat(2, minmax(0, 180px));
+}
+.source-history-task-filters {
+  grid-template-columns: minmax(180px, 1fr) minmax(120px, 160px) minmax(
+      150px,
+      180px
+    );
+}
+.source-history-filters .ui-field {
+  min-width: 0;
+}
+.source-history-filters .ui-field__control {
+  min-width: 0;
+}
+.source-history-run + .source-history-run {
+  border-top: 1px solid var(--color-border);
+}
+.source-history-summary {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto minmax(200px, 1.4fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+}
+.source-history-summary > .ui-badge {
+  justify-self: start;
+}
+.source-history-time {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.source-history-time time {
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.source-history-time > span,
+.source-history-muted,
+.source-history-observed,
+.source-history-account-identity {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+.source-history-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.source-history-counts > span {
+  white-space: nowrap;
+}
+.source-history-summary svg {
+  transition: transform 140ms;
+}
+.source-history-summary svg.is-open {
+  transform: rotate(180deg);
+}
+.source-history-run-detail {
+  padding-bottom: var(--space-4);
+  min-width: 0;
+}
+.source-history-account-heading {
+  margin-block: var(--space-4) var(--space-2);
+}
+.source-history-accounts {
+  border-top: 1px solid var(--color-border);
+}
+.source-history-account {
+  border-bottom: 1px solid var(--color-border);
+}
+.source-history-account-row {
+  display: grid;
+  grid-template-columns:
+    minmax(140px, 1fr) minmax(160px, 1.3fr) minmax(120px, 1fr)
+    auto;
+  align-items: start;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+}
+.source-history-account-name,
+.source-history-account-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.source-history-account-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.source-history-account-identity svg {
+  flex-shrink: 0;
+}
+.source-history-reason {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-status-warning-text);
+}
+.source-history-status-button {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.source-history-status-button .ui-badge {
+  gap: var(--space-1);
+}
+.source-history-status-button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 3px;
+}
+.source-history-task-detail {
+  background: var(--color-surface-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.source-history-fact {
+  margin-top: var(--space-4);
+}
+.source-history-fact p {
+  margin-block: var(--space-2);
+}
+.source-history-fact-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  font-size: 13px;
+}
+.source-history-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+.source-history-pagination > .source-history-observed {
+  margin-right: auto;
+}
+.source-history-diagnostic-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+.source-history-execution,
+.source-history-gap {
+  padding-block: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+.source-history-execution .source-history-fact-line + .source-history-fact-line,
+.source-history-gap .source-history-fact-line + .source-history-fact-line {
+  margin-top: var(--space-2);
+}
+.source-history-diagnostics {
+  list-style: none;
+  padding: 0;
+  margin-block: var(--space-3);
+}
+.source-history-diagnostic {
+  margin-block: var(--space-3);
+}
+.source-history-diagnostic p {
+  margin-block: var(--space-2);
+}
+@media (max-width: 960px) {
+  .source-history-summary {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+  .source-history-summary > .source-history-counts {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .source-history-account-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+  .source-history-account-row > .source-history-counts {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 640px) {
+  .source-history {
+    padding: var(--space-4);
+  }
+  .source-history-task-filters,
+  .source-history-run-filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .source-history-summary {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-3);
+  }
+  .source-history-time {
+    grid-column: 1 / -1;
+  }
+  .source-history-summary > .source-history-counts {
+    grid-row: auto;
+  }
+  .source-history-summary > .ui-button {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .source-history-account-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-3);
+  }
+  .source-history-account-name {
+    grid-column: 1;
+  }
+  .source-history-account-row > .ui-button {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .source-history-account-state,
+  .source-history-account-row > .source-history-counts {
+    grid-column: 1 / -1;
+  }
+  .source-history-task-detail {
+    padding: var(--space-3);
+  }
+  .source-history-pagination > .source-history-observed {
+    flex-basis: 100%;
+  }
+}

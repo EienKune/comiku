@@ -12,6 +12,7 @@ export interface Environment {
   authSessionIdleSeconds: number;
   authSessionAbsoluteSeconds: number;
   authorProfileProofSecret?: string;
+  sourceCredentialsStateDirectory?: string;
   trustedProxyCidrs?: string[];
   notifications?: {
     enabled: boolean;
@@ -245,7 +246,24 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
     !["true", "false"].includes(input.SOURCE_SCHEDULE_ENABLED)
   )
     throw new Error("SOURCE_SCHEDULE_ENABLED must be true or false.");
+  const sourceCredentialsStateDirectory =
+    input.SOURCE_CREDENTIALS_STATE_DIRECTORY?.trim();
+  if (
+    sourceCredentialsStateDirectory &&
+    (!isAbsolute(sourceCredentialsStateDirectory) ||
+      /[\0\r\n]/.test(sourceCredentialsStateDirectory))
+  )
+    throw new Error(
+      "SOURCE_CREDENTIALS_STATE_DIRECTORY must be a literal absolute path.",
+    );
   return {
+    ...(sourceCredentialsStateDirectory
+      ? {
+          sourceCredentialsStateDirectory: resolve(
+            sourceCredentialsStateDirectory,
+          ),
+        }
+      : {}),
     ...(input.NOTIFICATIONS_ENABLED !== undefined ||
     input.NOTIFICATION_CONNECTIONS_FILE
       ? {

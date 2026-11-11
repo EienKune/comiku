@@ -170,11 +170,17 @@ test("claim gate denial persists a delay without a claim or fair budget write", 
     primaryWeight: 3,
   });
   const retryAt = new Date("2030-01-01T00:00:00Z");
-  jobs.registerClaimGate("fixture", async (candidate, transaction) => {
-    assert.equal(candidate.attempts, 2);
-    assert.equal(transaction, tx);
-    return new JobDeferred(retryAt, "platform_cooldown");
-  });
+  jobs.registerClaimGate(
+    "fixture",
+    async (candidate, transaction, _now, admission) => {
+      assert.equal(candidate.attempts, 2);
+      assert.equal(transaction, tx);
+      assert.match(admission.leaseId, /^[0-9a-f-]{36}$/);
+      assert.equal(admission.ownerId, jobs.ownerId);
+      assert.equal(admission.budgetAttempt, 3);
+      return new JobDeferred(retryAt, "platform_cooldown");
+    },
+  );
   const events: string[] = [];
   const log = console.info;
   console.info = (line: string) => {

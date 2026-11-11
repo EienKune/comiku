@@ -3483,17 +3483,61 @@
     "/api/source-fetch/runs": {
       "get": {
         "operationId": "listSourceFetchRuns",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "queued",
+                "running",
+                "succeeded",
+                "partial_failed",
+                "failed"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "trigger",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "manual",
+                "scheduled"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 10
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/SourceFetchRunDto"
-                  }
+                  "$ref": "#/components/schemas/SourceRunPageDto"
                 }
               }
             }
@@ -3705,7 +3749,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SourceFetchRunDto"
+                  "$ref": "#/components/schemas/SourceRunSummaryDto"
                 }
               }
             }
@@ -3789,6 +3833,1527 @@
         "summary": "",
         "tags": [
           "source-fetch"
+        ]
+      }
+    },
+    "/api/source-fetch/runs/{id}/tasks": {
+      "get": {
+        "operationId": "listSourceFetchTasks",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "all",
+                "anomalies",
+                "active",
+                "queued",
+                "running",
+                "waiting",
+                "succeeded",
+                "failed",
+                "skipped"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceTaskPageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-fetch"
+        ]
+      }
+    },
+    "/api/source-fetch/runs/{id}/tasks/{taskId}": {
+      "get": {
+        "operationId": "getSourceFetchTask",
+        "parameters": [
+          {
+            "name": "taskId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceTaskDetailDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-fetch"
+        ]
+      }
+    },
+    "/api/source-fetch/runs/{id}/tasks/{taskId}/executions": {
+      "get": {
+        "operationId": "listSourceFetchTaskExecutions",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "taskId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceExecutionPageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-fetch"
+        ]
+      }
+    },
+    "/api/source-fetch/runs/{id}/tasks/{taskId}/gaps": {
+      "get": {
+        "operationId": "listSourceFetchTaskGaps",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "taskId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceGapPageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-fetch"
+        ]
+      }
+    },
+    "/api/source-fetch/platforms/{platform}/maintenance": {
+      "get": {
+        "operationId": "getSourceMaintenance",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "x",
+                "pixiv"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceMaintenanceDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-maintenance"
+        ]
+      },
+      "post": {
+        "operationId": "pauseSourceMaintenance",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "x",
+                "pixiv"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceMaintenanceExpectedDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceMaintenanceDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-maintenance"
+        ]
+      }
+    },
+    "/api/source-fetch/platforms/{platform}/resume": {
+      "post": {
+        "operationId": "resumeSourceMaintenance",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "x",
+                "pixiv"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceMaintenanceExpectedDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceMaintenanceDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-maintenance"
+        ]
+      }
+    },
+    "/api/source-fetch/platforms/{platform}/credentials": {
+      "post": {
+        "operationId": "saveSourceCredentials",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "x",
+                "pixiv"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceCredentialInputDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceCredentialOperationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-maintenance"
+        ]
+      }
+    },
+    "/api/source-fetch/platforms/{platform}/credential-updates/{id}": {
+      "get": {
+        "operationId": "getSourceCredentialOperation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "x",
+                "pixiv"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceCredentialOperationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-maintenance"
+        ]
+      }
+    },
+    "/api/source-fetch/platforms/{platform}/credential-updates/{id}/reconcile": {
+      "post": {
+        "operationId": "reconcileSourceCredentialOperation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "x",
+                "pixiv"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceMaintenanceExpectedDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceCredentialOperationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-maintenance"
+        ]
+      }
+    },
+    "/api/source-fetch/platforms/{platform}/credential-updates/{id}/abort": {
+      "post": {
+        "operationId": "abortUnpreparedSourceCredentialOperation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "x",
+                "pixiv"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceMaintenanceExpectedDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceCredentialOperationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-maintenance"
+        ]
+      }
+    },
+    "/api/source-fetch/platforms/{platform}/credential-updates/{id}/verify": {
+      "post": {
+        "operationId": "verifySourceCredentialOperation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "x",
+                "pixiv"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceMaintenanceExpectedDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceCredentialOperationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "source-maintenance"
         ]
       }
     },
@@ -18205,6 +19770,12 @@
       "SourcePlatformStateDto": {
         "type": "object",
         "properties": {
+          "maintenancePaused": {
+            "type": "boolean"
+          },
+          "maintenanceEpoch": {
+            "type": "number"
+          },
           "platform": {
             "type": "string"
           },
@@ -18365,148 +19936,9 @@
           "lastManual"
         ]
       },
-      "SourceAdapterHealth": {
-        "type": "string",
-        "enum": [
-          "idle",
-          "healthy",
-          "degraded",
-          "cooling_down",
-          "unavailable",
-          "disabled"
-        ]
-      },
-      "SourceFetchItemStatus": {
-        "type": "string",
-        "enum": [
-          "running",
-          "succeeded",
-          "failed",
-          "skipped"
-        ]
-      },
-      "SourceFetchRunItemDto": {
+      "SourceRunSummaryDto": {
         "type": "object",
         "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "externalAccountId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "authorName": {
-            "type": "string"
-          },
-          "platform": {
-            "type": "string"
-          },
-          "adapterKey": {
-            "type": "string"
-          },
-          "adapterHealth": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SourceAdapterHealth"
-              }
-            ]
-          },
-          "status": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SourceFetchItemStatus"
-              }
-            ]
-          },
-          "pagesFetched": {
-            "type": "number"
-          },
-          "itemsSeen": {
-            "type": "number"
-          },
-          "candidatesCreated": {
-            "type": "number"
-          },
-          "candidatesExisting": {
-            "type": "number"
-          },
-          "mediaStored": {
-            "type": "number"
-          },
-          "apiRequests": {
-            "type": "number"
-          },
-          "errorCode": {
-            "type": "string",
-            "nullable": true
-          },
-          "errorMessage": {
-            "type": "string",
-            "nullable": true
-          },
-          "startedAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "completedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "externalAccountId",
-          "authorName",
-          "platform",
-          "adapterKey",
-          "adapterHealth",
-          "status",
-          "pagesFetched",
-          "itemsSeen",
-          "candidatesCreated",
-          "candidatesExisting",
-          "mediaStored",
-          "apiRequests",
-          "errorCode",
-          "errorMessage",
-          "startedAt",
-          "completedAt"
-        ]
-      },
-      "SourceFetchRunDto": {
-        "type": "object",
-        "properties": {
-          "targetCount": {
-            "type": "number"
-          },
-          "completedTargets": {
-            "type": "number"
-          },
-          "waitingTargets": {
-            "type": "number"
-          },
-          "waitingReason": {
-            "type": "string",
-            "nullable": true
-          },
-          "attempts": {
-            "type": "number"
-          },
-          "jobStatus": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/JobStatus"
-              }
-            ]
-          },
-          "nextRetryAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -18525,16 +19957,566 @@
               }
             ]
           },
-          "requestedById": {
+          "startedAt": {
             "type": "string",
-            "format": "uuid",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
             "nullable": true
           },
+          "legacy": {
+            "type": "boolean"
+          },
+          "targetCount": {
+            "type": "number"
+          },
+          "completedTargets": {
+            "type": "number"
+          },
+          "succeededTargets": {
+            "type": "number"
+          },
+          "failedTargets": {
+            "type": "number"
+          },
+          "runningTargets": {
+            "type": "number"
+          },
+          "queuedTargets": {
+            "type": "number"
+          },
+          "waitingTargets": {
+            "type": "number"
+          },
+          "anomalyTargets": {
+            "type": "number"
+          },
+          "pagesFetched": {
+            "type": "number"
+          },
+          "candidatesCreated": {
+            "type": "number"
+          },
+          "mediaStored": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "trigger",
+          "status",
+          "startedAt",
+          "completedAt",
+          "legacy",
+          "targetCount",
+          "completedTargets",
+          "succeededTargets",
+          "failedTargets",
+          "runningTargets",
+          "queuedTargets",
+          "waitingTargets",
+          "anomalyTargets",
+          "pagesFetched",
+          "candidatesCreated",
+          "mediaStored"
+        ]
+      },
+      "SourceRunPageDto": {
+        "type": "object",
+        "properties": {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/SourceFetchRunItemDto"
+              "$ref": "#/components/schemas/SourceRunSummaryDto"
             }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor",
+          "observedAt"
+        ]
+      },
+      "SourceTaskRowDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Task ID, or result-item ID for legacy runs"
+          },
+          "accountId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "authorName": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "externalUserId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "waiting",
+              "succeeded",
+              "failed",
+              "skipped"
+            ]
+          },
+          "failureCode": {
+            "type": "string",
+            "nullable": true,
+            "description": "Controlled reason only; arbitrary upstream text is omitted"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "deferredUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "legacy": {
+            "type": "boolean"
+          },
+          "pagesFetched": {
+            "type": "number"
+          },
+          "candidatesCreated": {
+            "type": "number"
+          },
+          "mediaStored": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "accountId",
+          "authorName",
+          "platform",
+          "handle",
+          "externalUserId",
+          "status",
+          "failureCode",
+          "startedAt",
+          "completedAt",
+          "deferredUntil",
+          "legacy",
+          "pagesFetched",
+          "candidatesCreated",
+          "mediaStored"
+        ]
+      },
+      "SourceTaskPageDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceTaskRowDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "legacy": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor",
+          "observedAt",
+          "legacy"
+        ]
+      },
+      "SourceAdapterHealth": {
+        "type": "string",
+        "enum": [
+          "idle",
+          "healthy",
+          "degraded",
+          "cooling_down",
+          "unavailable",
+          "disabled"
+        ]
+      },
+      "SourceAccountCurrentDto": {
+        "type": "object",
+        "properties": {
+          "fetchEnabled": {
+            "type": "boolean"
+          },
+          "deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "adapterHealth": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceAdapterHealth"
+              }
+            ]
+          },
+          "unresolvedGapCount": {
+            "type": "number",
+            "description": "All current unresolved known posts for this account; not attributed to the selected run"
+          },
+          "excludedGapCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "fetchEnabled",
+          "deletedAt",
+          "adapterHealth",
+          "unresolvedGapCount",
+          "excludedGapCount"
+        ]
+      },
+      "SourceFollowupSuccessDto": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "taskId",
+          "runId",
+          "completedAt"
+        ]
+      },
+      "SourceTaskJobDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JobStatus"
+              }
+            ]
+          },
+          "attempts": {
+            "type": "number",
+            "description": "This task's consumed job budget; never a batch retry count"
+          },
+          "nextAvailableAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Earliest queued execution time; not a promise that a source gate will admit it"
+          },
+          "nextRetryAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "status",
+          "attempts",
+          "nextAvailableAt",
+          "nextRetryAt"
+        ]
+      },
+      "SourceTaskDetailDto": {
+        "type": "object",
+        "properties": {
+          "original": {
+            "$ref": "#/components/schemas/SourceTaskRowDto"
+          },
+          "current": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceAccountCurrentDto"
+              }
+            ]
+          },
+          "followupSuccess": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceFollowupSuccessDto"
+              }
+            ]
+          },
+          "job": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceTaskJobDto"
+              }
+            ]
+          },
+          "executionHistoryAvailable": {
+            "type": "boolean",
+            "description": "False for legacy summary-only history"
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "original",
+          "current",
+          "followupSuccess",
+          "job",
+          "executionHistoryAvailable",
+          "observedAt"
+        ]
+      },
+      "SourceDiagnosticSampleDto": {
+        "type": "object",
+        "properties": {
+          "stage": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "httpStatus": {
+            "type": "number"
+          },
+          "limitBytes": {
+            "type": "number"
+          },
+          "declaredBytes": {
+            "type": "number"
+          },
+          "observedBytes": {
+            "type": "number"
+          },
+          "durationMs": {
+            "type": "number"
+          },
+          "timeout": {
+            "type": "boolean"
+          },
+          "exceptionType": {
+            "type": "string"
+          },
+          "missingField": {
+            "type": "string"
+          },
+          "responseBytes": {
+            "type": "number"
+          },
+          "responseFormat": {
+            "type": "string",
+            "enum": [
+              "empty",
+              "json",
+              "html",
+              "text",
+              "binary"
+            ]
+          },
+          "requestOperation": {
+            "type": "string"
+          },
+          "runtimeVersion": {
+            "type": "string"
+          },
+          "exitCode": {
+            "type": "number"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "transportError": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "reason",
+          "scope",
+          "occurredAt"
+        ]
+      },
+      "SourceExecutionDiagnosticsDto": {
+        "type": "object",
+        "properties": {
+          "samples": {
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceDiagnosticSampleDto"
+            }
+          },
+          "omitted": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "samples",
+          "omitted"
+        ]
+      },
+      "SourceExecutionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "scan"
+            ]
+          },
+          "budgetAttempt": {
+            "type": "number"
+          },
+          "budgetRefunded": {
+            "type": "boolean"
+          },
+          "admittedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "businessOutcome": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "partial_failed",
+              "failed",
+              "deferred"
+            ],
+            "nullable": true
+          },
+          "businessFinishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "settledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "diagnostics": {
+            "$ref": "#/components/schemas/SourceExecutionDiagnosticsDto"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "budgetAttempt",
+          "budgetRefunded",
+          "admittedAt",
+          "businessOutcome",
+          "businessFinishedAt",
+          "settledAt",
+          "diagnostics"
+        ]
+      },
+      "SourceExecutionPageDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceExecutionDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "scan"
+            ],
+            "description": "Only directly linked scan executions; recovery is not inferred from account identity"
+          },
+          "legacy": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor",
+          "observedAt",
+          "scope",
+          "legacy"
+        ]
+      },
+      "SourceGapCampaignDto": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "number"
+          },
+          "state": {
+            "type": "string"
+          },
+          "failureCode": {
+            "type": "string",
+            "nullable": true
           },
           "startedAt": {
             "type": "string",
@@ -18547,16 +20529,108 @@
           }
         },
         "required": [
-          "attempts",
-          "jobStatus",
-          "nextRetryAt",
-          "id",
-          "trigger",
-          "status",
-          "requestedById",
-          "items",
+          "number",
+          "state",
+          "failureCode",
           "startedAt",
           "completedAt"
+        ]
+      },
+      "SourceGapDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "postId": {
+            "type": "string",
+            "description": "Public source post identity, not a download URL"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "failureCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "attempts": {
+            "type": "number",
+            "description": "Completed failed recovery campaigns recorded on this known post"
+          },
+          "nextRetryAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "campaign": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceGapCampaignDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "postId",
+          "platform",
+          "state",
+          "failureCode",
+          "attempts",
+          "nextRetryAt",
+          "createdAt",
+          "updatedAt",
+          "campaign"
+        ]
+      },
+      "SourceGapPageDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceGapDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "current_account"
+            ],
+            "description": "Current unresolved known posts for the account across all runs; no selected-run attribution"
+          },
+          "legacy": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor",
+          "observedAt",
+          "scope",
+          "legacy"
         ]
       },
       "RunSourceFetchDto": {
@@ -18590,6 +20664,211 @@
         "required": [
           "id",
           "status"
+        ]
+      },
+      "SourceCredentialOperationDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "failureCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "expectedEpoch": {
+            "type": "number"
+          },
+          "expectedGeneration": {
+            "type": "string"
+          },
+          "targetGeneration": {
+            "type": "string",
+            "nullable": true
+          },
+          "verificationOutcome": {
+            "type": "string",
+            "nullable": true
+          },
+          "verificationCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "verifiedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "platform",
+          "requestId",
+          "phase",
+          "failureCode",
+          "expectedEpoch",
+          "expectedGeneration",
+          "targetGeneration",
+          "verificationOutcome",
+          "verificationCode",
+          "verifiedAt",
+          "createdAt",
+          "completedAt"
+        ]
+      },
+      "SourceMaintenanceDto": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "type": "string"
+          },
+          "supported": {
+            "type": "boolean"
+          },
+          "readonlyReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "maintenancePaused": {
+            "type": "boolean"
+          },
+          "maintenanceEpoch": {
+            "type": "number"
+          },
+          "credentialGeneration": {
+            "type": "string",
+            "nullable": true
+          },
+          "unsettledExecutions": {
+            "type": "number"
+          },
+          "canSave": {
+            "type": "boolean"
+          },
+          "authStatus": {
+            "type": "string"
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "cooldownUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "activeOperation": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceCredentialOperationDto"
+              }
+            ]
+          },
+          "lastOperation": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceCredentialOperationDto"
+              }
+            ]
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "platform",
+          "supported",
+          "readonlyReason",
+          "maintenancePaused",
+          "maintenanceEpoch",
+          "credentialGeneration",
+          "unsettledExecutions",
+          "canSave",
+          "authStatus",
+          "errorCode",
+          "cooldownUntil",
+          "activeOperation",
+          "lastOperation",
+          "observedAt"
+        ]
+      },
+      "SourceMaintenanceExpectedDto": {
+        "type": "object",
+        "properties": {
+          "expectedEpoch": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "expectedGeneration": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedEpoch",
+          "expectedGeneration"
+        ]
+      },
+      "SourceCredentialInputDto": {
+        "type": "object",
+        "properties": {
+          "expectedEpoch": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "expectedGeneration": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "authToken": {
+            "type": "string",
+            "writeOnly": true,
+            "maxLength": 8192
+          },
+          "ct0": {
+            "type": "string",
+            "writeOnly": true,
+            "maxLength": 8192
+          },
+          "refreshToken": {
+            "type": "string",
+            "writeOnly": true,
+            "maxLength": 8192
+          }
+        },
+        "required": [
+          "expectedEpoch",
+          "expectedGeneration",
+          "requestId"
         ]
       },
       "AuthorizationStatus": {

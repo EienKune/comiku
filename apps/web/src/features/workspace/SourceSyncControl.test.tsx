@@ -659,3 +659,18 @@ test("waiting platform summary exposes progress without a request spinner or new
   expect(syncButton().querySelector("svg.ui-spin")).toBeNull();
   expect(document.querySelector(".ui-badge")).toBeNull();
 });
+
+test("platform maintenance is distinguished from waiting for a worker slot", async () => {
+  const active = snapshot({
+    status: "queued",
+    waitingReason: "platform_maintenance",
+  });
+  vi.spyOn(client, "GET").mockResolvedValue(
+    response({ active, lastManual: null }) as never,
+  );
+  mount();
+  await waitFor(() => expect(syncButton().hasAttribute("disabled")).toBe(true));
+  fireEvent.focus(inspectTarget());
+  await screen.findByText(/平台维护中/);
+  expect(screen.queryByText(/等待执行空位/)).toBeNull();
+});

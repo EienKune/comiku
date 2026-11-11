@@ -1,9 +1,14 @@
+import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import type { components } from "@comiku/api-client";
 import { Badge, Button, Surface } from "../../components/ui";
 import { PlatformIcon } from "../../components/PlatformIcon";
 import { client, unwrap } from "../account/api";
+import {
+  SourceCredentialDialog,
+  type CredentialIntent,
+} from "./SourceCredentialDialog";
 import "../../components/platform-links.css";
 import "./system.css";
 
@@ -29,6 +34,8 @@ function statusOf(
 ) {
   if (failed) return { label: "状态读取失败", tone: "warning" } as const;
   if (loading) return { label: "读取中", tone: "neutral" } as const;
+  if (state?.maintenancePaused)
+    return { label: "维护中", tone: "warning" } as const;
   if (!configured) return { label: "未配置", tone: "neutral" } as const;
   if (!available) return { label: "接入不可用", tone: "warning" } as const;
   if (!state) return statuses.unverified;
@@ -38,6 +45,7 @@ function statusOf(
   );
 }
 function stateDetail(state: PlatformState | undefined) {
+  if (state?.maintenancePaused) return "平台已暂停，关闭凭据窗口后仍保持维护。";
   if (state?.status === "auth_paused")
     return state.errorCode === "challenge_required"
       ? "平台要求验证登录，请处理后重新验证。"
@@ -59,6 +67,9 @@ function stateDetail(state: PlatformState | undefined) {
 }
 
 export function SourceConnections({ enabled = true }: { enabled?: boolean }) {
+  const [selected, setSelected] = useState<"x" | "pixiv" | null>(null);
+  // Only opaque recovery intent survives a dialog close; credentials never leave it.
+  const intents = useRef<Partial<Record<"x" | "pixiv", CredentialIntent>>>({});
   const sources = useQuery({
     queryKey: ["source-capabilities"],
     enabled,
@@ -150,10 +161,33 @@ export function SourceConnections({ enabled = true }: { enabled?: boolean }) {
                 <Badge tone={badge.tone}>{badge.label}</Badge>
               </div>
               {detail && <p className="system-connection-detail">{detail}</p>}
+              <div className="source-connection-actions">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={!enabled}
+                  aria-label={`管理 ${name} 凭据`}
+                  onClick={() => setSelected(platform)}
+                >
+                  管理凭据
+                </Button>
+              </div>
             </article>
           );
         })}
       </div>
+      {selected && enabled && (
+        <SourceCredentialDialog
+          key={selected}
+          platform={selected}
+          recoveryIntent={intents.current[selected]}
+          onIntentChange={(intent) => {
+            intents.current[selected] = intent ?? undefined;
+          }}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </Surface>
   );
 }
