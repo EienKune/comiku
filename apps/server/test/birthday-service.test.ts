@@ -303,7 +303,7 @@ test("automatic synchronization honors disabled settings and future due time", a
     queued: true,
   });
   assert.equal(due.state.jobId, "new-job");
-  assert.equal(due.state.nextCheckAt.getTime(), now.getTime() + 3_600_000);
+  assert.equal(due.state.nextCheckAt.getTime(), now.getTime() + 300_000);
 });
 
 test("display disabling hides a stored catalog without requiring its contents to parse", async () => {
@@ -351,6 +351,7 @@ test("source failure retains the last successful immutable catalog and records o
     throw new Error("sensitive upstream URL and body");
   });
   const log = t.mock.method(console, "error", () => {});
+  const beforeFailure = Date.now();
   await assert.rejects(
     f.service.synchronize(job, new AbortController().signal),
     /^Error: birthday_source_failed$/,
@@ -358,6 +359,8 @@ test("source failure retains the last successful immutable catalog and records o
   assert.deepEqual(f.state.catalog, before);
   assert.equal(f.state.lastCheckedAt, now);
   assert.equal(f.state.lastErrorCode, "birthday_source_failed");
+  assert.ok(f.state.nextCheckAt.getTime() >= beforeFailure + 300_000);
+  assert.ok(f.state.nextCheckAt.getTime() <= Date.now() + 300_000);
   assert.equal(f.catalogs.size, 1);
   assert.doesNotMatch(JSON.stringify(log.mock.calls), /sensitive upstream/);
 });

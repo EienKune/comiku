@@ -9,6 +9,8 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## Notifications
 
+- Birthday workers drain due Kivo checkpoints without batch sleeps, while reminder maintenance, primary-source scheduling and failed cleanup retain independent one-minute cadences. Source/job retry eligibility is persisted for five minutes; a terminal job's future eligibility must also fence replacement scheduling. Register the birthday handlers' retry delay with Jobs: changing only source `nextCheckAt` does not delay retries of an existing queued job. Keep ordinary Jobs backoff unchanged, preserve attempt limits and test restart/reclaim behavior against PostgreSQL.
+
 - Birthday source evidence is independent: a successful Kivo index cannot renew profile birthdays, and a successful SchaleDB check cannot renew Kivo people. Publish source facts and the combined catalog under the same combined-state mutex; profile hashes bind freshness to the exact persisted evidence. Every source writer, including index membership registration, takes job lease then combined lock then source-state lock. Keep source raw catalogs separate from public projections.
 - Public birthday person keys survive a later explicit game-ID bridge; persist accepted skin/game membership even when upstream edges disappear. Names only hold suspected duplicates, never merge identities. Keep the historical date/offset occurrence namespace and event key: a frozen daily digest is not regenerated after profile recovery, discovery or implementation. Source fetch failures must not skip DB-only reminder maintenance.
 
