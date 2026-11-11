@@ -9,6 +9,8 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## Notifications
 
+- QQ reminder contacts use dedicated self-only GET/PATCH endpoints rather than extending `ProfileDto` (also inherited by admin creation/management) or the shared `UserDto`. Keep nullable unique QQ values out of auth/member/admin projections and audit detail; record only whether a binding exists. Recheck the session under the account write lock, enforce expected profile revision and map the QQ-only update's unique conflict separately from username conflicts; driver adapters do not guarantee a `P2002.meta.target` array. A current-revision same-value update is a no-op; stale writes still conflict. This is a declared contact, not verified QQ identity or a login mechanism. Structured mentions require a separate delivery contract; plain text/CQ strings must remain inert. Read/retry buttons inside forms must explicitly use `type="button"`; cached data plus a failed refetch must never submit a dirty binding draft.
+
 - Quarantined accepted SchaleDB entries retain display facts but must disable new reminders even after the source check succeeds. Recompute eligibility from accepted membership; pending unaccepted outfits must not veto a trusted person. An outfit's old hint for an already accepted pending original is not a fresh review and must not reject the entire source. A reverted source stays held until explicit review.
 - Birthday summary/calendar caches also expire when a hidden or disabled panel resumes on a new Shanghai date within the normal stale window. Keep each key lazy and avoid restarting an in-flight read; same-day resumes retain fresh data. Exercise short hidden-midnight transitions as well as the visible midnight timer.
 

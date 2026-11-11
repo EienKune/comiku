@@ -42,12 +42,31 @@ import {
   UserAvatarUrlDto,
 } from "./user-avatar.dto.js";
 import { UsersService } from "./users.service.js";
+import { QqBindingDto, UpdateQqBindingDto } from "./user-qq-binding.dto.js";
 
 @ApiTags("accounts")
 @ApiCookieAuth()
 @Controller("users")
 export class UsersController {
   constructor(@Inject(UsersService) private readonly users: UsersService) {}
+  @Get("me/qq-binding")
+  @Access({ permission: "self" })
+  @ApiOperation({ operationId: "getMyQqBinding" })
+  @ApiOkResponse({ type: QqBindingDto })
+  qqBinding(@Req() req: AuthRequest) {
+    return this.users.qqBinding(req.actor);
+  }
+  @Patch("me/qq-binding")
+  @Access({ permission: "self" })
+  @ApiOperation({ operationId: "updateMyQqBinding" })
+  @ApiBody({ type: UpdateQqBindingDto })
+  @ApiOkResponse({ type: QqBindingDto })
+  updateQqBinding(
+    @Req() req: AuthRequest,
+    @Body(bodyValidation(UpdateQqBindingDto)) input: UpdateQqBindingDto,
+  ) {
+    return this.users.updateQqBinding(req.actor, input);
+  }
   @Patch("me")
   @Access({ permission: "self" })
   @ApiOperation({ operationId: "updateProfile" })

@@ -19,6 +19,7 @@ model User {
   username                            String                        @unique @db.VarChar(64)
   passwordHash                        String                        @map("password_hash") @db.Text
   displayName                         String                        @map("display_name") @db.VarChar(100)
+  qqNumber                            String?                       @unique @map("qq_number") @db.VarChar(20)
   avatarObjectKey                     String?                       @map("avatar_object_key") @db.Text
   avatarFileObjectId                  String?                       @map("avatar_file_object_id") @db.Uuid
   avatarFileObject                    FileObject?                   @relation("UserAvatar", fields: [avatarFileObjectId], references: [id], onDelete: Restrict)
