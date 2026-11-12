@@ -1365,7 +1365,7 @@ export class WorksService {
         data: { revision: { increment: 1 } },
       });
       if (!changed.count) this.stale();
-      await tx.workStageParticipant.create({
+      const participant = await tx.workStageParticipant.create({
         data: {
           workId,
           stage: input.stage,
@@ -1405,6 +1405,7 @@ export class WorksService {
             operation,
             stage: input.stage,
             userId: targetUserId,
+            participantId: participant.id,
             participationRegistered: true,
           },
         },
