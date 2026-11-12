@@ -1,3 +1,4 @@
+import { lockAccountMembership } from "../users/account-membership-lock.js";
 import { createHash } from "node:crypto";
 import { assertCurrentHandoff } from "../workflow/revision-policy.js";
 import { assertProductionWritable } from "../workflow/review-policy.js";
@@ -950,6 +951,8 @@ export class WorksService {
       return this.get(workId, actorId);
 
     await this.db.$transaction(async (tx) => {
+      await lockAccountMembership(tx);
+      await this.assertStagePermission(actorId, input.stage, workId, tx);
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
       );
@@ -1314,6 +1317,8 @@ export class WorksService {
       return this.get(workId, actorId);
     }
     await this.db.$transaction(async (tx) => {
+      await lockAccountMembership(tx);
+      await this.assertStagePermission(targetUserId, input.stage, workId, tx);
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
       );
@@ -2041,6 +2046,8 @@ export class WorksService {
     }
 
     await this.db.$transaction(async (tx) => {
+      await lockAccountMembership(tx);
+
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
       );
@@ -2126,6 +2133,27 @@ export class WorksService {
       });
       if (!submittedRound.some(({ userId }) => userId === actorId)) {
         throw new ForbiddenException("只有本轮提交参与者可以取消提交");
+      }
+      const restoredUsers = await tx.user.findMany({
+        where: { id: { in: submittedRound.map(({ userId }) => userId) } },
+        include: { roles: true, languageCapabilities: true },
+      });
+      if (
+        restoredUsers.length !== submittedRound.length ||
+        restoredUsers.some(
+          (user) =>
+            !user.isActive ||
+            !canUserWorkStage(
+              user.roles.map((r) => r.role),
+              user.languageCapabilities.map((l) => l.language),
+              input.stage,
+              work.sourceLanguage,
+            ),
+        )
+      ) {
+        throw new ConflictException(
+          "本轮参与者已失去工作资格，请先由管理员恢复职责和语言再取消提交",
+        );
       }
       const transition = stageTransitions[input.stage];
       const changed = await tx.work.updateMany({
