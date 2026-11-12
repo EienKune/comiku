@@ -1,7 +1,8 @@
 import { workflowLabels, reviewLabels } from "./work-status";
 import { useDeferredValue, useState } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
+import { WorkViewNavigation, type WorkPerspective } from "./WorkViewNavigation";
 import {
   ArrowDown,
   ArrowLeft,
@@ -38,6 +39,8 @@ import { useCandidateDialog } from "./use-candidate-dialog";
 import "./work-series.css";
 
 export function WorkSeriesDirectoryPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const user = useAccount(),
     [search, setSearch] = useState(""),
     [author, setAuthor] = useState<CandidateAuthorChoice | null>(null),
@@ -59,25 +62,26 @@ export function WorkSeriesDirectoryPage() {
       ),
     getNextPageParam: (p) => p.nextCursor ?? undefined,
   });
+  function changePerspective(next: WorkPerspective) {
+    if (next === "series") return;
+    const saved: unknown = location.state?.worksViewQuery;
+    const params = new URLSearchParams(typeof saved === "string" ? saved : "");
+    if (params.get("view") !== next) {
+      params.delete("tab");
+      params.delete("phase");
+      params.delete("unassignedStage");
+    }
+    params.set("view", next);
+    navigate(`/works?${params.toString()}`);
+  }
   if (!user.permissions.includes("works:read"))
     return <p>没有查看作品的权限。</p>;
   return (
     <div className="account-content-boundary">
-      <Link className="account-link" to="/works?view=read">
-        <ArrowLeft size={16} />
-        返回作品
-      </Link>
-      <div className="series-heading">
-        <SectionHeading title="系列" />
-        {user.permissions.includes("works:metadata") && (
-          <Button
-            leadingIcon={<Plus size={16} />}
-            onClick={() => setCreate(true)}
-          >
-            新建系列
-          </Button>
-        )}
-      </div>
+      <SectionHeading title="作品">
+        查看流程全貌，或按自己的职务和语言能力接取工作。
+      </SectionHeading>
+      <WorkViewNavigation active="series" onChange={changePerspective} />
       <div className="series-toolbar">
         <SearchField
           aria-label="搜索系列名称"
@@ -86,6 +90,14 @@ export function WorkSeriesDirectoryPage() {
           onChange={(e) => setSearch(e.target.value)}
         />
         <CandidateAuthorFilter value={author} onChange={setAuthor} />
+        {user.permissions.includes("works:metadata") && (
+          <Button
+            leadingIcon={<Plus size={16} />}
+            onClick={() => setCreate(true)}
+          >
+            新建系列
+          </Button>
+        )}
       </div>
       <Feedback error={query.error?.message} />
       {query.isPending && <p role="status">正在读取系列…</p>}
@@ -99,6 +111,7 @@ export function WorkSeriesDirectoryPage() {
             <Surface as="article" className="series-card" key={s.id}>
               <Link
                 to={`/works/series/${s.id}`}
+                state={location.state}
                 className="series-card-cover"
                 aria-label={`打开系列 ${s.title}`}
               >
@@ -114,7 +127,9 @@ export function WorkSeriesDirectoryPage() {
               </Link>
               <div className="series-card-body">
                 <h2>
-                  <Link to={`/works/series/${s.id}`}>{s.title}</Link>
+                  <Link to={`/works/series/${s.id}`} state={location.state}>
+                    {s.title}
+                  </Link>
                 </h2>
                 <span>{s.authorName}</span>
                 <div className="series-card-meta">
@@ -232,6 +247,7 @@ function CreateSeriesDialog({ onClose }: { onClose: () => void }) {
   );
 }
 export function WorkSeriesDetailPage() {
+  const location = useLocation();
   const { seriesId = "" } = useParams(),
     user = useAccount(),
     cache = useQueryClient(),
@@ -282,7 +298,7 @@ export function WorkSeriesDetailPage() {
     return <p>没有查看作品的权限。</p>;
   return (
     <div className="account-content-boundary">
-      <Link className="account-link" to="/works/series">
+      <Link className="account-link" to="/works/series" state={location.state}>
         <ArrowLeft size={16} />
         返回系列
       </Link>

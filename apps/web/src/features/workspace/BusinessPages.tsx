@@ -1,5 +1,6 @@
 import { WorkAlbum } from "./WorkAlbum";
 import { WorkSeriesAssociation } from "./WorkSeriesAssociation";
+import { WorkViewNavigation, type WorkPerspective } from "./WorkViewNavigation";
 import { workflowLabels, reviewLabels } from "./work-status";
 import { BirthdayStrip } from "../birthdays/BirthdayStrip";
 import {
@@ -78,7 +79,6 @@ import {
   Images,
   Inbox,
   Grid2X2,
-  BookOpen,
   List,
   ScanText,
   Search,
@@ -86,7 +86,13 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { Link, Navigate, useParams, useSearchParams } from "react-router";
+import {
+  Link,
+  Navigate,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router";
 import { SkipProofreadingButton } from "./SkipProofreadingButton";
 import {
   Badge,
@@ -3495,6 +3501,7 @@ export function CandidatesPage() {
 
 export function WorksPage() {
   const user = useAccount();
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const { view, tab, tabs } = workViewState(params, user);
   const qualificationKey = `${user.roles.join(",")}:${user.languageCapabilities.join(",")}:${user.permissions.join(",")}`;
@@ -3503,20 +3510,31 @@ export function WorksPage() {
     view === "work" && ["translate", "proofread", "typeset"].includes(tab);
   const targetClaimStage = isClaim ? (tab as ClaimStage) : undefined;
   const [readLayout, setReadLayout] = useState<"grid" | "rows" | "album">(() =>
-    params.get("layout") === "album" ? "album" : "grid",
+    params.get("layout") === "album"
+      ? "album"
+      : params.get("layout") === "rows"
+        ? "rows"
+        : "grid",
   );
-  const [workLayout, setWorkLayout] = useState<"grid" | "rows">("grid");
+  const [workLayout, setWorkLayout] = useState<"grid" | "rows">(() =>
+    params.get("layout") === "rows" ? "rows" : "grid",
+  );
   const layout = view === "read" ? readLayout : workLayout;
   const isAlbum = view === "read" && layout === "album";
   function setLayout(value: "grid" | "rows" | "album") {
     if (view === "read") setReadLayout(value);
     else if (value !== "album") setWorkLayout(value);
   }
-  const [language, setLanguage] = useState<SourceLanguage | "all">("all");
+  const [language, setLanguage] = useState<SourceLanguage | "all">(() => {
+    const value = params.get("language");
+    return value && Object.hasOwn(sourceLanguageLabels, value)
+      ? (value as SourceLanguage)
+      : "all";
+  });
   const [selectionMode, setSelectionMode] = useState(false);
   const [selected, setSelected] = useState<Record<string, number>>({});
-  const [search, setSearch] = useState("");
-  const [mine, setMine] = useState(false);
+  const [search, setSearch] = useState(() => params.get("search") ?? "");
+  const [mine, setMine] = useState(() => params.get("mine") === "1");
   const deferredSearch = useDeferredValue(search.trim());
   const action = useAction();
   const runWorkAction = action.run;
@@ -3529,6 +3547,23 @@ export function WorksPage() {
       next.delete("phase");
       next.delete("unassignedStage");
       return next;
+    });
+  }
+  async function changePerspective(next: WorkPerspective) {
+    if (next !== "series") return changeView(next);
+    const saved = new URLSearchParams(params);
+    saved.set("view", view);
+    saved.set("tab", tab);
+    saved.set("layout", layout);
+    if (search) saved.set("search", search);
+    else saved.delete("search");
+    if (language !== "all") saved.set("language", language);
+    else saved.delete("language");
+    if (mine) saved.set("mine", "1");
+    else saved.delete("mine");
+    await navigate(`/works?${saved.toString()}`, { replace: true });
+    await navigate("/works/series", {
+      state: { worksViewQuery: saved.toString() },
     });
   }
   useEffect(() => {
@@ -3758,38 +3793,10 @@ export function WorksPage() {
           enabled={isTodo}
           fallbackTopbar={topbarRegistration}
         />
-        <header className="account-heading">
-          <div className="workspace-works-title">
-            <h1>作品</h1>
-            <Link className="account-link" to="/works/series">
-              <BookOpen size={16} />
-              系列目录
-            </Link>
-          </div>
-          <p>查看流程全貌，或按自己的职务和语言能力接取工作。</p>
-        </header>
-        <div
-          className="workspace-view-toggle"
-          role="group"
-          aria-label="作品视角"
-        >
-          <Button
-            size="sm"
-            variant={view === "work" ? "primary" : "secondary"}
-            aria-pressed={view === "work"}
-            onClick={() => changeView("work")}
-          >
-            工作视图
-          </Button>
-          <Button
-            size="sm"
-            variant={view === "read" ? "primary" : "secondary"}
-            aria-pressed={view === "read"}
-            onClick={() => changeView("read")}
-          >
-            查看视图
-          </Button>
-        </div>
+        <SectionHeading title="作品">
+          查看流程全貌，或按自己的职务和语言能力接取工作。
+        </SectionHeading>
+        <WorkViewNavigation active={view} onChange={changePerspective} />
         <div
           className="workspace-tabs"
           role="tablist"

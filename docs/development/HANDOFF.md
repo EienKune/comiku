@@ -245,6 +245,9 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## Verification and operations
 
+- Keep the three work perspectives in one navigation component. Series browsing has its own query and must not mount or fetch the ordinary work list or its stage/layout controls. Save the current work query before leaving for series and carry it through the directory/detail/back links; restore the work filters/layout on return without turning series into a backend WorkView enum.
+
+
 - Similarity searches scan only originals referenced by WorkImage. A candidate fingerprint created by an explicit lookup must not expand the adopted-image scan or coverage counts. SHA matches remain useful when perceptual decoding fails. Version the normalization recipe; never interpret perceptual distance as proof that comic dialogue is identical. Check SQL plans and response timings separately from an in-memory XOR/popcount benchmark.
 - Keep history fingerprint backfill in the existing heavy/global slot, cap outstanding work across workers and yield to other eligible heavy jobs. Empty-history discovery is throttled; a LIMIT does not bound the cost of proving every original is already covered. Interactive GETs must not repair or enqueue jobs.
 - Candidate import series intent is an immutable receipt, not current membership. Compare canonical values: PostgreSQL jsonb reorders object keys. Persist the normalized intent with the Work and attach membership in the same transaction; a lost reply must replay the original candidate revision, ordered media IDs, series revision and request ID. Lock/recheck the full Actor session and candidates:manage before the author, series and candidate rows; works:metadata alone also permits operators and is insufficient for candidate import.
