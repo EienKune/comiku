@@ -3,7 +3,6 @@ import { BadRequestException } from "@nestjs/common";
 export const BIRTHDAY_NOTIFICATION_EVENT = "birthday.reminder";
 export const BIRTHDAY_RESOURCE_KIND = "birthday_digest";
 export const BIRTHDAY_OFFSETS = [0, 1, 7] as const;
-export const BIRTHDAY_SOURCE_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 export interface BirthdayOffsetState {
   generation: number;
   acceptAfter: string;

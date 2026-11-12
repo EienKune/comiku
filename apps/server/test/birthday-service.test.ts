@@ -1,11 +1,12 @@
+import { BirthdaysService } from "../src/birthdays/birthdays.service.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  BirthdaysService,
+  BaBirthdayDataAdapter,
   nextBirthdaySync,
   readBirthdayPeople,
-} from "../src/birthdays/birthdays.service.js";
+} from "../src/birthdays/adapters/ba/ba-birthday-data.adapter.js";
 import { parseEnvironment } from "../src/config/environment.js";
 import type { PrismaService } from "../src/database/prisma.service.js";
 import type { BackgroundJob } from "../src/generated/prisma/client.js";
@@ -13,7 +14,7 @@ import type { JobsService } from "../src/jobs/jobs.service.js";
 import type {
   BirthdayIdentity,
   BirthdayPerson,
-} from "../src/birthdays/providers/schaledb.js";
+} from "../src/birthdays/adapters/ba/providers/schaledb.js";
 
 const now = new Date("2026-11-11T00:00:00Z");
 const person: BirthdayPerson = {
@@ -187,7 +188,7 @@ function fixture(enabled = true) {
       if (counters.leases === 2) beforePublish?.();
     },
   };
-  const service = new BirthdaysService(
+  const service = new BaBirthdayDataAdapter(
     db as unknown as PrismaService,
     jobs as unknown as JobsService,
     parseEnvironment({
@@ -199,6 +200,7 @@ function fixture(enabled = true) {
   );
   return {
     service,
+    api: new BirthdaysService(db as unknown as PrismaService, service),
     db,
     state,
     settings,
@@ -214,6 +216,33 @@ function fixture(enabled = true) {
     },
   };
 }
+
+test("BA resolves accepted original avatars before the generic calendar without changing stored people", async () => {
+  const f = fixture();
+  const original = { ...person, originalEntryId: 90000 };
+  f.state.catalog!.people = [original];
+  const before = JSON.stringify(f.state.catalog!.people);
+  assert.equal(f.service.namespace, "schaledb");
+  assert.equal(
+    (await f.service.catalog())?.people[0].avatarUrl,
+    "https://schaledb.com/images/student/icon/90000.webp",
+  );
+  assert.equal(
+    (await f.api.calendar(now)).people[0]?.avatarUrl,
+    "https://schaledb.com/images/student/icon/90000.webp",
+  );
+  assert.equal(JSON.stringify(f.state.catalog!.people), before);
+  f.state.catalog!.people = [
+    {
+      ...original,
+      avatarUrl: "https://static.kivo.wiki/images/students/example.png",
+    },
+  ];
+  assert.equal(
+    (await f.service.catalog())?.people[0].avatarUrl,
+    "https://static.kivo.wiki/images/students/example.png",
+  );
+});
 
 function syntheticFetch(secondBirthday = "11/11"): typeof fetch {
   return async (input) => {
@@ -262,8 +291,8 @@ test("disabled birthday feature performs no database, queue or network work", as
     throw new Error("unexpected network");
   });
   assert.deepEqual(await f.service.schedule(), { queued: false });
-  assert.equal((await f.service.calendar(now)).enabled, false);
-  assert.equal((await f.service.catalogStatus()).available, false);
+  assert.equal((await f.api.calendar(now)).enabled, false);
+  assert.equal((await f.api.catalogStatus()).available, false);
   await f.service.synchronize(job, new AbortController().signal);
   await assert.rejects(f.service.schedule("admin"));
   assert.deepEqual(f.counters, {
@@ -310,7 +339,7 @@ test("display disabling hides a stored catalog without requiring its contents to
   const f = fixture();
   f.settings.displayEnabled = false;
   f.state.catalog!.people = [{} as BirthdayPerson];
-  assert.equal((await f.service.calendar(now)).enabled, false);
+  assert.equal((await f.api.calendar(now)).enabled, false);
 });
 
 test("turning both settings off after enqueue avoids network while explicit manual refresh remains allowed", async (t) => {

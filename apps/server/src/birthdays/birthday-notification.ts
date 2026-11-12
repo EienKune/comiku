@@ -1,13 +1,8 @@
+import type { BirthdayReminderPerson } from "./birthday-data.adapter.js";
 import { createHash } from "node:crypto";
 import { normalizeBirthdayNote } from "./birthday-policy.js";
 
-export interface BirthdayNotificationPerson {
-  key: string;
-  name: string;
-  month: number;
-  day: number;
-  originalEntryId: number | null;
-}
+export type BirthdayNotificationPerson = BirthdayReminderPerson;
 export interface BirthdayNotificationSnapshot {
   kind: "birthday_digest";
   sendLocalDate: string;
@@ -44,7 +39,7 @@ export function renderBirthdayNotification(
     "【角色生日提醒】",
     `${timing} · ${snapshot.targetLocalDate}`,
     "",
-    `生日学生：${snapshot.people.map((person) => person.name).join("、")}`,
+    `生日角色：${snapshot.people.map((person) => person.name).join("、")}`,
     ...(normalizedNote ? ["", normalizedNote] : []),
   ].join("\n");
   // Reserve the same immutable historical replay prefix as ordinary messages.

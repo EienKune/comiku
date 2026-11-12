@@ -45,7 +45,7 @@ export async function runBirthdayWorker(
       }
     }
     try {
-      // Successful Kivo checkpoints can make the next batch immediately due.
+      // A source checkpoint can make its next batch immediately due.
       await birthdays.scheduleSupplement();
     } catch {
       console.error("生日补充来源调度未完成，将在下一轮恢复");

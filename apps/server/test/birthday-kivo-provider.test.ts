@@ -6,7 +6,7 @@ import {
   kivoProfileHash,
   readKivoProfile,
   validateKivoProfile,
-} from "../src/birthdays/providers/kivo.js";
+} from "../src/birthdays/adapters/ba/providers/kivo.js";
 
 const student = (id = 9001) => ({
   id,
