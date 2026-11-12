@@ -98,9 +98,22 @@ export async function readReminderEvidence(
     },
   });
   const cancellations = await tx.$queryRaw<
-    { participantId: string; cancelKey: string }[]
+    { participantId: string; cancelKey: string; preclaimed: boolean }[]
   >(Prisma.sql`
-    SELECT p.id AS "participantId", cancelled.token AS "cancelKey"
+    SELECT p.id AS "participantId", cancelled.token AS "cancelKey",
+      EXISTS (
+        SELECT 1 FROM work_events e
+        WHERE e.work_id = p.work_id AND e.created_at = p.joined_at
+          AND e.action = 'stage_joined' AND e.actor_id = p.user_id
+          AND p.participation_mode = 'owner'
+          AND e.detail->>'stage' = p.stage::text
+          AND e.detail->>'userId' = p.user_id::text
+          AND e.detail->'participationRegistered' = 'true'::jsonb
+          AND starts_with(e.detail->>'operation', 'claim:' || p.stage::text || ':' || p.user_id::text || ':')
+          AND e.from_workflow_status = e.to_workflow_status
+          AND ((p.stage = 'proofread' AND e.from_workflow_status IN ('pending_translate', 'translating'))
+            OR (p.stage = 'typeset' AND e.from_workflow_status IN ('pending_translate', 'translating', 'pending_proofread', 'proofreading')))
+      ) AS preclaimed
     FROM work_stage_participants p
     LEFT JOIN LATERAL (
       SELECT count(*)::text || ':' || coalesce(max(e.id::text), '') AS token FROM work_events e
@@ -112,6 +125,9 @@ export async function readReminderEvidence(
   `);
   const cancelByParticipant = new Map(
     cancellations.map((item) => [item.participantId, item.cancelKey]),
+  );
+  const preclaimedByParticipant = new Map(
+    cancellations.map((item) => [item.participantId, item.preclaimed]),
   );
   return participants.map((participant) => {
     const { work, user, stage } = participant;
@@ -199,6 +215,14 @@ export async function readReminderEvidence(
       waiting: state === "waiting",
       completed: state === "completed",
       ended: state === "ended",
+      // Both timestamps are transaction-stable DB defaults in reserveStage.
+      // Missing/ambiguous legacy evidence stays conservative. Initial claim
+      // provenance must not revive a later assignment/completion/cancel round.
+      preclaimed:
+        preclaimedByParticipant.get(participant.id) === true &&
+        cancelByParticipant.get(participant.id) === "0:" &&
+        !participant.assignments.length &&
+        !submission,
     };
   });
 }
@@ -215,6 +239,7 @@ export interface ReminderItemsOptions {
   readyEnabled: boolean;
   overdueEnabled: boolean;
   limit?: number;
+  counts?: boolean;
 }
 
 export class WorkReminderProjection {
@@ -362,11 +387,21 @@ export class WorkReminderProjection {
         OR (k.kind = 'overdue' AND ${options.overdueEnabled} AND ${eligibleMilliseconds} >= ${BigInt(OVERDUE_MILLISECONDS)}))
       AND NOT EXISTS (SELECT 1 FROM work_reminder_notices n
         WHERE n.participant_id = e.participant_id AND n.round = e.round AND n.kind = k.kind
-          AND n.channel_id = ${options.channelId}::uuid)
+          AND n.channel_id = ${options.channelId}::uuid
+          AND NOT EXISTS (SELECT 1 FROM notification_deliveries d
+            WHERE d.event_id = n.event_id AND d.channel_id = n.channel_id
+              AND d.status IN ('cancelled', 'failed')
+              AND NOT EXISTS (SELECT 1 FROM notification_attempts a
+                WHERE a.delivery_id = d.id AND a.send_boundary_crossed)
+              AND NOT EXISTS (SELECT 1 FROM notification_deliveries sibling
+                WHERE sibling.event_id = n.event_id AND sibling.channel_id = n.channel_id
+                  AND (sibling.status NOT IN ('cancelled','failed') OR EXISTS (
+                    SELECT 1 FROM notification_attempts a WHERE a.delivery_id = sibling.id AND a.send_boundary_crossed)))))
     `;
-    const counts = await tx.$queryRaw<
-      { kind: string; count: bigint }[]
-    >(Prisma.sql`
+    const counts =
+      options.counts === false
+        ? []
+        : await tx.$queryRaw<{ kind: string; count: bigint }[]>(Prisma.sql`
       SELECT k.kind, count(*) AS count FROM work_reminder_episodes e
       CROSS JOIN (VALUES ('ready'), ('overdue')) k(kind)
       WHERE ${predicate} GROUP BY k.kind
@@ -422,7 +457,7 @@ export class WorkReminderProjection {
           round: candidate.round,
           eligibleMilliseconds: Number(candidate.eligibleMilliseconds),
         });
-      } else {
+      } else if (options.counts !== false) {
         result[candidate.kind === "ready" ? "readyCount" : "overdueCount"]--;
       }
     }

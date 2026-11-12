@@ -24,6 +24,8 @@ export interface ReminderEvidence {
   waiting: boolean;
   completed: boolean;
   ended: boolean;
+  /** Proven initial reservation, never an inference from current readiness. */
+  preclaimed?: boolean;
 }
 
 export interface ReminderObservation {
@@ -66,7 +68,10 @@ export function advanceReminderClock(
 // An uncertain interval is lost, but an ordinary revision never resets prior time.
 export function observeReminder(
   previous: ReminderObservation | null,
-  evidence: Pick<ReminderEvidence, "state" | "sourceKey" | "evidenceKey">,
+  evidence: Pick<
+    ReminderEvidence,
+    "state" | "sourceKey" | "evidenceKey" | "preclaimed"
+  >,
   now: Date,
   clockMilliseconds?: bigint,
 ): ReminderObservation {
@@ -115,6 +120,8 @@ export function observeReminder(
           : (previous?.readyObservedAt ?? null),
     preclaimed:
       evidence.state === "waiting" ||
-      (!newRound && (previous?.preclaimed ?? false)),
+      (!newRound && (previous?.preclaimed ?? false)) ||
+      (evidence.preclaimed === true &&
+        (!previous || (!newRound && previous.round === 1))),
   };
 }
