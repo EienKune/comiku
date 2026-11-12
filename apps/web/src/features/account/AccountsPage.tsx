@@ -465,14 +465,14 @@ function CredentialDialog({
     </Dialog>
   );
 }
-export function AccountsPage() {
+export function AccountsPage({ enabled = true }: { enabled?: boolean }) {
   const me = useAccount();
   const allowed = me.permissions.includes("accounts:manage");
-  const roles = useRoles(allowed);
+  const roles = useRoles(enabled && allowed);
   const users = useQuery({
     queryKey: ["users"],
     queryFn: async () => unwrap(await client.GET("/api/users")),
-    enabled: allowed,
+    enabled: enabled && allowed,
   });
   const [editing, setEditing] = useState<CurrentUser | null>(null);
   const [confirmation, setConfirmation] = useState<{
@@ -501,9 +501,6 @@ export function AccountsPage() {
       .join("、");
   return (
     <>
-      <SectionHeading title="账号管理">
-        由管理员统一分发账号。重要操作需要确认当前管理员密码，并写入账号审计。
-      </SectionHeading>
       <CreateAccount roles={roles.data} onCreated={setCredential} />
       <Surface className="account-card account-content-boundary">
         <h2>团队账号 · {users.data.length}</h2>
@@ -578,22 +575,24 @@ export function AccountsPage() {
           </table>
         </div>
       </Surface>
-      <AuditPanel />
-      {editing && (
+      {me.permissions.includes("audit:read") && (
+        <AuditPanel enabled={enabled && allowed} />
+      )}
+      {enabled && editing && (
         <ManageAccount
           user={editing}
           roles={roles.data}
           onClose={() => setEditing(null)}
         />
       )}
-      {confirmation && (
+      {enabled && confirmation && (
         <ConfirmAccountAction
           {...confirmation}
           onClose={() => setConfirmation(null)}
           onCredential={setCredential}
         />
       )}
-      {credential && (
+      {enabled && credential && (
         <CredentialDialog
           credential={credential}
           onClose={() => setCredential(null)}
@@ -615,17 +614,20 @@ const auditLabels: Record<string, string> = {
   "account.profile_updated": "修改资料",
   "account.avatar_updated": "修改头像",
   "account.avatar_removed": "移除头像",
+  "account.qq_binding_updated": "修改 QQ 绑定",
   "account.admin_initialized": "初始化管理员",
   "account.admin_recovered": "服务器恢复管理员",
 };
-function AuditPanel() {
+function AuditPanel({ enabled }: { enabled: boolean }) {
   const query = useQuery({
     queryKey: ["audit"],
     queryFn: async () => unwrap(await client.GET("/api/users/audit")),
+    enabled,
   });
   const users = useQuery({
     queryKey: ["users"],
     queryFn: async () => unwrap(await client.GET("/api/users")),
+    enabled,
   });
   return (
     <Surface className="account-card account-content-boundary">

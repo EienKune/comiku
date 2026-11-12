@@ -80,3 +80,54 @@ test("unsupported actions and invalid allowlisted facts are deterministic poison
     /notification_event_invalid/,
   );
 });
+
+test("participation kind projects only the exact durable claim/join shapes for the same stage", () => {
+  const userId = "00000000-0000-4000-8000-000000000009";
+  for (const [operation, kind] of [
+    [`claim:translate:${userId}:`, "claim"],
+    [`claim:translate:${userId}:署名:含冒号`, "claim"],
+    ["join:translate:", "join"],
+    ["join:translate:署名:含冒号", "join"],
+  ]) {
+    const mapped = mapWorkEventNotification(
+      { ...source, detail: { ...source.detail, operation } },
+      1,
+    )!;
+    assert.equal(
+      normalizeNotificationEvent(mapped).snapshot.participationKind,
+      kind,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(mapped),
+      /operation|署名|SECRET_CANARY|private.example/,
+    );
+    assert.doesNotMatch(JSON.stringify(mapped), new RegExp(userId));
+  }
+  for (const operation of [
+    undefined,
+    "claim",
+    "join",
+    "join:translate",
+    "claim:translate:",
+    "claim:translate:not-a-uuid:",
+    `claim:typeset:${userId}:`,
+    "join:typeset:",
+    `assign:translate:${userId}:`,
+    { claim: true },
+  ]) {
+    const mapped = mapWorkEventNotification(
+      { ...source, detail: { stage: "translate", operation } },
+      1,
+    )!;
+    assert.equal("participationKind" in mapped, false);
+  }
+  const unrelated = mapWorkEventNotification(
+    {
+      ...source,
+      action: "stage_started",
+      detail: { stage: "translate", operation: "join:translate:" },
+    },
+    1,
+  )!;
+  assert.equal("participationKind" in unrelated, false);
+});

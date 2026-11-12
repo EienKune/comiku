@@ -19,12 +19,11 @@ afterEach(() => {
 });
 
 function openPage(permissions: string[], url = "/settings/system") {
-  return render(
-    <QueryClientProvider
-      client={
-        new QueryClient({ defaultOptions: { queries: { retry: false } } })
-      }
-    >
+  const cache = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const view = render(
+    <QueryClientProvider client={cache}>
       <MemoryRouter initialEntries={[url]}>
         <Routes>
           <Route element={<Outlet context={{ permissions }} />}>
@@ -34,6 +33,7 @@ function openPage(permissions: string[], url = "/settings/system") {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, cache };
 }
 
 test("a source user cannot open technical management or request its history", () => {
@@ -70,21 +70,37 @@ test("a system administrator can read collection history in the dedicated page",
 });
 
 function mockManagement() {
+  vi.spyOn(client, "POST").mockResolvedValue({
+    data: { text: "合成工作摘要" },
+    response: new Response(),
+  } as never);
   return vi.spyOn(client, "GET").mockImplementation((async (path: string) => ({
     data:
-      path === "/api/source-fetch/runs"
-        ? { items: [], nextCursor: null, observedAt: "2026-11-10T00:00:00Z" }
-        : path.endsWith("/configuration")
-          ? {
+      path === "/api/notifications/work-reminders"
+        ? {
+            settings: {
               enabled: false,
-              configurationError: null,
-              connections: [{ key: "bot", name: "测试连接", available: true }],
-              eventTypes: [{ type: "imported", label: "导入作品" }],
-              channels: [],
-            }
-          : path.endsWith("/deliveries")
-            ? { items: [], nextCursor: null }
-            : [],
+              sendTimes: ["09:00", "18:00"],
+              note: "",
+              revision: 0,
+            },
+            channels: [],
+          }
+        : path === "/api/source-fetch/runs"
+          ? { items: [], nextCursor: null, observedAt: "2026-11-10T00:00:00Z" }
+          : path.endsWith("/configuration")
+            ? {
+                enabled: false,
+                configurationError: null,
+                connections: [
+                  { key: "bot", name: "测试连接", available: true },
+                ],
+                eventTypes: [{ type: "imported", label: "导入作品" }],
+                channels: [],
+              }
+            : path.endsWith("/deliveries")
+              ? { items: [], nextCursor: null }
+              : [],
     response: new Response(),
   })) as never);
 }
@@ -270,4 +286,48 @@ test("an inactive source panel performs no capability reads or history polling, 
     await vi.advanceTimersByTimeAsync(45_000);
   });
   expect(get.mock.calls.length).toBe(before);
+});
+
+test("account data and audit load only on the authorized active tab and retain form drafts", async () => {
+  const get = mockManagement();
+  const { cache } = openPage(
+    ["system:manage", "accounts:manage", "members:read", "audit:read"],
+    "/settings/system?tab=notifications",
+  );
+  await screen.findByText("暂无群目标。");
+  const accountReads = () =>
+    get.mock.calls.filter((call) => String(call[0]).startsWith("/api/users"))
+      .length;
+  expect(accountReads()).toBe(0);
+  fireEvent.click(screen.getByRole("tab", { name: "账号管理" }));
+  await screen.findByRole("heading", { name: "分发新账号" });
+  await screen.findByRole("heading", { name: "最近账号审计" });
+  fireEvent.change(screen.getByRole("textbox", { name: "账户名" }), {
+    target: { value: "draftmember" },
+  });
+  expect(accountReads()).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole("tab", { name: "图源采集" }));
+  await screen.findByText("暂无同步记录。");
+  const before = accountReads();
+  await act(async () => {
+    await cache.invalidateQueries({ queryKey: ["users"] });
+    await cache.invalidateQueries({ queryKey: ["roles"] });
+    await cache.invalidateQueries({ queryKey: ["audit"] });
+  });
+  expect(accountReads()).toBe(before);
+  fireEvent.click(screen.getByRole("tab", { name: "账号管理" }));
+  expect(
+    (screen.getByRole("textbox", { name: "账户名" }) as HTMLInputElement).value,
+  ).toBe("draftmember");
+  expect(screen.queryByText("我的 QQ 绑定")).toBeNull();
+});
+
+test("technical-management permission alone never exposes or fetches account management", async () => {
+  const get = mockManagement();
+  openPage(["system:manage"], "/settings/system?tab=accounts");
+  await screen.findByText("暂无同步记录。");
+  expect(screen.queryByRole("tab", { name: "账号管理" })).toBeNull();
+  expect(
+    get.mock.calls.some((call) => String(call[0]).startsWith("/api/users")),
+  ).toBe(false);
 });

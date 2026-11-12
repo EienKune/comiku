@@ -12,6 +12,13 @@ import {
   isPrivateNotificationIp,
   normalizeNotificationIp,
 } from "./notification-connections.js";
+import {
+  NOTIFICATION_MESSAGE_PAYLOAD_MAX_BYTES,
+  notificationMessageSegments,
+  notificationMessageTextValid,
+  type NotificationMessagePolicy,
+} from "./notification-message-segments.js";
+import { safeNotificationSendDiagnostics } from "./notification-diagnostics.js";
 
 export interface OneBotHttpAdapterOptions {
   lookup?: (hostname: string) => Promise<LookupAddress[]>;
@@ -35,12 +42,18 @@ export class OneBotHttpAdapter {
     groupId: string,
     text: string,
     signal?: AbortSignal,
+    frozenSegments?: unknown,
+    policy: NotificationMessagePolicy = "standard",
   ): Promise<NotificationSendResult> {
+    const segments =
+      frozenSegments == null
+        ? [{ type: "text", data: { text } }]
+        : notificationMessageSegments(frozenSegments, policy);
     if (
       !/^[1-9]\d{0,19}$/.test(groupId) ||
-      typeof text !== "string" ||
-      !text ||
-      [...text].length > 1000
+      !notificationMessageTextValid(text, policy) ||
+      !segments ||
+      (policy === "work_digest" && frozenSegments == null)
     ) {
       return {
         status: "failed",
@@ -48,12 +61,44 @@ export class OneBotHttpAdapter {
         sendBoundaryCrossed: false,
       };
     }
+    if (policy === "work_digest") {
+      let offset = 0;
+      for (const segment of segments) {
+        if (segment.type !== "text") continue;
+        if (!text.startsWith(segment.data.text, offset))
+          return {
+            status: "failed",
+            errorCode: "notification_payload_invalid",
+            sendBoundaryCrossed: false,
+          };
+        offset += segment.data.text.length;
+      }
+      if (offset !== text.length)
+        return {
+          status: "failed",
+          errorCode: "notification_payload_invalid",
+          sendBoundaryCrossed: false,
+        };
+    }
+    const payload = JSON.stringify({
+      group_id: groupId,
+      message: segments,
+      auto_escape: true,
+    });
+    if (Buffer.byteLength(payload) > NOTIFICATION_MESSAGE_PAYLOAD_MAX_BYTES)
+      return {
+        status: "failed",
+        errorCode: "notification_payload_invalid",
+        sendBoundaryCrossed: false,
+      };
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) controller.abort();
     const timer = setTimeout(abort, this.timeoutMs);
     let boundary = false;
+    let httpStatus: number | undefined;
+    let retcode: unknown;
     const fail = (
       status: NotificationSendResult["status"],
       errorCode: string,
@@ -61,6 +106,9 @@ export class OneBotHttpAdapter {
       status,
       errorCode,
       sendBoundaryCrossed: boundary,
+      ...(httpStatus !== undefined && {
+        diagnostics: safeNotificationSendDiagnostics({ httpStatus, retcode }),
+      }),
     });
     try {
       const endpoint = new URL(connection.endpoint);
@@ -118,11 +166,6 @@ export class OneBotHttpAdapter {
             : new HttpAgent(options);
         this.agents.set(connection.fingerprint, agent);
       }
-      const payload = JSON.stringify({
-        group_id: groupId,
-        message: [{ type: "text", data: { text } }],
-        auto_escape: true,
-      });
       return await new Promise<NotificationSendResult>((resolve) => {
         let settled = false;
         const finish = (result: NotificationSendResult) => {
@@ -160,6 +203,7 @@ export class OneBotHttpAdapter {
           },
           (response) => {
             boundary = true;
+            httpStatus = response.statusCode;
             const chunks: Buffer[] = [];
             let size = 0;
             response.on("data", (chunk: Buffer) => {
@@ -194,6 +238,7 @@ export class OneBotHttpAdapter {
                   retcode?: unknown;
                   data?: { message_id?: unknown };
                 };
+                retcode = reply.retcode;
                 const messageId = reply.data?.message_id;
                 if (
                   reply.status === "ok" &&

@@ -62,7 +62,11 @@ export class DashboardService {
     );
     return {
       totalWorks: workflowGroups.reduce(
-        (total, item) => total + item._count._all,
+        (total, item) =>
+          total +
+          (item.workflowStatus === WorkflowStatus.archived
+            ? 0
+            : item._count._all),
         0,
       ),
       workflowCounts: Object.values(WorkflowStatus).map((status) => ({

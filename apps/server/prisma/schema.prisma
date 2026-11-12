@@ -19,6 +19,7 @@ model User {
   username                            String                        @unique @db.VarChar(64)
   passwordHash                        String                        @map("password_hash") @db.Text
   displayName                         String                        @map("display_name") @db.VarChar(100)
+  qqNumber                            String?                       @unique @map("qq_number") @db.VarChar(20)
   avatarObjectKey                     String?                       @map("avatar_object_key") @db.Text
   avatarFileObjectId                  String?                       @map("avatar_file_object_id") @db.Uuid
   avatarFileObject                    FileObject?                   @relation("UserAvatar", fields: [avatarFileObjectId], references: [id], onDelete: Restrict)
@@ -1747,6 +1748,7 @@ model NotificationChannel {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
   deliveries NotificationDelivery[]
+  workReminderSubscription WorkReminderSubscription?
   @@map("notification_channels")
 }
 
@@ -1803,6 +1805,9 @@ model NotificationDelivery {
   channelId String @map("channel_id") @db.Uuid
   channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Restrict)
   audienceGeneration Int @map("audience_generation")
+  reminderGeneration Int? @map("reminder_generation")
+  reminderScopeGeneration Int? @map("reminder_scope_generation")
+  messageSegments Json? @map("message_segments")
   replayGeneration Int @default(0) @map("replay_generation")
   sourceDeliveryId String? @map("source_delivery_id") @db.Uuid
   requestKey String? @unique @map("request_key") @db.VarChar(255)
@@ -1896,4 +1901,88 @@ model SourceCredentialChangeOperation {
   @@unique([actorId, requestId])
   @@index([platform, createdAt, id], map: "source_credential_operation_platform_idx")
   @@map("source_credential_change_operations")
+}
+
+model WorkReminderSettings {
+  id String @id @default("global") @db.VarChar(32)
+  enabled Boolean @default(false)
+  sendTimes String[] @default(["09:00", "18:00"]) @map("send_times")
+  note String @default("") @db.VarChar(480)
+  revision Int @default(0)
+  generation Int @default(1)
+  acceptAfter DateTime @default(now()) @map("accept_after") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@map("work_reminder_settings")
+}
+
+model WorkReminderSubscription {
+  channelId String @id @map("channel_id") @db.Uuid
+  channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Restrict)
+  digestEnabled Boolean @default(false) @map("digest_enabled")
+  readyEnabled Boolean @default(false) @map("ready_enabled")
+  overdueEnabled Boolean @default(false) @map("overdue_enabled")
+  mentionsEnabled Boolean @default(true) @map("mentions_enabled")
+  revision Int @default(0)
+  generation Int @default(1)
+  acceptAfter DateTime @default(now()) @map("accept_after") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@map("work_reminder_subscriptions")
+}
+
+// Asynchronous observation projection: it never participates in business writes.
+model WorkReminderClock {
+  id String @id @default("global") @db.VarChar(32)
+  elapsedMilliseconds BigInt @default(0) @map("elapsed_milliseconds")
+  lastObservedAt DateTime @map("last_observed_at") @db.Timestamptz(3)
+  @@map("work_reminder_clock")
+}
+
+model WorkReminderEpisode {
+  participantId String @id @map("participant_id") @db.Uuid
+  workId String @map("work_id") @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  stage WorkStage
+  round Int @default(1)
+  state String @db.VarChar(16)
+  sourceKey String @map("source_key") @db.Char(64)
+  evidenceKey String @map("evidence_key") @db.Char(64)
+  eligibleMilliseconds BigInt @default(0) @map("eligible_milliseconds")
+  clockMilliseconds BigInt @default(0) @map("clock_milliseconds")
+  lastObservedAt DateTime @map("last_observed_at") @db.Timestamptz(3)
+  readyObservedAt DateTime? @map("ready_observed_at") @db.Timestamptz(3)
+  preclaimed Boolean @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@index([lastObservedAt, participantId], map: "work_reminder_episode_observed_idx")
+  @@index([state, eligibleMilliseconds, participantId], map: "work_reminder_episode_due_idx")
+  @@map("work_reminder_episodes")
+}
+
+model WorkDigestOccurrence {
+  id String @id @default(uuid()) @db.Uuid
+  channelId String @map("channel_id") @db.Uuid
+  localDate String @map("local_date") @db.Char(10)
+  slot String @db.VarChar(5)
+  dueAt DateTime @map("due_at") @db.Timestamptz(3)
+  validBefore DateTime @map("valid_before") @db.Timestamptz(3)
+  eventId String? @unique @map("event_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@unique([channelId, localDate, slot], map: "work_digest_occurrence_slot_key")
+  @@index([validBefore], map: "work_digest_occurrence_expiry_idx")
+  @@map("work_digest_occurrences")
+}
+
+model WorkReminderNotice {
+  id String @id @default(uuid()) @db.Uuid
+  participantId String @map("participant_id") @db.Uuid
+  round Int
+  kind String @db.VarChar(16)
+  channelId String @map("channel_id") @db.Uuid
+  scopeGeneration Int @map("scope_generation")
+  eventId String @map("event_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@unique([participantId, round, kind, channelId, scopeGeneration], map: "work_reminder_notice_once_key")
+  @@index([channelId, scopeGeneration, eventId], map: "work_reminder_notice_scope_idx")
+  @@index([eventId], map: "work_reminder_notice_event_idx")
+  @@map("work_reminder_notices")
 }

@@ -1,15 +1,16 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { Palette, UserRound, KeyRound, X } from "lucide-react";
 import {
-  Button,
-  IconButton,
-  SelectField,
-  TextField,
-} from "../../components/ui";
+  Link,
+  Navigate,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router";
+import { Palette, UserRound, KeyRound } from "lucide-react";
+import { Button, SelectField, Surface, TextField } from "../../components/ui";
 import {
   applyTheme,
   defaultTheme,
@@ -21,12 +22,12 @@ import {
 } from "../../styles/theme";
 import { useAccount } from "./account-context";
 import { client, queryClient, unwrap } from "./api";
-import { Feedback } from "./forms";
-import { useSettingsNavigation } from "./settings-routing";
+import { Feedback, SectionHeading } from "./forms";
 import { AvatarSettings } from "./AvatarSettings";
 import { refreshMemberProfile } from "./profile-cache";
 import { useAction } from "./use-action";
 import { loginReturnTarget } from "./login-return";
+import { QqBindingSettings } from "./QqBindingSettings";
 
 const profileSchema = z.object({
   displayName: z.string().trim().min(1, "请输入成员昵称").max(100),
@@ -44,59 +45,50 @@ const passwordSchema = z
 
 function SettingsFrame({
   children,
-  canClose = true,
+  showNavigation = true,
 }: {
   children: ReactNode;
-  canClose?: boolean;
+  showNavigation?: boolean;
 }) {
-  const { close } = useSettingsNavigation();
-  const dialog = useRef<HTMLDialogElement>(null);
-  useLayoutEffect(() => {
-    const element = dialog.current;
-    element?.showModal();
-    return () => element?.close();
-  }, []);
+  const location = useLocation();
+  const [params] = useSearchParams();
+  const active = location.pathname.endsWith("/password")
+    ? "password"
+    : params.get("tab") === "profile"
+      ? "profile"
+      : "appearance";
   return (
-    <dialog
-      ref={dialog}
-      onCancel={(event) => {
-        event.preventDefault();
-        if (canClose) close();
-      }}
-      className="ui-surface workspace-settings"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="workspace-settings-title"
-    >
-      <header className="workspace-settings-heading">
-        <div>
-          <span>偏好与账号</span>
-          <h1 id="workspace-settings-title">设置</h1>
-        </div>
-        {canClose && (
-          <IconButton label="关闭设置" onClick={close}>
-            <X size={18} />
-          </IconButton>
-        )}
-      </header>
-      {canClose && (
-        <nav className="workspace-settings-tabs" aria-label="设置分类">
-          <Link to="/settings?tab=appearance">
+    <>
+      <SectionHeading title={showNavigation ? "个人设置" : "设置密码"} />
+      {showNavigation && (
+        <nav className="account-settings-tabs" aria-label="个人设置分类">
+          <Link
+            to="/settings?tab=appearance"
+            aria-current={active === "appearance" ? "page" : undefined}
+          >
             <Palette size={16} />
             外观
           </Link>
-          <Link to="/settings?tab=profile">
+          <Link
+            to="/settings?tab=profile"
+            aria-current={active === "profile" ? "page" : undefined}
+          >
             <UserRound size={16} />
             个人资料
           </Link>
-          <Link to="/settings/password">
+          <Link
+            to="/settings/password"
+            aria-current={active === "password" ? "page" : undefined}
+          >
             <KeyRound size={16} />
             修改密码
           </Link>
         </nav>
       )}
-      <div className="workspace-settings-body">{children}</div>
-    </dialog>
+      <Surface className="account-card account-settings-page">
+        {children}
+      </Surface>
+    </>
   );
 }
 
@@ -170,6 +162,13 @@ export function ProfilePage() {
   const action = useAction();
   const [params] = useSearchParams();
   const tab = params.get("tab") ?? "appearance";
+  const location = useLocation();
+  useEffect(() => {
+    if (tab === "profile" && location.hash === "#qq-binding")
+      document
+        .getElementById("qq-binding")
+        ?.scrollIntoView({ block: "center" });
+  }, [tab, location.hash]);
   const {
     register,
     handleSubmit,
@@ -180,7 +179,12 @@ export function ProfilePage() {
       displayName: user.displayName,
     },
   });
-  if (tab === "appearance")
+  if (tab === "qq") {
+    const next = new URLSearchParams(params);
+    next.set("tab", "profile");
+    return <Navigate to={`/settings?${next.toString()}#qq-binding`} replace />;
+  }
+  if (tab !== "profile")
     return (
       <SettingsFrame>
         <AppearanceSettings />
@@ -223,6 +227,9 @@ export function ProfilePage() {
             保存资料
           </Button>
         </form>
+        <div id="qq-binding">
+          <QqBindingSettings />
+        </div>
         <Button
           variant="secondary"
           disabled={action.busy}
@@ -247,7 +254,6 @@ export function PasswordPage() {
   const action = useAction();
   const navigate = useNavigate();
   const location = useLocation();
-  const { close } = useSettingsNavigation();
   const {
     register,
     handleSubmit,
@@ -255,7 +261,7 @@ export function PasswordPage() {
     formState: { errors },
   } = useForm({ resolver: zodResolver(passwordSchema) });
   return (
-    <SettingsFrame canClose={!user.mustChangePassword}>
+    <SettingsFrame showNavigation={!user.mustChangePassword}>
       <section className="settings-pane">
         <div>
           <h2>{user.mustChangePassword ? "设置你自己的密码" : "修改密码"}</h2>
@@ -282,7 +288,7 @@ export function PasswordPage() {
               queryClient.setQueryData(["me"], updated);
               if (user.mustChangePassword)
                 navigate(loginReturnTarget(location.state), { replace: true });
-              else close();
+              else action.setSuccess("密码已更新");
             }),
           )}
         >
@@ -316,7 +322,7 @@ export function PasswordPage() {
             {...register("confirmPassword")}
             error={errors.confirmPassword?.message}
           />
-          <Feedback error={action.error} />
+          <Feedback error={action.error} success={action.success} />
           <Button type="submit" loading={action.busy}>
             确认修改密码
           </Button>

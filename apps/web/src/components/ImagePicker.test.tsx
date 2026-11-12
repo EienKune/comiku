@@ -152,6 +152,52 @@ test("a locked avatar cannot be replaced or cancelled", () => {
   expect(onChange).not.toHaveBeenCalled();
 });
 
+test("personal avatars accept supported MIME types or suffixes without a MIME type and reject ZIP and other types", () => {
+  const onChange = vi.fn();
+  render(
+    <ImagePicker
+      label="个人头像"
+      variant="avatar"
+      formats="avatar"
+      files={[]}
+      onChange={onChange}
+      maxFileSize={5 * 1024 * 1024}
+    />,
+  );
+  const input = screen.getByLabelText("个人头像") as HTMLInputElement;
+  expect(input.accept).toBe("image/png,image/jpeg,image/webp,image/gif");
+  const supported = [
+    new File(["gif"], "avatar.GIF", { type: "image/gif" }),
+    new File(["jpeg"], "avatar.jfif", { type: "image/jpeg" }),
+    new File(["png"], "avatar", { type: "image/png" }),
+    new File(["webp"], "avatar", { type: "image/webp" }),
+    new File(["png"], "avatar.PNG"),
+    new File(["gif"], "avatar.gif"),
+  ];
+  for (const file of supported) {
+    fireEvent.change(input, { target: { files: [file] } });
+    expect(onChange).toHaveBeenLastCalledWith([file]);
+  }
+  expect(screen.getByText(/PNG、JPEG、WebP、GIF/).textContent).toContain(
+    "5 MiB",
+  );
+  for (const file of [
+    new File(["zip"], "avatar.zip", { type: "application/zip" }),
+    new File(["zip"], "avatar.png", { type: "application/zip" }),
+    new File(["gif"], "avatar.gif", { type: "application/octet-stream" }),
+    new File(["svg"], "avatar.png", { type: "image/svg+xml" }),
+    new File(["zip"], "avatar.zip"),
+    new File(["svg"], "avatar.svg"),
+    new File(["png"], "avatar"),
+  ]) {
+    fireEvent.change(input, {
+      target: { files: [file] },
+    });
+    expect(screen.getByRole("alert").textContent).toContain("GIF");
+  }
+  expect(onChange).toHaveBeenCalledTimes(supported.length);
+});
+
 test("multiple images append without duplicates and invalid selections preserve the current files", () => {
   vi.stubGlobal(
     "URL",

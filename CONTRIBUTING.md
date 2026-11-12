@@ -19,6 +19,8 @@
 
 业务规则见 [架构说明](docs/architecture.md)，UI 以 [DESIGN.md](DESIGN.md)、语义 token 和 `/playground` 为准。先核对规则，再修改实现；不要在页面复制角色或状态枚举。权限、流程、版本边界和文件授权必须由后端再次校验。
 
+CI 在 `main`、`dev` 的 Push 和所有 Pull Request 上运行完整检查，包括以功能分支为目标的堆叠 PR。功能分支普通 Push 不额外运行同一套 CI，需要远端校验时创建 PR。小改动先运行受影响测试，送审或发布前完成完整检查。
+
 按顺序运行以下命令，避免多个 Prisma generate 同时写入同一目录：
 
 ```sh

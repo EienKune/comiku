@@ -1,3 +1,4 @@
+import { notificationResourceKind } from "./notification-resource.js";
 import {
   BadRequestException,
   ConflictException,
@@ -251,8 +252,6 @@ export class NotificationsService {
         })),
       input.eventTypes,
     );
-    if (input.enabled && !rules.length)
-      throw new BadRequestException("启用群通知前至少选择一个事件");
     return {
       name: input.name.trim(),
       connectionKey: connection.key,
@@ -723,6 +722,14 @@ export class NotificationsService {
         );
       if (source.status === "unknown" && !input.confirmPossibleDuplicate)
         throw new ConflictException("请明确确认补发可能重复");
+      if (
+        ["work_digest", "work_ready"].includes(
+          notificationResourceKind(source.event),
+        )
+      )
+        throw new ConflictException(
+          "工作提醒按当前任务自动处理，无需补发历史消息",
+        );
       const channel = source.channel;
       if (
         !channel.enabled ||

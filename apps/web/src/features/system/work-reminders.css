@@ -1,0 +1,63 @@
+.work-reminder-panel {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-border);
+}
+.work-reminder-panel h3 {
+  margin: 0 0 16px;
+  font-size: var(--text-lg);
+}
+.work-reminder-panel fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.work-reminder-times,
+.work-reminder-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.work-reminder-times {
+  margin: 16px 0;
+}
+.work-reminder-times .ui-field {
+  flex: 0 1 200px;
+}
+.work-reminder-preview {
+  margin: 16px 0;
+}
+.work-reminder-channels {
+  display: grid;
+  gap: 16px;
+  margin-top: 24px;
+}
+.work-reminder-channel {
+  display: grid;
+  gap: 12px;
+  padding: 16px 0;
+  border-top: 1px solid var(--color-border);
+}
+.work-reminder-channel > div:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+}
+.work-reminder-comparison {
+  margin-top: 16px;
+}
+@media (max-width: 620px) {
+  .work-reminder-times .ui-field {
+    flex-basis: 100%;
+  }
+  .work-reminder-options {
+    align-items: flex-start;
+  }
+}
+
+#work-reminder-settings {
+  scroll-margin-top: 8rem;
+}
