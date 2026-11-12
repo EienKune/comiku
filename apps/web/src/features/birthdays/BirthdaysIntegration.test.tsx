@@ -33,6 +33,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 function openPage(url = "/settings/system?tab=notifications") {
+  vi.spyOn(client, "POST").mockResolvedValue(
+    reply({ text: "合成工作摘要" }) as never,
+  );
   const cache = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -40,65 +43,75 @@ function openPage(url = "/settings/system?tab=notifications") {
     path: string,
   ) =>
     reply(
-      path === "/api/birthdays/settings"
+      path === "/api/notifications/work-reminders"
         ? {
-            available: true,
-            settings,
-            personCount: 8,
-            lastCheckedAt: null,
-            dataUpdatedAt: null,
+            settings: {
+              enabled: false,
+              sendTimes: ["09:00", "18:00"],
+              note: "",
+              revision: 0,
+            },
+            channels: [],
           }
-        : path === "/api/birthdays/subscriptions"
-          ? [
-              {
-                id: "group",
-                name: "已有目标",
-                groupId: "12345",
-                connectionKey: "existing",
-                enabled: true,
-                revision: 2,
-                birthdayEnabled: true,
-                birthdayRevision: 1,
-              },
-            ]
-          : path === "/api/birthdays/template"
-            ? { note: "生日快乐", revision: 2 }
-            : path === "/api/notifications/configuration"
-              ? configuration
-              : path === "/api/notifications/deliveries"
-                ? {
-                    items: [
-                      {
-                        id: "delivery",
-                        channelName: "已有目标",
-                        eventId: "event",
-                        eventType: "birthday.reminder",
-                        resourceKind: "birthday_digest",
-                        birthday: {
-                          sendLocalDate: "2026-11-11",
-                          targetLocalDate: "2026-11-18",
-                          offsetDays: 7,
-                          count: 3,
+        : path === "/api/birthdays/settings"
+          ? {
+              available: true,
+              settings,
+              personCount: 8,
+              lastCheckedAt: null,
+              dataUpdatedAt: null,
+            }
+          : path === "/api/birthdays/subscriptions"
+            ? [
+                {
+                  id: "group",
+                  name: "已有目标",
+                  groupId: "12345",
+                  connectionKey: "existing",
+                  enabled: true,
+                  revision: 2,
+                  birthdayEnabled: true,
+                  birthdayRevision: 1,
+                },
+              ]
+            : path === "/api/birthdays/template"
+              ? { note: "生日快乐", revision: 2 }
+              : path === "/api/notifications/configuration"
+                ? configuration
+                : path === "/api/notifications/deliveries"
+                  ? {
+                      items: [
+                        {
+                          id: "delivery",
+                          channelName: "已有目标",
+                          eventId: "event",
+                          eventType: "birthday.reminder",
+                          resourceKind: "birthday_digest",
+                          birthday: {
+                            sendLocalDate: "2026-11-11",
+                            targetLocalDate: "2026-11-18",
+                            offsetDays: 7,
+                            count: 3,
+                          },
+                          workId: null,
+                          workNumber: null,
+                          status: "accepted",
+                          revision: 1,
+                          createdAt: "2026-11-11T01:00:00Z",
+                          groupId: "12345",
+                          connectionKey: "existing",
+                          contentText: "生日摘要",
+                          attempts: 1,
+                          errorCode: null,
+                          providerMessageId: "receipt",
+                          resolvedAt: null,
                         },
-                        workId: null,
-                        workNumber: null,
-                        status: "accepted",
-                        revision: 1,
-                        createdAt: "2026-11-11T01:00:00Z",
-                        groupId: "12345",
-                        connectionKey: "existing",
-                        contentText: "生日摘要",
-                        attempts: 1,
-                        errorCode: null,
-                        providerMessageId: "receipt",
-                        resolvedAt: null,
-                      },
-                    ],
-                    nextCursor: null,
-                  }
-                : path === "/api/source-fetch/runs"
-                  ? { items: [], nextCursor: null }
-                  : [],
+                      ],
+                      nextCursor: null,
+                    }
+                  : path === "/api/source-fetch/runs"
+                    ? { items: [], nextCursor: null }
+                    : [],
     )) as never);
   const view = render(
     <QueryClientProvider client={cache}>

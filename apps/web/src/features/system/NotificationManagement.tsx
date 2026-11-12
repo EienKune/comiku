@@ -1,4 +1,8 @@
 import {
+  WorkReminderSubscriptions,
+  WorkReminderTemplate,
+} from "./WorkReminderPanels";
+import {
   BirthdaySubscriptions,
   BirthdayTemplate,
 } from "../birthdays/BirthdayNotificationPanels";
@@ -94,7 +98,12 @@ export function NotificationManagement({
     status: "" as Delivery["status"] | "",
     groupId: "",
     workNumber: "",
-    eventType: "" as EventType | "notification.test" | "birthday.reminder" | "",
+    eventType: "" as
+      | EventType
+      | "notification.test"
+      | "birthday.reminder"
+      | "work.digest"
+      | "",
     createdFrom: "",
     createdThrough: "",
   };
@@ -1029,6 +1038,7 @@ export function NotificationManagement({
           </form>
         )}
         <BirthdaySubscriptions enabled={enabled && tab === "groups"} />
+        <WorkReminderSubscriptions enabled={enabled && tab === "groups"} />
       </div>
       <div
         role="tabpanel"
@@ -1047,6 +1057,17 @@ export function NotificationManagement({
           }
         />
         <BirthdayTemplate enabled={enabled && tab === "templates"} />
+        <WorkReminderTemplate
+          enabled={enabled && tab === "templates"}
+          onEdit={() => {
+            setTab("groups");
+            requestAnimationFrame(() => {
+              const editor = document.getElementById("work-reminder-settings");
+              editor?.focus();
+              editor?.scrollIntoView({ block: "start", behavior: "smooth" });
+            });
+          }}
+        />
       </div>
       <div
         role="tabpanel"
@@ -1137,6 +1158,7 @@ export function NotificationManagement({
               ))}
               <option value="notification.test">通知测试</option>
               <option value="birthday.reminder">角色生日</option>
+              <option value="work.digest">工作摘要</option>
             </SelectField>
             <TextField
               label="开始日期"
@@ -1201,13 +1223,15 @@ export function NotificationManagement({
               key={delivery.id}
               delivery={delivery}
               eventLabel={
-                delivery.resourceKind === "birthday_digest"
-                  ? "角色生日"
-                  : delivery.eventType === "notification.test"
-                    ? "通知测试"
-                    : (eventTypes.find(
-                        (event) => event.type === delivery.eventType,
-                      )?.label ?? delivery.eventType)
+                delivery.resourceKind === "work_digest"
+                  ? "工作摘要"
+                  : delivery.resourceKind === "birthday_digest"
+                    ? "角色生日"
+                    : delivery.eventType === "notification.test"
+                      ? "通知测试"
+                      : (eventTypes.find(
+                          (event) => event.type === delivery.eventType,
+                        )?.label ?? delivery.eventType)
               }
               onUpdated={() =>
                 void queryClient.invalidateQueries({
@@ -1315,16 +1339,18 @@ function DeliveryRow({
           {statusLabels[delivery.status] ?? delivery.status}
         </Badge>
         <strong>{eventLabel}</strong>
-        <span>
-          {delivery.resourceKind === "birthday_digest"
-            ? delivery.birthday
-              ? `${delivery.birthday.targetLocalDate} · ${delivery.birthday.count} 位角色 · ${delivery.birthday.offsetDays === 0 ? "生日当天" : `提前 ${delivery.birthday.offsetDays} 天`}`
-              : "生日摘要"
-            : delivery.resourceKind === "notification_test" ||
-                delivery.workNumber === null
-              ? "合成测试"
-              : `#${delivery.workNumber}`}
-        </span>
+        {delivery.resourceKind !== "work_digest" && (
+          <span>
+            {delivery.resourceKind === "birthday_digest"
+              ? delivery.birthday
+                ? `${delivery.birthday.targetLocalDate} · ${delivery.birthday.count} 位角色 · ${delivery.birthday.offsetDays === 0 ? "生日当天" : `提前 ${delivery.birthday.offsetDays} 天`}`
+                : "生日摘要"
+              : delivery.resourceKind === "notification_test" ||
+                  delivery.workNumber === null
+                ? "合成测试"
+                : `#${delivery.workNumber}`}
+          </span>
+        )}
         <time dateTime={delivery.createdAt}>
           {new Date(delivery.createdAt).toLocaleString()}
         </time>

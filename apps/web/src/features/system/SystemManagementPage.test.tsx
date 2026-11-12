@@ -70,21 +70,37 @@ test("a system administrator can read collection history in the dedicated page",
 });
 
 function mockManagement() {
+  vi.spyOn(client, "POST").mockResolvedValue({
+    data: { text: "合成工作摘要" },
+    response: new Response(),
+  } as never);
   return vi.spyOn(client, "GET").mockImplementation((async (path: string) => ({
     data:
-      path === "/api/source-fetch/runs"
-        ? { items: [], nextCursor: null, observedAt: "2026-11-10T00:00:00Z" }
-        : path.endsWith("/configuration")
-          ? {
+      path === "/api/notifications/work-reminders"
+        ? {
+            settings: {
               enabled: false,
-              configurationError: null,
-              connections: [{ key: "bot", name: "测试连接", available: true }],
-              eventTypes: [{ type: "imported", label: "导入作品" }],
-              channels: [],
-            }
-          : path.endsWith("/deliveries")
-            ? { items: [], nextCursor: null }
-            : [],
+              sendTimes: ["09:00", "18:00"],
+              note: "",
+              revision: 0,
+            },
+            channels: [],
+          }
+        : path === "/api/source-fetch/runs"
+          ? { items: [], nextCursor: null, observedAt: "2026-11-10T00:00:00Z" }
+          : path.endsWith("/configuration")
+            ? {
+                enabled: false,
+                configurationError: null,
+                connections: [
+                  { key: "bot", name: "测试连接", available: true },
+                ],
+                eventTypes: [{ type: "imported", label: "导入作品" }],
+                channels: [],
+              }
+            : path.endsWith("/deliveries")
+              ? { items: [], nextCursor: null }
+              : [],
     response: new Response(),
   })) as never);
 }

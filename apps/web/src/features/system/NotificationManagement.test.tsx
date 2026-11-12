@@ -1,3 +1,7 @@
+vi.mock("./WorkReminderPanels", () => ({
+  WorkReminderSubscriptions: () => null,
+  WorkReminderTemplate: () => null,
+}));
 // Independent birthday panel contracts are exercised in BirthdaysIntegration.test.tsx.
 vi.mock("../birthdays/BirthdayNotificationPanels", () => ({
   BirthdaySubscriptions: () => null,
