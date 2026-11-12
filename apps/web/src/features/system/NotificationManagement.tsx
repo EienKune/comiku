@@ -2,10 +2,8 @@ import {
   WorkReminderSubscriptions,
   WorkReminderTemplate,
 } from "./WorkReminderPanels";
-import {
-  BirthdaySubscriptions,
-  BirthdayTemplate,
-} from "../birthdays/BirthdayNotificationPanels";
+import { BirthdayTemplate } from "../birthdays/BirthdayNotificationPanels";
+import { BirthdayReminderSettings } from "../birthdays/BirthdayReminderSettings";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
@@ -514,7 +512,7 @@ export function NotificationManagement({
         aria-label="推送通知分类"
       >
         {[
-          ["groups", "群订阅"],
+          ["groups", "推送设置"],
           ["templates", "消息模板"],
           ["history", "投递记录"],
           ["status", "运行状态"],
@@ -595,8 +593,8 @@ export function NotificationManagement({
                 连接状态仅反映服务端配置，不代表 QQ 登录状态。
               </p>
             </details>
-            <header className="notification-heading">
-              <h3>群订阅</h3>
+            <header className="notification-heading notification-section-heading">
+              <h3>接收群</h3>
               <Button size="sm" disabled={saving} onClick={() => edit()}>
                 新增群目标
               </Button>
@@ -1038,7 +1036,7 @@ export function NotificationManagement({
             </fieldset>
           </form>
         )}
-        <BirthdaySubscriptions enabled={enabled && tab === "groups"} />
+        <BirthdayReminderSettings enabled={enabled && tab === "groups"} />
         <WorkReminderSubscriptions enabled={enabled && tab === "groups"} />
       </div>
       <div

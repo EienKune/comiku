@@ -13,6 +13,7 @@ import { MemoryRouter } from "react-router";
 import { client } from "../account/api";
 import { BirthdayStrip } from "./BirthdayStrip";
 import { BirthdaySettings } from "./BirthdaySettings";
+import { BirthdayReminderSettings } from "./BirthdayReminderSettings";
 import {
   BirthdaySubscriptions,
   BirthdayTemplate,
@@ -209,7 +210,12 @@ test("settings retain draft across background reads and submit revision fence; s
   vi.spyOn(client, "POST").mockRejectedValue(
     new Error("private upstream synchronization detail"),
   );
-  const view = mount(<BirthdaySettings />);
+  const view = mount(
+    <>
+      <BirthdaySettings />
+      <BirthdayReminderSettings enabled />
+    </>,
+  );
   fireEvent.change(await screen.findByLabelText("提醒时刻"), {
     target: { value: "10:30" },
   });
@@ -226,7 +232,7 @@ test("settings retain draft across background reads and submit revision fence; s
   expect((screen.getByLabelText("提醒时刻") as HTMLInputElement).value).toBe(
     "10:30",
   );
-  fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存生日提醒" }));
   await waitFor(() =>
     expect(patch).toHaveBeenCalledWith("/api/birthdays/settings", {
       body: {
@@ -385,17 +391,26 @@ test("settings conflict requires explicit current-version adoption before retryi
   const patch = vi
     .spyOn(client, "PATCH")
     .mockResolvedValue(reply({}, 409) as never);
-  mount(<BirthdaySettings />);
+  mount(<BirthdayReminderSettings enabled />);
   fireEvent.change(await screen.findByLabelText("提醒时刻"), {
     target: { value: "10:45" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存生日提醒" }));
   fireEvent.click(await screen.findByRole("button", { name: "核对当前设置" }));
-  await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+  await waitFor(() =>
+    expect(
+      get.mock.calls.filter((call) => call[0] === "/api/birthdays/settings"),
+    ).toHaveLength(2),
+  );
   get.mockResolvedValue(
     reply({
       available: true,
-      settings: { ...settings, revision: 9, sendTime: "11:30" },
+      settings: {
+        ...settings,
+        revision: 9,
+        sendTime: "11:30",
+        displayEnabled: false,
+      },
       personCount: 8,
     }) as never,
   );
@@ -408,18 +423,174 @@ test("settings conflict requires explicit current-version adoption before retryi
     screen.getByRole("button", { name: "保留草稿并采用当前版本" }),
   );
   patch.mockResolvedValue(
-    reply({ ...settings, revision: 10, sendTime: "10:45" }) as never,
+    reply({
+      ...settings,
+      revision: 10,
+      sendTime: "10:45",
+      displayEnabled: false,
+    }) as never,
   );
-  fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存生日提醒" }));
   await waitFor(() =>
     expect(patch).toHaveBeenLastCalledWith("/api/birthdays/settings", {
       body: {
         expectedRevision: 9,
-        displayEnabled: true,
+        displayEnabled: false,
         remindersEnabled: true,
         sendTime: "10:45",
         offsetDays: [0],
       },
     }),
   );
+});
+
+test("sequential scope saves use current server fields without restoring the other scope", async () => {
+  let server = { ...settings };
+  vi.spyOn(client, "GET").mockImplementation((async (path: string) =>
+    reply(
+      path === "/api/birthdays/settings"
+        ? { available: true, settings: server, personCount: 8 }
+        : [],
+    )) as never);
+  const patch = vi.spyOn(client, "PATCH").mockImplementation((async (
+    _path: string,
+    input: { body: typeof settings & { expectedRevision: number } },
+  ) => {
+    const { expectedRevision, ...fields } = input.body;
+    expect(expectedRevision).toBe(server.revision);
+    server = { ...server, ...fields, revision: server.revision + 1 };
+    return reply(server);
+  }) as never);
+  mount(
+    <>
+      <BirthdaySettings />
+      <BirthdayReminderSettings enabled />
+    </>,
+  );
+  fireEvent.click(await screen.findByLabelText("启用工作台生日"));
+  fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+  await screen.findByText("工作台展示已保存。");
+  fireEvent.change(screen.getByLabelText("提醒时刻"), {
+    target: { value: "10:15" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存生日提醒" }));
+  await screen.findByText("生日提醒已保存。");
+  expect(patch).toHaveBeenLastCalledWith("/api/birthdays/settings", {
+    body: {
+      expectedRevision: 5,
+      displayEnabled: false,
+      remindersEnabled: true,
+      sendTime: "10:15",
+      offsetDays: [0],
+    },
+  });
+  fireEvent.click(screen.getByLabelText("启用工作台生日"));
+  fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+  await waitFor(() => expect(patch).toHaveBeenCalledTimes(3));
+  expect(patch).toHaveBeenLastCalledWith("/api/birthdays/settings", {
+    body: {
+      expectedRevision: 6,
+      displayEnabled: true,
+      remindersEnabled: true,
+      sendTime: "10:15",
+      offsetDays: [0],
+    },
+  });
+});
+
+test("display conflicts preserve only the display draft and adopt the latest reminder fields", async () => {
+  const get = vi
+    .spyOn(client, "GET")
+    .mockResolvedValue(
+      reply({ available: true, settings, personCount: 8 }) as never,
+    );
+  const patch = vi
+    .spyOn(client, "PATCH")
+    .mockResolvedValue(reply({}, 409) as never);
+  mount(<BirthdaySettings />);
+  expect(screen.queryByLabelText("提醒时刻")).toBeNull();
+  expect(screen.queryByLabelText("启用生日提醒")).toBeNull();
+  fireEvent.click(await screen.findByLabelText("启用工作台生日"));
+  fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+  await screen.findByRole("button", { name: "核对当前设置" });
+  fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+  expect(patch).toHaveBeenCalledTimes(1);
+  get.mockResolvedValue(
+    reply({
+      available: true,
+      settings: {
+        ...settings,
+        revision: 9,
+        remindersEnabled: false,
+        sendTime: "11:30",
+        offsetDays: [1, 7],
+      },
+      personCount: 8,
+    }) as never,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "核对当前设置" }));
+  await screen.findByText(/11:30/);
+  expect(
+    (screen.getByLabelText("启用工作台生日") as HTMLInputElement).checked,
+  ).toBe(false);
+  fireEvent.click(
+    screen.getByRole("button", { name: "保留草稿并采用当前版本" }),
+  );
+  expect(patch).toHaveBeenCalledTimes(1);
+  patch.mockResolvedValue(
+    reply({
+      ...settings,
+      revision: 10,
+      displayEnabled: false,
+      remindersEnabled: false,
+      sendTime: "11:30",
+      offsetDays: [1, 7],
+    }) as never,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+  await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+  expect(patch).toHaveBeenLastCalledWith("/api/birthdays/settings", {
+    body: {
+      expectedRevision: 9,
+      displayEnabled: false,
+      remindersEnabled: false,
+      sendTime: "11:30",
+      offsetDays: [1, 7],
+    },
+  });
+});
+
+test("saving without a draft takes owned fields and revision from the same cache snapshot", async () => {
+  vi.spyOn(client, "GET").mockResolvedValue(
+    reply({ available: true, settings, personCount: 8 }) as never,
+  );
+  const patch = vi
+    .spyOn(client, "PATCH")
+    .mockResolvedValue(reply(settings) as never);
+  const { cache } = mount(<BirthdayReminderSettings enabled />);
+  await screen.findByLabelText("提醒时刻");
+  act(() => {
+    cache.setQueryData(["birthdays", "settings"], {
+      available: true,
+      personCount: 8,
+      settings: {
+        ...settings,
+        revision: 9,
+        remindersEnabled: false,
+        sendTime: "11:30",
+        offsetDays: [7],
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存生日提醒" }));
+  });
+  await waitFor(() => expect(patch).toHaveBeenCalled());
+  expect(patch).toHaveBeenCalledWith("/api/birthdays/settings", {
+    body: {
+      expectedRevision: 9,
+      displayEnabled: true,
+      remindersEnabled: false,
+      sendTime: "11:30",
+      offsetDays: [7],
+    },
+  });
 });

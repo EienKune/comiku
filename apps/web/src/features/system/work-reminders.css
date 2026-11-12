@@ -5,6 +5,7 @@
 }
 .work-reminder-panel h3 {
   margin: 0 0 16px;
+  font-size: var(--text-lg);
 }
 .work-reminder-panel fieldset {
   border: 0;

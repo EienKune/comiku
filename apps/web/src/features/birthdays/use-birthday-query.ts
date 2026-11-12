@@ -24,9 +24,6 @@ export function useBirthdayQuery<T>(
   const daily = key === "summary" || key === "calendar";
   const lastActiveDay = useRef<number | null>(null);
   useEffect(() => {
-    if (!active) void client.cancelQueries({ queryKey: ["birthdays", key] });
-  }, [active, client, key]);
-  useEffect(() => {
     if (!active || !daily) return;
     const day = shanghaiDay(Date.now());
     if (lastActiveDay.current !== null && lastActiveDay.current !== day) {
@@ -54,7 +51,7 @@ export function useBirthdayQuery<T>(
     schedule();
     return () => clearTimeout(timer);
   }, [active, client, daily, key]);
-  return useQuery({
+  const query = useQuery({
     queryKey: ["birthdays", key],
     enabled: active,
     queryFn: ({ signal }) => read(signal),
@@ -65,6 +62,17 @@ export function useBirthdayQuery<T>(
         ? 0
         : 60_000,
   });
+  useEffect(() => {
+    if (
+      !active &&
+      !client
+        .getQueryCache()
+        .find({ queryKey: ["birthdays", key], exact: true })
+        ?.isActive()
+    )
+      void client.cancelQueries({ queryKey: ["birthdays", key], exact: true });
+  }, [active, client, key]);
+  return query;
 }
 
 export function birthdayError(error: unknown) {
