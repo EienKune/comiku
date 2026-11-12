@@ -103,7 +103,7 @@ export async function readReminderEvidence(
     SELECT p.id AS "participantId", cancelled.token AS "cancelKey",
       EXISTS (
         SELECT 1 FROM work_events e
-        WHERE e.work_id = p.work_id AND e.created_at = p.joined_at
+        WHERE e.work_id = p.work_id AND e.detail->>'participantId' = p.id::text
           AND e.action = 'stage_joined' AND e.actor_id = p.user_id
           AND p.participation_mode = 'owner'
           AND e.detail->>'stage' = p.stage::text
@@ -215,9 +215,9 @@ export async function readReminderEvidence(
       waiting: state === "waiting",
       completed: state === "completed",
       ended: state === "ended",
-      // Both timestamps are transaction-stable DB defaults in reserveStage.
-      // Missing/ambiguous legacy evidence stays conservative. Initial claim
-      // provenance must not revive a later assignment/completion/cancel round.
+      // reserveStage records the created participant ID in its existing audit
+      // event. Missing/ambiguous legacy evidence stays conservative. Initial
+      // claim provenance must not revive a later assignment/completion/cancel round.
       preclaimed:
         preclaimedByParticipant.get(participant.id) === true &&
         cancelByParticipant.get(participant.id) === "0:" &&

@@ -58,6 +58,7 @@ test(
     });
     const work = await db.$transaction(async (tx) => {
       const work = await tx.work.create({
+        include: { stageParticipants: { select: { id: true } } },
         data: {
           authorId: author.id,
           importedById: user.id,
@@ -82,6 +83,7 @@ test(
             operation: `claim:proofread:${user.id}:`,
             stage: "proofread",
             userId: user.id,
+            participantId: work.stageParticipants[0]!.id,
             participationRegistered: true,
           },
         },
@@ -107,7 +109,6 @@ test(
       const claim = await db.workEvent.findFirstOrThrow({
         where: { workId: work.id, action: "stage_joined" },
       });
-      assert.deepEqual(claim.createdAt, participant.joinedAt);
       const readClaimEvidence = async () =>
         (
           await db.$transaction((tx) =>
@@ -115,9 +116,28 @@ test(
           )
         )[0]!;
       assert.equal((await readClaimEvidence()).preclaimed, true);
+      for (const offset of [-1, 1]) {
+        await db.workEvent.update({
+          where: { id: claim.id },
+          data: {
+            createdAt: new Date(participant.joinedAt.getTime() + offset),
+          },
+        });
+        assert.equal(
+          (await readClaimEvidence()).preclaimed,
+          true,
+          "the durable participant identity proves a claim independently of ORM timestamp differences",
+        );
+      }
+      await db.workEvent.update({
+        where: { id: claim.id },
+        data: { createdAt: claim.createdAt },
+      });
+      const missingParticipantDetail = {
+        ...(claim.detail as Prisma.JsonObject),
+      };
+      delete missingParticipantDetail.participantId;
       for (const update of [
-        { createdAt: new Date(participant.joinedAt.getTime() - 1) },
-        { createdAt: new Date(participant.joinedAt.getTime() + 1) },
         { actorId: null },
         {
           fromWorkflowStatus: "pending_proofread" as const,
@@ -125,6 +145,10 @@ test(
         },
         { detail: { ...(claim.detail as object), userId: randomUUID() } },
         { detail: { ...(claim.detail as object), stage: "typeset" } },
+        {
+          detail: { ...(claim.detail as object), participantId: randomUUID() },
+        },
+        { detail: missingParticipantDetail },
         {
           detail: {
             ...(claim.detail as object),
