@@ -38,6 +38,7 @@ import {
 import {
   renderWorkReminder,
   renderWorkReady,
+  WorkReminderPayloadTooLargeError,
   workReminderHash,
   type WorkDigestSnapshot,
   type WorkReminderFrozenItem,
@@ -562,11 +563,21 @@ export class WorkRemindersService {
             this.environment?.appOrigin,
           );
         } catch (error: unknown) {
-          if (
-            error instanceof Error &&
-            error.message === "work_reminder_payload_too_large"
-          ) {
-            console.warn("工作摘要超过消息容量，当前群本轮未登记，稍后重试。");
+          if (error instanceof WorkReminderPayloadTooLargeError) {
+            console.warn(
+              JSON.stringify({
+                scope: "work-reminders",
+                event: "digest_capacity_exceeded",
+                errorCode: error.message,
+                channelId: channel.id,
+                localDate: slot.localDate,
+                slot: slot.slot,
+                itemCount: error.itemCount,
+                mentionCount: error.mentionCount,
+                textCodeUnits: error.textCodeUnits,
+                limitBytes: error.limitBytes,
+              }),
+            );
             return;
           }
           throw error;

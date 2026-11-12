@@ -18,6 +18,7 @@ import {
   notificationMessageTextValid,
   type NotificationMessagePolicy,
 } from "./notification-message-segments.js";
+import { safeNotificationSendDiagnostics } from "./notification-diagnostics.js";
 
 export interface OneBotHttpAdapterOptions {
   lookup?: (hostname: string) => Promise<LookupAddress[]>;
@@ -96,6 +97,8 @@ export class OneBotHttpAdapter {
     if (signal?.aborted) controller.abort();
     const timer = setTimeout(abort, this.timeoutMs);
     let boundary = false;
+    let httpStatus: number | undefined;
+    let retcode: unknown;
     const fail = (
       status: NotificationSendResult["status"],
       errorCode: string,
@@ -103,6 +106,9 @@ export class OneBotHttpAdapter {
       status,
       errorCode,
       sendBoundaryCrossed: boundary,
+      ...(httpStatus !== undefined && {
+        diagnostics: safeNotificationSendDiagnostics({ httpStatus, retcode }),
+      }),
     });
     try {
       const endpoint = new URL(connection.endpoint);
@@ -197,6 +203,7 @@ export class OneBotHttpAdapter {
           },
           (response) => {
             boundary = true;
+            httpStatus = response.statusCode;
             const chunks: Buffer[] = [];
             let size = 0;
             response.on("data", (chunk: Buffer) => {
@@ -231,6 +238,7 @@ export class OneBotHttpAdapter {
                   retcode?: unknown;
                   data?: { message_id?: unknown };
                 };
+                retcode = reply.retcode;
                 const messageId = reply.data?.message_id;
                 if (
                   reply.status === "ok" &&
