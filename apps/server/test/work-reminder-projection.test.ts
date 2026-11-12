@@ -88,6 +88,30 @@ test("only a previously waiting claim qualifies for the one-per-round ready noti
   assert.equal(immediate.preclaimed, false);
 });
 
+test("durable initial claim evidence recovers a waiting-to-ready transition between observations without backdating the clock", () => {
+  const recovered = observeReminder(
+    null,
+    { ...ready, preclaimed: true },
+    start,
+  );
+  assert.equal(recovered.preclaimed, true);
+  assert.equal(recovered.eligibleMilliseconds, 0n);
+  assert.deepEqual(recovered.readyObservedAt, start);
+  const changed = observeReminder(
+    recovered,
+    { ...ready, preclaimed: true, sourceKey: "changed-round" },
+    at(60_000),
+  );
+  assert.equal(changed.round, 2);
+  assert.equal(changed.preclaimed, false);
+  const later = observeReminder(
+    changed,
+    { ...ready, preclaimed: true, sourceKey: "changed-round" },
+    at(120_000),
+  );
+  assert.equal(later.preclaimed, false);
+});
+
 test("an older worker timestamp cannot roll back projection evidence or its observation clock", () => {
   const previous = observeReminder(null, ready, at(60_000));
   assert.deepEqual(
@@ -216,13 +240,43 @@ function participant(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function evidenceFor(row: ReturnType<typeof participant>) {
+async function evidenceFor(
+  row: ReturnType<typeof participant>,
+  durable = { cancelKey: "0:", preclaimed: false },
+) {
   const tx = {
     workStageParticipant: { findMany: async () => [row] },
-    $queryRaw: async () => [{ participantId: "participant", cancelKey: "0:" }],
+    $queryRaw: async () => [{ participantId: "participant", ...durable }],
   } as unknown as Prisma.TransactionClient;
   return (await readReminderEvidence(tx, ["participant"]))[0]!;
 }
+
+test("initial claim provenance cannot qualify assignments, personal completion or cancelled rounds", async () => {
+  const row = participant({ assignments: [], contributionSubmissions: [] });
+  assert.equal(
+    (await evidenceFor(row, { cancelKey: "0:", preclaimed: true })).preclaimed,
+    true,
+  );
+  assert.equal(
+    (await evidenceFor(row, { cancelKey: "1:cancel", preclaimed: true }))
+      .preclaimed,
+    false,
+  );
+  assert.equal(
+    (await evidenceFor(participant(), { cancelKey: "0:", preclaimed: true }))
+      .preclaimed,
+    false,
+  );
+  assert.equal(
+    (
+      await evidenceFor(participant({ contributionSubmissions: [] }), {
+        cancelKey: "0:",
+        preclaimed: true,
+      })
+    ).preclaimed,
+    false,
+  );
+});
 
 test("personal completion requires every currently assigned page at the current revision", async () => {
   const completed = await evidenceFor(participant());

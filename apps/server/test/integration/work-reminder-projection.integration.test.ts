@@ -56,19 +56,37 @@ test(
         rawJson: {},
       },
     });
-    const work = await db.work.create({
-      data: {
-        authorId: author.id,
-        importedById: user.id,
-        sourceCandidatePostId: candidate.id,
-        stageParticipants: {
-          create: {
-            userId: user.id,
-            stage: "proofread",
-            participationMode: "owner",
+    const work = await db.$transaction(async (tx) => {
+      const work = await tx.work.create({
+        data: {
+          authorId: author.id,
+          importedById: user.id,
+          sourceCandidatePostId: candidate.id,
+          stageParticipants: {
+            create: {
+              userId: user.id,
+              stage: "proofread",
+              participationMode: "owner",
+            },
           },
         },
-      },
+      });
+      await tx.workEvent.create({
+        data: {
+          workId: work.id,
+          actorId: user.id,
+          action: "stage_joined",
+          fromWorkflowStatus: "pending_translate",
+          toWorkflowStatus: "pending_translate",
+          detail: {
+            operation: `claim:proofread:${user.id}:`,
+            stage: "proofread",
+            userId: user.id,
+            participationRegistered: true,
+          },
+        },
+      });
+      return work;
     });
     const participant = await db.workStageParticipant.findFirstOrThrow({
       where: { workId: work.id },
@@ -86,6 +104,53 @@ test(
       where: { id: "global" },
     });
     try {
+      const claim = await db.workEvent.findFirstOrThrow({
+        where: { workId: work.id, action: "stage_joined" },
+      });
+      assert.deepEqual(claim.createdAt, participant.joinedAt);
+      const readClaimEvidence = async () =>
+        (
+          await db.$transaction((tx) =>
+            readReminderEvidence(tx, [participant.id]),
+          )
+        )[0]!;
+      assert.equal((await readClaimEvidence()).preclaimed, true);
+      for (const update of [
+        { createdAt: new Date(participant.joinedAt.getTime() - 1) },
+        { createdAt: new Date(participant.joinedAt.getTime() + 1) },
+        { actorId: null },
+        {
+          fromWorkflowStatus: "pending_proofread" as const,
+          toWorkflowStatus: "pending_proofread" as const,
+        },
+        { detail: { ...(claim.detail as object), userId: randomUUID() } },
+        { detail: { ...(claim.detail as object), stage: "typeset" } },
+        {
+          detail: {
+            ...(claim.detail as object),
+            operation: `join:proofread:${user.id}:`,
+          },
+        },
+        {
+          detail: {
+            ...(claim.detail as object),
+            participationRegistered: false,
+          },
+        },
+      ]) {
+        await db.workEvent.update({ where: { id: claim.id }, data: update });
+        assert.equal((await readClaimEvidence()).preclaimed, false);
+        await db.workEvent.update({
+          where: { id: claim.id },
+          data: {
+            createdAt: claim.createdAt,
+            actorId: claim.actorId,
+            fromWorkflowStatus: claim.fromWorkflowStatus,
+            toWorkflowStatus: claim.toWorkflowStatus,
+            detail: claim.detail as Prisma.InputJsonValue,
+          },
+        });
+      }
       await db.workReminderClock.upsert({
         where: { id: "global" },
         create: {
@@ -94,6 +159,24 @@ test(
           lastObservedAt: now,
         },
         update: { elapsedMilliseconds: 0n, lastObservedAt: now },
+      });
+      await db.work.update({
+        where: { id: work.id },
+        data: { workflowStatus: "pending_proofread" },
+      });
+      await projection.maintain(now);
+      const recovered = await db.workReminderEpisode.findUniqueOrThrow({
+        where: { participantId: participant.id },
+      });
+      assert.equal(recovered.state, "ready");
+      assert.equal(recovered.preclaimed, true);
+      assert.equal(recovered.eligibleMilliseconds, 0n);
+      await db.workReminderEpisode.delete({
+        where: { participantId: participant.id },
+      });
+      await db.work.update({
+        where: { id: work.id },
+        data: { workflowStatus: "pending_translate" },
       });
       await db.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('comiku:work-reminder-projection', 0))`;
