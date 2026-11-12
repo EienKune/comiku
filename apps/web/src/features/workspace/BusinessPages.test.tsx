@@ -1750,3 +1750,90 @@ test("manual source upload uses a signed session before finalizing candidates", 
   );
   expect(window.localStorage.length).toBe(0);
 });
+
+test("reading album has its own query boundary, stays available after a card-list error and is absent from work view", async () => {
+  const user: CurrentUser = {
+    id: "album-viewer",
+    username: "viewer",
+    displayName: "读者",
+    roles: ["translator"],
+    languageCapabilities: ["ja"],
+    isActive: true,
+    mustChangePassword: false,
+    canSkipProofreading: false,
+    revision: 1,
+    permissions: ["works:read", "works:translate"],
+  };
+  const paths: string[] = [];
+  vi.spyOn(client, "GET").mockImplementation((async (path: string) => {
+    paths.push(path);
+    if (path === "/api/works") throw new Error("卡片列表暂不可用");
+    if (path === "/api/works/album")
+      return {
+        data: {
+          items: [
+            {
+              id: "adopted",
+              workId: "work",
+              workNumber: 42,
+              workTitle: "相册作品",
+              authorName: "相册作者",
+              orderIndex: 0,
+              imageCount: 1,
+              sourceLanguage: "ja",
+              workflowStatus: "translating",
+              reviewStatus: "normal",
+              importedAt: "2026-11-12T00:00:00Z",
+            },
+          ],
+          total: 1,
+          workTotal: 1,
+          nextCursor: null,
+        },
+        response: new Response(),
+      };
+    return {
+      data: {
+        url: "https://example.invalid/synthetic.png",
+        expiresInSeconds: 3600,
+        status: "ready",
+      },
+      response: new Response(),
+    };
+  }) as typeof client.GET);
+  const cache = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const view = render(
+    <QueryClientProvider client={cache}>
+      <MemoryRouter initialEntries={["/works?view=read&layout=album"]}>
+        <Routes>
+          <Route element={<WorkspaceTestShell user={user} />}>
+            <Route path="/works" element={<WorksPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await screen.findByRole("button", { name: "相册作者 作品 #42 第 1 / 1 页" });
+  expect(paths.includes("/api/works")).toBe(false);
+  expect(screen.getByText("共 1 部作品 · 1 张图片")).toBeTruthy();
+  const toolbar = screen.getByRole("group", { name: "作品展示方式" });
+  expect(
+    toolbar.parentElement?.querySelector(".workspace-result-count"),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("link", { name: "系列目录" }).getAttribute("href"),
+  ).toBe("/works/series");
+  fireEvent.click(screen.getByRole("button", { name: "卡片" }));
+  await screen.findByText("卡片列表暂不可用");
+  fireEvent.click(screen.getByRole("button", { name: "相册" }));
+  await screen.findByRole("button", { name: "相册作者 作品 #42 第 1 / 1 页" });
+  expect(screen.queryByText("卡片列表暂不可用")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "工作视图" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "相册" })).toBeNull(),
+  );
+  view.unmount();
+  cache.clear();
+});

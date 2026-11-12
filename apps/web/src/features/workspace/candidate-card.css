@@ -222,3 +222,16 @@
   gap: var(--space-3);
   margin-top: var(--space-5);
 }
+
+@media (max-width: 760px) {
+  .workspace-topbar .candidate-batch-actions {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+  .workspace-topbar .candidate-batch-selection,
+  .workspace-topbar .candidate-batch-operations {
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+  }
+}

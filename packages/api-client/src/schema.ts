@@ -1362,6 +1362,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/work-series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listWorkSeries"];
+        put?: never;
+        post: operations["createWorkSeries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/work-series/work/{workId}/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getWorkSeriesContext"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/work-series/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getWorkSeries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateWorkSeries"];
+        trace?: never;
+    };
+    "/api/work-series/{id}/entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["addWorkSeriesEntries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/work-series/{id}/entries/{entryId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateWorkSeriesEntry"];
+        trace?: never;
+    };
+    "/api/work-series/{id}/entries/{entryId}/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["removeWorkSeriesEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/works": {
         parameters: {
             query?: never;
@@ -1370,6 +1466,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["listWorks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/album": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listWorkAlbumImages"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2546,6 +2658,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/image-similarity/candidates/{candidateId}/media/{mediaId}/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getCandidateImageSimilarity"];
+        put?: never;
+        post: operations["prepareCandidateImageSimilarity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3603,7 +3731,17 @@ export interface components {
         };
         /** @enum {string} */
         CandidateAction: "import" | "discard" | "restore";
+        WorkSeriesImportIntentDto: {
+            /** Format: uuid */
+            seriesId?: string;
+            expectedRevision?: number;
+            createTitle?: string;
+            /** Format: uuid */
+            requestId?: string;
+            label?: string | null;
+        };
         CandidateActionItemDto: {
+            series?: components["schemas"]["WorkSeriesImportIntentDto"] | null;
             /** Format: uuid */
             id: string;
             expectedRevision: number;
@@ -3690,14 +3828,134 @@ export interface components {
             /** Format: uuid */
             fileId: string;
         };
-        /** @enum {string} */
-        WorkView: "todo" | "recommended" | "publish";
-        /** @enum {string} */
-        WorkPhase: "translation" | "proofread" | "typeset" | "pending_publish" | "published";
+        WorkSeriesCoverDto: {
+            /** Format: uuid */
+            workId: string;
+            /** Format: uuid */
+            imageId: string;
+        };
+        WorkSeriesSummaryDto: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            /** Format: uuid */
+            authorId: string;
+            authorName: string;
+            revision: number;
+            memberCount: number;
+            /** Format: date-time */
+            updatedAt: string;
+            coverImages: components["schemas"]["WorkSeriesCoverDto"][];
+        };
+        WorkSeriesPageDto: {
+            items: components["schemas"]["WorkSeriesSummaryDto"][];
+            total: number;
+            nextCursor: string | null;
+        };
         /** @enum {string} */
         WorkflowStatus: "pending_translate" | "translating" | "pending_proofread" | "proofreading" | "pending_typeset" | "typesetting" | "pending_publish" | "published" | "archived";
         /** @enum {string} */
         ReviewStatus: "normal" | "needs_review" | "blocked";
+        WorkSeriesEntryDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            workId: string;
+            workNumber: number;
+            title: string | null;
+            workflowStatus: components["schemas"]["WorkflowStatus"];
+            reviewStatus: components["schemas"]["ReviewStatus"];
+            archived: boolean;
+            orderIndex: number;
+            label: string | null;
+            imageCount: number;
+            /** Format: uuid */
+            coverImageId: string | null;
+        };
+        WorkSeriesContextDto: {
+            series: components["schemas"]["WorkSeriesSummaryDto"] | null;
+            currentEntry: components["schemas"]["WorkSeriesEntryDto"] | null;
+            previous: components["schemas"]["WorkSeriesEntryDto"] | null;
+            next: components["schemas"]["WorkSeriesEntryDto"] | null;
+        };
+        WorkSeriesDetailDto: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            /** Format: uuid */
+            authorId: string;
+            authorName: string;
+            revision: number;
+            memberCount: number;
+            /** Format: date-time */
+            updatedAt: string;
+            coverImages: components["schemas"]["WorkSeriesCoverDto"][];
+            archived: boolean;
+            visibleTotal: number;
+            entries: components["schemas"]["WorkSeriesEntryDto"][];
+            nextCursor: string | null;
+        };
+        CreateWorkSeriesDto: {
+            /**
+             * Format: uuid
+             * @description 同一写入意图重试时保留，变更内容须换用新标识。
+             */
+            requestId: string;
+            /** Format: uuid */
+            authorId: string;
+            title: string;
+            workIds?: string[];
+        };
+        UpdateWorkSeriesDto: {
+            /**
+             * Format: uuid
+             * @description 同一写入意图重试时保留，变更内容须换用新标识。
+             */
+            requestId: string;
+            expectedRevision: number;
+            title?: string;
+            archived?: boolean;
+        };
+        AddWorkSeriesEntriesDto: {
+            /**
+             * Format: uuid
+             * @description 同一写入意图重试时保留，变更内容须换用新标识。
+             */
+            requestId: string;
+            expectedRevision: number;
+            workIds: string[];
+            /**
+             * Format: uuid
+             * @description 省略为末尾，null为首位，ID为放到该条目之后。
+             */
+            afterEntryId?: string | null;
+        };
+        UpdateWorkSeriesEntryDto: {
+            /**
+             * Format: uuid
+             * @description 同一写入意图重试时保留，变更内容须换用新标识。
+             */
+            requestId: string;
+            expectedRevision: number;
+            label?: string | null;
+            /**
+             * Format: uuid
+             * @description 省略不移动，null为首位。
+             */
+            afterEntryId?: string | null;
+        };
+        WorkSeriesRevisionDto: {
+            /**
+             * Format: uuid
+             * @description 同一写入意图重试时保留，变更内容须换用新标识。
+             */
+            requestId: string;
+            expectedRevision: number;
+        };
+        /** @enum {string} */
+        WorkView: "todo" | "recommended" | "publish";
+        /** @enum {string} */
+        WorkPhase: "translation" | "proofread" | "typeset" | "pending_publish" | "published";
         WorkClaimCountDto: {
             /** @enum {string} */
             stage: "translate" | "proofread" | "typeset";
@@ -3767,6 +4025,28 @@ export interface components {
             total: number;
             phaseCounts: components["schemas"]["WorkPhaseCountDto"][];
             /** Format: uuid */
+            nextCursor: string | null;
+        };
+        WorkAlbumImageDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            workId: string;
+            workNumber: number;
+            workTitle: string | null;
+            authorName: string;
+            orderIndex: number;
+            imageCount: number;
+            sourceLanguage: components["schemas"]["SourceLanguage"];
+            workflowStatus: components["schemas"]["WorkflowStatus"];
+            reviewStatus: components["schemas"]["ReviewStatus"];
+            /** Format: date-time */
+            importedAt: string;
+        };
+        WorkAlbumPageDto: {
+            items: components["schemas"]["WorkAlbumImageDto"][];
+            total: number;
+            workTotal: number;
             nextCursor: string | null;
         };
         WorkImageDto: {
@@ -4910,6 +5190,43 @@ export interface components {
         };
         BirthdayPreviewDto: {
             text: string;
+        };
+        ImageSimilarityCoverageDto: {
+            /** @description Distinct adopted original files in readable works */
+            total: number;
+            ready: number;
+            pending: number;
+            failed: number;
+        };
+        ImageSimilarityMatchDto: {
+            /** Format: uuid */
+            workId: string;
+            workNumber: number;
+            workTitle: string | null;
+            /** Format: uuid */
+            authorId: string;
+            authorName: string;
+            /** Format: uuid */
+            imageId: string;
+            /** @description Zero-based actual WorkImage page order */
+            index: number;
+            imageCount: number;
+            /** @enum {string} */
+            workflowStatus: "pending_translate" | "translating" | "pending_proofread" | "proofreading" | "pending_typeset" | "typesetting" | "pending_publish" | "published" | "archived";
+            /** @enum {string} */
+            reviewStatus: "normal" | "needs_review" | "blocked";
+            archived: boolean;
+            /** @enum {string} */
+            matchKind: "exact" | "perceptual";
+            distance: number;
+        };
+        ImageSimilarityResultDto: {
+            /** @enum {string} */
+            state: "preparing" | "ready" | "failed" | "partial";
+            coverage: components["schemas"]["ImageSimilarityCoverageDto"];
+            matches: components["schemas"]["ImageSimilarityMatchDto"][];
+            /** @description Safe controlled current-image failure code */
+            error?: string;
         };
         ErrorDto: {
             statusCode: number;
@@ -13363,6 +13680,708 @@ export interface operations {
             };
         };
     };
+    listWorkSeries: {
+        parameters: {
+            query?: {
+                authorId?: string;
+                search?: string;
+                cursor?: string;
+                limit?: number;
+                includeArchived?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkSeriesPageDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    createWorkSeries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWorkSeriesDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkSeriesSummaryDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    getWorkSeriesContext: {
+        parameters: {
+            query?: {
+                includeHistory?: boolean;
+            };
+            header?: never;
+            path: {
+                workId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkSeriesContextDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    getWorkSeries: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                includeHistory?: boolean;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkSeriesDetailDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    updateWorkSeries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWorkSeriesDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkSeriesSummaryDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    addWorkSeriesEntries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddWorkSeriesEntriesDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkSeriesSummaryDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    updateWorkSeriesEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWorkSeriesEntryDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkSeriesSummaryDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    removeWorkSeriesEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entryId: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkSeriesRevisionDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkSeriesSummaryDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
     listWorks: {
         parameters: {
             query?: {
@@ -13392,6 +14411,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkPageDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    listWorkAlbumImages: {
+        parameters: {
+            query?: {
+                view?: components["schemas"]["WorkView"];
+                /** @description 推荐接取限定到一个具备资格的职责，仅与 recommended 视角组合 */
+                claimStage?: string;
+                search?: string;
+                phase?: components["schemas"]["WorkPhase"];
+                sourceLanguage?: components["schemas"]["SourceLanguage"];
+                workflowStatus?: components["schemas"]["WorkflowStatus"];
+                reviewStatus?: components["schemas"]["ReviewStatus"];
+                authorId?: string;
+                unassignedStage?: string;
+                mine?: boolean;
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkAlbumPageDto"];
                 };
             };
             /** @description 请求字段无效 */
@@ -20241,6 +21356,176 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BirthdayPreviewDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    getCandidateImageSimilarity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mediaId: unknown;
+                candidateId: unknown;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageSimilarityResultDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    prepareCandidateImageSimilarity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mediaId: unknown;
+                candidateId: unknown;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageSimilarityResultDto"];
                 };
             };
             /** @description 请求字段无效 */

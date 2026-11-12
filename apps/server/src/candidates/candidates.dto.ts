@@ -1,4 +1,5 @@
 import { Transform, Type } from "class-transformer";
+import { WorkSeriesImportIntentDto } from "../work-series/work-series.dto.js";
 import {
   IMAGE_ANALYSIS_LABEL_TONES,
   type ImageAnalysisLabelPresentation,
@@ -316,6 +317,12 @@ export enum CandidateAction {
 }
 
 export class CandidateActionItemDto {
+  @ApiPropertyOptional({ type: WorkSeriesImportIntentDto, nullable: true })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => WorkSeriesImportIntentDto)
+  series?: WorkSeriesImportIntentDto | null;
+
   @ApiProperty({ type: String, format: "uuid" })
   @IsUUID()
   id!: string;

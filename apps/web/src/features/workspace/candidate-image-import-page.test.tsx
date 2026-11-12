@@ -91,7 +91,12 @@ function mount() {
 }
 type Manifest = {
   action: string;
-  items: { id: string; expectedRevision: number; mediaIds: string[] }[];
+  items: {
+    id: string;
+    expectedRevision: number;
+    mediaIds: string[];
+    series?: components["schemas"]["WorkSeriesImportIntentDto"];
+  }[];
 };
 function fixture(items = [post("a")]) {
   const state = {
@@ -117,6 +122,11 @@ function fixture(items = [post("a")]) {
     path: string,
     options?: { params?: { query?: { triageGroup?: string } } },
   ) => {
+    if (path === "/api/work-series")
+      return {
+        data: { items: [], total: 0, nextCursor: null },
+        response: new Response(),
+      };
     if (path === "/api/source-fetch/progress")
       return {
         data: { active: null, lastManual: null },
@@ -213,6 +223,11 @@ test("Apply remains local across snapshot refresh; final confirmation atomically
   ).toBe(false);
   fireEvent.click(within(reopened).getByRole("button", { name: "取消" }));
   selectA();
+  expect(
+    screen
+      .getByRole("button", { name: /入库所选/ })
+      .closest(".workspace-topbar-actions"),
+  ).toBeTruthy();
   const confirmation = beginImport();
   expect(state.writes).toEqual([]);
   expect(within(confirmation).getByText("入库 2 / 3 张")).toBeTruthy();
@@ -334,4 +349,58 @@ test("a revision change never silently rebases a draft; only explicit reload sta
     expectedRevision: 3,
     mediaIds: ["a-one", "a-two", "a-three"],
   });
+});
+
+test("single-post series creation stays optional and freezes its exact intent across an uncertain response", async () => {
+  const { state, dispatch } = fixture();
+  dispatch.mockRejectedValueOnce(new TypeError("network unavailable"));
+  mount();
+  await screen.findByText("正文 a");
+  selectA();
+  let dialog = beginImport();
+  const choose = within(dialog).getByRole("combobox", {
+    name: "关联系列（可选）",
+  });
+  await waitFor(() =>
+    expect((choose as HTMLButtonElement).disabled).toBe(false),
+  );
+  expect(choose.textContent).toBe("不关联系列");
+  fireEvent.click(choose);
+  fireEvent.click(within(dialog).getByRole("option", { name: "新建系列…" }));
+  fireEvent.change(
+    within(dialog).getByRole("textbox", { name: "新系列名称" }),
+    { target: { value: "放学后的约定" } },
+  );
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "章节标签" }), {
+    target: { value: "前篇" },
+  });
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "确认创建 1 部作品" }),
+  );
+  await screen.findByRole("button", { name: "重试本次入库" });
+  expect(
+    (
+      within(dialog).getByRole("textbox", {
+        name: "新系列名称",
+      }) as HTMLInputElement
+    ).disabled,
+  ).toBe(true);
+  expect(state.writes[0].items[0].series).toMatchObject({
+    createTitle: "放学后的约定",
+    label: "前篇",
+  });
+  expect(state.writes[0].items[0].series?.requestId).toMatch(/^[0-9a-f-]{36}$/);
+  fireEvent.click(within(dialog).getByRole("button", { name: "返回候选池" }));
+  fireEvent.click(screen.getByRole("button", { name: "查看本次入库" }));
+  dialog = screen.getByRole("dialog", { name: "确认入库" });
+  expect(
+    (
+      within(dialog).getByRole("textbox", {
+        name: "新系列名称",
+      }) as HTMLInputElement
+    ).value,
+  ).toBe("放学后的约定");
+  fireEvent.click(within(dialog).getByRole("button", { name: "重试本次入库" }));
+  await screen.findByText("1 项入库完成");
+  expect(state.writes[1]).toEqual(state.writes[0]);
 });

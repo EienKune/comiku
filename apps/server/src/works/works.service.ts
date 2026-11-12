@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { assertCurrentHandoff } from "../workflow/revision-policy.js";
 import { assertProductionWritable } from "../workflow/review-policy.js";
 import {
@@ -48,6 +49,8 @@ import type {
   WorkMutationDto,
   WorkPageDto,
   WorkQueryDto,
+  WorkAlbumQueryDto,
+  WorkAlbumPageDto,
   PersonalWorkTaskDto,
   WorkSourceDto,
 } from "./works.dto.js";
@@ -169,7 +172,7 @@ export class WorksService {
     private readonly translations: TranslationsService,
   ) {}
 
-  async list(actorId: string, query: WorkQueryDto): Promise<WorkPageDto> {
+  private async listScopes(actorId: string, query: WorkQueryDto) {
     if (query.claimStage && query.view !== WorkView.recommended)
       throw new BadRequestException("可接职责只能用于推荐接取视角");
     const limit = query.limit ?? 24;
@@ -286,6 +289,144 @@ export class WorksService {
             : []),
       ],
     };
+    return { limit, actor, todoScope, statisticsScope, publishScope, scope };
+  }
+
+  async album(
+    actorId: string,
+    query: WorkAlbumQueryDto,
+  ): Promise<WorkAlbumPageDto> {
+    if (query.view !== undefined || query.claimStage !== undefined)
+      throw new BadRequestException("相册仅用于作品查看视图");
+    const { scope, actor } = await this.listScopes(actorId, {
+      ...query,
+      cursor: undefined,
+    });
+    if (!actor.roles.length)
+      throw new ForbiddenException("当前账号不能查看作品");
+    const filter = createHash("sha256")
+      .update(
+        JSON.stringify({
+          actorId,
+          search: query.search ?? "",
+          sourceLanguage: query.sourceLanguage ?? null,
+          phase: query.phase ?? null,
+          workflowStatus: query.workflowStatus ?? null,
+          reviewStatus: query.reviewStatus ?? null,
+          authorId: query.authorId ?? null,
+          mine: query.mine ?? false,
+          unassignedStage: query.unassignedStage ?? null,
+        }),
+      )
+      .digest("hex");
+    let seek: Prisma.WorkImageWhereInput = {};
+    if (query.cursor) {
+      try {
+        const c: unknown = JSON.parse(
+          Buffer.from(query.cursor, "base64url").toString(),
+        );
+        if (!c || typeof c !== "object") throw Error();
+        const v = c as Record<string, unknown>;
+        const uuid =
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (
+          v.v !== 1 ||
+          v.f !== filter ||
+          typeof v.t !== "string" ||
+          !Number.isFinite(Date.parse(v.t)) ||
+          typeof v.w !== "string" ||
+          !uuid.test(v.w) ||
+          typeof v.i !== "string" ||
+          !uuid.test(v.i) ||
+          !Number.isInteger(v.o) ||
+          Number(v.o) < 0
+        )
+          throw Error();
+        const date = new Date(v.t),
+          workId = v.w,
+          imageId = v.i,
+          orderIndex = Number(v.o);
+        seek = {
+          OR: [
+            { work: { importedAt: { lt: date } } },
+            { work: { importedAt: date }, workId: { lt: workId } },
+            { workId, orderIndex: { gt: orderIndex } },
+            { workId, orderIndex, id: { gt: imageId } },
+          ],
+        };
+      } catch {
+        throw new BadRequestException("相册游标无效，请重新加载");
+      }
+    }
+    const where: Prisma.WorkImageWhereInput = { work: scope };
+    const [total, workTotal, rows] = await Promise.all([
+      this.db.workImage.count({ where }),
+      this.db.work.count({ where: scope }),
+      this.db.workImage.findMany({
+        where: { AND: [where, seek] },
+        select: {
+          id: true,
+          workId: true,
+          orderIndex: true,
+          work: {
+            select: {
+              workNumber: true,
+              title: true,
+              importedAt: true,
+              sourceLanguage: true,
+              workflowStatus: true,
+              reviewStatus: true,
+              author: { select: { displayName: true } },
+              _count: { select: { images: true } },
+            },
+          },
+        },
+        orderBy: [
+          { work: { importedAt: "desc" } },
+          { workId: "desc" },
+          { orderIndex: "asc" },
+          { id: "asc" },
+        ],
+        take: query.limit + 1,
+      }),
+    ]);
+    const items = rows.slice(0, query.limit).map((row) => ({
+      id: row.id,
+      workId: row.workId,
+      orderIndex: row.orderIndex,
+      workNumber: row.work.workNumber,
+      workTitle: row.work.title,
+      authorName: row.work.author.displayName,
+      imageCount: row.work._count.images,
+      sourceLanguage: row.work.sourceLanguage,
+      workflowStatus: row.work.workflowStatus,
+      reviewStatus: row.work.reviewStatus,
+      importedAt: row.work.importedAt.toISOString(),
+    }));
+    const last = items.at(-1);
+    return {
+      total,
+      workTotal,
+      items,
+      nextCursor:
+        rows.length > query.limit && last
+          ? Buffer.from(
+              JSON.stringify({
+                v: 1,
+                f: filter,
+                t: last.importedAt,
+                w: last.workId,
+                o: last.orderIndex,
+                i: last.id,
+              }),
+            ).toString("base64url")
+          : null,
+    };
+  }
+
+  async list(actorId: string, query: WorkQueryDto): Promise<WorkPageDto> {
+    const { limit, actor, todoScope, statisticsScope, publishScope, scope } =
+      await this.listScopes(actorId, query);
     const [todoTotal, total, phaseCounts, claimCounts, publishTotal] =
       await Promise.all([
         this.db.work.count({ where: todoScope }),
