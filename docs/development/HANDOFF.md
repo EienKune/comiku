@@ -6,6 +6,7 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## CI and regression scope
 
+- Seed large PostgreSQL fixtures in bounded statements while retaining the complete dataset and all query-plan budgets. For history rows, use each batch's global sequence and the unique event-key join rather than repeatedly scanning and splitting the full event table. Do not increase production query timeouts to accommodate fixture setup.
 - Full CI runs on pushes to `main`/`dev` and on pull requests to any branch. Keep PR targets unfiltered so stacked reviews retain checks; ordinary feature pushes do not duplicate the PR run. Run affected tests during small iterations and complete the required checks before review or release.
 - Consolidating overlapping tests must retain distinct behavior: the notification mask matrix also checks exact heading placement, actor labels and missing metadata; history pagination also checks explicit filter application, refresh with an unsubmitted draft, page reset, back navigation and stale-request cancellation. Keep permission, concurrency, retry, compatibility and database-plan regressions.
 
