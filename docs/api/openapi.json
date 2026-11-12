@@ -18668,7 +18668,8 @@
                 "typeset_version_deleted",
                 "typeset_version_restored",
                 "notification.test",
-                "birthday.reminder"
+                "birthday.reminder",
+                "work.digest"
               ],
               "type": "string"
             }
@@ -18934,6 +18935,434 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NotificationDeliveryDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/work-reminders": {
+      "get": {
+        "operationId": "getWorkReminders",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkReminderManagementDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/work-reminders/settings": {
+      "patch": {
+        "operationId": "updateWorkReminderSettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkReminderSettingsInputDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkReminderSettingsDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/work-reminders/subscriptions/{id}": {
+      "patch": {
+        "operationId": "updateWorkReminderSubscription",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkReminderSubscriptionInputDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkReminderChannelDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/notifications/work-reminders/preview": {
+      "post": {
+        "operationId": "previewWorkReminder",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkReminderPreviewInputDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkReminderPreviewDto"
                 }
               }
             }
@@ -29067,7 +29496,8 @@
             "enum": [
               "work",
               "notification_test",
-              "birthday_digest"
+              "birthday_digest",
+              "work_digest"
             ]
           },
           "birthday": {
@@ -29337,6 +29767,194 @@
         "required": [
           "idempotencyKey",
           "action"
+        ]
+      },
+      "WorkReminderSettingsDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "sendTimes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "enabled",
+          "sendTimes",
+          "note",
+          "revision"
+        ]
+      },
+      "WorkReminderSubscriptionDto": {
+        "type": "object",
+        "properties": {
+          "digestEnabled": {
+            "type": "boolean"
+          },
+          "readyEnabled": {
+            "type": "boolean"
+          },
+          "overdueEnabled": {
+            "type": "boolean"
+          },
+          "mentionsEnabled": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "digestEnabled",
+          "readyEnabled",
+          "overdueEnabled",
+          "mentionsEnabled",
+          "revision"
+        ]
+      },
+      "WorkReminderChannelDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "connectionKey": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "number"
+          },
+          "subscription": {
+            "$ref": "#/components/schemas/WorkReminderSubscriptionDto"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "groupId",
+          "enabled",
+          "connectionKey",
+          "revision",
+          "subscription"
+        ]
+      },
+      "WorkReminderManagementDto": {
+        "type": "object",
+        "properties": {
+          "settings": {
+            "$ref": "#/components/schemas/WorkReminderSettingsDto"
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkReminderChannelDto"
+            }
+          }
+        },
+        "required": [
+          "settings",
+          "channels"
+        ]
+      },
+      "WorkReminderSettingsInputDto": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "sendTimes": {
+            "minItems": 2,
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": "string",
+            "description": "At most 120 Unicode code points"
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "enabled",
+          "sendTimes",
+          "note"
+        ]
+      },
+      "WorkReminderSubscriptionInputDto": {
+        "type": "object",
+        "properties": {
+          "expectedChannelRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "digestEnabled": {
+            "type": "boolean"
+          },
+          "readyEnabled": {
+            "type": "boolean"
+          },
+          "overdueEnabled": {
+            "type": "boolean"
+          },
+          "mentionsEnabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "expectedChannelRevision",
+          "expectedRevision",
+          "digestEnabled",
+          "readyEnabled",
+          "overdueEnabled",
+          "mentionsEnabled"
+        ]
+      },
+      "WorkReminderPreviewInputDto": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkReminderPreviewDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
         ]
       },
       "BirthdayPersonDto": {

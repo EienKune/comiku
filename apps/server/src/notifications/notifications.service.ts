@@ -736,6 +736,10 @@ export class NotificationsService {
         );
       if (source.status === "unknown" && !input.confirmPossibleDuplicate)
         throw new ConflictException("请明确确认补发可能重复");
+      if (source.event.resourceKind === "work_digest")
+        throw new ConflictException(
+          "工作提醒按当前任务重新汇总，请等待下一发送时段",
+        );
       if (source.event.resourceKind === "birthday_digest") {
         if (!this.environment.birthdays?.enabled)
           throw new ConflictException("生日功能已停用，不能补发");

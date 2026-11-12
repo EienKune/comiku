@@ -216,7 +216,7 @@ export class NotificationBirthdaySummaryDto {
 export class NotificationDeliveryDto {
   @ApiProperty({
     type: String,
-    enum: ["work", "notification_test", "birthday_digest"],
+    enum: ["work", "notification_test", "birthday_digest", "work_digest"],
   })
   resourceKind!: string;
   @ApiProperty({ type: NotificationBirthdaySummaryDto, nullable: true })
@@ -280,10 +280,16 @@ export class NotificationDeliveryQueryDto {
       ...NOTIFICATION_EVENT_KEYS,
       "notification.test",
       "birthday.reminder",
+      "work.digest",
     ],
   })
   @IsOptional()
-  @IsIn([...NOTIFICATION_EVENT_KEYS, "notification.test", "birthday.reminder"])
+  @IsIn([
+    ...NOTIFICATION_EVENT_KEYS,
+    "notification.test",
+    "birthday.reminder",
+    "work.digest",
+  ])
   eventType?: string;
   @ApiPropertyOptional({ type: String, format: "date-time" })
   @IsOptional()

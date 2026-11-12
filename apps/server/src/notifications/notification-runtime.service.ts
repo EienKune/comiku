@@ -28,6 +28,12 @@ import {
   lockBirthdaySettings,
   lockBirthdaySubscription,
 } from "./notification-birthday-policy.js";
+import {
+  lockWorkReminderSettings,
+  lockWorkReminderSubscription,
+  workReminderDeliveryInvalidReason,
+  workReminderMessageValid,
+} from "../work-reminders/work-reminder-notification-policy.js";
 
 @Injectable()
 export class NotificationRuntimeService implements OnModuleInit {
@@ -96,14 +102,21 @@ export class NotificationRuntimeService implements OnModuleInit {
           birthdayGlobalGeneration?: number;
           birthdayOffsetGeneration?: number;
           birthdayScopeGeneration?: number;
+          reminderGeneration?: number;
+          reminderScopeGeneration?: number;
+          messageSegments?: Prisma.InputJsonValue;
         }[];
         const birthdaySettings =
           event.resourceKind === "birthday_digest" &&
           this.environment.birthdays?.enabled
             ? await lockBirthdaySettings(tx)
             : null;
+        const reminderSettings =
+          event.resourceKind === "work_digest"
+            ? await lockWorkReminderSettings(tx)
+            : null;
         for (const ref of refs) {
-          if (event.resourceKind === "birthday_digest")
+          if (["birthday_digest", "work_digest"].includes(event.resourceKind))
             await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${ref.id}::uuid FOR SHARE`;
           const channel = await tx.notificationChannel.findUnique({
             where: { id: ref.id },
@@ -125,6 +138,25 @@ export class NotificationRuntimeService implements OnModuleInit {
                   ? null
                   : "birthday_frozen_content_invalid"))
               : null;
+          const reminderInvalid =
+            event.resourceKind === "work_digest"
+              ? ((await workReminderDeliveryInvalidReason(
+                  event.snapshot,
+                  ref,
+                  reminderSettings,
+                  await lockWorkReminderSubscription(tx, channel.id),
+                  tx,
+                )) ??
+                (!ref.content?.text ||
+                [...ref.content.text].length > 1000 ||
+                !workReminderMessageValid(
+                  event.snapshot,
+                  ref.messageSegments,
+                  ref.content.text,
+                )
+                  ? "work_reminder_content_invalid"
+                  : null))
+              : null;
           const current =
             !!ref.groupId &&
             !!ref.connectionKey &&
@@ -134,7 +166,8 @@ export class NotificationRuntimeService implements OnModuleInit {
             channel.groupId === ref.groupId &&
             channel.connectionKey === ref.connectionKey &&
             channel.connectionFingerprint === ref.connectionFingerprint &&
-            !birthdayInvalid;
+            !birthdayInvalid &&
+            !reminderInvalid;
           await tx.notificationDelivery.createMany({
             data: {
               eventId: event.id,
@@ -148,15 +181,22 @@ export class NotificationRuntimeService implements OnModuleInit {
               status: current ? "pending" : "cancelled",
               errorCode: current
                 ? null
-                : (birthdayInvalid ?? "channel_configuration_changed"),
+                : (birthdayInvalid ??
+                  reminderInvalid ??
+                  "channel_configuration_changed"),
               ...(event.resourceKind === "birthday_digest" && {
                 birthdayGlobalGeneration: ref.birthdayGlobalGeneration,
                 birthdayOffsetGeneration: ref.birthdayOffsetGeneration,
                 birthdayScopeGeneration: ref.birthdayScopeGeneration,
               }),
+              ...(event.resourceKind === "work_digest" && {
+                reminderGeneration: ref.reminderGeneration,
+                reminderScopeGeneration: ref.reminderScopeGeneration,
+                messageSegments: ref.messageSegments,
+              }),
               text:
                 ref.content?.text ??
-                (event.resourceKind === "birthday_digest"
+                (["birthday_digest", "work_digest"].includes(event.resourceKind)
                   ? ""
                   : renderNotificationMessage(
                       event as unknown as NormalizedNotificationEvent,
@@ -314,11 +354,19 @@ export class NotificationRuntimeService implements OnModuleInit {
         this.environment.birthdays?.enabled
           ? await lockBirthdaySettings(tx)
           : null;
+      const reminderSettings =
+        initial.reminderGeneration != null
+          ? await lockWorkReminderSettings(tx)
+          : null;
       await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${initial.channelId}::uuid FOR UPDATE`;
       const birthdaySubscription =
         initial.birthdayGlobalGeneration != null &&
         this.environment.birthdays?.enabled
           ? await lockBirthdaySubscription(tx, initial.channelId)
+          : null;
+      const reminderSubscription =
+        initial.reminderGeneration != null
+          ? await lockWorkReminderSubscription(tx, initial.channelId)
           : null;
       await tx.$queryRaw`SELECT id FROM notification_deliveries WHERE id = ${initial.id}::uuid FOR UPDATE`;
       const row = await tx.notificationDelivery.findUniqueOrThrow({
@@ -377,6 +425,27 @@ export class NotificationRuntimeService implements OnModuleInit {
           now,
         );
         if (invalid) return cancel(invalid);
+      }
+      if (row.event.resourceKind === "work_digest") {
+        const invalid = await workReminderDeliveryInvalidReason(
+          row.event.snapshot,
+          row,
+          reminderSettings,
+          reminderSubscription,
+          tx,
+          now,
+        );
+        if (invalid) return cancel(invalid);
+        if (
+          !workReminderMessageValid(
+            row.event.snapshot,
+            row.messageSegments,
+            row.text,
+          )
+        )
+          return cancel("work_reminder_content_invalid");
+      } else if (row.messageSegments != null) {
+        return cancel("notification_segments_scope_invalid");
       }
       const connection = this.registry.get(row.connectionKey);
       if (!connection)
@@ -521,6 +590,7 @@ export class NotificationRuntimeService implements OnModuleInit {
         preparation.row.groupId,
         preparation.row.text,
         signal,
+        preparation.row.messageSegments,
       );
     } catch {
       result = {
