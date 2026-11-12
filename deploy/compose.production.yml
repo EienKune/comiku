@@ -34,7 +34,7 @@ x-app: &app
 
 services:
   postgres:
-    image: postgres:17-bookworm
+    image: postgres:18-bookworm
     restart: unless-stopped
     environment:
       POSTGRES_DB: comiku
@@ -43,7 +43,7 @@ services:
     secrets:
       [postgres_admin_password, postgres_password, postgres_backup_password]
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
       - ./postgres-init.sh:/docker-entrypoint-initdb.d/10-comiku.sh:ro
     networks: [database]
     mem_limit: 768m
@@ -180,14 +180,14 @@ services:
 
   postgres-restore:
     profiles: [restore]
-    image: postgres:17-bookworm
+    image: postgres:18-bookworm
     environment:
       POSTGRES_DB: comiku_restore_test
       POSTGRES_USER: comiku
       POSTGRES_PASSWORD_FILE: /run/secrets/restore_password
     secrets: [restore_password]
     networks: [database]
-    tmpfs: ["/var/lib/postgresql/data:rw,nosuid,size=512m"]
+    tmpfs: ["/var/lib/postgresql:rw,nosuid,size=512m"]
     mem_limit: 512m
     cpus: 0.5
     healthcheck:

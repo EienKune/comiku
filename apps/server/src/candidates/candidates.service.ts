@@ -1164,6 +1164,8 @@ export class CandidatesService {
     action: CandidateAction,
     item: CandidateActionItemDto,
   ) {
+    if (action !== CandidateAction.import && item.mediaIds !== undefined)
+      throw new ConflictException("图片选择仅适用于入库操作");
     if (action === CandidateAction.import) return this.import(actorId, item);
     const from = action === CandidateAction.discard ? "pending" : "discarded";
     const to = action === CandidateAction.discard ? "discarded" : "pending";
@@ -1206,6 +1208,14 @@ export class CandidatesService {
   }
 
   private async import(actorId: string, item: CandidateActionItemDto) {
+    if (
+      item.mediaIds !== undefined &&
+      (!Array.isArray(item.mediaIds) ||
+        item.mediaIds.length < 1 ||
+        item.mediaIds.length > 1000 ||
+        new Set(item.mediaIds).size !== item.mediaIds.length)
+    )
+      throw new ConflictException("请选择不重复的有效图片");
     return this.db.$transaction(async (tx) => {
       const observed = await tx.candidatePost.findUnique({
         where: { id: item.id },
@@ -1221,11 +1231,40 @@ export class CandidatesService {
         include: {
           media: { orderBy: { orderIndex: "asc" } },
           author: true,
-          work: true,
+          work: {
+            include: {
+              images: {
+                select: { sourceCandidateMediaId: true },
+                orderBy: { orderIndex: "asc" },
+              },
+            },
+          },
         },
       });
       if (!candidate) throw new NotFoundException("候选不存在");
+      const mediaById = new Map(
+        candidate.media.map((media) => [media.id, media]),
+      );
+      const mediaIds = item.mediaIds ?? candidate.media.map(({ id }) => id);
+      if (mediaIds.some((id) => !mediaById.has(id)))
+        throw new ConflictException("所选图片不属于该候选，请刷新后重试");
       if (candidate.status === "imported" && candidate.work) {
+        if (candidate.work.candidateImportRevision === null) {
+          if (item.mediaIds !== undefined)
+            throw new ConflictException(
+              "历史入库请求无法确认图片选择，请查看已有作品",
+            );
+        } else if (
+          candidate.work.candidateImportRevision !== item.expectedRevision ||
+          candidate.work.images.length !== mediaIds.length ||
+          candidate.work.images.some(
+            (image, index) => image.sourceCandidateMediaId !== mediaIds[index],
+          )
+        ) {
+          throw new ConflictException(
+            "候选已按其他版本或图片选择入库，请查看已有作品",
+          );
+        }
         return {
           id: item.id,
           outcome: CandidateActionOutcome.unchanged,
@@ -1265,6 +1304,7 @@ export class CandidatesService {
         data: {
           authorId: candidate.authorId,
           sourceCandidatePostId: candidate.id,
+          candidateImportRevision: item.expectedRevision,
           sourcePostUrl: candidate.externalPostUrl,
           title: null,
           sourceText: candidate.text,
@@ -1273,13 +1313,17 @@ export class CandidatesService {
         },
       });
       await tx.workImage.createMany({
-        data: candidate.media.map((media) => ({
-          workId: work.id,
-          originalFileObjectId: media.fileObjectId,
-          orderIndex: media.orderIndex,
-          width: media.width,
-          height: media.height,
-        })),
+        data: mediaIds.map((id, orderIndex) => {
+          const media = mediaById.get(id)!;
+          return {
+            workId: work.id,
+            sourceCandidateMediaId: media.id,
+            originalFileObjectId: media.fileObjectId,
+            orderIndex,
+            width: media.width,
+            height: media.height,
+          };
+        }),
       });
       await tx.workEvent.create({
         data: {

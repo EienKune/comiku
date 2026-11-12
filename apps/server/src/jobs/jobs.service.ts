@@ -16,7 +16,11 @@ export type JobHandler = (
 ) => Promise<void>;
 export const JOB_LEASE_MS = 60_000;
 export type JobDeferredReason =
-  "capacity" | "credential_unavailable" | "platform_cooldown" | "scope_paused";
+  | "capacity"
+  | "credential_unavailable"
+  | "platform_cooldown"
+  | "scope_paused"
+  | "platform_maintenance";
 export class JobDeferred extends Error {
   constructor(
     readonly retryAt: Date,
@@ -31,6 +35,7 @@ export class JobDeferred extends Error {
         "credential_unavailable",
         "platform_cooldown",
         "scope_paused",
+        "platform_maintenance",
       ].includes(reason)
     )
       throw new Error("Invalid deferred reason");
@@ -44,16 +49,35 @@ export type JobClaimGate = (
   job: BackgroundJob,
   tx: Prisma.TransactionClient,
   now: Date,
+  admission: JobAdmissionContext,
 ) => Promise<void | JobDeferred>;
+export interface JobAdmissionContext {
+  leaseId: string;
+  ownerId: string;
+  budgetAttempt: number;
+}
+export interface JobExecutionLifecycle {
+  run<T>(job: BackgroundJob, action: () => Promise<T>): Promise<T>;
+  business(
+    tx: Prisma.TransactionClient,
+    job: BackgroundJob,
+    outcome: "succeeded" | "failed" | "deferred",
+    error?: unknown,
+    refunded?: boolean,
+  ): Promise<void>;
+  settled(job: BackgroundJob): Promise<void>;
+}
 export function retryDelay(attempt: number): number {
   return Math.min(300_000, 5_000 * 2 ** (attempt - 1));
 }
 
 @Injectable()
 export class JobsService {
+  readonly ownerId = randomUUID();
   private readonly leaseContext = new AsyncLocalStorage<BackgroundJob>();
   private handlers = new Map<string, JobHandler>();
   private gates = new Map<string, JobClaimGate>();
+  private lifecycles = new Map<string, JobExecutionLifecycle>();
   private policies = new Map<string, QueuePolicy>();
   private availability = new Map<
     string,
@@ -75,6 +99,10 @@ export class JobsService {
   registerClaimGate(kind: string, gate: JobClaimGate) {
     if (this.gates.has(kind)) throw new Error("Duplicate job claim gate");
     this.gates.set(kind, gate);
+  }
+  registerExecutionLifecycle(kind: string, lifecycle: JobExecutionLifecycle) {
+    if (this.lifecycles.has(kind)) throw new Error("Duplicate job lifecycle");
+    this.lifecycles.set(kind, lifecycle);
   }
 
   registerQueuePolicy(lane: JobLane, scope: string, policy: QueuePolicy) {
@@ -269,7 +297,12 @@ export class JobsService {
         !this.handlers.has(next.kind)
       )
         return null;
-      const deferred = await this.gates.get(next.kind)?.(next, tx, now);
+      const leaseId = randomUUID();
+      const deferred = await this.gates.get(next.kind)?.(next, tx, now, {
+        leaseId,
+        ownerId: this.ownerId,
+        budgetAttempt: next.attempts + 1,
+      });
       if (deferred) {
         const retryAt = deferredRetryAt(deferred, now);
         await tx.backgroundJob.update({
@@ -282,7 +315,6 @@ export class JobsService {
         };
         return null;
       }
-      const leaseId = randomUUID();
       if (policy) {
         const refund = {
           advanceLeaseId: leaseId,
@@ -321,6 +353,16 @@ export class JobsService {
   }
 
   async execute(job: BackgroundJob, stopping?: AbortSignal) {
+    const lifecycle = this.lifecycles.get(job.kind);
+    const run = () => this.executeOwned(job, stopping, lifecycle);
+    return lifecycle ? lifecycle.run(job, run) : run();
+  }
+
+  private async executeOwned(
+    job: BackgroundJob,
+    stopping?: AbortSignal,
+    lifecycle?: JobExecutionLifecycle,
+  ) {
     const controller = new AbortController();
     const stop = () => controller.abort();
     stopping?.addEventListener("abort", stop, { once: true });
@@ -343,16 +385,23 @@ export class JobsService {
         this.handlers.get(job.kind)!(job, controller.signal),
       );
       controller.signal.throwIfAborted();
-      const completed = await this.db.backgroundJob.updateMany({
-        where: { id: job.id, leaseId: job.leaseId, status: "running" },
-        data: {
-          status: "succeeded",
-          leaseId: null,
-          leaseUntil: null,
-          completedAt: new Date(),
-          lastError: null,
-        },
-      });
+      const complete = async (tx: Prisma.TransactionClient) => {
+        const completed = await tx.backgroundJob.updateMany({
+          where: { id: job.id, leaseId: job.leaseId, status: "running" },
+          data: {
+            status: "succeeded",
+            leaseId: null,
+            leaseUntil: null,
+            completedAt: new Date(),
+            lastError: null,
+          },
+        });
+        if (completed.count) await lifecycle?.business(tx, job, "succeeded");
+        return completed;
+      };
+      const completed = lifecycle
+        ? await this.db.$transaction(complete)
+        : await complete(this.db);
       if (completed.count)
         console.info(JSON.stringify(jobEvent("succeeded", job)));
     } catch (error) {
@@ -379,6 +428,7 @@ export class JobsService {
             },
           });
           if (changed.count) {
+            await lifecycle?.business(tx, job, "deferred", error, true);
             const where = {
               lane_scope: { lane: job.lane, scope: job.executionScope },
             };
@@ -412,17 +462,24 @@ export class JobsService {
         return;
       }
       const retryAt = new Date(Date.now() + retryDelay(job.attempts));
-      const changed = await this.db.backgroundJob.updateMany({
-        where: { id: job.id, leaseId: job.leaseId, status: "running" },
-        data: {
-          status: job.attempts >= 3 ? "failed" : "queued",
-          availableAt: retryAt,
-          leaseId: null,
-          leaseUntil: null,
-          lastError: "后台处理未完成，请检查资源权限或配置后重试",
-          ...(job.attempts >= 3 ? { completedAt: new Date() } : {}),
-        },
-      });
+      const fail = async (tx: Prisma.TransactionClient) => {
+        const changed = await tx.backgroundJob.updateMany({
+          where: { id: job.id, leaseId: job.leaseId, status: "running" },
+          data: {
+            status: job.attempts >= 3 ? "failed" : "queued",
+            availableAt: retryAt,
+            leaseId: null,
+            leaseUntil: null,
+            lastError: "后台处理未完成，请检查资源权限或配置后重试",
+            ...(job.attempts >= 3 ? { completedAt: new Date() } : {}),
+          },
+        });
+        if (changed.count) await lifecycle?.business(tx, job, "failed", error);
+        return changed;
+      };
+      const changed = lifecycle
+        ? await this.db.$transaction(fail)
+        : await fail(this.db);
       if (changed.count)
         console.info(
           JSON.stringify(
@@ -436,6 +493,9 @@ export class JobsService {
     } finally {
       clearInterval(heartbeat);
       stopping?.removeEventListener("abort", stop);
+      // Handler promises must include child/stream/cleanup completion. Lease loss
+      // never settles another owner's admission and does not imply local shutdown.
+      await lifecycle?.settled(job);
     }
   }
 

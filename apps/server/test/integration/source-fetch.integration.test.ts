@@ -28,6 +28,10 @@ import {
 import { ContentSourceRegistry } from "../../src/source-ingestion/source-registry.js";
 import { PrismaService } from "../../src/database/prisma.service.js";
 import { hashPassword } from "../../src/users/password.js";
+import type {
+  SourceRunSummaryDto,
+  SourceTaskPageDto,
+} from "../../src/source-ingestion/source-history.dto.js";
 
 loadRootEnvironment();
 const testUrl = process.env.TEST_DATABASE_URL;
@@ -365,16 +369,33 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
     await moduleRef
       .get(JobsService)
       .runNext("network", undefined, "source:fixture");
-    const run = await request<{
-      status: string;
-      items: {
-        candidatesCreated: number;
-        candidatesExisting: number;
-        mediaStored: number;
-      }[];
-    }>(admin, "GET", `/api/source-fetch/runs/${queuedRun.data.id}`);
+    const run = await request<SourceRunSummaryDto>(
+      admin,
+      "GET",
+      `/api/source-fetch/runs/${queuedRun.data.id}`,
+    );
     assert.equal(run.status, 200);
     assert.equal(run.data.status, "queued", JSON.stringify(run.data));
+    assert.equal("items" in run.data, false);
+    assert.equal(run.data.targetCount, 1);
+    assert.equal(run.data.candidatesCreated, 1);
+    assert.equal(run.data.mediaStored, 2);
+    const queuedTasks = await request<SourceTaskPageDto>(
+      admin,
+      "GET",
+      `/api/source-fetch/runs/${queuedRun.data.id}/tasks`,
+    );
+    assert.equal(queuedTasks.status, 200);
+    assert.equal(queuedTasks.data.items.length, 1);
+    assert.deepEqual(
+      queuedTasks.data.items.map((task) => [
+        task.accountId,
+        task.status,
+        task.candidatesCreated,
+        task.mediaStored,
+      ]),
+      [[accountId, "queued", 1, 2]],
+    );
     const interruptedState = await db.sourceAdapterState.findUniqueOrThrow({
       where: {
         externalAccountId_adapterKey: {
@@ -390,8 +411,12 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
     assert.equal(interruptedCursor.page, 1);
     assert.equal(typeof interruptedCursor.endTime, "string");
     assert.equal(interruptedState.completedThroughAt, null);
+    // Inspect processor-only per-adapter receipts internally; the HTTP read is a bounded summary.
+    const processedRun = await moduleRef
+      .get(SourceFetchService)
+      .get(queuedRun.data.id);
     assert.deepEqual(
-      run.data.items.map((item) => [
+      processedRun.items.map((item) => [
         item.candidatesCreated,
         item.candidatesExisting,
         item.mediaStored,
@@ -418,22 +443,43 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
     await moduleRef
       .get(JobsService)
       .runNext("network", undefined, "source:fixture");
-    const resumedRun = await request<{
-      status: string;
-      items: {
-        adapterKey: string;
-        candidatesCreated: number;
-        candidatesExisting: number;
-        mediaStored: number;
-      }[];
-    }>(admin, "GET", `/api/source-fetch/runs/${resumedQueued.data.id}`);
+    const resumedRun = await request<SourceRunSummaryDto>(
+      admin,
+      "GET",
+      `/api/source-fetch/runs/${resumedQueued.data.id}`,
+    );
+    assert.equal(resumedRun.status, 200);
     assert.equal(
       resumedRun.data.status,
       "succeeded",
       JSON.stringify(resumedRun.data),
     );
+    assert.equal("items" in resumedRun.data, false);
+    assert.equal(resumedRun.data.targetCount, 1);
+    assert.equal(resumedRun.data.completedTargets, 1);
+    assert.equal(resumedRun.data.candidatesCreated, 2);
+    assert.equal(resumedRun.data.mediaStored, 3);
+    const resumedTasks = await request<SourceTaskPageDto>(
+      admin,
+      "GET",
+      `/api/source-fetch/runs/${resumedQueued.data.id}/tasks`,
+    );
+    assert.equal(resumedTasks.status, 200);
+    assert.equal(resumedTasks.data.items.length, 1);
     assert.deepEqual(
-      resumedRun.data.items
+      resumedTasks.data.items.map((task) => [
+        task.accountId,
+        task.status,
+        task.candidatesCreated,
+        task.mediaStored,
+      ]),
+      [[accountId, "succeeded", 2, 3]],
+    );
+    const processedResumedRun = await moduleRef
+      .get(SourceFetchService)
+      .get(resumedQueued.data.id);
+    assert.deepEqual(
+      processedResumedRun.items
         .filter((item) => item.adapterKey === "fixture_default")
         .map((item) => [
           item.candidatesCreated,

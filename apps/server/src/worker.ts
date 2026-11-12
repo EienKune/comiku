@@ -12,6 +12,7 @@ import { JobsService } from "./jobs/jobs.service.js";
 import { SourceFetchService } from "./source-ingestion/source-fetch.service.js";
 import { PrismaService } from "./database/prisma.service.js";
 import { writeWorkerHealth } from "./ops/worker-health.js";
+import { NotificationRuntimeService } from "./notifications/notification-runtime.service.js";
 
 const environment = loadEnvironment();
 const app = await NestFactory.createApplicationContext(
@@ -24,6 +25,7 @@ const jobs = app.get(JobsService);
 const sources = app.get(SourceFetchService);
 const transfers = app.get(DownloadsService);
 const analysis = app.get(ImageAnalysisService);
+const notifications = app.get(NotificationRuntimeService);
 let nextAnalysisScan = 0;
 let nextReviewCleanup = 0;
 let nextSourceRecoveryScan = 0;
@@ -86,6 +88,21 @@ async function loop(lane: "heavy" | "network" | "analysis", scope = "global") {
     await delay(1_000, undefined, { signal: stopping.signal }).catch(() => {});
   }
 }
+async function notificationLoop() {
+  let nextMaintenance = 0;
+  while (!stopping.signal.aborted) {
+    try {
+      if (Date.now() >= nextMaintenance) {
+        await notifications.maintain();
+        nextMaintenance = Date.now() + 5_000;
+      }
+      if (await notifications.runNext(stopping.signal)) continue;
+    } catch {
+      console.error("通知处理未完成，请检查通知投递记录。");
+    }
+    await delay(5_000, undefined, { signal: stopping.signal }).catch(() => {});
+  }
+}
 try {
   await Promise.all([
     maintenanceLoop(),
@@ -94,6 +111,7 @@ try {
     loop("network"),
     loop("network", "source:x"),
     loop("network", "source:pixiv"),
+    ...(notifications.enabled ? [notificationLoop()] : []),
   ]);
 } finally {
   clearInterval(healthTimer);

@@ -122,6 +122,8 @@ export class SourceFetchService {
   }
 
   onModuleInit() {
+    for (const kind of ["source_account_fetch", "source_post_recover"])
+      this.jobs.registerExecutionLifecycle(kind, this.platforms.executions);
     this.recovery.register((job, campaign, signal) =>
       this.recoverPost(job, campaign, signal),
     );
@@ -144,8 +146,10 @@ export class SourceFetchService {
     this.jobs.register("source_account_fetch", (job, signal) =>
       this.runAccountTask(job, signal),
     );
-    this.jobs.registerClaimGate("source_account_fetch", (job, tx, now) =>
-      this.platforms.claim(job, tx, now),
+    this.jobs.registerClaimGate(
+      "source_account_fetch",
+      (job, tx, now, admission) =>
+        this.platforms.claim(job, tx, now, undefined, admission),
     );
   }
 
@@ -229,8 +233,14 @@ export class SourceFetchService {
               },
             });
             await this.tasks.aggregate(tx, task.runId);
+            await this.platforms.executions.business(
+              tx,
+              job,
+              gaps ? "partial_failed" : "succeeded",
+            );
           });
         } catch (error) {
+          this.platforms.executions.record(error);
           if (signal.aborted) throw error;
           await this.db.$transaction(async (tx) => {
             await this.jobs.assertCurrentLease(tx);
@@ -252,6 +262,8 @@ export class SourceFetchService {
               },
             });
             await this.tasks.aggregate(tx, task.runId);
+            if (error instanceof BadRequestException)
+              await this.platforms.executions.business(tx, job, "failed");
           });
           if (error instanceof BadRequestException) return;
           throw error;
@@ -428,6 +440,10 @@ export class SourceFetchService {
             await this.recovery.finish(tx, campaign, true);
           });
         } catch (error) {
+          this.platforms.executions.record(
+            error,
+            String(diagnosticContext.stage),
+          );
           signal.throwIfAborted();
           if (error instanceof JobDeferred) throw error;
           const shared = platformFailure(error, new Date());
@@ -544,6 +560,7 @@ export class SourceFetchService {
       await this.db.$transaction((tx) =>
         this.settleTerminalJob(tx, job.id, now),
       );
+    await this.platforms.executions.pruneSettled(now);
   }
 
   private async settleAccountTerminal(
@@ -958,6 +975,7 @@ export class SourceFetchService {
         SELECT COUNT(*) AS total,COUNT(*) FILTER (WHERE t.completed_at IS NOT NULL) AS completed,
           COUNT(*) FILTER (WHERE t.status='waiting') AS waiting,
           CASE WHEN BOOL_OR(t.status='waiting' AND t.failure_code IN ('credential_unavailable','scope_paused')) THEN 'credential_unavailable'
+            WHEN BOOL_OR(t.status='waiting' AND t.failure_code='platform_maintenance') THEN 'platform_maintenance'
             WHEN BOOL_OR(t.status='waiting' AND t.failure_code='platform_cooldown') THEN 'platform_cooldown'
             WHEN BOOL_OR(t.status='waiting') THEN 'capacity' ELSE NULL END AS reason
         FROM source_fetch_account_tasks t WHERE t.run_id=r.id
@@ -1078,12 +1096,16 @@ export class SourceFetchService {
               )
                 ? "credential_unavailable"
                 : waiting.some(
-                      (task) => task.failureCode === "platform_cooldown",
+                      (task) => task.failureCode === "platform_maintenance",
                     )
-                  ? "platform_cooldown"
-                  : waiting.some((task) => task.failureCode === "capacity")
-                    ? "capacity"
-                    : null,
+                  ? "platform_maintenance"
+                  : waiting.some(
+                        (task) => task.failureCode === "platform_cooldown",
+                      )
+                    ? "platform_cooldown"
+                    : waiting.some((task) => task.failureCode === "capacity")
+                      ? "capacity"
+                      : null,
             }
           : {}),
         attempts: children.length
@@ -1324,6 +1346,10 @@ export class SourceFetchService {
         );
         return;
       } catch (error) {
+        this.platforms.executions.record(
+          error,
+          String(diagnosticContext.stage),
+        );
         if (signal.aborted) throw error;
         if (error instanceof JobDeferred) throw error;
         const execution = this.accountExecution.getStore();
@@ -1927,6 +1953,14 @@ export class SourceFetchService {
           await this.discovery.record(tx, context, content);
         }
       });
+      for (const failure of page.discoveryFailures ?? [])
+        this.platforms.executions.record(
+          new SourceResponseError("invalid_response", {
+            reason: failure.failureCode,
+            scope: "post",
+          }),
+          "validate_post",
+        );
       for (const content of page.items) {
         delete diagnosticContext.mediaId;
         diagnosticContext.stage = "validate_post";
@@ -2399,6 +2433,10 @@ export class SourceFetchService {
                       error instanceof Error ? error.name : "Error",
                   },
                 });
+          this.platforms.executions.record(
+            failure,
+            String(diagnosticContext.stage),
+          );
           await this.db.$transaction(async (tx) => {
             await this.lockSource(tx, account, state, createdById);
             await this.assertEligible(account, state, leaseId, tx);

@@ -4,6 +4,10 @@ import { SourcePlatformStates } from "../src/source-ingestion/source-platform-st
 import { SourceResponseError } from "../src/source-ingestion/source-response.js";
 function fixture(platform = "x") {
   const scopes: string[] = [];
+  const renewals: Array<{
+    where: { leaseUntil?: { gt: Date } };
+    data: { leaseUntil?: Date };
+  }> = [];
   let job: Record<string, unknown> | undefined;
   let inside = false,
     reserved = false,
@@ -33,10 +37,29 @@ function fixture(platform = "x") {
         job = data;
         reserved = true;
       },
-      updateMany: async () => ({ count: lostLease ? 0 : 1 }),
+      updateMany: async (input: {
+        where: { leaseUntil?: { gt: Date } };
+        data: { leaseUntil?: Date };
+      }) => {
+        if (input.data.leaseUntil) renewals.push(input);
+        if (
+          lostLease ||
+          (input.where.leaseUntil &&
+            job?.leaseUntil instanceof Date &&
+            job.leaseUntil <= input.where.leaseUntil.gt)
+        )
+          return { count: 0 };
+        if (input.data.leaseUntil)
+          job = { ...job, leaseUntil: input.data.leaseUntil };
+        return { count: 1 };
+      },
     },
     sourceAccountScanState: { count: async () => (postBusy ? 1 : 0) },
     sourceAdapterState: { count: async () => (postBusy ? 1 : 0) },
+    sourcePlatformExecution: {
+      create: async () => ({}),
+      updateMany: async () => ({ count: 1 }),
+    },
     sourcePlatformState: {
       findUnique: async () => state,
       updateMany: async ({ data }: { data: Partial<typeof state> }) => {
@@ -70,6 +93,8 @@ function fixture(platform = "x") {
   return {
     states,
     scopes,
+    renewals,
+    tx,
     job: () => job,
     state: () => state,
     inside: () => inside,
@@ -254,4 +279,112 @@ test("Pixiv busy and auth pause prevent network before callback", async () => {
     /暂停/,
   );
   assert.equal(called, false);
+});
+
+const flushHeartbeat = () =>
+  new Promise<void>((resolve) => setImmediate(resolve));
+test("a live 63-second profile plus avatar renews its lease and clears the heartbeat on completion", async (t) => {
+  const start = new Date("2026-11-11T00:00:00Z"),
+    f = fixture();
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: start });
+  try {
+    const result = await f.states.profileNetwork("actor", async () => {
+      for (let n = 0; n < 4; n++) {
+        t.mock.timers.tick(15_000);
+        await flushHeartbeat();
+      }
+      t.mock.timers.tick(3_000);
+      await flushHeartbeat();
+      return "verified profile and avatar";
+    });
+    assert.equal(result, "verified profile and avatar");
+    assert.ok(f.renewals.length > 0);
+    for (const update of f.renewals)
+      assert.ok(update.where.leaseUntil?.gt instanceof Date);
+    const before = f.renewals.length;
+    t.mock.timers.tick(120_000);
+    await flushHeartbeat();
+    assert.equal(f.renewals.length, before);
+  } finally {
+    t.mock.timers.reset();
+  }
+});
+test("a profile heartbeat cannot resurrect an expired lease and cannot renew forever", async (t) => {
+  const start = new Date("2026-11-11T00:00:00Z");
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: start });
+  try {
+    const expired = fixture();
+    await assert.rejects(
+      expired.states.profileNetwork("actor", async () => {
+        t.mock.timers.tick(61_000);
+        await flushHeartbeat();
+        return "late";
+      }),
+      /过期/,
+    );
+    assert.equal(
+      (expired.job()?.leaseUntil as Date).getTime(),
+      start.getTime() + 60_000,
+    );
+    const bounded = fixture(),
+      admitted = Date.now();
+    await assert.rejects(
+      bounded.states.profileNetwork("actor", async () => {
+        for (let n = 0; n < 9; n++) {
+          t.mock.timers.tick(15_000);
+          await flushHeartbeat();
+        }
+        return "stalled";
+      }),
+      /过期/,
+    );
+    assert.ok(bounded.renewals.length > 0);
+    assert.ok(
+      bounded.renewals.every(
+        (update) => update.data.leaseUntil!.getTime() <= admitted + 120_000,
+      ),
+    );
+  } finally {
+    t.mock.timers.reset();
+  }
+});
+
+test("a profile heartbeat samples expiry after waiting for its job row lock", async (t) => {
+  const start = new Date("2026-11-11T00:00:00Z"),
+    f = fixture();
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let entered = false;
+  f.tx.$queryRaw = async (...args: unknown[]) => {
+    const query = (args[0] as TemplateStringsArray).join("?");
+    if (query.includes("FROM background_jobs")) {
+      entered = true;
+      await blocked;
+    }
+    return [];
+  };
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: start });
+  try {
+    await assert.rejects(
+      f.states.profileNetwork("actor", async () => {
+        t.mock.timers.tick(15_000);
+        await flushHeartbeat();
+        assert.equal(entered, true);
+        t.mock.timers.tick(46_000);
+        release();
+        await flushHeartbeat();
+        return "late after lock wait";
+      }),
+      /过期/,
+    );
+    assert.equal(
+      (f.job()?.leaseUntil as Date).getTime(),
+      start.getTime() + 60_000,
+    );
+  } finally {
+    release();
+    t.mock.timers.reset();
+  }
 });

@@ -25,25 +25,34 @@ export class SourceRecoveryService {
       signal: AbortSignal,
     ) => Promise<void>,
   ) {
-    this.jobs.registerClaimGate("source_post_recover", async (job, tx, now) => {
-      const campaign = await tx.sourceRecoveryCampaign.findUnique({
-        where: { id: job.resourceId },
-        include: { discoveryPost: true },
-      });
-      if (!campaign || campaign.jobId !== job.id)
-        throw new Error("Invalid recovery campaign");
-      return this.platforms.claim(job, tx, now, {
-        platform: campaign.discoveryPost.platform,
-        completedAt: campaign.completedAt,
-        waiting: async () => {},
-        running: async () => {
-          await tx.sourceRecoveryCampaign.updateMany({
-            where: { id: campaign.id, completedAt: null },
-            data: { state: "running" },
-          });
-        },
-      });
-    });
+    this.jobs.registerClaimGate(
+      "source_post_recover",
+      async (job, tx, now, admission) => {
+        const campaign = await tx.sourceRecoveryCampaign.findUnique({
+          where: { id: job.resourceId },
+          include: { discoveryPost: true },
+        });
+        if (!campaign || campaign.jobId !== job.id)
+          throw new Error("Invalid recovery campaign");
+        return this.platforms.claim(
+          job,
+          tx,
+          now,
+          {
+            platform: campaign.discoveryPost.platform,
+            completedAt: campaign.completedAt,
+            waiting: async () => {},
+            running: async () => {
+              await tx.sourceRecoveryCampaign.updateMany({
+                where: { id: campaign.id, completedAt: null },
+                data: { state: "running" },
+              });
+            },
+          },
+          admission,
+        );
+      },
+    );
     this.jobs.register("source_post_recover", async (job, signal) => {
       const campaign = await this.db.sourceRecoveryCampaign.findUnique({
         where: { id: job.resourceId },

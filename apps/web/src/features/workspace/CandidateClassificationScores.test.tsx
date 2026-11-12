@@ -11,6 +11,8 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { client } from "../account/api";
 import { CandidateClassificationScores } from "./CandidateClassificationScores";
+import { CandidateTags } from "./CandidateTags";
+import { CandidateInspectionScope } from "./CandidateInspectionScope";
 const tag = { label: "art", text: "漫画／插画", tone: "success" as const };
 const value = {
   modelKey: "current",
@@ -321,4 +323,109 @@ test("pending background refresh preserves the mounted table and scroll position
   });
   expect(screen.getByRole("table")).toBe(table);
   expect(scroll.scrollTop).toBe(140);
+});
+
+function mountTagScope() {
+  const cache = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+  });
+  caches.push(cache);
+  return render(
+    <QueryClientProvider client={cache}>
+      <CandidateTags
+        hashtags={["BA"]}
+        matches={[]}
+        model={
+          <CandidateClassificationScores candidateId="post" category={tag} />
+        }
+      />
+    </QueryClientProvider>,
+  );
+}
+
+test("scores anchor below the entire tag block", async () => {
+  mock();
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      return {
+        width: 300,
+        height: this.classList.contains("candidate-tags") ? 80 : 26,
+        top: 20,
+        bottom: this.classList.contains("candidate-tags") ? 100 : 46,
+        left: 30,
+        right: 330,
+        x: 30,
+        y: 20,
+        toJSON: () => ({}),
+      };
+    },
+  );
+  mountTagScope();
+  fireEvent.click(trigger());
+  expect(
+    (await screen.findByRole("dialog", { name: "所有图片的分类分数" })).style
+      .top,
+  ).toBe("108px");
+});
+
+test("focus and hover inspection switches between tags and scores within one scope without stealing focus", async () => {
+  const get = mock();
+  mountTagScope();
+  const tagTrigger = screen.getByRole("button", {
+    name: /查看全部原帖标签|#BA/,
+  });
+  act(() => tagTrigger.focus());
+  expect(screen.getByRole("dialog", { name: "全部原帖标签" })).toBeTruthy();
+  fireEvent.pointerEnter(trigger(), { pointerType: "mouse" });
+  expect(screen.queryByRole("dialog", { name: "全部原帖标签" })).toBeNull();
+  await screen.findByRole("table");
+  expect(document.activeElement).toBe(tagTrigger);
+  act(() => trigger().focus());
+  fireEvent.keyDown(trigger(), { key: "ArrowDown" });
+  expect(document.activeElement?.className).toContain(
+    "candidate-scores__scroll",
+  );
+  act(() => tagTrigger.focus());
+  expect(
+    screen.queryByRole("dialog", { name: "所有图片的分类分数" }),
+  ).toBeNull();
+  expect(screen.getByRole("dialog", { name: "全部原帖标签" })).toBeTruthy();
+  fireEvent.keyDown(tagTrigger, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(screen.getByRole("dialog"));
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(tagTrigger);
+  fireEvent.click(trigger());
+  await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+});
+
+test("independent tag blocks do not share an inspection singleton", () => {
+  render(
+    <>
+      <CandidateTags hashtags={["first"]} matches={[]} />
+      <CandidateTags hashtags={["second"]} matches={[]} />
+    </>,
+  );
+  const triggers = screen.getAllByRole("button", { name: /查看全部原帖标签/ });
+  fireEvent.click(triggers[0]);
+  fireEvent.click(triggers[1]);
+  expect(screen.getAllByRole("dialog", { name: "全部原帖标签" })).toHaveLength(
+    2,
+  );
+});
+
+test("a shared page inspection scope excludes popovers across different cards", () => {
+  render(
+    <CandidateInspectionScope>
+      <CandidateTags hashtags={["first"]} matches={[]} />
+      <CandidateTags hashtags={["second"]} matches={[]} />
+    </CandidateInspectionScope>,
+  );
+  const triggers = screen.getAllByRole("button", { name: /查看全部原帖标签/ });
+  fireEvent.click(triggers[0]);
+  fireEvent.click(triggers[1]);
+  expect(screen.getAllByRole("dialog", { name: "全部原帖标签" })).toHaveLength(
+    1,
+  );
+  expect(screen.getByRole("dialog").textContent).toContain("second");
 });

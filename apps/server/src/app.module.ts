@@ -18,6 +18,7 @@ import { WorksModule } from "./works/works.module.js";
 import { TranslationsModule } from "./translations/translations.module.js";
 import { TypesettingModule } from "./typesetting/typesetting.module.js";
 import { PublishingModule } from "./publishing/publishing.module.js";
+import { NotificationsModule } from "./notifications/notifications.module.js";
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { PublishingModule } from "./publishing/publishing.module.js";
     PublishingModule,
     ReviewsModule,
     DashboardModule,
+    NotificationsModule,
   ],
   controllers: [HealthController],
 })

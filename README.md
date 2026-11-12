@@ -25,7 +25,7 @@ Comiku 将「授权作者管理 → 图源候选 → 翻译校对 → 外部嵌�
 
 ## 本地快速启动
 
-**环境要求**：Node.js **24.22.1**、pnpm **9.1.2** 以及可运行 Linux 容器的 Docker。
+**环境要求**：Node.js **24.22.1**、pnpm **9.1.2**、PostgreSQL **18** 以及可运行 Linux 容器的 Docker。开发 Compose 提供 PostgreSQL 18。
 
 _（注：若仅查看 UI Playground 则无需数据库，安装依赖后直接运行 `pnpm dev:web` 即可。）_
 

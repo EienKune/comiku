@@ -345,3 +345,20 @@ test("hover can cross into the overview and a hidden resize anchor dismisses it"
   expect(screen.queryByRole("button", { name: "#six" })).toBeNull();
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+
+test("overview opens outside the whole two-row tag block instead of covering its second row", () => {
+  const measure = vi
+    .mocked(HTMLElement.prototype.getBoundingClientRect)
+    .getMockImplementation()!;
+  vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(
+    function (this: HTMLElement) {
+      const rect = measure.call(this);
+      return this.classList.contains("candidate-tags")
+        ? { ...rect, top: 20, bottom: 100, height: 80 }
+        : rect;
+    },
+  );
+  render(<CandidateTags hashtags={["BA"]} matches={[matches[0]]} />);
+  fireEvent.click(screen.getByRole("button", { name: /↑ #BA/ }));
+  expect(screen.getByRole("dialog").style.top).toBe("108px");
+});

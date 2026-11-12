@@ -26,6 +26,8 @@ X/Pixiv 资料解析返回有效期十分钟的 `profileProof`，绑定操作人
 
 已有卷不会因更改 `POSTGRES_PASSWORD` 自动改密。使用 `docker compose -f docker-compose.dev.yml stop` 停止开发数据库；不要删卷重建来修复配置。
 
+开发、测试与生产模板使用 PostgreSQL 18，小版本随所选 18 系列官方镜像更新；主版本不自动升级。18 的数据卷挂载到 `/var/lib/postgresql`，默认 `PGDATA=/var/lib/postgresql/18/docker`。旧 17 数据卷不能直接交给 18 启动，升级步骤见[部署说明](deployment.md#postgresql-主版本升级)。
+
 ## R2
 
 显式使用 r2 时完整配置下列四项：
@@ -50,6 +52,8 @@ Bucket 保持私有，CORS 精确允许当前浏览器 origin，方法为 GET/PU
 local 与 R2 不是自动迁移关系：更换驱动不会搬运已有对象。使用独立测试库/桶验证 R2，不要把原 local 数据库直接切到空 R2 Bucket。
 
 ## X 与后台调度
+
+群通知使用可选 `NOTIFICATIONS_ENABLED`（默认 false）和绝对路径 `NOTIFICATION_CONNECTIONS_FILE`。连接、token 环境变量和精确 IP 白名单由部署者在私有文件配置，API/worker 共享同一配置；网页只选择已配置连接。业务 Service 不调用通知模块，后台已通过持久 WorkEvent 异步接入作品变化。启用后会自动推送持久起点之后符合已启用群订阅的事件；首次起点之前的历史不自动补发，全局暂停后恢复沿用原起点。启用真实连接前应核对群目标、订阅和模板。详见 [群通知](notifications.md)。
 
 日常采集与账号资料同步只使用 gallery-dl 的 X/Pixiv 实现，配置见下方 gallery-dl 章节。旧网页会话与官方 API 实现仅保留为历史源码和合成测试，不注册到运行时，不作为失败回退；旧凭据环境变量不再读取。
 
@@ -94,6 +98,16 @@ Image analysis accepts original input up to 32 MiB. Larger images within the col
 Size-limit and forbidden-URL rejections retain controlled media reasons and put the discovery in `needs_attention`. Unsupported-type and empty-body responses remain retryable, since a CDN can transiently return an HTTP-200 error page or empty response. Diagnostics contain controlled reasons, `limit_bytes`, and `declared_bytes` or `observed_bytes` when available. After changing configuration, operators inspect terminal gaps and explicitly authorize recovery.
 
 Transient post gaps first become eligible after 5 minutes; after the first failed recovery campaign they wait 10 minutes, then 30 minutes between remaining campaigns, up to eight campaigns. Each campaign uses the normal job executor (at most three executions, 5/10-second delays). Platform gates, the shared per-platform queue and the maintenance scan determine execution after eligibility. Account cooldown uses `SOURCE_COOLDOWN_MINUTES`.
+
+## Online source credential maintenance
+
+Online editing is opt-in: set `SOURCE_CREDENTIALS_STATE_DIRECTORY` to an existing absolute private directory (0700) outside the checkout and Docker build context. The configured gallery JSON and referenced Cookie files must be owned by the service user (0600), with private writable parent directories. Native Windows online editing is read-only because POSIX mode bits do not establish a Windows ACL.
+
+All participating API and worker processes must see the **same files**, not merely matching path strings. Use a shared writable private directory; independent hosts and read-only single-file Docker mounts do not meet this contract. Do not externally edit these files while an update operation is active. Platforms sharing configuration or referenced Cookie material cannot be edited independently.
+
+The administrator flow is pause, wait for confirmed execution completion, save, optional bounded authentication verification, then explicitly resume. Pausing preserves queued jobs and account settings. Closing the dialog does not resume the platform. A lease deadline is not proof that a subprocess or network stream has stopped. New credentials must still respect a trusted platform cooldown.
+
+The directory contains private recovery material, including previous credentials. It must have restricted access and an appropriate private backup policy. Unresolved operations retain their material; do not delete it to unlock the UI. See [source-ingestion maintenance](adapters/source-ingestion.md) for explicit recovery boundaries. X accepts paired `auth_token`/`ct0` fields; Pixiv accepts an application refresh token. A browser `PHPSESSID` Cookie is a different credential and is not an application refresh token.
 
 ## 登录期限
 

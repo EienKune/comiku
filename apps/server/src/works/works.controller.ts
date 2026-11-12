@@ -40,6 +40,7 @@ import {
   WorkMutationDto,
   WorkPageDto,
   WorkQueryDto,
+  WorkSourceDto,
 } from "./works.dto.js";
 import { WorksService } from "./works.service.js";
 
@@ -83,6 +84,30 @@ export class WorksController {
     @Query(bodyValidation(ImageReadQueryDto)) query: ImageReadQueryDto,
   ) {
     return this.works.imageUrl(workId, imageId, query.variant);
+  }
+
+  @Get(":id/source")
+  @Access({ permission: "works:read" })
+  @ApiOperation({ operationId: "getWorkSource" })
+  @ApiParam({ name: "id", format: "uuid" })
+  @ApiOkResponse({ type: WorkSourceDto })
+  source(@Param("id", ParseUUIDPipe) id: string) {
+    return this.works.source(id);
+  }
+
+  @Get(":workId/source/media/:mediaId/url")
+  @Access({ permission: "works:read" })
+  @ApiOperation({ operationId: "getWorkSourceMediaUrl" })
+  @ApiParam({ name: "workId", format: "uuid" })
+  @ApiParam({ name: "mediaId", format: "uuid" })
+  @ApiQuery({ type: ImageReadQueryDto })
+  @ApiOkResponse({ type: ImageUrlDto })
+  sourceMediaUrl(
+    @Param("workId", ParseUUIDPipe) workId: string,
+    @Param("mediaId", ParseUUIDPipe) mediaId: string,
+    @Query(bodyValidation(ImageReadQueryDto)) query: ImageReadQueryDto,
+  ) {
+    return this.works.sourceMediaUrl(workId, mediaId, query.variant);
   }
 
   @Patch(":id")

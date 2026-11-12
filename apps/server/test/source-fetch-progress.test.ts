@@ -203,3 +203,42 @@ test("platform diagnostics and controlled recheck require technical administrati
       permission: "system:manage",
     });
 });
+
+test("progress SQL preserves maintenance as its own waiting reason", async () => {
+  const { service, queries } = fixture([
+    {
+      ...row,
+      targetCount: 2n,
+      completedTargets: 0n,
+      waitingTargets: 1n,
+      waitingReason: "platform_maintenance",
+    },
+  ]);
+  const result = await service.progress(now);
+  assert.equal(result.active?.waitingReason, "platform_maintenance");
+  assert.match(queries[0].sql, /failure_code='platform_maintenance'/);
+});
+
+test("existing reconciliation pass invokes exactly one bounded execution cleanup", async () => {
+  const db = {
+    $queryRaw: async () => [],
+    sourceFetchRun: { findMany: async () => [] },
+    backgroundJob: { findMany: async () => [] },
+  };
+  const service = new SourceFetchService(
+    null as never,
+    db as never,
+    null as never,
+    null as never,
+    null as never,
+    null as never,
+  );
+  service.recovery.reconcile = async () => {};
+  let calls = 0;
+  service.platforms.executions.pruneSettled = async () => {
+    calls++;
+    return 0;
+  };
+  await service.reconcileExhausted();
+  assert.equal(calls, 1);
+});

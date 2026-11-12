@@ -99,6 +99,23 @@ async function waitDatabase(name) {
   }
   throw new Error("Fixture PostgreSQL did not become ready.");
 }
+function assertDatabaseRuntime(name, user, database) {
+  assert.equal(
+    docker(
+      "exec",
+      name,
+      "psql",
+      "-U",
+      user,
+      "-d",
+      database,
+      "-Atc",
+      "SELECT current_setting('server_version_num')::integer / 10000 || '|' || current_setting('data_directory')",
+    ),
+    "18|/var/lib/postgresql/18/docker",
+    "PostgreSQL 18 must use the versioned directory inside the mounted parent",
+  );
+}
 const mount = ["--mount", `type=bind,source=${directory},target=/fixtures`];
 const password = randomBytes(24).toString("hex");
 const appPassword = randomBytes(24).toString("hex");
@@ -177,10 +194,11 @@ try {
     "9.1.2",
   );
   docker("run", "--rm", image.tools, "pnpm", "db:generate");
-  assert.match(
-    docker("run", "--rm", "--entrypoint", "pg_dump", image.backup, "--version"),
-    /17\./,
-  );
+  for (const command of ["pg_dump", "pg_restore", "psql"])
+    assert.match(
+      docker("run", "--rm", "--entrypoint", command, image.backup, "--version"),
+      /\(PostgreSQL\) 18\./,
+    );
   await mkdir(directory, { recursive: true, mode: 0o777 });
   await writeFile(join(directory, "app-password"), appPassword, {
     mode: 0o644,
@@ -201,7 +219,7 @@ try {
     "--user",
     "0:0",
     "--mount",
-    `type=volume,source=${volume},target=/var/lib/postgresql/data`,
+    `type=volume,source=${volume},target=/var/lib/postgresql`,
     ...sourceSecrets,
     "-e",
     "POSTGRES_USER=postgres",
@@ -219,7 +237,7 @@ try {
     "--user",
     "0:0",
     "--tmpfs",
-    "/var/lib/postgresql/data",
+    "/var/lib/postgresql",
     "-e",
     "POSTGRES_USER=fixture",
     "-e",
@@ -233,6 +251,8 @@ try {
   );
   await waitDatabase(source);
   await waitDatabase(restore);
+  assertDatabaseRuntime(source, "postgres", "fixture_test");
+  assertDatabaseRuntime(restore, "fixture", "fixture_restore_test");
   docker(
     "run",
     "--rm",
@@ -490,22 +510,25 @@ try {
     "--output",
     "/fixtures/database.comikubak",
   );
-  docker(
-    "run",
-    "--rm",
-    "--user",
-    "0:0",
-    "--network",
-    prefix,
-    ...mount,
-    "-e",
-    "COMIKU_BACKUP_ENV_FILE=/fixtures/backup.env",
-    "-e",
-    "RESTORE_ARCHIVE_FILE=/fixtures/database.comikubak",
-    image.backup,
-    "restore",
-    "--execute",
+  const restored = JSON.parse(
+    docker(
+      "run",
+      "--rm",
+      "--user",
+      "0:0",
+      "--network",
+      prefix,
+      ...mount,
+      "-e",
+      "COMIKU_BACKUP_ENV_FILE=/fixtures/backup.env",
+      "-e",
+      "RESTORE_ARCHIVE_FILE=/fixtures/database.comikubak",
+      image.backup,
+      "restore",
+      "--execute",
+    ),
   );
+  assert.equal(restored.metadata.postgresMajor, 18);
   assert.equal(
     docker(
       "exec",
@@ -566,7 +589,7 @@ try {
     "--user",
     "0:0",
     "--mount",
-    `type=volume,source=${volume},target=/var/lib/postgresql/data`,
+    `type=volume,source=${volume},target=/var/lib/postgresql`,
     ...sourceSecrets,
     "-e",
     "POSTGRES_USER=postgres",
@@ -580,6 +603,7 @@ try {
     "postgres",
   );
   await waitDatabase(source);
+  assertDatabaseRuntime(source, "postgres", "fixture_test");
   assert.equal(
     docker(
       "exec",

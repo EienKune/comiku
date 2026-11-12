@@ -17,7 +17,7 @@ export interface SourceFailureDetails {
 }
 const reasons = new Set([
   ...MEDIA_POLICY_REASONS,
-  ..."unknown_failure auth_failed source_forbidden challenge_required rate_limited network_error source_not_found post_not_found not_found connector_failed cursor_invalid discovery_incomplete limit_reached runtime_unavailable source_identity_conflict source_unresolved process_output_limit process_timeout process_start process_exit invalid_json media_network_error storage_failure invalid_response configuration_error".split(
+  ..."unknown_failure auth_failed source_forbidden challenge_required rate_limited network_error source_not_found post_not_found not_found connector_failed cursor_invalid discovery_incomplete metadata_unavailable limit_reached runtime_unavailable source_identity_conflict source_unresolved process_output_limit process_timeout process_start process_exit invalid_json media_network_error storage_failure invalid_response configuration_error".split(
     " ",
   ),
 ]);

@@ -116,6 +116,8 @@ export class SourceFetchProgressDto {
 }
 
 export class SourcePlatformStateDto {
+  @ApiPropertyOptional({ type: Boolean }) maintenancePaused?: boolean;
+  @ApiPropertyOptional({ type: Number }) maintenanceEpoch?: number;
   @ApiProperty({ type: String }) platform!: string;
   @ApiProperty({ type: String }) status!: string;
   @ApiProperty({ type: String }) credentialGeneration!: string;
