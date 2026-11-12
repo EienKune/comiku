@@ -214,7 +214,7 @@ export function WorkReminderSubscriptions({ enabled }: { enabled: boolean }) {
               )}
             </div>
             <p className="notification-boundary">
-              每天按北京时间合并发送。可开工后 72
+              每天按北京时间合并发送。任务可以开始制作后累计 72
               小时仍未交稿，每轮提醒一次；已有任务从启用后开始观测，无法确认的停机时段可能使提醒延后。
             </p>
             <TextField
@@ -368,7 +368,7 @@ function ChannelReminder({
         {(
           [
             ["digestEnabled", "每日摘要"],
-            ["readyEnabled", "预认领可开工"],
+            ["readyEnabled", "预认领任务已就绪"],
             ["overdueEnabled", "72 小时未交稿"],
             ["mentionsEnabled", "@ 提醒成员"],
           ] as const
@@ -414,7 +414,7 @@ function ChannelReminder({
             {comparison.enabled ? "开启" : "关闭"} ·{" "}
             {[
               comparison.subscription.digestEnabled && "每日摘要",
-              comparison.subscription.readyEnabled && "预认领可开工",
+              comparison.subscription.readyEnabled && "预认领任务已就绪",
               comparison.subscription.overdueEnabled && "72 小时未交稿",
               comparison.subscription.mentionsEnabled && "@ 提醒成员",
             ]
@@ -455,7 +455,7 @@ export function WorkReminderTemplate({
     <section className="work-reminder-panel" aria-label="工作摘要模板">
       <h3>工作摘要</h3>
       <p className="notification-boundary">
-        每日摘要、可以开工和超时事项合并发送，同一成员最多 @ 一次。
+        每日摘要、预认领任务已就绪和超时事项合并发送，同一成员最多 @ 一次。
       </p>
       {query.isError && (
         <p role="alert">

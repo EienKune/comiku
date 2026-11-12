@@ -56,7 +56,7 @@ export function renderWorkReminder(
     .toISOString()
     .replace("T", " ")
     .slice(0, 19);
-  const lines = ["【工作摘要】", `截至 ${observed}（上海时间）`];
+  const lines = ["【工作摘要】", `截至 ${observed}`];
   if (snapshot.counts.availableWorks || snapshot.counts.candidates)
     lines.push(
       `待接作品 ${snapshot.counts.availableWorks} 部 · 翻译 ${snapshot.counts.availableTranslation} / 校对 ${snapshot.counts.availableProofreading} / 嵌字 ${snapshot.counts.availableTypesetting}`,
@@ -64,11 +64,11 @@ export function renderWorkReminder(
     );
   if (snapshot.counts.ready || snapshot.counts.overdue)
     lines.push(
-      `可开工 ${snapshot.counts.ready} 项 · 超过72小时未交稿 ${snapshot.counts.overdue} 项`,
+      `预认领任务已就绪 ${snapshot.counts.ready} 项 · 超过72小时未交稿 ${snapshot.counts.overdue} 项`,
     );
   for (const item of snapshot.items)
     lines.push(
-      `${item.kind === "overdue" ? "未交稿" : "可开工"} · #${item.workNumber} ${compact(item.title ?? "待定标题", 48)} · ${stageName[item.stage]} · ${compact(item.displayName, 24)}`,
+      `#${item.workNumber} ${compact(item.title ?? "待定标题", 48)} · ${item.kind === "overdue" ? `${stageName[item.stage]}超过72小时未交稿` : `可以开始${stageName[item.stage]}`} · ${compact(item.displayName, 24)}`,
     );
   const total = snapshot.counts.ready + snapshot.counts.overdue;
   if (total > snapshot.items.length)
