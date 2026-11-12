@@ -181,3 +181,68 @@ test("work digest freezes the actual observation time, five readable details and
     workReminderHash("two", snapshot),
   );
 });
+
+test("full digests list every overdue task and mention each person once without the legacy text or item cap", () => {
+  const items = Array.from({ length: 24 }, (_, index) => ({
+    ...snapshot.items[0]!,
+    participantId: `p${index}`,
+    workNumber: 100 + index,
+    kind: "overdue" as const,
+    stage: "translate" as const,
+    title: "完整作品标题".repeat(8),
+    displayName: `成员${index}`,
+    qqNumber: index === 23 ? "10001000" : String(10001000 + index),
+  }));
+  const full: WorkDigestSnapshot = {
+    ...snapshot,
+    formatVersion: 3,
+    counts: { ...snapshot.counts, ready: 0, overdue: items.length },
+    items,
+  };
+  const rendered = renderWorkReminder(
+    full,
+    "完整摘要",
+    true,
+    "https://comiku.example",
+  );
+  assert.ok([...rendered.text].length > 1000);
+  assert.match(rendered.text, /超过72小时未交稿：24 项/);
+  assert.doesNotMatch(rendered.text, /另有|预认领|可以开始/);
+  for (const item of items)
+    assert.ok(rendered.text.includes(`#${item.workNumber} `));
+  assert.equal(
+    rendered.messageSegments.filter((s) => s.type === "at").length,
+    23,
+  );
+  assert.ok(
+    notificationMessageSegments(rendered.messageSegments, "work_digest"),
+  );
+  assert.equal(notificationMessageSegments(rendered.messageSegments), null);
+  assert.throws(
+    () =>
+      renderWorkReminder(
+        { ...full, counts: { ...full.counts, overdue: 25 } },
+        "",
+        true,
+      ),
+    /work_digest_incomplete_snapshot/,
+  );
+  const oversized = Array.from({ length: 2000 }, (_, i) => ({
+    ...items[0]!,
+    participantId: `large${i}`,
+    workNumber: i,
+  }));
+  assert.throws(
+    () =>
+      renderWorkReminder(
+        {
+          ...full,
+          counts: { ...full.counts, overdue: oversized.length },
+          items: oversized,
+        },
+        "",
+        true,
+      ),
+    /work_reminder_payload_too_large/,
+  );
+});

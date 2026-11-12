@@ -8,9 +8,9 @@ import {
 } from "@nestjs/common";
 import { ENVIRONMENT, type Environment } from "../config/environment.js";
 import { PrismaService } from "../database/prisma.service.js";
+import { Prisma } from "../generated/prisma/client.js";
 import type {
   NotificationChannel,
-  Prisma,
   WorkReminderSettings,
   WorkReminderSubscription,
 } from "../generated/prisma/client.js";
@@ -462,24 +462,61 @@ export class WorkRemindersService {
           channel.sourceAcceptAfter > slot.dueAt
         )
           return;
-        if (
-          await tx.workDigestOccurrence.findUnique({
-            where: {
-              channelId_localDate_slot: {
-                channelId: channel.id,
-                localDate: slot.localDate,
-                slot: slot.slot,
-              },
+        const occurrence = await tx.workDigestOccurrence.findUnique({
+          where: {
+            channelId_localDate_slot: {
+              channelId: channel.id,
+              localDate: slot.localDate,
+              slot: slot.slot,
             },
-          })
-        )
-          return;
+          },
+        });
+        if (occurrence) {
+          if (!occurrence.eventId) return;
+          const previous = await tx.notificationEvent.findUniqueOrThrow({
+            where: { id: occurrence.eventId },
+          });
+          const frozen = previous.snapshot as {
+            kind?: string;
+            formatVersion?: number;
+          };
+          const ref = (
+            previous.routeRefs as unknown as {
+              id: string;
+              generation: number;
+              reminderGeneration?: number;
+              reminderScopeGeneration?: number;
+            }[]
+          ).find((route) => route.id === channel.id);
+          if (
+            previous.resourceKind !== WORK_DIGEST_RESOURCE ||
+            frozen.kind !== "work_digest" ||
+            frozen.formatVersion !== 3 ||
+            ref?.generation !== channel.audienceGeneration ||
+            ref.reminderGeneration !== settings.generation ||
+            ref.reminderScopeGeneration !== scope.generation
+          )
+            return;
+          // Channel shared lock excludes send reservations and manual replay;
+          // locking every sibling keeps the cancellation proof stable here.
+          await tx.$queryRaw`SELECT id FROM notification_deliveries WHERE event_id = ${previous.id}::uuid
+            AND channel_id = ${channel.id}::uuid ORDER BY id FOR UPDATE`;
+          const [safe] = await tx.$queryRaw<{ rebuild: boolean }[]>`
+            SELECT EXISTS (SELECT 1 FROM notification_deliveries d WHERE d.event_id = ${previous.id}::uuid
+              AND d.channel_id = ${channel.id}::uuid) AND NOT EXISTS (
+              SELECT 1 FROM notification_deliveries d WHERE d.event_id = ${previous.id}::uuid
+                AND d.channel_id = ${channel.id}::uuid AND (
+                  d.status <> 'cancelled' OR d.error_code IS NULL OR d.error_code NOT IN
+                    ('work_reminder_task_changed','work_reminder_observation_stale') OR EXISTS (
+                    SELECT 1 FROM notification_attempts a WHERE a.delivery_id = d.id AND a.send_boundary_crossed))) AS rebuild`;
+          if (!safe?.rebuild) return;
+        }
         const candidates = await this.projection.readItems(tx, effectiveNow, {
           channelId: channel.id,
           scopeGeneration: scope.generation,
           readyEnabled: false,
           overdueEnabled: scope.overdueEnabled,
-          limit: 5,
+          allOverdue: true,
         });
         const counts = {
           ...(scope.digestEnabled
@@ -488,10 +525,7 @@ export class WorkRemindersService {
           ready: candidates.readyCount,
           overdue: candidates.overdueCount,
         };
-        const id = randomUUID();
-        await tx.workDigestOccurrence.create({
-          data: { id, channelId: channel.id, ...slot },
-        });
+        const id = occurrence?.id ?? randomUUID();
         if (
           !counts.availableWorks &&
           !counts.translationTotal &&
@@ -499,12 +533,17 @@ export class WorkRemindersService {
           !counts.typesettingTotal &&
           !counts.candidates &&
           !candidates.items.length
-        )
+        ) {
+          if (!occurrence)
+            await tx.workDigestOccurrence.create({
+              data: { id, channelId: channel.id, ...slot },
+            });
           return;
+        }
         const items = freeze(candidates.items);
         const snapshot: WorkDigestSnapshot = {
           kind: "work_digest",
-          formatVersion: 2,
+          formatVersion: 3,
           ...slot,
           dueAt: slot.dueAt.toISOString(),
           validBefore: slot.validBefore.toISOString(),
@@ -512,13 +551,36 @@ export class WorkRemindersService {
           counts,
           items,
         };
+        let rendered: ReturnType<typeof renderWorkReminder>;
+        try {
+          rendered = renderWorkReminder(
+            snapshot,
+            settings.note,
+            scope.mentionsEnabled,
+            this.environment?.appOrigin,
+          );
+        } catch (error: unknown) {
+          if (
+            error instanceof Error &&
+            error.message === "work_reminder_payload_too_large"
+          ) {
+            console.warn("工作摘要超过消息容量，当前群本轮未登记，稍后重试。");
+            return;
+          }
+          throw error;
+        }
+        if (!occurrence)
+          await tx.workDigestOccurrence.create({
+            data: { id, channelId: channel.id, ...slot },
+          });
         const eventId = await this.register(
           tx,
-          id,
+          occurrence ? randomUUID() : id,
           snapshot,
           channel,
           scope,
           settings,
+          rendered,
         );
         await tx.workDigestOccurrence.update({
           where: { id },
@@ -526,6 +588,7 @@ export class WorkRemindersService {
         });
       });
   }
+
   private async register(
     tx: Prisma.TransactionClient,
     id: string,
@@ -533,22 +596,11 @@ export class WorkRemindersService {
     channel: NotificationChannel,
     scope: WorkReminderSubscription,
     settings: WorkReminderSettings,
+    prepared?: ReturnType<typeof renderWorkReminder>,
   ) {
-    // Reclaim only the selected identities, using the participant-leading unique
-    // index. Never sweep a channel's accepted/unknown notice history every minute.
-    for (const item of snapshot.items)
-      await tx.$executeRaw`DELETE FROM work_reminder_notices n
-        WHERE n.participant_id = ${item.participantId}::uuid AND n.round = ${item.round}
-          AND n.kind = ${item.kind} AND n.channel_id = ${channel.id}::uuid
-          AND EXISTS (SELECT 1 FROM notification_deliveries d
-            WHERE d.event_id = n.event_id AND d.channel_id = n.channel_id AND d.status IN ('cancelled','failed')
-              AND NOT EXISTS (SELECT 1 FROM notification_attempts a WHERE a.delivery_id = d.id AND a.send_boundary_crossed)
-              AND NOT EXISTS (SELECT 1 FROM notification_deliveries sibling
-                WHERE sibling.event_id = n.event_id AND sibling.channel_id = n.channel_id
-                  AND (sibling.status NOT IN ('cancelled','failed') OR EXISTS (
-                    SELECT 1 FROM notification_attempts a WHERE a.delivery_id = sibling.id AND a.send_boundary_crossed))))`;
     const rendered =
-      snapshot.kind === "work_ready"
+      prepared ??
+      (snapshot.kind === "work_ready"
         ? renderWorkReady(
             snapshot,
             scope.mentionsEnabled,
@@ -559,7 +611,27 @@ export class WorkRemindersService {
             settings.note,
             scope.mentionsEnabled,
             this.environment?.appOrigin,
-          );
+          ));
+    // Bound each statement while seeking only the selected participant identities.
+    for (let offset = 0; offset < snapshot.items.length; offset += 100) {
+      const rows = snapshot.items
+        .slice(offset, offset + 100)
+        .map(
+          (item) =>
+            Prisma.sql`(${item.participantId}::uuid, ${item.round}::int, ${item.kind}::text)`,
+        );
+      await tx.$executeRaw(Prisma.sql`DELETE FROM work_reminder_notices n
+        USING (VALUES ${Prisma.join(rows)}) AS selected(participant_id, round, kind)
+        WHERE n.participant_id = selected.participant_id AND n.round = selected.round
+          AND n.kind = selected.kind AND n.channel_id = ${channel.id}::uuid
+          AND EXISTS (SELECT 1 FROM notification_deliveries d
+            WHERE d.event_id = n.event_id AND d.channel_id = n.channel_id AND d.status IN ('cancelled','failed')
+              AND NOT EXISTS (SELECT 1 FROM notification_attempts a WHERE a.delivery_id = d.id AND a.send_boundary_crossed)
+              AND NOT EXISTS (SELECT 1 FROM notification_deliveries sibling
+                WHERE sibling.event_id = n.event_id AND sibling.channel_id = n.channel_id
+                  AND (sibling.status NOT IN ('cancelled','failed') OR EXISTS (
+                    SELECT 1 FROM notification_attempts a WHERE a.delivery_id = sibling.id AND a.send_boundary_crossed))))`);
+    }
     const event = await tx.notificationEvent.create({
       data: {
         eventKey: `${snapshot.kind}:${id}`,
@@ -601,9 +673,9 @@ export class WorkRemindersService {
         ]),
       },
     });
-    if (snapshot.items.length)
+    for (let offset = 0; offset < snapshot.items.length; offset += 100)
       await tx.workReminderNotice.createMany({
-        data: snapshot.items.map((item) => ({
+        data: snapshot.items.slice(offset, offset + 100).map((item) => ({
           participantId: item.participantId,
           round: item.round,
           kind: item.kind,

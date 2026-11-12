@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { workReminderMessageValid } from "../src/work-reminders/work-reminder-notification-policy.js";
+import {
+  workReminderMessageValid,
+  workReminderMessagePolicy,
+} from "../src/work-reminders/work-reminder-notification-policy.js";
 
 test("frozen reminder segments cannot mention a different contact or replace the audited text", () => {
   const snapshot = {
@@ -56,6 +59,64 @@ test("frozen reminder segments cannot mention a different contact or replace the
   assert.equal(
     workReminderMessageValid({ ...snapshot, items: [] }, [segments[0]], text),
     true,
+  );
+});
+
+test("only a valid full-digest resource can carry all overdue contacts and extended text", () => {
+  const items = Array.from({ length: 24 }, (_, index) => ({
+    participantId: randomUUID(),
+    workId: randomUUID(),
+    userId: randomUUID(),
+    round: 1,
+    stage: "translate",
+    kind: "overdue",
+    sourceKey: "a".repeat(64),
+    userRevision: 0,
+    qqNumber: String(10001000 + index),
+  }));
+  const frozen = {
+    kind: "work_digest",
+    formatVersion: 3,
+    dueAt: "2026-11-12T01:00:00Z",
+    validBefore: "2026-11-12T10:00:00Z",
+    observedAt: "2026-11-12T01:00:01Z",
+    counts: { ready: 0, overdue: items.length },
+    items,
+  };
+  const text = "超时任务明细".repeat(250);
+  const message = [
+    { type: "text", data: { text } },
+    ...items.map((item) => ({ type: "at", data: { qq: item.qqNumber } })),
+  ];
+  assert.equal(workReminderMessagePolicy(frozen, "work_digest"), "work_digest");
+  assert.equal(
+    workReminderMessageValid(frozen, message, text, "work_digest"),
+    true,
+  );
+  assert.equal(
+    workReminderMessageValid(frozen, message, text, "work_ready"),
+    false,
+  );
+  assert.equal(workReminderMessagePolicy(frozen, "work_ready"), "standard");
+  for (const modified of [
+    { ...frozen, formatVersion: 2 },
+    { ...frozen, kind: "work_ready" },
+    { ...frozen, counts: { ready: 0, overdue: items.length + 1 } },
+    { ...frozen, items: [items[0], ...items.slice(1, -1), items[0]] },
+    { ...frozen, items: [{ ...items[0], kind: "ready" }, ...items.slice(1)] },
+  ])
+    assert.equal(
+      workReminderMessageValid(modified, message, text, "work_digest"),
+      false,
+    );
+  assert.equal(
+    workReminderMessageValid(
+      frozen,
+      [...message, message[1]],
+      text,
+      "work_digest",
+    ),
+    false,
   );
 });
 

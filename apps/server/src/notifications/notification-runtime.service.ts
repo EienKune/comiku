@@ -34,7 +34,9 @@ import {
   lockWorkReminderSubscription,
   workReminderDeliveryInvalidReason,
   workReminderMessageValid,
+  workReminderMessagePolicy,
 } from "../work-reminders/work-reminder-notification-policy.js";
+import { notificationMessageTextValid } from "./notification-message-segments.js";
 
 @Injectable()
 export class NotificationRuntimeService implements OnModuleInit {
@@ -150,11 +152,15 @@ export class NotificationRuntimeService implements OnModuleInit {
                 tx,
               )) ??
               (!ref.content?.text ||
-              [...ref.content.text].length > 1000 ||
+              !notificationMessageTextValid(
+                ref.content.text,
+                workReminderMessagePolicy(event.snapshot, event.resourceKind),
+              ) ||
               !workReminderMessageValid(
                 event.snapshot,
                 ref.messageSegments,
                 ref.content.text,
+                event.resourceKind,
               )
                 ? "work_reminder_content_invalid"
                 : null))
@@ -444,6 +450,7 @@ export class NotificationRuntimeService implements OnModuleInit {
             row.event.snapshot,
             row.messageSegments,
             row.text,
+            row.event.resourceKind,
           )
         )
           return cancel("work_reminder_content_invalid");
@@ -580,7 +587,15 @@ export class NotificationRuntimeService implements OnModuleInit {
           errorCode: null,
         },
       });
-      return { row, attempt, connection };
+      return {
+        row,
+        attempt,
+        connection,
+        messagePolicy: workReminderMessagePolicy(
+          row.event.snapshot,
+          row.event.resourceKind,
+        ),
+      };
     });
     if (!preparation) return;
     if ("deferred" in preparation) throw preparation.deferred;
@@ -594,6 +609,7 @@ export class NotificationRuntimeService implements OnModuleInit {
         preparation.row.text,
         signal,
         preparation.row.messageSegments,
+        preparation.messagePolicy,
       );
     } catch {
       result = {

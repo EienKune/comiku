@@ -26,18 +26,20 @@ export async function lockReminderEvidence(
   workIds: string[],
   userIds: string[],
 ): Promise<void> {
-  if (workIds.length)
-    await tx.$queryRaw(Prisma.sql`
-    SELECT id FROM works
-    WHERE id IN (${Prisma.join([...new Set(workIds)].sort().map((id) => Prisma.sql`${id}::uuid`))})
+  // Acquire the complete work set before any user lock, in one global order.
+  // Chunking must not interleave works/users or restart ordering for each page.
+  for (const [table, ids] of [
+    ["works", workIds],
+    ["users", userIds],
+  ] as const) {
+    const ordered = [...new Set(ids)].sort();
+    for (let offset = 0; offset < ordered.length; offset += 100)
+      await tx.$queryRaw(Prisma.sql`
+    SELECT id FROM ${Prisma.raw(table)}
+    WHERE id IN (${Prisma.join(ordered.slice(offset, offset + 100).map((id) => Prisma.sql`${id}::uuid`))})
     ORDER BY id FOR SHARE NOWAIT
   `);
-  if (userIds.length)
-    await tx.$queryRaw(Prisma.sql`
-    SELECT id FROM users
-    WHERE id IN (${Prisma.join([...new Set(userIds)].sort().map((id) => Prisma.sql`${id}::uuid`))})
-    ORDER BY id FOR SHARE NOWAIT
-  `);
+  }
 }
 
 export async function readReminderEvidence(
@@ -240,6 +242,7 @@ export interface ReminderItemsOptions {
   overdueEnabled: boolean;
   limit?: number;
   counts?: boolean;
+  allOverdue?: boolean;
 }
 
 export class WorkReminderProjection {
@@ -363,6 +366,8 @@ export class WorkReminderProjection {
     readyCount: number;
     overdueCount: number;
   }> {
+    if (options.allOverdue && options.readyEnabled)
+      throw new Error("work_reminder_all_overdue_requires_ready_disabled");
     const limit = Math.max(1, Math.min(5, options.limit ?? 5));
     const clock = await tx.workReminderClock.findUnique({
       where: { id: "global" },
@@ -399,7 +404,7 @@ export class WorkReminderProjection {
                     SELECT 1 FROM notification_attempts a WHERE a.delivery_id = sibling.id AND a.send_boundary_crossed)))))
     `;
     const counts =
-      options.counts === false
+      options.counts === false || options.allOverdue
         ? []
         : await tx.$queryRaw<{ kind: string; count: bigint }[]>(Prisma.sql`
       SELECT k.kind, count(*) AS count FROM work_reminder_episodes e
@@ -423,17 +428,24 @@ export class WorkReminderProjection {
         ${eligibleMilliseconds} AS "eligibleMilliseconds"
       FROM work_reminder_episodes e CROSS JOIN (VALUES ('ready'), ('overdue')) k(kind)
       WHERE ${predicate}
-      ORDER BY k.kind, e.ready_observed_at, e.participant_id LIMIT ${limit}
+      ORDER BY k.kind, e.ready_observed_at, e.participant_id
+      ${options.allOverdue ? Prisma.empty : Prisma.sql`LIMIT ${limit}`}
     `);
     await lockReminderEvidence(
       tx,
       candidates.map(({ workId }) => workId),
       candidates.map(({ userId }) => userId),
     );
-    const evidence = await readReminderEvidence(
-      tx,
-      candidates.map(({ participantId }) => participantId),
-    );
+    const evidence: ReminderEvidence[] = [];
+    for (let offset = 0; offset < candidates.length; offset += 100)
+      evidence.push(
+        ...(await readReminderEvidence(
+          tx,
+          candidates
+            .slice(offset, offset + 100)
+            .map(({ participantId }) => participantId),
+        )),
+      );
     const byId = new Map(evidence.map((item) => [item.participantId, item]));
     const result = {
       items: [] as ReminderItem[],
@@ -457,10 +469,11 @@ export class WorkReminderProjection {
           round: candidate.round,
           eligibleMilliseconds: Number(candidate.eligibleMilliseconds),
         });
-      } else if (options.counts !== false) {
+      } else if (options.counts !== false && !options.allOverdue) {
         result[candidate.kind === "ready" ? "readyCount" : "overdueCount"]--;
       }
     }
+    if (options.allOverdue) result.overdueCount = result.items.length;
     return result;
   }
 }

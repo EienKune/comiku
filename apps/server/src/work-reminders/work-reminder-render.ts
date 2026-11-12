@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import type { WorkStage } from "../generated/prisma/client.js";
 import type { NotificationMessageSegment } from "../notifications/notification-message-segments.js";
+import {
+  notificationMessageSegments,
+  type NotificationMessagePolicy,
+} from "../notifications/notification-message-segments.js";
 import { normalizeWorkReminderNote } from "./work-reminder-scheduling.js";
 
 export interface WorkReminderFrozenItem {
@@ -19,7 +23,7 @@ export interface WorkReminderFrozenItem {
 }
 export interface WorkDigestSnapshot {
   kind: "work_digest";
-  formatVersion?: 2;
+  formatVersion?: 2 | 3;
   localDate: string;
   slot: string;
   dueAt: string;
@@ -69,7 +73,15 @@ export function renderWorkReminder(
     .replace("T", " ")
     .slice(0, 19);
   const lines = ["【工作摘要】", `截至 ${observed}`];
-  if (snapshot.formatVersion === 2) {
+  const modern = snapshot.formatVersion === 2 || snapshot.formatVersion === 3;
+  if (
+    snapshot.formatVersion === 3 &&
+    (snapshot.counts.ready !== 0 ||
+      snapshot.counts.overdue !== snapshot.items.length ||
+      snapshot.items.some((item) => item.kind !== "overdue"))
+  )
+    throw new Error("work_digest_incomplete_snapshot");
+  if (modern) {
     lines.push(
       `待入库候选：${snapshot.counts.candidates} 篇`,
       `翻译：${snapshot.counts.translationTotal ?? snapshot.counts.availableTranslation} 部（待认领 ${snapshot.counts.availableTranslation}）`,
@@ -83,10 +95,7 @@ export function renderWorkReminder(
       `待接作品 ${snapshot.counts.availableWorks} 部 · 翻译 ${snapshot.counts.availableTranslation} / 校对 ${snapshot.counts.availableProofreading} / 嵌字 ${snapshot.counts.availableTypesetting}`,
       `可入库候选 ${snapshot.counts.candidates} 篇`,
     );
-  if (
-    snapshot.formatVersion !== 2 &&
-    (snapshot.counts.ready || snapshot.counts.overdue)
-  )
+  if (!modern && (snapshot.counts.ready || snapshot.counts.overdue))
     lines.push(
       `预认领任务已就绪 ${snapshot.counts.ready} 项 · 超过72小时未交稿 ${snapshot.counts.overdue} 项`,
     );
@@ -100,7 +109,12 @@ export function renderWorkReminder(
   if (normalizedNote) lines.push("", normalizedNote);
   lines.push("", `${siteUrl.replace(/\/$/, "")}/works`);
   const text = lines.join("\n");
-  return withMentions(text, snapshot.items, mentions);
+  return withMentions(
+    text,
+    snapshot.items,
+    mentions,
+    snapshot.formatVersion === 3 ? "work_digest" : "standard",
+  );
 }
 
 export function renderWorkReady(
@@ -125,6 +139,7 @@ function withMentions(
   text: string,
   items: WorkReminderFrozenItem[],
   mentions: boolean,
+  policy: NotificationMessagePolicy = "standard",
 ) {
   const messageSegments: NotificationMessageSegment[] = [
     { type: "text", data: { text } },
@@ -141,7 +156,12 @@ function withMentions(
         messageSegments.push({ type: "at", data: { qq: item.qqNumber } });
       }
     }
-  if ([...text].length > 1000)
+  if (
+    policy === "work_digest" &&
+    !notificationMessageSegments(messageSegments, policy)
+  )
+    throw new Error("work_reminder_payload_too_large");
+  if (policy === "standard" && [...text].length > 1000)
     throw new Error("work_reminder_message_too_long");
   return { text, messageSegments };
 }
