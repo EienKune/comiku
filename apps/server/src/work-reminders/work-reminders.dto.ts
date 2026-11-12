@@ -6,6 +6,7 @@ import {
   IsArray,
   IsBoolean,
   IsInt,
+  IsIn,
   IsOptional,
   IsString,
   Matches,
@@ -73,6 +74,10 @@ export class WorkReminderSubscriptionInputDto {
   @ApiProperty({ type: Boolean }) @IsBoolean() mentionsEnabled!: boolean;
 }
 export class WorkReminderPreviewInputDto {
+  @ApiPropertyOptional({ type: String, enum: ["digest", "ready"] })
+  @IsOptional()
+  @IsIn(["digest", "ready"])
+  kind?: "digest" | "ready";
   @ApiPropertyOptional({ type: String })
   @IsOptional()
   @IsString()

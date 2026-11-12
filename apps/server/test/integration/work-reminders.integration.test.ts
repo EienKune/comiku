@@ -11,7 +11,10 @@ import {
   WorkRemindersService,
   readWorkDigestCounts,
 } from "../../src/work-reminders/work-reminders.service.js";
-import type { WorkDigestSnapshot } from "../../src/work-reminders/work-reminder-render.js";
+import type {
+  WorkDigestSnapshot,
+  WorkReadySnapshot,
+} from "../../src/work-reminders/work-reminder-render.js";
 import {
   lockWorkReminderSettings,
   lockWorkReminderSubscription,
@@ -139,9 +142,10 @@ test(
     }
     async function delivery(
       eventId: string,
-      status: "cancelled" | "failed" | "unknown" | "accepted",
+      status: "cancelled" | "failed" | "unknown" | "accepted" | "pending",
       crossed = false,
       route = channel,
+      replayGeneration = 0,
     ) {
       const row = await db.notificationDelivery.create({
         data: {
@@ -154,6 +158,7 @@ test(
           channelRevision: route.revision,
           text: "synthetic frozen text",
           status,
+          replayGeneration,
           jobId: randomUUID(),
         },
       });
@@ -171,13 +176,15 @@ test(
       return row;
     }
     t.after(async () => {
-      const events = await db.workDigestOccurrence.findMany({
-        where: { channelId: { in: channelIds } },
-        select: { eventId: true },
-      });
-      const eventIds = events.flatMap(({ eventId }) =>
-        eventId ? [eventId] : [],
+      const events = await Promise.all(
+        channelIds.map((id) =>
+          db.notificationEvent.findMany({
+            where: { routeRefs: { array_contains: [{ id }] } },
+            select: { id: true },
+          }),
+        ),
       );
+      const eventIds = events.flatMap((rows) => rows.map(({ id }) => id));
       await db.notificationAttempt.deleteMany({
         where: { delivery: { channelId: { in: channelIds } } },
       });
@@ -247,16 +254,26 @@ test(
       });
       participantIds.push(participant.id);
     }
-    await projection.maintain(new Date(morning.getTime() - 60_000));
+    const handoffAt = new Date(morning.getTime() - 30 * 60_000);
+    await projection.maintain(new Date(handoffAt.getTime() - 60_000));
     await db.work.updateMany({
       where: { id: { in: workIds } },
       data: { workflowStatus: "pending_typeset" },
     });
 
     await t.test(
-      "staggered workers freeze the newest projection and consume only five displayed notices in one slot",
+      "staggered workers capture one message per ready task before the daily slot without duplicate notices",
       async () => {
         function pausedWorker() {
+          const queries: string[] = [];
+          const record = (args: unknown[]) => {
+            const query = args[0];
+            queries.push(
+              Array.isArray(query)
+                ? query.join("?")
+                : ((query as { sql?: string })?.sql ?? ""),
+            );
+          };
           let projected!: () => void, release!: () => void;
           const paused = new Promise<void>((resolve) => {
             projected = resolve;
@@ -266,9 +283,28 @@ test(
           });
           const proxy = new Proxy(db, {
             get(target, property) {
+              if (property === "$transaction")
+                return (
+                  run: (tx: Prisma.TransactionClient) => Promise<unknown>,
+                ) =>
+                  target.$transaction((tx) =>
+                    run(
+                      new Proxy(tx, {
+                        get(client, name) {
+                          if (name === "$queryRaw" || name === "$executeRaw")
+                            return (...args: unknown[]) => {
+                              record(args);
+                              return Reflect.apply(client[name], client, args);
+                            };
+                          return Reflect.get(client, name, client);
+                        },
+                      }),
+                    ),
+                  );
               if (property !== "$executeRaw")
                 return Reflect.get(target, property, target);
               return async (...args: unknown[]) => {
+                record(args);
                 if (
                   Array.isArray(args[0]) &&
                   args[0].join("").includes("work_reminder_expired")
@@ -282,39 +318,102 @@ test(
           });
           return {
             service: new WorkRemindersService(proxy, registry, env),
+            queries,
             paused,
             release,
           };
         }
         const workerA = pausedWorker(),
           workerB = pausedWorker();
-        const first = workerA.service.maintain(morning);
+        const first = workerA.service.maintain(handoffAt);
         await workerA.paused;
-        const observedAt = new Date(morning.getTime() + 1_000);
+        const observedAt = new Date(handoffAt.getTime() + 1_000);
         const second = workerB.service.maintain(observedAt);
         await workerB.paused;
         try {
           workerA.release();
           await first;
+          assert.equal(
+            await db.workReminderNotice.count({
+              where: { channelId: channel.id },
+            }),
+            5,
+            "one maintenance pass captures at most five handoffs",
+          );
         } finally {
           workerB.release();
           await second;
         }
-        await reminders.maintain(morning);
+        for (const worker of [workerA, workerB]) {
+          assert.equal(
+            worker.queries.some(
+              (query) =>
+                /\bcount\s*\(/i.test(query) &&
+                /FROM\s+work_reminder_episodes\b/i.test(query),
+            ),
+            false,
+            "ready-only registration must not count the full eligible episode backlog",
+          );
+          const deletes = worker.queries.filter((query) =>
+            /DELETE\s+FROM\s+work_reminder_notices\b/i.test(query),
+          );
+          assert.ok(
+            deletes.length <= 5,
+            "one bounded pass reclaims at most five selected notice identities",
+          );
+          for (const query of deletes) {
+            for (const field of [
+              "participant_id",
+              "round",
+              "kind",
+              "channel_id",
+            ])
+              assert.match(
+                query,
+                new RegExp(`n\\.${field}\\s*=`),
+                "notice reclamation must seek the complete selected identity, never sweep a channel history",
+              );
+          }
+        }
+        assert.equal(
+          workerA.queries.filter((query) =>
+            /DELETE\s+FROM\s+work_reminder_notices\b/i.test(query),
+          ).length,
+          5,
+        );
+        await reminders.maintain(observedAt);
         const occurrences = await db.workDigestOccurrence.findMany({
           where: { channelId: channel.id },
         });
-        assert.equal(occurrences.length, 1);
-        const event = await db.notificationEvent.findUniqueOrThrow({
-          where: { id: occurrences[0]!.eventId! },
+        assert.equal(
+          occurrences.length,
+          0,
+          "ready-only subscriptions create no daily occurrence",
+        );
+        const notices = await db.workReminderNotice.findMany({
+          where: { channelId: channel.id },
+          orderBy: { eventId: "asc" },
         });
-        const snapshot = event.snapshot as unknown as WorkDigestSnapshot;
-        assert.equal(snapshot.items.length, 5);
-        assert.equal(snapshot.counts.ready, 6);
+        assert.equal(
+          notices.length,
+          6,
+          "two bounded passes drain six tasks exactly once",
+        );
+        assert.equal(
+          new Set(notices.map((notice) => notice.participantId)).size,
+          6,
+        );
+        const event = await db.notificationEvent.findUniqueOrThrow({
+          where: { id: notices[0]!.eventId },
+        });
+        const snapshot = event.snapshot as unknown as WorkReadySnapshot;
+        assert.equal(event.type, "work.ready");
+        assert.equal(event.resourceKind, "work_ready");
+        assert.equal(snapshot.items.length, 1);
         assert.equal(snapshot.observedAt, observedAt.toISOString());
         assert.equal(
           await db.workReminderNotice.count({ where: { eventId: event.id } }),
-          5,
+          1,
         );
         assert.match(JSON.stringify(event.routeRefs), /messageSegments/);
         async function guard(value = snapshot, at = observedAt) {
@@ -390,55 +489,112 @@ test(
           where: { id: snapshot.items[0]!.participantId },
           data: { submittedAt: null },
         });
+        await db.workStageParticipant.update({
+          where: { id: snapshot.items[0]!.participantId },
+          data: { leftAt: handoffAt },
+        });
+        assert.equal(await guard(), "work_reminder_task_changed");
+        await db.workStageParticipant.update({
+          where: { id: snapshot.items[0]!.participantId },
+          data: { leftAt: null },
+        });
+        await db.workReminderSubscription.update({
+          where: { channelId: channel.id },
+          data: { readyEnabled: false },
+        });
+        assert.equal(await guard(), "work_reminder_subscription_changed");
+        await db.workReminderSubscription.update({
+          where: { channelId: channel.id },
+          data: { readyEnabled: true },
+        });
         await delivery(event.id, "cancelled");
       },
     );
     await t.test(
-      "unsent cancellation returns displayed items at next slot; accepted and unknown never return",
+      "unsent cancellation returns immediately while legacy accepted and unknown ready notices never return",
       async () => {
-        await reminders.maintain(evening);
-        const eveningOccurrence =
-          await db.workDigestOccurrence.findUniqueOrThrow({
-            where: {
-              channelId_localDate_slot: {
-                channelId: channel.id,
-                localDate: day,
-                slot: "18:00",
-              },
-            },
+        const notices = await db.workReminderNotice.findMany({
+          where: { channelId: channel.id },
+        });
+        const cancelled = await db.notificationDelivery.findFirstOrThrow({
+          where: { channelId: channel.id, status: "cancelled" },
+        });
+        const retained = notices.filter(
+          (notice) => notice.eventId !== cancelled.eventId,
+        );
+        for (const [index, notice] of retained.entries()) {
+          const event = await db.notificationEvent.findUniqueOrThrow({
+            where: { id: notice.eventId },
           });
+          const ready = event.snapshot as unknown as WorkReadySnapshot;
+          if (index < 2) {
+            const legacy: WorkDigestSnapshot = {
+              ...ready,
+              kind: "work_digest",
+              localDate: day,
+              slot: "09:00",
+              counts: {
+                ready: 1,
+                overdue: 0,
+                availableTranslation: 0,
+                availableProofreading: 0,
+                availableTypesetting: 0,
+                availableWorks: 0,
+                candidates: 0,
+              },
+            };
+            await db.notificationEvent.update({
+              where: { id: event.id },
+              data: {
+                resourceKind: "work_digest",
+                type: "work.digest",
+                snapshot: legacy as unknown as Prisma.InputJsonValue,
+              },
+            });
+          }
+          if (index === 2 || index === 3) {
+            await delivery(event.id, "cancelled");
+            await delivery(
+              event.id,
+              index === 2 ? "unknown" : "accepted",
+              false,
+              channel,
+              1,
+            );
+          } else {
+            await delivery(event.id, index === 1 ? "unknown" : "accepted");
+          }
+        }
+        await reminders.maintain(evening);
+        const returned = await db.workReminderNotice.findFirstOrThrow({
+          where: {
+            channelId: channel.id,
+            eventId: { notIn: notices.map((row) => row.eventId) },
+          },
+        });
         const event = await db.notificationEvent.findUniqueOrThrow({
-          where: { id: eveningOccurrence.eventId! },
+          where: { id: returned.eventId },
         });
         assert.equal(
-          (event.snapshot as unknown as WorkDigestSnapshot).items.length,
-          5,
+          (event.snapshot as unknown as WorkReadySnapshot).items.length,
+          1,
         );
         await delivery(event.id, "unknown");
         const tomorrow = new Date(morning.getTime() + 86_400_000);
         await reminders.maintain(tomorrow);
-        const occurrence = await db.workDigestOccurrence.findFirstOrThrow({
-          where: { channelId: channel.id, dueAt: tomorrow },
-        });
-        const last = await db.notificationEvent.findUniqueOrThrow({
-          where: { id: occurrence.eventId! },
-        });
         assert.equal(
-          (last.snapshot as unknown as WorkDigestSnapshot).items.length,
-          1,
+          await db.workReminderNotice.count({
+            where: { channelId: channel.id },
+          }),
+          6,
         );
-        await delivery(last.id, "accepted");
         await reminders.maintain(new Date(evening.getTime() + 86_400_000));
-        const empty = await db.workDigestOccurrence.findFirstOrThrow({
-          where: {
-            channelId: channel.id,
-            dueAt: new Date(evening.getTime() + 86_400_000),
-          },
-        });
         assert.equal(
-          empty.eventId,
-          null,
-          "zero personal items consume a slot without producing a message",
+          await db.workDigestOccurrence.count({
+            where: { channelId: channel.id },
+          }),
+          0,
+          "a ready-only subscription never consumes a daily slot",
         );
       },
     );
@@ -492,17 +648,22 @@ test(
           mentionsEnabled: true,
         });
         await reminders.maintain(new Date(morning.getTime() + 2 * 86_400_000));
-        const empty = await db.workDigestOccurrence.findFirstOrThrow({
-          where: {
-            channelId: channel.id,
-            dueAt: new Date(morning.getTime() + 2 * 86_400_000),
-          },
-        });
-        assert.equal(empty.eventId, null);
+        assert.equal(
+          await db.workDigestOccurrence.count({
+            where: { channelId: channel.id },
+          }),
+          0,
+        );
+        assert.equal(
+          await db.workReminderNotice.count({
+            where: { channelId: channel.id },
+          }),
+          6,
+        );
       },
     );
     await t.test(
-      "a registration failure rolls back its slot, event and notices together",
+      "registration rollback is atomic and only conclusive unsent failures release ready notices",
       async () => {
         const rollbackTime = new Date(morning.getTime() + 3 * 86_400_000);
         const another = await db.notificationChannel.create({
@@ -571,44 +732,171 @@ test(
           }),
           0,
         );
+        assert.equal(
+          await db.notificationEvent.count({
+            where: { routeRefs: { array_contains: [{ id: another.id }] } },
+          }),
+          0,
+        );
         await reminders.maintain(rollbackTime);
         assert.equal(
           await db.workDigestOccurrence.count({
             where: { channelId: another.id },
           }),
-          1,
+          0,
         );
-        const occurrence = await db.workDigestOccurrence.findFirstOrThrow({
-          where: { channelId: another.id, dueAt: rollbackTime },
+        const first = await db.workReminderNotice.findMany({
+          where: { channelId: another.id },
         });
-        await delivery(occurrence.eventId!, "failed", false, another);
-        const next = new Date(rollbackTime.getTime() + 9 * 3_600_000);
+        assert.equal(first.length, 5);
+        for (const notice of first)
+          await delivery(notice.eventId, "failed", false, another);
+        const next = new Date(rollbackTime.getTime() + 60_000);
         await reminders.maintain(next);
-        const retry = await db.workDigestOccurrence.findFirstOrThrow({
-          where: { channelId: another.id, dueAt: next },
-        });
-        const retryEvent = await db.notificationEvent.findUniqueOrThrow({
-          where: { id: retry.eventId! },
+        const retry = await db.workReminderNotice.findMany({
+          where: { channelId: another.id },
         });
         assert.equal(
-          (retryEvent.snapshot as unknown as WorkDigestSnapshot).items.length,
+          retry.length,
           5,
-          "conclusive unsent failure returns five items at the next slot",
+          "conclusive unsent failure returns five items on the next maintenance pass",
         );
-        await delivery(retryEvent.id, "failed", true, another);
+        assert.ok(
+          retry.every(
+            (row) => !first.some((old) => old.eventId === row.eventId),
+          ),
+        );
+        for (const notice of retry)
+          await delivery(notice.eventId, "failed", true, another);
         const following = new Date(rollbackTime.getTime() + 86_400_000);
         await reminders.maintain(following);
-        const retained = await db.workDigestOccurrence.findFirstOrThrow({
-          where: { channelId: another.id, dueAt: following },
-        });
-        const retainedEvent = await db.notificationEvent.findUniqueOrThrow({
-          where: { id: retained.eventId! },
+        const retained = await db.workReminderNotice.findMany({
+          where: { channelId: another.id },
         });
         assert.equal(
-          (retainedEvent.snapshot as unknown as WorkDigestSnapshot).items
-            .length,
-          1,
+          retained.length,
+          6,
           "a failed transport that crossed the boundary does not cause another automatic mention",
+        );
+        assert.equal(
+          retained.filter((row) =>
+            retry.some((old) => old.eventId === row.eventId),
+          ).length,
+          5,
+        );
+      },
+    );
+    await t.test(
+      "disabling handoffs cancels a pending ready delivery while the scheduled digest retains occupied stage totals and overdue details",
+      async () => {
+        const digestTime = new Date(morning.getTime() + 5 * 86_400_000);
+        const work = await makeWork();
+        const participant = await db.workStageParticipant.create({
+          data: {
+            workId: work.id,
+            userId: actor.id,
+            stage: "typeset",
+            participationMode: "owner",
+            joinedAt: before,
+          },
+        });
+        participantIds.push(participant.id);
+        await projection.maintain(new Date(digestTime.getTime() - 60_000));
+        await db.work.update({
+          where: { id: work.id },
+          data: { workflowStatus: "pending_typeset" },
+        });
+        await reminders.maintain(new Date(digestTime.getTime() - 30_000));
+        const ready = await db.workReminderNotice.findFirstOrThrow({
+          where: {
+            participantId: participant.id,
+            channelId: channel.id,
+            kind: "ready",
+          },
+        });
+        const pending = await delivery(ready.eventId, "pending");
+        const readyEventCount = await db.notificationEvent.count({
+          where: {
+            type: "work.ready",
+            routeRefs: { array_contains: [{ id: channel.id }] },
+          },
+        });
+        const scope = await db.workReminderSubscription.findUniqueOrThrow({
+          where: { channelId: channel.id },
+        });
+        await reminders.updateSubscription(actor.id, channel.id, {
+          expectedChannelRevision: channel.revision,
+          expectedRevision: scope.revision,
+          digestEnabled: true,
+          readyEnabled: false,
+          overdueEnabled: true,
+          mentionsEnabled: true,
+        });
+        assert.equal(
+          (
+            await db.notificationDelivery.findUniqueOrThrow({
+              where: { id: pending.id },
+            })
+          ).status,
+          "cancelled",
+        );
+        await db.workReminderEpisode.update({
+          where: { participantId: participant.id },
+          data: { eligibleMilliseconds: 72n * 3_600_000n },
+        });
+        await reminders.maintain(digestTime);
+        const occurrence = await db.workDigestOccurrence.findFirstOrThrow({
+          where: { channelId: channel.id, dueAt: digestTime },
+        });
+        const event = await db.notificationEvent.findUniqueOrThrow({
+          where: { id: occurrence.eventId! },
+        });
+        const snapshot = event.snapshot as unknown as WorkDigestSnapshot;
+        assert.equal(snapshot.formatVersion, 2);
+        assert.equal(snapshot.counts.ready, 0);
+        assert.ok(snapshot.counts.typesettingTotal! >= participantIds.length);
+        assert.equal(snapshot.items.length, 1);
+        assert.equal(snapshot.items[0]!.kind, "overdue");
+        assert.equal(snapshot.items[0]!.participantId, participant.id);
+        assert.equal(
+          await db.workReminderNotice.count({
+            where: {
+              participantId: participant.id,
+              channelId: channel.id,
+              kind: "ready",
+            },
+          }),
+          1,
+          "a cancelled notice may remain until that exact task is selected again",
+        );
+        assert.equal(
+          (
+            await db.workReminderNotice.findFirstOrThrow({
+              where: {
+                participantId: participant.id,
+                channelId: channel.id,
+                kind: "ready",
+              },
+            })
+          ).eventId,
+          ready.eventId,
+        );
+        assert.equal(
+          await db.notificationEvent.count({
+            where: {
+              type: "work.ready",
+              routeRefs: { array_contains: [{ id: channel.id }] },
+            },
+          }),
+          readyEventCount,
+          "disabling handoffs must not recapture the cancelled ready task",
+        );
+        await reminders.maintain(digestTime);
+        assert.equal(
+          await db.workDigestOccurrence.count({
+            where: { channelId: channel.id },
+          }),
+          1,
         );
       },
     );
@@ -616,6 +904,7 @@ test(
       "current availability matches claim ownership even after the owner's role is revoked",
       async () => {
         const baseline = await readWorkDigestCounts(db);
+        assert.ok(baseline.typesettingTotal >= participantIds.length);
         await db.workStageParticipant.updateMany({
           where: { id: { in: participantIds } },
           data: { leftAt: morning },
@@ -623,9 +912,13 @@ test(
         const vacant = await readWorkDigestCounts(db);
         assert.equal(
           vacant.availableTypesetting - baseline.availableTypesetting,
-          6,
+          participantIds.length,
         );
-        assert.equal(vacant.availableWorks - baseline.availableWorks, 6);
+        assert.equal(
+          vacant.availableWorks - baseline.availableWorks,
+          participantIds.length,
+        );
+        assert.equal(vacant.typesettingTotal, baseline.typesettingTotal);
         await db.workStageParticipant.updateMany({
           where: { id: { in: participantIds } },
           data: { leftAt: null },

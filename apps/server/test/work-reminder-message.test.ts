@@ -58,3 +58,69 @@ test("frozen reminder segments cannot mention a different contact or replace the
     true,
   );
 });
+
+test("handoff snapshots freeze exactly one ready task while legacy digests retain their historical mixed item contract", () => {
+  const item = {
+    participantId: randomUUID(),
+    workId: randomUUID(),
+    userId: randomUUID(),
+    round: 1,
+    stage: "proofread",
+    kind: "ready",
+    sourceKey: "b".repeat(64),
+    userRevision: 2,
+    qqNumber: "10001000",
+  };
+  const frozen = {
+    kind: "work_ready",
+    dueAt: "2026-11-12T03:12:00Z",
+    validBefore: "2026-11-13T03:12:00Z",
+    observedAt: "2026-11-12T03:12:00Z",
+    items: [item],
+  };
+  const text = "【任务交接提醒】\n可以开始校对";
+  const segments = [
+    { type: "text", data: { text } },
+    { type: "at", data: { qq: item.qqNumber } },
+  ];
+  assert.equal(workReminderMessageValid(frozen, segments, text), true);
+  for (const items of [[], [item, item], [{ ...item, kind: "overdue" }]]) {
+    assert.equal(
+      workReminderMessageValid({ ...frozen, items }, segments, text),
+      false,
+    );
+  }
+  assert.equal(
+    workReminderMessageValid(frozen, [...segments, segments[1]], text),
+    false,
+  );
+  assert.equal(
+    workReminderMessageValid(
+      { ...frozen, kind: "work_digest" },
+      segments,
+      text,
+    ),
+    true,
+  );
+  assert.equal(
+    workReminderMessageValid(
+      { ...frozen, kind: "work_digest", formatVersion: 2 },
+      segments,
+      text,
+    ),
+    false,
+  );
+  assert.equal(
+    workReminderMessageValid(
+      {
+        ...frozen,
+        kind: "work_digest",
+        formatVersion: 2,
+        items: [{ ...item, kind: "overdue" }],
+      },
+      segments,
+      text,
+    ),
+    true,
+  );
+});

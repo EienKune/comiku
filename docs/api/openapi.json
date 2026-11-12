@@ -18669,7 +18669,8 @@
                 "typeset_version_restored",
                 "notification.test",
                 "birthday.reminder",
-                "work.digest"
+                "work.digest",
+                "work.ready"
               ],
               "type": "string"
             }
@@ -29497,7 +29498,8 @@
               "work",
               "notification_test",
               "birthday_digest",
-              "work_digest"
+              "work_digest",
+              "work_ready"
             ]
           },
           "birthday": {
@@ -29941,6 +29943,13 @@
       "WorkReminderPreviewInputDto": {
         "type": "object",
         "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "digest",
+              "ready"
+            ]
+          },
           "note": {
             "type": "string"
           }

@@ -1530,3 +1530,48 @@ test("running status tab keeps drafts, gates configuration and supports four-tab
     "状态页切换保留",
   );
 });
+
+test.each([
+  ["work_digest", "work.digest", "工作摘要"],
+  ["work_ready", "work.ready", "任务交接提醒"],
+])(
+  "%s history preserves frozen content and only permits acknowledgement",
+  async (resourceKind, eventType, label) => {
+    const { get, post } = setup();
+    await screen.findByRole("button", { name: "编辑 合成群" });
+    get.mockResolvedValueOnce({
+      data: {
+        items: [
+          {
+            ...delivery,
+            resourceKind,
+            eventType,
+            workNumber: null,
+            preview: "历史冻结正文",
+          },
+        ],
+        nextCursor: null,
+      },
+      response: new Response(),
+    } as never);
+    fireEvent.click(screen.getByRole("tab", { name: "投递记录" }));
+    expect(await screen.findByText(label, { selector: "strong" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("combobox", { name: "事件类型" }));
+    fireEvent.click(screen.getByRole("option", { name: label }));
+    expect(screen.getByText("历史冻结正文")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "补发" })).toBeNull();
+    expect(screen.queryByLabelText("我已核对，确认补发可能重复")).toBeNull();
+    expect(screen.queryByText("合成测试")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "确认已核对" }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(post.mock.calls[0][1]).toMatchObject({
+      body: { action: "acknowledge" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+    await waitFor(() =>
+      expect(get.mock.calls.at(-1)?.[1]).toMatchObject({
+        params: { query: { eventType } },
+      }),
+    );
+  },
+);

@@ -8,6 +8,7 @@ import {
 } from "../src/work-reminders/work-reminder-scheduling.js";
 import {
   renderWorkReminder,
+  renderWorkReady,
   workReminderHash,
   type WorkDigestSnapshot,
 } from "../src/work-reminders/work-reminder-render.js";
@@ -55,6 +56,65 @@ test("work digest processes only the current Shanghai slot and expires before mi
   assert.equal(normalizeWorkReminderNote("  提示  "), "提示");
   assert.throws(() => normalizeWorkReminderNote("\n"));
   assert.throws(() => normalizeWorkReminderNote("😀".repeat(121)));
+});
+
+test("new digests summarize stage backlog and only overdue details; ready notices stand alone", () => {
+  const overdue = snapshot.items.filter((item) => item.kind === "overdue");
+  const rendered = renderWorkReminder(
+    {
+      ...snapshot,
+      formatVersion: 2,
+      counts: {
+        ...snapshot.counts,
+        ready: 0,
+        translationTotal: 10,
+        proofreadingTotal: 8,
+        typesettingTotal: 6,
+      },
+      items: overdue,
+    },
+    "提示语",
+    true,
+    "https://comiku.example",
+  );
+  assert.match(rendered.text, /待入库候选：4 篇/);
+  assert.match(rendered.text, /翻译：10 部（待认领 3）/);
+  assert.match(rendered.text, /校对：8 部（待认领 2）/);
+  assert.match(rendered.text, /嵌字：6 部（待认领 1）/);
+  assert.doesNotMatch(rendered.text, /预认领|可以开始|任务交接/);
+  assert.match(rendered.text, /超过72小时未交稿：4 项/);
+  assert.equal(
+    rendered.messageSegments.filter((s) => s.type === "at").length,
+    2,
+  );
+  const ready = renderWorkReady(
+    {
+      kind: "work_ready",
+      dueAt: snapshot.dueAt,
+      validBefore: snapshot.validBefore,
+      observedAt: snapshot.observedAt,
+      items: [snapshot.items[0]!],
+    },
+    true,
+    "https://comiku.example",
+  );
+  assert.match(ready.text, /^【任务交接提醒】\n#42 /);
+  assert.match(ready.text, /可以开始嵌字了/);
+  assert.doesNotMatch(ready.text, /工作摘要|72小时|预认领|上海时间/);
+  assert.match(ready.text, /https:\/\/comiku.example\/works\/work$/);
+  assert.equal(ready.messageSegments.filter((s) => s.type === "at").length, 1);
+  assert.throws(() =>
+    renderWorkReady(
+      {
+        kind: "work_ready",
+        dueAt: snapshot.dueAt,
+        validBefore: snapshot.validBefore,
+        observedAt: snapshot.observedAt,
+        items: overdue,
+      },
+      true,
+    ),
+  );
 });
 
 const snapshot: WorkDigestSnapshot = {

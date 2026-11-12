@@ -1,3 +1,4 @@
+import { isWorkReminderResource } from "../work-reminders/work-reminder-scheduling.js";
 import {
   Inject,
   Injectable,
@@ -111,12 +112,14 @@ export class NotificationRuntimeService implements OnModuleInit {
           this.environment.birthdays?.enabled
             ? await lockBirthdaySettings(tx)
             : null;
-        const reminderSettings =
-          event.resourceKind === "work_digest"
-            ? await lockWorkReminderSettings(tx)
-            : null;
+        const reminderSettings = isWorkReminderResource(event.resourceKind)
+          ? await lockWorkReminderSettings(tx)
+          : null;
         for (const ref of refs) {
-          if (["birthday_digest", "work_digest"].includes(event.resourceKind))
+          if (
+            event.resourceKind === "birthday_digest" ||
+            isWorkReminderResource(event.resourceKind)
+          )
             await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${ref.id}::uuid FOR SHARE`;
           const channel = await tx.notificationChannel.findUnique({
             where: { id: ref.id },
@@ -138,25 +141,24 @@ export class NotificationRuntimeService implements OnModuleInit {
                   ? null
                   : "birthday_frozen_content_invalid"))
               : null;
-          const reminderInvalid =
-            event.resourceKind === "work_digest"
-              ? ((await workReminderDeliveryInvalidReason(
-                  event.snapshot,
-                  ref,
-                  reminderSettings,
-                  await lockWorkReminderSubscription(tx, channel.id),
-                  tx,
-                )) ??
-                (!ref.content?.text ||
-                [...ref.content.text].length > 1000 ||
-                !workReminderMessageValid(
-                  event.snapshot,
-                  ref.messageSegments,
-                  ref.content.text,
-                )
-                  ? "work_reminder_content_invalid"
-                  : null))
-              : null;
+          const reminderInvalid = isWorkReminderResource(event.resourceKind)
+            ? ((await workReminderDeliveryInvalidReason(
+                event.snapshot,
+                ref,
+                reminderSettings,
+                await lockWorkReminderSubscription(tx, channel.id),
+                tx,
+              )) ??
+              (!ref.content?.text ||
+              [...ref.content.text].length > 1000 ||
+              !workReminderMessageValid(
+                event.snapshot,
+                ref.messageSegments,
+                ref.content.text,
+              )
+                ? "work_reminder_content_invalid"
+                : null))
+            : null;
           const current =
             !!ref.groupId &&
             !!ref.connectionKey &&
@@ -189,14 +191,15 @@ export class NotificationRuntimeService implements OnModuleInit {
                 birthdayOffsetGeneration: ref.birthdayOffsetGeneration,
                 birthdayScopeGeneration: ref.birthdayScopeGeneration,
               }),
-              ...(event.resourceKind === "work_digest" && {
+              ...(isWorkReminderResource(event.resourceKind) && {
                 reminderGeneration: ref.reminderGeneration,
                 reminderScopeGeneration: ref.reminderScopeGeneration,
                 messageSegments: ref.messageSegments,
               }),
               text:
                 ref.content?.text ??
-                (["birthday_digest", "work_digest"].includes(event.resourceKind)
+                (event.resourceKind === "birthday_digest" ||
+                isWorkReminderResource(event.resourceKind)
                   ? ""
                   : renderNotificationMessage(
                       event as unknown as NormalizedNotificationEvent,
@@ -426,7 +429,7 @@ export class NotificationRuntimeService implements OnModuleInit {
         );
         if (invalid) return cancel(invalid);
       }
-      if (row.event.resourceKind === "work_digest") {
+      if (isWorkReminderResource(row.event.resourceKind)) {
         const invalid = await workReminderDeliveryInvalidReason(
           row.event.snapshot,
           row,

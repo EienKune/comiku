@@ -184,6 +184,7 @@ export class NotificationsController {
       "notification.test",
       "birthday.reminder",
       "work.digest",
+      "work.ready",
     ],
   })
   @ApiQuery({

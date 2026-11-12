@@ -2,6 +2,11 @@ import { BadRequestException } from "@nestjs/common";
 
 export const WORK_DIGEST_EVENT = "work.digest";
 export const WORK_DIGEST_RESOURCE = "work_digest";
+export const WORK_READY_EVENT = "work.ready";
+export const WORK_READY_RESOURCE = "work_ready";
+export function isWorkReminderResource(kind: string | null): boolean {
+  return kind === WORK_DIGEST_RESOURCE || kind === WORK_READY_RESOURCE;
+}
 export function normalizeWorkReminderNote(note: string): string {
   if (
     typeof note !== "string" ||

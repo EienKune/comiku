@@ -48,6 +48,7 @@ export function normalizeNotificationHistoryQuery(
     (query.eventType !== undefined &&
       query.eventType !== "birthday.reminder" &&
       query.eventType !== "work.digest" &&
+      query.eventType !== "work.ready" &&
       !NOTIFICATION_EVENT_TYPES.some((event) => event.type === query.eventType))
   )
     throw invalid();

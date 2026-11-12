@@ -84,6 +84,6 @@ export class WorkRemindersController {
     @Body(bodyValidation(WorkReminderPreviewInputDto))
     input: WorkReminderPreviewInputDto,
   ): Promise<WorkReminderPreviewDto> {
-    return this.reminders.preview(input.note);
+    return this.reminders.preview(input.note, input.kind);
   }
 }
