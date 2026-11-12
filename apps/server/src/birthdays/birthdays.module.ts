@@ -1,3 +1,5 @@
+import { BirthdayDataAdapter } from "./birthday-data.adapter.js";
+import { BaBirthdayDataAdapter } from "./adapters/ba/ba-birthday-data.adapter.js";
 import { Module } from "@nestjs/common";
 import { DatabaseModule } from "../database/database.module.js";
 import { JobsModule } from "../jobs/jobs.module.js";
@@ -9,7 +11,11 @@ import { BirthdayReminderService } from "./birthday-reminder.service.js";
 @Module({
   imports: [DatabaseModule, JobsModule, NotificationsModule],
   controllers: [BirthdaysController],
-  providers: [BirthdaysService, BirthdayReminderService],
+  providers: [
+    { provide: BirthdayDataAdapter, useClass: BaBirthdayDataAdapter },
+    BirthdaysService,
+    BirthdayReminderService,
+  ],
   exports: [BirthdaysService, BirthdayReminderService],
 })
 export class BirthdaysModule {}

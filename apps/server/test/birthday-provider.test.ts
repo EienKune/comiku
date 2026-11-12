@@ -1,9 +1,9 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchBirthdayCatalog } from "../src/birthdays/providers/schaledb.js";
-import { reviewedRegistry } from "../src/birthdays/providers/reviewed-registry.js";
-import { birthdayReminderCheckedAt } from "../src/birthdays/birthday-reminder.service.js";
+import { fetchBirthdayCatalog } from "../src/birthdays/adapters/ba/providers/schaledb.js";
+import { reviewedRegistry } from "../src/birthdays/adapters/ba/providers/reviewed-registry.js";
+import { birthdayReminderCheckedAt } from "../src/birthdays/adapters/ba/ba-birthday-data.adapter.js";
 
 const jp = (
   id: number,

@@ -348,3 +348,9 @@ Pixiv profile resolution uses the native App API without enumerating works, but 
 ## Birthday layer after standalone reminders
 
 - Keep published birthday migrations byte-for-byte. A standalone reminder release can precede their older dated migration: the additive birthday migration introduces its resource discriminator without colliding with reminder tables. A later forward migration backfills only defaulted `work.digest`/`work.ready` namespaces. Type-derived routing, history and blocker queries remain compatible with those old rows, and integrated producers keep explicit stored namespaces. Frozen snapshots, hashes, route references and all other event fields remain untouched.
+
+## Birthday adapter boundary
+
+- Calendar, HTTP facade and reminder orchestration consume BirthdayDataAdapter. Keep provider identities, avatar resolution, acquisition, persistent evidence validation, source locks and freshness inside adapters/ba. Source adapters return a persisted catalog reference and a local, transactionally validated reminder publication; core never performs network I/O in that transaction.
+- Preserve BA source keys, job kinds, hash field order and the schaledb occurrence/event namespace across refactors. Adapter-owned audit fields remain in frozen people without interpretation by the generic renderer. A disabled adapter must stop facade reads/scheduling/cleanup and reminder registration; feature-flag routing/pre-send/replay guards remain in the notification engine.
+- Test replacement with synthetic non-BA string identities and a different freshness period, including actual generic reminder registration and duplicate maintenance. Keep public response allowlists so adapter-private fields never become HTTP fields. BA avatar fallback belongs in the adapter and needs its own regression.
