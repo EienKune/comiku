@@ -4,11 +4,11 @@ import test from "node:test";
 import {
   BirthdaySupplement,
   KIVO_SYNC_KIND,
-} from "../src/birthdays/birthday-supplement.js";
+} from "../src/birthdays/adapters/ba/birthday-supplement.js";
 import type { PrismaService } from "../src/database/prisma.service.js";
 import type { JobsService } from "../src/jobs/jobs.service.js";
 import type { BackgroundJob } from "../src/generated/prisma/client.js";
-import { kivoProfileHash } from "../src/birthdays/providers/kivo.js";
+import { kivoProfileHash } from "../src/birthdays/adapters/ba/providers/kivo.js";
 
 const HOUR = 3_600_000;
 const profile = (id: number) => ({

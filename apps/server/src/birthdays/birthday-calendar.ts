@@ -1,4 +1,4 @@
-import type { BirthdayPerson } from "./providers/schaledb.js";
+import type { BirthdayPerson } from "./birthday-data.adapter.js";
 
 export interface BirthdayCalendarPerson extends BirthdayPerson {
   nextDate: string | null;
@@ -28,15 +28,9 @@ export function birthdayCalendar(people: readonly BirthdayPerson[], now: Date) {
       const p: BirthdayCalendarPerson = {
         ...person,
         aliases: [...person.aliases],
-        entryIds: [...person.entryIds],
         nextDate: null,
         daysUntil: null,
-        avatarUrl:
-          person.avatarUrl ??
-          (person.originalEntryId !== null &&
-          person.entryIds.includes(person.originalEntryId)
-            ? `https://schaledb.com/images/student/icon/${person.originalEntryId}.webp`
-            : null),
+        avatarUrl: person.avatarUrl,
       };
       if (person.month === null || person.day === null) return p;
       for (

@@ -22,8 +22,8 @@ import {
 } from "../src/notifications/notification-events.js";
 import { NotificationRuntimeService } from "../src/notifications/notification-runtime.service.js";
 import type { Environment } from "../src/config/environment.js";
-import { birthdayReminderCheckedAt } from "../src/birthdays/birthday-reminder.service.js";
-import type { BirthdayPerson } from "../src/birthdays/providers/schaledb.js";
+import { birthdayReminderCheckedAt } from "../src/birthdays/adapters/ba/ba-birthday-data.adapter.js";
+import type { BirthdayPerson } from "../src/birthdays/adapters/ba/providers/schaledb.js";
 
 test("birthday calendar uses Shanghai calendar addition without moving leap birthdays", () => {
   assert.equal(

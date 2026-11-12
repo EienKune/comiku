@@ -36,7 +36,7 @@ export function SystemManagementPage() {
     });
   }
   return (
-    <>
+    <div className="system-management">
       <SectionHeading title="系统管理" />
       <div className="system-tabs" role="tablist" aria-label="系统管理">
         {visibleTabs.map((tab) => (
@@ -122,6 +122,6 @@ export function SystemManagementPage() {
           <AccountsPage enabled={active === "accounts"} />
         </div>
       )}
-    </>
+    </div>
   );
 }

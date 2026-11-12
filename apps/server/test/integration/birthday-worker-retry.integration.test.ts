@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
-  BirthdaysService,
+  BaBirthdayDataAdapter,
   BIRTHDAY_SCOPE,
   BIRTHDAY_SYNC_KIND,
-} from "../../src/birthdays/birthdays.service.js";
-import { KIVO_SYNC_KIND } from "../../src/birthdays/birthday-supplement.js";
+} from "../../src/birthdays/adapters/ba/ba-birthday-data.adapter.js";
+import { KIVO_SYNC_KIND } from "../../src/birthdays/adapters/ba/birthday-supplement.js";
 import { parseEnvironment } from "../../src/config/environment.js";
 import { PrismaService } from "../../src/database/prisma.service.js";
 import type { Prisma } from "../../src/generated/prisma/client.js";
@@ -66,7 +66,7 @@ test(
             });
             const worker = () => {
               const jobs = new JobsService(facade);
-              new BirthdaysService(failingSource, jobs, environment);
+              new BaBirthdayDataAdapter(failingSource, jobs, environment);
               return jobs;
             };
             for (const kind of [BIRTHDAY_SYNC_KIND, KIVO_SYNC_KIND]) {
@@ -178,7 +178,11 @@ test(
             });
             const facade = transactionFacade(tx);
             const jobs = new JobsService(facade);
-            const service = new BirthdaysService(facade, jobs, environment);
+            const service = new BaBirthdayDataAdapter(
+              facade,
+              jobs,
+              environment,
+            );
             const retryAt = new Date(Date.now() + 300_000);
             for (const [source, kind] of [
               ["schaledb", BIRTHDAY_SYNC_KIND],
@@ -289,7 +293,7 @@ test(
             const defaultKind = `recovery_${randomUUID()}`;
             const worker = () => {
               const jobs = new JobsService(facade);
-              new BirthdaysService(facade, jobs, environment);
+              new BaBirthdayDataAdapter(facade, jobs, environment);
               jobs.register(defaultKind, async () => {
                 throw new Error("claim-only fixture must never execute");
               });
