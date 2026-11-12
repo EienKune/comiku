@@ -1,3 +1,7 @@
+import {
+  WorkReminderSubscriptions,
+  WorkReminderTemplate,
+} from "./WorkReminderPanels";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
@@ -90,7 +94,7 @@ export function NotificationManagement({
     status: "" as Delivery["status"] | "",
     groupId: "",
     workNumber: "",
-    eventType: "" as EventType | "notification.test" | "",
+    eventType: "" as EventType | "notification.test" | "work.digest" | "",
     createdFrom: "",
     createdThrough: "",
   };
@@ -242,10 +246,6 @@ export function NotificationManagement({
   }
   async function save() {
     if (!draft) return;
-    if (draft.enabled && draft.eventTypes.length === 0) {
-      setError("启用时至少选择一个事件。");
-      return;
-    }
     if (draft.subscriptionRules?.some((rule) => rule.stages?.length === 0)) {
       setError("指定职责时至少选择一个职责。");
       return;
@@ -305,6 +305,9 @@ export function NotificationManagement({
       await unwrap(result);
       setDraft(null);
       setSuccess("配置已保存");
+      void queryClient.invalidateQueries({
+        queryKey: ["birthdays", "subscriptions"],
+      });
       void queryClient.invalidateQueries({
         queryKey: ["notification-configuration"],
       });
@@ -1025,6 +1028,7 @@ export function NotificationManagement({
             </fieldset>
           </form>
         )}
+        <WorkReminderSubscriptions enabled={enabled && tab === "groups"} />
       </div>
       <div
         role="tabpanel"
@@ -1041,6 +1045,17 @@ export function NotificationManagement({
               queryKey: ["notification-configuration"],
             })
           }
+        />
+        <WorkReminderTemplate
+          enabled={enabled && tab === "templates"}
+          onEdit={() => {
+            setTab("groups");
+            requestAnimationFrame(() => {
+              const editor = document.getElementById("work-reminder-settings");
+              editor?.focus();
+              editor?.scrollIntoView({ block: "start", behavior: "smooth" });
+            });
+          }}
         />
       </div>
       <div
@@ -1131,6 +1146,7 @@ export function NotificationManagement({
                 </option>
               ))}
               <option value="notification.test">通知测试</option>
+              <option value="work.digest">工作摘要</option>
             </SelectField>
             <TextField
               label="开始日期"
@@ -1195,11 +1211,13 @@ export function NotificationManagement({
               key={delivery.id}
               delivery={delivery}
               eventLabel={
-                delivery.eventType === "notification.test"
-                  ? "通知测试"
-                  : (eventTypes.find(
-                      (event) => event.type === delivery.eventType,
-                    )?.label ?? delivery.eventType)
+                delivery.resourceKind === "work_digest"
+                  ? "工作摘要"
+                  : delivery.eventType === "notification.test"
+                    ? "通知测试"
+                    : (eventTypes.find(
+                        (event) => event.type === delivery.eventType,
+                      )?.label ?? delivery.eventType)
               }
               onUpdated={() =>
                 void queryClient.invalidateQueries({
@@ -1307,11 +1325,14 @@ function DeliveryRow({
           {statusLabels[delivery.status] ?? delivery.status}
         </Badge>
         <strong>{eventLabel}</strong>
-        <span>
-          {delivery.workNumber !== null
-            ? `#${delivery.workNumber}`
-            : "合成测试"}
-        </span>
+        {delivery.resourceKind !== "work_digest" && (
+          <span>
+            {delivery.resourceKind === "notification_test" ||
+            delivery.workNumber === null
+              ? "合成测试"
+              : `#${delivery.workNumber}`}
+          </span>
+        )}
         <time dateTime={delivery.createdAt}>
           {new Date(delivery.createdAt).toLocaleString()}
         </time>

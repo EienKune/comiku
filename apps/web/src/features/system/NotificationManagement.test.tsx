@@ -1,3 +1,7 @@
+vi.mock("./WorkReminderPanels", () => ({
+  WorkReminderSubscriptions: () => null,
+  WorkReminderTemplate: () => null,
+}));
 // @vitest-environment jsdom
 import { afterEach, expect, test, vi } from "vitest";
 import {
