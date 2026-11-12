@@ -12,7 +12,12 @@ import {
   isPrivateNotificationIp,
   normalizeNotificationIp,
 } from "./notification-connections.js";
-import { notificationMessageSegments } from "./notification-message-segments.js";
+import {
+  NOTIFICATION_MESSAGE_PAYLOAD_MAX_BYTES,
+  notificationMessageSegments,
+  notificationMessageTextValid,
+  type NotificationMessagePolicy,
+} from "./notification-message-segments.js";
 
 export interface OneBotHttpAdapterOptions {
   lookup?: (hostname: string) => Promise<LookupAddress[]>;
@@ -37,17 +42,17 @@ export class OneBotHttpAdapter {
     text: string,
     signal?: AbortSignal,
     frozenSegments?: unknown,
+    policy: NotificationMessagePolicy = "standard",
   ): Promise<NotificationSendResult> {
     const segments =
       frozenSegments == null
         ? [{ type: "text", data: { text } }]
-        : notificationMessageSegments(frozenSegments);
+        : notificationMessageSegments(frozenSegments, policy);
     if (
       !/^[1-9]\d{0,19}$/.test(groupId) ||
-      typeof text !== "string" ||
-      !text ||
-      [...text].length > 1000 ||
-      !segments
+      !notificationMessageTextValid(text, policy) ||
+      !segments ||
+      (policy === "work_digest" && frozenSegments == null)
     ) {
       return {
         status: "failed",
@@ -55,6 +60,36 @@ export class OneBotHttpAdapter {
         sendBoundaryCrossed: false,
       };
     }
+    if (policy === "work_digest") {
+      let offset = 0;
+      for (const segment of segments) {
+        if (segment.type !== "text") continue;
+        if (!text.startsWith(segment.data.text, offset))
+          return {
+            status: "failed",
+            errorCode: "notification_payload_invalid",
+            sendBoundaryCrossed: false,
+          };
+        offset += segment.data.text.length;
+      }
+      if (offset !== text.length)
+        return {
+          status: "failed",
+          errorCode: "notification_payload_invalid",
+          sendBoundaryCrossed: false,
+        };
+    }
+    const payload = JSON.stringify({
+      group_id: groupId,
+      message: segments,
+      auto_escape: true,
+    });
+    if (Buffer.byteLength(payload) > NOTIFICATION_MESSAGE_PAYLOAD_MAX_BYTES)
+      return {
+        status: "failed",
+        errorCode: "notification_payload_invalid",
+        sendBoundaryCrossed: false,
+      };
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal?.addEventListener("abort", abort, { once: true });
@@ -125,11 +160,6 @@ export class OneBotHttpAdapter {
             : new HttpAgent(options);
         this.agents.set(connection.fingerprint, agent);
       }
-      const payload = JSON.stringify({
-        group_id: groupId,
-        message: segments,
-        auto_escape: true,
-      });
       return await new Promise<NotificationSendResult>((resolve) => {
         let settled = false;
         const finish = (result: NotificationSendResult) => {
