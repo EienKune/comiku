@@ -16,3 +16,4 @@ Comiku 的原创代码、文档和自有示例图采用 MIT；第三方包保留
 - X、Pixiv 名称及界面中的平台标识用于指明外部账号链接，不属于 Comiku 的品牌授权，也不表示得到平台认可。
 - `apps/web/public/samples/demo-work.svg` 是本项目生成的中性几何演示图，PNG 由同目录 SVG 生成；`pnpm demo:image` 可重新生成。测试 fixture 为合成数据。
 - 用户上传的漫画、授权截图及其他材料由其权利人授权，不属于软件示例素材，也不因软件 MIT 许可而转为开源素材。
+- 默认 BA 生日实现读取 SchaleDB 和 Kivo 公开资料及头像。来源和使用条款入口见[角色生日说明](docs/birthdays.md#展示与资料)，数据与头像按各自来源的条款使用。
