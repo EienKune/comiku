@@ -12,6 +12,7 @@ import {
   isPrivateNotificationIp,
   normalizeNotificationIp,
 } from "./notification-connections.js";
+import { notificationMessageSegments } from "./notification-message-segments.js";
 
 export interface OneBotHttpAdapterOptions {
   lookup?: (hostname: string) => Promise<LookupAddress[]>;
@@ -35,12 +36,18 @@ export class OneBotHttpAdapter {
     groupId: string,
     text: string,
     signal?: AbortSignal,
+    frozenSegments?: unknown,
   ): Promise<NotificationSendResult> {
+    const segments =
+      frozenSegments == null
+        ? [{ type: "text", data: { text } }]
+        : notificationMessageSegments(frozenSegments);
     if (
       !/^[1-9]\d{0,19}$/.test(groupId) ||
       typeof text !== "string" ||
       !text ||
-      [...text].length > 1000
+      [...text].length > 1000 ||
+      !segments
     ) {
       return {
         status: "failed",
@@ -120,7 +127,7 @@ export class OneBotHttpAdapter {
       }
       const payload = JSON.stringify({
         group_id: groupId,
-        message: [{ type: "text", data: { text } }],
+        message: segments,
         auto_escape: true,
       });
       return await new Promise<NotificationSendResult>((resolve) => {

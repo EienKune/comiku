@@ -131,6 +131,69 @@ test("adapter pins destination and sends text segments with bearer token, reusin
   );
 });
 
+test("server-frozen mentions use OneBot at segments while arbitrary segments never reach transport", async () => {
+  const bodies: unknown[] = [];
+  await withServer(
+    (req, res) => {
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      req.on("end", () => {
+        bodies.push(JSON.parse(raw));
+        res.end(
+          JSON.stringify({ status: "ok", retcode: 0, data: { message_id: 7 } }),
+        );
+      });
+    },
+    async (endpoint) => {
+      const adapter = new OneBotHttpAdapter();
+      const connection = registry(endpoint).get("test")!;
+      const segments = [
+        { type: "text", data: { text: "[CQ:at,qq=all] 待交稿 " } },
+        { type: "at", data: { qq: "10001000" } },
+      ];
+      try {
+        assert.equal(
+          (
+            await adapter.send(
+              connection,
+              "123",
+              "待交稿 @合成成员",
+              undefined,
+              segments,
+            )
+          ).status,
+          "accepted",
+        );
+        assert.deepEqual(bodies, [
+          { group_id: "123", message: segments, auto_escape: true },
+        ]);
+        for (const invalid of [
+          [],
+          [{ type: "at", data: { qq: "all" } }],
+          [{ type: "text", data: { text: "x", extra: "no" } }],
+          [{ type: "image", data: { file: "file:///private" } }],
+          [...segments, segments[1]],
+          [{ type: "text", data: { text: "x".repeat(1001) } }],
+          [...segments, { type: "text", data: { text: "x" }, extra: true }],
+        ]) {
+          const result = await adapter.send(
+            connection,
+            "123",
+            "待交稿",
+            undefined,
+            invalid,
+          );
+          assert.equal(result.status, "failed");
+          assert.equal(result.sendBoundaryCrossed, false);
+        }
+        assert.equal(bodies.length, 1);
+      } finally {
+        adapter.close();
+      }
+    },
+  );
+});
+
 test("async, malformed, missing receipt, redirects, and 5xx become unknown without leaks", async () => {
   for (const fixture of [
     { code: 200, body: JSON.stringify({ status: "async", retcode: 1 }) },

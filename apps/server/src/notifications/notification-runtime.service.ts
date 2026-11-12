@@ -1,4 +1,8 @@
 import {
+  notificationResourceKind,
+  notificationResourceTypeFilter,
+} from "./notification-resource.js";
+import {
   Inject,
   Injectable,
   Optional,
@@ -23,6 +27,12 @@ import {
   NOTIFICATION_JOB_KIND,
   NOTIFICATION_SCOPE,
 } from "./notification-engine.helpers.js";
+import {
+  lockWorkReminderSettings,
+  lockWorkReminderSubscription,
+  workReminderDeliveryInvalidReason,
+  workReminderMessageValid,
+} from "../work-reminders/work-reminder-notification-policy.js";
 
 @Injectable()
 export class NotificationRuntimeService implements OnModuleInit {
@@ -88,12 +98,40 @@ export class NotificationRuntimeService implements OnModuleInit {
           connectionFingerprint?: string;
           includeDetails?: boolean;
           content?: NotificationFrozenContent;
+          reminderGeneration?: number;
+          reminderScopeGeneration?: number;
+          messageSegments?: Prisma.InputJsonValue;
         }[];
+        const reminderSettings =
+          notificationResourceKind(event) === "work_digest"
+            ? await lockWorkReminderSettings(tx)
+            : null;
         for (const ref of refs) {
+          if (notificationResourceKind(event) === "work_digest")
+            await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${ref.id}::uuid FOR SHARE`;
           const channel = await tx.notificationChannel.findUnique({
             where: { id: ref.id },
           });
           if (!channel) throw new Error("notification_channel_missing");
+          const reminderInvalid =
+            notificationResourceKind(event) === "work_digest"
+              ? ((await workReminderDeliveryInvalidReason(
+                  event.snapshot,
+                  ref,
+                  reminderSettings,
+                  await lockWorkReminderSubscription(tx, channel.id),
+                  tx,
+                )) ??
+                (!ref.content?.text ||
+                [...ref.content.text].length > 1000 ||
+                !workReminderMessageValid(
+                  event.snapshot,
+                  ref.messageSegments,
+                  ref.content.text,
+                )
+                  ? "work_reminder_content_invalid"
+                  : null))
+              : null;
           const current =
             !!ref.groupId &&
             !!ref.connectionKey &&
@@ -102,7 +140,8 @@ export class NotificationRuntimeService implements OnModuleInit {
             channel.audienceGeneration === ref.generation &&
             channel.groupId === ref.groupId &&
             channel.connectionKey === ref.connectionKey &&
-            channel.connectionFingerprint === ref.connectionFingerprint;
+            channel.connectionFingerprint === ref.connectionFingerprint &&
+            !reminderInvalid;
           await tx.notificationDelivery.createMany({
             data: {
               eventId: event.id,
@@ -114,16 +153,25 @@ export class NotificationRuntimeService implements OnModuleInit {
               channelRevision: ref.revision,
               groupId: ref.groupId ?? channel.groupId,
               status: current ? "pending" : "cancelled",
-              errorCode: current ? null : "channel_configuration_changed",
+              errorCode: current
+                ? null
+                : (reminderInvalid ?? "channel_configuration_changed"),
+              ...(notificationResourceKind(event) === "work_digest" && {
+                reminderGeneration: ref.reminderGeneration,
+                reminderScopeGeneration: ref.reminderScopeGeneration,
+                messageSegments: ref.messageSegments,
+              }),
               text:
                 ref.content?.text ??
-                renderNotificationMessage(
-                  event as unknown as NormalizedNotificationEvent,
-                  {
-                    includeDetails: ref.includeDetails ?? false,
-                    siteUrl: this.environment.appOrigin,
-                  },
-                ),
+                (notificationResourceKind(event) === "work_digest"
+                  ? ""
+                  : renderNotificationMessage(
+                      event as unknown as NormalizedNotificationEvent,
+                      {
+                        includeDetails: ref.includeDetails ?? false,
+                        siteUrl: this.environment.appOrigin,
+                      },
+                    )),
             },
             skipDuplicates: true,
           });
@@ -266,7 +314,16 @@ export class NotificationRuntimeService implements OnModuleInit {
         where: { id: job.resourceId },
       });
       if (!initial) return null;
+      // Lock reminder policy before the shared channel send reservation.
+      const reminderSettings =
+        initial.reminderGeneration != null
+          ? await lockWorkReminderSettings(tx)
+          : null;
       await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${initial.channelId}::uuid FOR UPDATE`;
+      const reminderSubscription =
+        initial.reminderGeneration != null
+          ? await lockWorkReminderSubscription(tx, initial.channelId)
+          : null;
       await tx.$queryRaw`SELECT id FROM notification_deliveries WHERE id = ${initial.id}::uuid FOR UPDATE`;
       const row = await tx.notificationDelivery.findUniqueOrThrow({
         where: { id: initial.id },
@@ -313,6 +370,27 @@ export class NotificationRuntimeService implements OnModuleInit {
         channel.connectionKey !== row.connectionKey
       )
         return cancel("channel_configuration_changed");
+      if (notificationResourceKind(row.event) === "work_digest") {
+        const invalid = await workReminderDeliveryInvalidReason(
+          row.event.snapshot,
+          row,
+          reminderSettings,
+          reminderSubscription,
+          tx,
+          now,
+        );
+        if (invalid) return cancel(invalid);
+        if (
+          !workReminderMessageValid(
+            row.event.snapshot,
+            row.messageSegments,
+            row.text,
+          )
+        )
+          return cancel("work_reminder_content_invalid");
+      } else if (row.messageSegments != null) {
+        return cancel("notification_segments_scope_invalid");
+      }
       const connection = this.registry.get(row.connectionKey);
       if (!connection)
         return {
@@ -341,7 +419,10 @@ export class NotificationRuntimeService implements OnModuleInit {
           channelId: row.channelId,
           groupId: row.groupId,
           id: { not: row.id },
-          event: { resourceId: row.event.resourceId },
+          event: {
+            type: notificationResourceTypeFilter(row.event),
+            resourceId: row.event.resourceId,
+          },
           OR: [
             { status: "unknown", resolvedAt: null },
             {
@@ -362,6 +443,7 @@ export class NotificationRuntimeService implements OnModuleInit {
       });
       const earlierUnrouted = await tx.notificationEvent.findFirst({
         where: {
+          type: notificationResourceTypeFilter(row.event),
           resourceId: row.event.resourceId,
           routedAt: null,
           routeRefs: {
@@ -452,6 +534,7 @@ export class NotificationRuntimeService implements OnModuleInit {
         preparation.row.groupId,
         preparation.row.text,
         signal,
+        preparation.row.messageSegments,
       );
     } catch {
       result = {

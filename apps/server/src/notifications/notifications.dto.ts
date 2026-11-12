@@ -207,6 +207,11 @@ export class NotificationPreviewDto {
 }
 
 export class NotificationDeliveryDto {
+  @ApiProperty({
+    type: String,
+    enum: ["work", "notification_test", "work_digest"],
+  })
+  resourceKind!: string;
   @ApiProperty({ enum: ["capture_current"], nullable: true })
   metadataOrigin!: "capture_current" | null;
   @ApiProperty({ type: Number, nullable: true }) contentRevision!:
@@ -262,10 +267,10 @@ export class NotificationDeliveryQueryDto {
   workNumber?: number;
   @ApiPropertyOptional({
     type: String,
-    enum: [...NOTIFICATION_EVENT_KEYS, "notification.test"],
+    enum: [...NOTIFICATION_EVENT_KEYS, "notification.test", "work.digest"],
   })
   @IsOptional()
-  @IsIn([...NOTIFICATION_EVENT_KEYS, "notification.test"])
+  @IsIn([...NOTIFICATION_EVENT_KEYS, "notification.test", "work.digest"])
   eventType?: string;
   @ApiPropertyOptional({ type: String, format: "date-time" })
   @IsOptional()
