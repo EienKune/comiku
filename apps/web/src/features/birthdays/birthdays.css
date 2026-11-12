@@ -190,7 +190,6 @@
   font-size: var(--text-sm);
   font-weight: 600;
 }
-.birthday-setting-foot,
 .birthday-save-bar {
   display: flex;
   justify-content: space-between;
@@ -198,10 +197,6 @@
   flex-wrap: wrap;
   gap: 12px;
   margin-top: 20px;
-}
-.birthday-setting-foot a {
-  font-size: var(--text-sm);
-  color: var(--color-brand-700);
 }
 .birthday-notification-panel {
   margin-top: 24px;
@@ -213,17 +208,23 @@
 }
 .birthday-notification-panel h3 {
   margin: 0;
-  font-size: var(--text-md);
+  font-size: var(--text-lg);
+}
+.birthday-subscriptions {
+  display: grid;
+  gap: 16px;
 }
 .birthday-subscription {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  gap: 12px;
+  padding: 16px 0;
+  border-top: 1px solid var(--color-border);
 }
 .birthday-subscription > div {
-  display: grid;
-  gap: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -278,8 +279,5 @@
   .birthday-form-grid {
     grid-template-columns: 1fr;
     gap: 20px;
-  }
-  .birthday-subscription {
-    flex-wrap: wrap;
   }
 }

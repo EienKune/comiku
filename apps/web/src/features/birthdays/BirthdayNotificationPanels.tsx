@@ -13,7 +13,13 @@ import "./birthdays.css";
 
 type Template = components["schemas"]["BirthdayTemplateDto"];
 
-export function BirthdaySubscriptions({ enabled }: { enabled: boolean }) {
+export function BirthdaySubscriptions({
+  enabled,
+  showHeading = true,
+}: {
+  enabled: boolean;
+  showHeading?: boolean;
+}) {
   const cache = useQueryClient();
   const query = useBirthdayQuery("subscriptions", enabled, async (signal) =>
     unwrap(await client.GET("/api/birthdays/subscriptions", { signal })),
@@ -22,8 +28,13 @@ export function BirthdaySubscriptions({ enabled }: { enabled: boolean }) {
   const [error, setError] = useState("");
   const channels = Array.isArray(query.data) ? query.data : [];
   return (
-    <section className="birthday-notification-panel" aria-label="生日群订阅">
-      <h3>角色生日</h3>
+    <section
+      className={
+        showHeading ? "birthday-notification-panel" : "birthday-subscriptions"
+      }
+      aria-label="生日群订阅"
+    >
+      {showHeading && <h3>角色生日</h3>}
       <ErrorToast message={error} onDismiss={() => setError("")} />
       {query.isError && (
         <p role="alert">
@@ -41,9 +52,12 @@ export function BirthdaySubscriptions({ enabled }: { enabled: boolean }) {
         <div className="birthday-subscription" key={channel.id}>
           <div>
             <strong>{channel.name}</strong>
-            <span className="birthday-muted">QQ 群 {channel.groupId}</span>
+            <span className="birthday-muted">
+              QQ 群 {channel.groupId}
+              {!channel.enabled ? " · 群推送已关闭" : ""}
+            </span>
           </div>
-          <label className="birthday-check">
+          <label className="notification-check">
             <input
               type="checkbox"
               aria-label={`${channel.name}的生日提醒`}
@@ -78,12 +92,12 @@ export function BirthdaySubscriptions({ enabled }: { enabled: boolean }) {
                 }
               }}
             />
-            生日提醒
+            接收生日提醒
           </label>
         </div>
       ))}
       {query.data && channels.length === 0 && (
-        <p className="birthday-muted">先在群订阅中添加接收群。</p>
+        <p className="birthday-muted">先在上方添加接收群。</p>
       )}
     </section>
   );
