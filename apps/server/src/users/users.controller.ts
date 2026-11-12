@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   Inject,
   Param,
@@ -43,12 +44,36 @@ import {
 } from "./user-avatar.dto.js";
 import { UsersService } from "./users.service.js";
 import { QqBindingDto, UpdateQqBindingDto } from "./user-qq-binding.dto.js";
+import {
+  RegistrationSettingsDto,
+  UpdateRegistrationSettingsDto,
+} from "./registration.dto.js";
 
 @ApiTags("accounts")
 @ApiCookieAuth()
 @Controller("users")
 export class UsersController {
   constructor(@Inject(UsersService) private readonly users: UsersService) {}
+  @Get("registration-settings")
+  @Header("Cache-Control", "private, no-store")
+  @Access({ permission: "accounts:manage" })
+  @ApiOperation({ operationId: "getRegistrationSettings" })
+  @ApiOkResponse({ type: RegistrationSettingsDto })
+  registrationSettings() {
+    return this.users.registrationSettings();
+  }
+  @Patch("registration-settings")
+  @Access({ permission: "accounts:manage" })
+  @ApiOperation({ operationId: "updateRegistrationSettings" })
+  @ApiBody({ type: UpdateRegistrationSettingsDto })
+  @ApiOkResponse({ type: RegistrationSettingsDto })
+  updateRegistrationSettings(
+    @Req() req: AuthRequest,
+    @Body(bodyValidation(UpdateRegistrationSettingsDto))
+    input: UpdateRegistrationSettingsDto,
+  ) {
+    return this.users.updateRegistrationSettings(req.actor, input);
+  }
   @Get("me/qq-binding")
   @Access({ permission: "self" })
   @ApiOperation({ operationId: "getMyQqBinding" })

@@ -2,13 +2,14 @@ import { useAction } from "./use-action";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Navigate, useLocation, useNavigate } from "react-router";
+import { Link, Navigate, useLocation, useNavigate } from "react-router";
 import { BookOpen } from "lucide-react";
 import { Button, Surface, TextField } from "../../components/ui";
 import { client, queryClient, unwrap, useMe } from "./api";
 import { ErrorState, Feedback, LoadingState } from "./forms";
 import "./account.css";
 import { loginReturnTarget } from "./login-return";
+import { useRegistrationOptions } from "./registration-options";
 
 const schema = z.object({
   username: z.string().trim().min(3, "请输入至少 3 位账户名").max(64),
@@ -16,6 +17,7 @@ const schema = z.object({
 });
 export function LoginPage() {
   const me = useMe();
+  const registration = useRegistrationOptions(!me.data);
   const navigate = useNavigate();
   const location = useLocation();
   const returnTo = loginReturnTarget(location.state);
@@ -31,7 +33,13 @@ export function LoginPage() {
   if (me.data)
     return (
       <Navigate
-        to={me.data.mustChangePassword ? "/settings/password" : returnTo}
+        to={
+          me.data.mustChangePassword
+            ? "/settings/password"
+            : !me.data.roles.length
+              ? "/settings?tab=profile"
+              : returnTo
+        }
         state={me.data.mustChangePassword ? { returnTo } : undefined}
         replace
       />
@@ -44,7 +52,6 @@ export function LoginPage() {
           Comiku
         </div>
         <h1>一起，把故事带给更多人。</h1>
-        <p>使用管理员分发的账号登录。</p>
         <form
           className="account-form"
           onSubmit={handleSubmit((values) =>
@@ -56,7 +63,11 @@ export function LoginPage() {
               queryClient.clear();
               queryClient.setQueryData(["me"], user);
               navigate(
-                user.mustChangePassword ? "/settings/password" : returnTo,
+                user.mustChangePassword
+                  ? "/settings/password"
+                  : !user.roles.length
+                    ? "/settings?tab=profile"
+                    : returnTo,
                 {
                   replace: true,
                   state: user.mustChangePassword ? { returnTo } : undefined,
@@ -83,7 +94,14 @@ export function LoginPage() {
             登录
           </Button>
         </form>
-        <p className="account-help">忘记密码或需要账号，请联系团队管理员。</p>
+        {registration.data?.enabled && (
+          <p className="account-help">
+            <Link to="/register" state={{ returnTo }}>
+              注册账号
+            </Link>
+          </p>
+        )}
+        <p className="account-help">忘记密码，请联系团队管理员。</p>
       </Surface>
     </main>
   );

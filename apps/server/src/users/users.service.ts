@@ -13,6 +13,7 @@ import { ENVIRONMENT, type Environment } from "../config/environment.js";
 import { PrismaService } from "../database/prisma.service.js";
 import {
   permissionsFor,
+  roleLabels,
   type Actor,
   type Permission,
 } from "../common/access.js";
@@ -37,6 +38,12 @@ import type {
   AuthUserDto,
 } from "./users.dto.js";
 import type { UpdateQqBindingDto } from "./user-qq-binding.dto.js";
+import {
+  registrationRoles,
+  type RegisterDto,
+  type UpdateRegistrationSettingsDto,
+} from "./registration.dto.js";
+import { canUserWorkStage } from "../workflow/workflow-policy.js";
 
 type UserWithRoles = Prisma.UserGetPayload<{
   include: { roles: true; languageCapabilities: true };
@@ -153,6 +160,185 @@ export class UsersService {
       },
     });
     return { token, sessionId: session.id };
+  }
+  async registrationSettings(db: PrismaService | Tx = this.db) {
+    const saved = await db.accountRegistrationSettings.findUnique({
+      where: { id: "global" },
+    });
+    return {
+      enabled: saved?.enabled ?? false,
+      allowRoleSelection: saved?.allowRoleSelection ?? false,
+      revision: saved?.revision ?? 0,
+    };
+  }
+  async registrationOptions() {
+    return {
+      ...(await this.registrationSettings()),
+      roles: registrationRoles.map((value) => ({
+        value,
+        label: roleLabels[value],
+      })),
+      languageCapabilities: [
+        { value: "ja" as const, label: "日语" },
+        { value: "ko" as const, label: "韩语" },
+      ],
+    };
+  }
+  async updateRegistrationSettings(
+    actor: Actor,
+    input: UpdateRegistrationSettingsDto,
+  ) {
+    // Verify the expensive password outside the account-wide transaction/barrier.
+    const admin = await this.authorize(this.db, actor, "accounts:manage");
+    await this.confirm(admin, input.currentPassword);
+    return this.write(async (tx) => {
+      const current = await this.authorize(tx, actor, "accounts:manage");
+      if (current.passwordHash !== admin.passwordHash)
+        throw new ForbiddenException("账号已更新，请重新确认密码");
+      const before = await this.registrationSettings(tx);
+      if (before.revision !== input.expectedRevision)
+        throw new ConflictException("注册设置已更新，请刷新后重试");
+      if (
+        before.enabled === input.enabled &&
+        before.allowRoleSelection === input.allowRoleSelection
+      )
+        return before;
+      const data = {
+        enabled: input.enabled,
+        allowRoleSelection: input.allowRoleSelection,
+        revision: before.revision + 1,
+      };
+      await tx.accountRegistrationSettings.upsert({
+        where: { id: "global" },
+        create: data,
+        update: data,
+      });
+      await this.audit(
+        tx,
+        actor.userId,
+        null,
+        "account.registration_settings_updated",
+        { before, after: data },
+      );
+      return data;
+    });
+  }
+  async register(input: RegisterDto) {
+    const before = await this.registrationSettings();
+    this.assertRegistration(input, before);
+    const passwordHash = await hashPassword(input.password);
+    return this.write(async (tx) => {
+      this.assertRegistration(input, await this.registrationSettings(tx));
+      const user = await tx.user.create({
+        data: {
+          username: normalizeUsername(input.username),
+          displayName: input.displayName,
+          passwordHash,
+          mustChangePassword: false,
+          roles: { create: input.roles.map((role) => ({ role })) },
+          languageCapabilities: {
+            create: input.languageCapabilities.map((language) => ({
+              language,
+            })),
+          },
+        },
+        include: withRoles,
+      });
+      await this.audit(tx, user.id, user.id, "account.self_registered", {
+        roles: input.roles,
+        languageCapabilities: input.languageCapabilities,
+      });
+      const session = await this.issue(tx, user.id);
+      return { ...session, user: this.authUser(publicUser(user)) };
+    });
+  }
+  private assertRegistration(
+    input: RegisterDto,
+    settings: {
+      enabled: boolean;
+      allowRoleSelection: boolean;
+      revision: number;
+    },
+  ) {
+    if (!settings.enabled) throw new ForbiddenException("注册暂未开放");
+    if (input.expectedSettingsRevision !== settings.revision)
+      throw new ConflictException("注册设置已更新，请重新确认");
+    if (
+      input.roles.some(
+        (role) => !registrationRoles.includes(role as Exclude<Role, "admin">),
+      )
+    )
+      throw new BadRequestException("不能注册所选职责");
+    if (
+      !settings.allowRoleSelection &&
+      (input.roles.length || input.languageCapabilities.length)
+    )
+      throw new BadRequestException("请等待管理员分配职责和语言");
+    if (settings.allowRoleSelection && !input.roles.length)
+      throw new BadRequestException("至少选择一个职责");
+  }
+  private async assertRetainedQualifications(
+    tx: Tx,
+    before: UserWithRoles,
+    roles: Role[],
+    languages: UserWithRoles["languageCapabilities"][number]["language"][],
+  ) {
+    const previousRoles = before.roles.map((r) => r.role);
+    const previousLanguages = before.languageCapabilities.map(
+      (l) => l.language,
+    );
+    // Additions cannot remove a qualification; avoid querying task history for them.
+    if (
+      previousRoles.every((r) => roles.includes(r)) &&
+      previousLanguages.every((l) => languages.includes(l))
+    )
+      return;
+    const [participants, revisionParticipants] = await Promise.all([
+      tx.workStageParticipant.findMany({
+        where: { userId: before.id, leftAt: null, submittedAt: null },
+        select: {
+          stage: true,
+          work: { select: { workNumber: true, sourceLanguage: true } },
+        },
+      }),
+      tx.reviewRevisionParticipant.findMany({
+        where: {
+          userId: before.id,
+          leftAt: null,
+          submittedAt: null,
+          revision: { status: "active" },
+        },
+        select: {
+          stage: true,
+          revision: {
+            select: {
+              work: { select: { workNumber: true, sourceLanguage: true } },
+            },
+          },
+        },
+      }),
+    ]);
+    const tasks = [
+      ...participants,
+      ...revisionParticipants.map((p) => ({
+        stage: p.stage,
+        work: p.revision.work,
+      })),
+    ];
+    const blocked = tasks.find(
+      (p) =>
+        canUserWorkStage(
+          previousRoles,
+          previousLanguages,
+          p.stage,
+          p.work.sourceLanguage,
+        ) &&
+        !canUserWorkStage(roles, languages, p.stage, p.work.sourceLanguage),
+    );
+    if (blocked)
+      throw new ConflictException(
+        `成员仍认领作品 #${blocked.work.workNumber}，请先完成或退出对应职责再修改；归档作品需先恢复`,
+      );
   }
   async login(username: string, password: string) {
     const user = await this.db.user.findUnique({
@@ -580,9 +766,12 @@ export class UsersService {
     });
   }
   async manage(actor: Actor, id: string, input: ManageUserDto) {
+    const confirmed = await this.authorize(this.db, actor, "accounts:manage");
+    await this.confirm(confirmed, input.currentPassword);
     return this.write(async (tx) => {
       const admin = await this.authorize(tx, actor, "accounts:manage");
-      await this.confirm(admin, input.currentPassword);
+      if (admin.passwordHash !== confirmed.passwordHash)
+        throw new ForbiddenException("账号已更新，请重新确认密码");
       const target = await tx.user.findUnique({
         where: { id },
         include: withRoles,
@@ -590,6 +779,13 @@ export class UsersService {
       if (!target) throw new NotFoundException("账号不存在");
       if (target.revision !== input.expectedRevision)
         throw new ConflictException("账号已更新，请刷新后重试");
+      await this.assertRetainedQualifications(
+        tx,
+        target,
+        input.roles,
+        input.languageCapabilities ??
+          target.languageCapabilities.map((l) => l.language),
+      );
       if (
         target.isActive &&
         target.roles.some((r) => r.role === Role.admin) &&

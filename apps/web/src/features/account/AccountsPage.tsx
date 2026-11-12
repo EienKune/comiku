@@ -10,6 +10,7 @@ import { Button, Surface, TextField, Badge } from "../../components/ui";
 import { useAccount } from "./account-context";
 import { client, queryClient, unwrap, useRoles } from "./api";
 import { ErrorState, Feedback, LoadingState, SectionHeading } from "./forms";
+import { RegistrationSettings } from "./RegistrationSettings";
 
 type Credential = components["schemas"]["CredentialDto"];
 type RoleOption = components["schemas"]["RoleOptionDto"];
@@ -501,6 +502,7 @@ export function AccountsPage({ enabled = true }: { enabled?: boolean }) {
       .join("、");
   return (
     <>
+      <RegistrationSettings enabled={enabled && allowed} />
       <CreateAccount roles={roles.data} onCreated={setCredential} />
       <Surface className="account-card account-content-boundary">
         <h2>团队账号 · {users.data.length}</h2>
@@ -608,6 +610,8 @@ const auditLabels: Record<string, string> = {
   "auth.password_changed": "修改密码",
   "auth.revoke_other_sessions": "退出其他会话",
   "account.created": "创建账号",
+  "account.self_registered": "成员注册账号",
+  "account.registration_settings_updated": "变更注册设置",
   "account.managed": "变更账号",
   "account.password_reset": "重置密码",
   "account.sessions_revoked": "撤销会话",
