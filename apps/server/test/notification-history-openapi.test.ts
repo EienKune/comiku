@@ -68,6 +68,8 @@ test("Swagger exports the complete notification delivery history query contract"
         ...NOTIFICATION_EVENT_KEYS,
         "notification.test",
         "birthday.reminder",
+        "work.digest",
+        "work.ready",
       ],
     });
     for (const name of ["createdFrom", "createdBefore"]) {

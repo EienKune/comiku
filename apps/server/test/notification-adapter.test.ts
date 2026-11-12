@@ -12,6 +12,12 @@ import {
   normalizeNotificationIp,
 } from "../src/notifications/notification-connections.js";
 import { OneBotHttpAdapter } from "../src/notifications/onebot-http.adapter.js";
+import {
+  NOTIFICATION_MESSAGE_PAYLOAD_MAX_BYTES,
+  notificationMessageSegments,
+  notificationMessageTextValid,
+  type NotificationMessageSegment,
+} from "../src/notifications/notification-message-segments.js";
 
 const secret = "SECRET_CANARY_NEVER_EXPOSE";
 const entry = (endpoint: string) => ({
@@ -131,9 +137,296 @@ test("adapter pins destination and sends text segments with bearer token, reusin
   );
 });
 
+test("server-frozen mentions use OneBot at segments while arbitrary segments never reach transport", async () => {
+  const bodies: unknown[] = [];
+  await withServer(
+    (req, res) => {
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      req.on("end", () => {
+        bodies.push(JSON.parse(raw));
+        res.end(
+          JSON.stringify({ status: "ok", retcode: 0, data: { message_id: 7 } }),
+        );
+      });
+    },
+    async (endpoint) => {
+      const adapter = new OneBotHttpAdapter();
+      const connection = registry(endpoint).get("test")!;
+      const segments = [
+        { type: "text", data: { text: "[CQ:at,qq=all] 待交稿 " } },
+        { type: "at", data: { qq: "10001000" } },
+      ];
+      try {
+        assert.equal(
+          (
+            await adapter.send(
+              connection,
+              "123",
+              "待交稿 @合成成员",
+              undefined,
+              segments,
+            )
+          ).status,
+          "accepted",
+        );
+        assert.deepEqual(bodies, [
+          { group_id: "123", message: segments, auto_escape: true },
+        ]);
+        for (const invalid of [
+          [],
+          [{ type: "at", data: { qq: "all" } }],
+          [{ type: "text", data: { text: "x", extra: "no" } }],
+          [{ type: "image", data: { file: "file:///private" } }],
+          [...segments, segments[1]],
+          [{ type: "text", data: { text: "x".repeat(1001) } }],
+          [...segments, { type: "text", data: { text: "x" }, extra: true }],
+        ]) {
+          const result = await adapter.send(
+            connection,
+            "123",
+            "待交稿",
+            undefined,
+            invalid,
+          );
+          assert.equal(result.status, "failed");
+          assert.equal(result.sendBoundaryCrossed, false);
+        }
+        assert.equal(bodies.length, 1);
+      } finally {
+        adapter.close();
+      }
+    },
+  );
+});
+
+test("message policies preserve standard limits while full digests use escaped UTF-8 byte budgets", () => {
+  assert.equal(notificationMessageTextValid("😀".repeat(1000)), true);
+  assert.equal(notificationMessageTextValid("😀".repeat(1001)), false);
+  const ordinaryText = { type: "text", data: { text: "x" } };
+  const twentySegments = Array.from({ length: 20 }, () => ordinaryText);
+  assert.ok(notificationMessageSegments(twentySegments));
+  assert.equal(
+    notificationMessageSegments([...twentySegments, ordinaryText]),
+    null,
+  );
+  const sixMentions = Array.from({ length: 6 }, (_, index) => ({
+    type: "at",
+    data: { qq: String(10001000 + index) },
+  }));
+  assert.equal(
+    notificationMessageSegments([ordinaryText, ...sixMentions]),
+    null,
+  );
+  assert.ok(
+    notificationMessageSegments([ordinaryText, ...sixMentions], "work_digest"),
+  );
+
+  for (const unit of ["中", "😀", '"', "\\", "\u0000", "\ud800", "\udc00"]) {
+    const escapedUnitBytes = Buffer.byteLength(JSON.stringify(unit)) - 2;
+    const withinBudget = unit.repeat(
+      Math.floor(
+        (NOTIFICATION_MESSAGE_PAYLOAD_MAX_BYTES - 1024) / escapedUnitBytes,
+      ),
+    );
+    assert.equal(
+      notificationMessageTextValid(withinBudget, "work_digest"),
+      true,
+    );
+    assert.ok(
+      notificationMessageSegments(
+        [{ type: "text", data: { text: withinBudget } }],
+        "work_digest",
+      ),
+    );
+    const overBudget = unit.repeat(
+      Math.ceil(NOTIFICATION_MESSAGE_PAYLOAD_MAX_BYTES / escapedUnitBytes),
+    );
+    assert.equal(
+      notificationMessageTextValid(overBudget, "work_digest"),
+      false,
+    );
+    assert.equal(
+      notificationMessageSegments(
+        [{ type: "text", data: { text: overBudget } }],
+        "work_digest",
+      ),
+      null,
+    );
+  }
+  const manySmallSegments = Array.from({ length: 10_000 }, () => ordinaryText);
+  assert.equal(
+    notificationMessageSegments(manySmallSegments, "work_digest"),
+    null,
+  );
+  assert.equal(notificationMessageTextValid("", "work_digest"), false);
+  assert.equal(notificationMessageSegments([], "work_digest"), null);
+  for (const invalid of [
+    [{ type: "at", data: { qq: "10001000" } }],
+    [ordinaryText, { type: "at", data: { qq: "all" } }],
+    [ordinaryText, sixMentions[0], sixMentions[0]],
+    [{ ...ordinaryText, extra: true }],
+    [{ type: "text", data: { text: "x", extra: true } }],
+    [ordinaryText, { type: "image", data: { file: "file:///private" } }],
+  ])
+    assert.equal(notificationMessageSegments(invalid, "work_digest"), null);
+});
+
+test("a trusted full digest sends all text and more than twenty distinct mentions in one request", async () => {
+  const bodies: {
+    group_id: string;
+    message: NotificationMessageSegment[];
+    auto_escape: boolean;
+  }[] = [];
+  await withServer(
+    (req, res) => {
+      assert.equal(req.url, "/send_group_msg");
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      req.on("end", () => {
+        assert.ok(
+          Buffer.byteLength(raw) <= NOTIFICATION_MESSAGE_PAYLOAD_MAX_BYTES,
+        );
+        bodies.push(JSON.parse(raw));
+        res.end(
+          JSON.stringify({ status: "ok", retcode: 0, data: { message_id: 8 } }),
+        );
+      });
+    },
+    async (endpoint) => {
+      const adapter = new OneBotHttpAdapter();
+      const connection = registry(endpoint).get("test")!;
+      const firstText =
+        "[CQ:at,qq=all] 超72小时未交稿\n" + "正文😀".repeat(400);
+      const lastText = "\n完整末尾：https://example.test/works";
+      const text = firstText + lastText;
+      const segments: NotificationMessageSegment[] = [
+        { type: "text", data: { text: firstText } },
+        ...Array.from({ length: 24 }, (_, index) => ({
+          type: "at" as const,
+          data: { qq: String(10001000 + index) },
+        })),
+        { type: "text", data: { text: lastText } },
+      ];
+      try {
+        assert.deepEqual(
+          await adapter.send(connection, "123", text, undefined, segments),
+          {
+            status: "failed",
+            errorCode: "notification_payload_invalid",
+            sendBoundaryCrossed: false,
+          },
+        );
+        assert.deepEqual(
+          await adapter.send(
+            connection,
+            "123",
+            text,
+            undefined,
+            segments,
+            "work_digest",
+          ),
+          {
+            status: "accepted",
+            providerMessageId: "8",
+            sendBoundaryCrossed: true,
+          },
+        );
+        assert.deepEqual(bodies, [
+          { group_id: "123", message: segments, auto_escape: true },
+        ]);
+      } finally {
+        adapter.close();
+      }
+    },
+  );
+});
+
+test("full digests reject mismatched frozen text and oversized escaped payloads before lookup or send", async () => {
+  let requests = 0,
+    lookups = 0;
+  await withServer(
+    (_req, res) => {
+      requests++;
+      res.end("{}");
+    },
+    async (endpoint) => {
+      const adapter = new OneBotHttpAdapter({
+        lookup: async () => {
+          lookups++;
+          return [{ address: "127.0.0.1", family: 4 }];
+        },
+      });
+      const connection = registry(
+        endpoint.replace("127.0.0.1", "bot.example"),
+      ).get("test")!;
+      const text = "完整摘要".repeat(300);
+      const segments = [{ type: "text", data: { text } }];
+      try {
+        for (const [bodyText, frozen] of [
+          [text, undefined],
+          [text, [{ type: "text", data: { text: text + "extra" } }]],
+          [text + "extra", segments],
+          [
+            text,
+            [
+              { type: "text", data: { text: "prefix" } },
+              { type: "text", data: { text } },
+            ],
+          ],
+          [text, [...segments, { type: "at", data: { qq: "all" } }]],
+          [
+            text,
+            [
+              ...segments,
+              { type: "at", data: { qq: "10001000" } },
+              { type: "at", data: { qq: "10001000" } },
+            ],
+          ],
+          ...["中", "😀", '"', "\u0000", "\ud800"].map((unit) => {
+            const oversized = unit.repeat(
+              NOTIFICATION_MESSAGE_PAYLOAD_MAX_BYTES,
+            );
+            return [oversized, [{ type: "text", data: { text: oversized } }]];
+          }),
+        ] as [string, unknown][]) {
+          assert.deepEqual(
+            await adapter.send(
+              connection,
+              "123",
+              bodyText,
+              undefined,
+              frozen,
+              "work_digest",
+            ),
+            {
+              status: "failed",
+              errorCode: "notification_payload_invalid",
+              sendBoundaryCrossed: false,
+            },
+          );
+        }
+        assert.equal(lookups, 0);
+        assert.equal(requests, 0);
+      } finally {
+        adapter.close();
+      }
+    },
+  );
+});
+
 test("async, malformed, missing receipt, redirects, and 5xx become unknown without leaks", async () => {
   for (const fixture of [
     { code: 200, body: JSON.stringify({ status: "async", retcode: 1 }) },
+    {
+      code: 200,
+      body: JSON.stringify({
+        status: "failed",
+        retcode: 12001,
+        wording: secret,
+        message: "98765432100123456789",
+      }),
+    },
     { code: 200, body: JSON.stringify({ status: "ok", retcode: 0, data: {} }) },
     { code: 200, body: "SECRET_CANARY" },
     { code: 302, body: "", location: "http://169.254.169.254/" },
@@ -157,6 +450,10 @@ test("async, malformed, missing receipt, redirects, and 5xx become unknown witho
           assert.equal(result.status, "unknown");
           assert.equal(result.sendBoundaryCrossed, true);
           assert.doesNotMatch(JSON.stringify(result), /SECRET_CANARY|169\.254/);
+          assert.doesNotMatch(JSON.stringify(result), /98765432100123456789/);
+          assert.equal(result.diagnostics?.httpStatus, fixture.code);
+          if (fixture.body.includes('"retcode":12001'))
+            assert.equal(result.diagnostics?.retcode, 12001);
         } finally {
           adapter.close();
         }
@@ -360,6 +657,10 @@ test("explicit provider rejection is permanent and never leaks provider text", a
               status: "failed",
               errorCode: "notification_provider_rejected",
               sendBoundaryCrossed: true,
+              diagnostics: {
+                httpStatus: fixture.code,
+                ...(fixture.code === 200 && { retcode: 1404 }),
+              },
             },
           );
         } finally {

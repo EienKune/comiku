@@ -11,7 +11,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AccountLayout } from "./AccountApp";
 import { LoginPage } from "./LoginPage";
 import { PasswordPage } from "./ProfilePage";
-import { SettingsRoutingContext } from "./settings-routing";
 
 const mocks = vi.hoisted(() => ({ current: null as unknown, post: vi.fn() }));
 vi.mock("./api", () => ({
@@ -33,7 +32,6 @@ vi.mock("./use-session-activity", () => ({
 }));
 const workPath =
   "/works/00000000-0000-4000-8000-000000000001?from=notification#history";
-const closeSettings = vi.fn();
 function member(mustChangePassword = false) {
   return {
     id: "00000000-0000-4000-8000-000000000002",
@@ -67,21 +65,17 @@ function setup(
       }
     >
       <MemoryRouter initialEntries={[initial]}>
-        <SettingsRoutingContext.Provider
-          value={{ background: null, close: closeSettings }}
-        >
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route element={<AccountLayout />}>
-              <Route
-                path="/works/:id"
-                element={<Destination label="作品目标" />}
-              />
-              <Route path="/settings/password" element={<PasswordPage />} />
-              <Route path="/" element={<Destination label="首页" />} />
-            </Route>
-          </Routes>
-        </SettingsRoutingContext.Provider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route element={<AccountLayout />}>
+            <Route
+              path="/works/:id"
+              element={<Destination label="作品目标" />}
+            />
+            <Route path="/settings/password" element={<PasswordPage />} />
+            <Route path="/" element={<Destination label="首页" />} />
+          </Route>
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -112,14 +106,7 @@ async function changePassword(temporary = true) {
 }
 beforeEach(() => {
   mocks.current = null;
-  closeSettings.mockReset();
   mocks.post.mockImplementation(async () => ({ data: member() }));
-  HTMLDialogElement.prototype.showModal = function () {
-    this.setAttribute("open", "");
-  };
-  HTMLDialogElement.prototype.close = function () {
-    this.removeAttribute("open");
-  };
 });
 afterEach(() => {
   cleanup();
@@ -157,11 +144,13 @@ test("direct login without a saved target still opens the home page", async () =
   await login();
   await screen.findByText("首页:/");
 });
-test("ordinary password settings close through the existing settings flow", async () => {
+test("ordinary password settings remain on the page and show success", async () => {
   mocks.current = member();
   setup({ pathname: "/settings/password", state: { returnTo: workPath } });
   await changePassword(false);
-  await waitFor(() => expect(closeSettings).toHaveBeenCalledOnce());
+  await screen.findByText("密码已更新");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByRole("heading", { name: "修改密码" })).toBeTruthy();
   expect(screen.queryByText("作品目标:" + workPath)).toBeNull();
 });
 for (const target of [

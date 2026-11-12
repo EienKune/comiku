@@ -183,6 +183,8 @@ export class NotificationsController {
       ...NOTIFICATION_EVENT_KEYS,
       "notification.test",
       "birthday.reminder",
+      "work.digest",
+      "work.ready",
     ],
   })
   @ApiQuery({

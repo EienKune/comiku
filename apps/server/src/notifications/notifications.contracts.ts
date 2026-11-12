@@ -98,6 +98,12 @@ export interface NotificationSendResult {
   errorCode?: string;
   providerMessageId?: string;
   sendBoundaryCrossed: boolean;
+  /** Safe transient numeric evidence only; never persist or expose a raw response. */
+  diagnostics?: NotificationSendDiagnostics;
+}
+export interface NotificationSendDiagnostics {
+  httpStatus?: number;
+  retcode?: number;
 }
 
 /** Module-internal immutable routing snapshot. Never accepted by HTTP controllers. */

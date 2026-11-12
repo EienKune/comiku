@@ -91,6 +91,39 @@
 .account-narrow {
   max-width: 38rem;
 }
+.account-settings-page {
+  width: 100%;
+}
+.account-settings-page .settings-pane {
+  max-width: 44rem;
+}
+.account-settings-tabs {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--space-5);
+}
+.account-settings-tabs a {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: var(--space-2);
+  white-space: nowrap;
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+  padding: var(--space-3) var(--space-4);
+  min-height: 44px;
+}
+.account-settings-tabs a[aria-current="page"] {
+  border-bottom-color: var(--color-brand);
+  color: var(--color-text);
+  font-weight: var(--font-weight-control);
+}
+.account-settings-tabs a:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
 .account-form {
   display: grid;
   gap: var(--space-5);
