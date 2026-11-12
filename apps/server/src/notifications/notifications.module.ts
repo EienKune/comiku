@@ -10,6 +10,8 @@ import { NotificationWorkEventBridgeService } from "./notification-work-event-br
 import { NotificationsController } from "./notifications.controller.js";
 import { NotificationsService } from "./notifications.service.js";
 import { OneBotHttpAdapter } from "./onebot-http.adapter.js";
+import { WorkRemindersService } from "../work-reminders/work-reminders.service.js";
+import { WorkRemindersController } from "../work-reminders/work-reminders.controller.js";
 
 // Explicit environment injection keeps offline OpenAPI exports and synthetic
 // application construction independent from the machine's private bot config.
@@ -40,7 +42,7 @@ class NotificationTransportLifecycle implements OnModuleDestroy {
 
 @Module({
   imports: [DatabaseModule, JobsModule],
-  controllers: [NotificationsController],
+  controllers: [NotificationsController, WorkRemindersController],
   providers: [
     notificationConnectionProvider,
     OneBotHttpAdapter,
@@ -50,7 +52,13 @@ class NotificationTransportLifecycle implements OnModuleDestroy {
     NotificationsService,
     NotificationStatusService,
     NotificationRuntimeService,
+    WorkRemindersService,
   ],
-  exports: [NotificationPublisherService, NotificationRuntimeService],
+  exports: [
+    NotificationPublisherService,
+    NotificationRuntimeService,
+    NotificationConnectionRegistry,
+    WorkRemindersService,
+  ],
 })
 export class NotificationsModule {}

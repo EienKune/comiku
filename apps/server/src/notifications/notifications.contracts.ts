@@ -42,6 +42,7 @@ export interface NotificationSafeSnapshot {
   metadataObservedAt?: string;
   metadataOrigin?: "capture_current";
   stage?: WorkStage;
+  participationKind?: "claim" | "join";
   fromWorkflowStatus?: WorkflowStatus;
   toWorkflowStatus?: WorkflowStatus;
   fromReviewStatus?: ReviewStatus;
@@ -61,6 +62,7 @@ export interface NotificationEventInput {
   metadataObservedAt?: string;
   metadataOrigin?: "capture_current";
   stage?: WorkStage;
+  participationKind?: "claim" | "join";
   fromWorkflowStatus?: WorkflowStatus;
   toWorkflowStatus?: WorkflowStatus;
   fromReviewStatus?: ReviewStatus;
@@ -96,6 +98,12 @@ export interface NotificationSendResult {
   errorCode?: string;
   providerMessageId?: string;
   sendBoundaryCrossed: boolean;
+  /** Safe transient numeric evidence only; never persist or expose a raw response. */
+  diagnostics?: NotificationSendDiagnostics;
+}
+export interface NotificationSendDiagnostics {
+  httpStatus?: number;
+  retcode?: number;
 }
 
 /** Module-internal immutable routing snapshot. Never accepted by HTTP controllers. */

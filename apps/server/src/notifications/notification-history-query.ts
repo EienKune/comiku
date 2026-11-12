@@ -46,6 +46,8 @@ export function normalizeNotificationHistoryQuery(
         query.workNumber < 1 ||
         query.workNumber > 2147483647)) ||
     (query.eventType !== undefined &&
+      query.eventType !== "work.digest" &&
+      query.eventType !== "work.ready" &&
       !NOTIFICATION_EVENT_TYPES.some((event) => event.type === query.eventType))
   )
     throw invalid();

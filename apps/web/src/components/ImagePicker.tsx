@@ -49,12 +49,14 @@ export function ImagePicker({
   avatarField?: ReactNode;
   avatarFallback?: ReactNode;
   selectionStatus?: string;
-  formats?: "images" | "source";
+  formats?: "images" | "source" | "avatar";
 }) {
   const input = useRef<HTMLInputElement>(null);
   const id = useId();
   const [error, setError] = useState("");
   const sourceFiles = formats === "source";
+  const avatarFiles = formats === "avatar";
+  const imageFormats = avatarFiles ? "PNG、JPEG、WebP、GIF" : "PNG、JPEG、WebP";
   const noun = sourceFiles ? "文件" : "图片";
   const sizeLimit = `${maxFileSize / 1024 / 1024} MiB`;
   return (
@@ -69,7 +71,9 @@ export function ImagePicker({
         accept={
           sourceFiles
             ? ".zip,image/png,image/jpeg,image/webp,image/gif"
-            : accept
+            : avatarFiles
+              ? `${accept},image/gif`
+              : accept
         }
         multiple={multiple}
         disabled={disabled}
@@ -78,19 +82,29 @@ export function ImagePicker({
           event.currentTarget.value = "";
           if (disabled || !selected.length) return;
           if (
-            selected.some(
-              (file) =>
-                !(
-                  sourceFiles
-                    ? /\.(zip|png|jpe?g|webp|gif)$/i
-                    : /\.(png|jpe?g|webp)$/i
-                ).test(file.name),
-            )
+            selected.some((file) => {
+              if (avatarFiles)
+                return file.type
+                  ? ![
+                      "image/png",
+                      "image/jpeg",
+                      "image/webp",
+                      "image/gif",
+                    ].includes(file.type)
+                  : !/\.(png|jpe?g|webp|gif)$/i.test(file.name);
+              return !(
+                sourceFiles
+                  ? /\.(zip|png|jpe?g|webp|gif)$/i
+                  : /\.(png|jpe?g|webp)$/i
+              ).test(file.name);
+            })
           ) {
             setError(
               sourceFiles
                 ? "请选择图片或 ZIP 文件"
-                : "请选择 PNG、JPEG 或 WebP 图片",
+                : avatarFiles
+                  ? "请选择 PNG、JPEG、WebP 或 GIF 图片"
+                  : "请选择 PNG、JPEG 或 WebP 图片",
             );
             return;
           }
@@ -176,14 +190,14 @@ export function ImagePicker({
               : `选择${noun}`}
           </Button>
           <small id={`${id}-hint`}>
-            {sourceFiles ? "图片或 ZIP" : "PNG、JPEG、WebP"} ·{" "}
+            {sourceFiles ? "图片或 ZIP" : imageFormats} ·{" "}
             {multiple ? `最多 ${maxFiles} 个 · ` : ""}每个 {sizeLimit}
           </small>
         </div>
       )}
       {variant === "avatar" && (
         <small id={`${id}-hint`} className="ui-image-picker__avatar-hint">
-          PNG、JPEG、WebP · 每张 {sizeLimit}
+          {imageFormats} · 每张 {sizeLimit}
         </small>
       )}
       {variant !== "avatar" && !!files.length && (

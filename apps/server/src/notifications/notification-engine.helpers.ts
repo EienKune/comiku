@@ -1,3 +1,4 @@
+import { notificationResourceKind } from "./notification-resource.js";
 import { ForbiddenException } from "@nestjs/common";
 import { permissionsFor } from "../common/access.js";
 import type {
@@ -75,6 +76,7 @@ export function deliveryDto(
     groupId: row.groupId,
     connectionKey: row.connectionKey,
     eventType: row.event.type,
+    resourceKind: notificationResourceKind(row.event),
     workNumber: snapshot.workNumber ?? null,
     status: row.status as (typeof DELIVERY_STATUSES)[number],
     attempts: row.attempts,

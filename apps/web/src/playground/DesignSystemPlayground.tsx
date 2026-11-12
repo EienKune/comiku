@@ -78,6 +78,7 @@ const colorTokens = [
 function ImagePickerDemo() {
   const [name, setName] = useState("合成作者");
   const [avatar, setAvatar] = useState<File[]>([]);
+  const [personalAvatar, setPersonalAvatar] = useState<File[]>([]);
   const [sources, setSources] = useState<File[]>([]);
   const [evidence, setEvidence] = useState<File[]>([]);
   const [disabled, setDisabled] = useState(false);
@@ -116,7 +117,7 @@ function ImagePickerDemo() {
       className="component-panel component-panel--wide"
       id="image-picker-demo"
     >
-      <h3>作者图片选择</h3>
+      <h3>图片选择</h3>
       <div className="button-showcase">
         <Button
           variant="secondary"
@@ -151,6 +152,17 @@ function ImagePickerDemo() {
           }
           files={avatar}
           onChange={setAvatar}
+          maxFileSize={5 * 1024 * 1024}
+          disabled={disabled}
+        />
+        <ImagePicker
+          label="示例个人头像"
+          variant="avatar"
+          formats="avatar"
+          currentAvatar={<Avatar name="合成成员" size="lg" />}
+          avatarFallback={<Avatar name="合成成员" size="lg" />}
+          files={personalAvatar}
+          onChange={setPersonalAvatar}
           maxFileSize={5 * 1024 * 1024}
           disabled={disabled}
         />

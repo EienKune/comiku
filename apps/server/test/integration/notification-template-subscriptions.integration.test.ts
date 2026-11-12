@@ -207,7 +207,7 @@ test(
             await db.notificationWorkEventReceipt.findUniqueOrThrow({
               where: { sourceEventId: event.id },
             });
-          assert.equal(receipt.inputVersion, 2);
+          assert.equal(receipt.inputVersion, 3);
           assert.equal(receipt.status, "recorded");
           await save({
             titleEnabled: false,

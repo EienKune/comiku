@@ -19,10 +19,8 @@ import {
   notificationPayloadHash,
   renderNotificationMessage,
 } from "./notification-events.js";
-import {
-  renderTemplateNotificationMessage,
-  validateNotificationReceiptInput,
-} from "./notification-content.js";
+import { renderTemplateNotificationMessage } from "./notification-content.js";
+import { validateNotificationReceiptInput } from "./notification-receipt-input.js";
 import {
   readNotificationTemplates,
   matchesSubscriptionRule,
@@ -77,7 +75,7 @@ export function validateNotificationFrozenRoutes(
       !/^[0-9a-f]{64}$/i.test(route.connectionFingerprint) ||
       typeof route.includeDetails !== "boolean" ||
       route.templateVersion !== 1 ||
-      (inputVersion === 2 &&
+      ((inputVersion === 2 || inputVersion === 3) &&
         (!route.content ||
           typeof route.content !== "object" ||
           typeof route.content.text !== "string" ||
@@ -87,7 +85,7 @@ export function validateNotificationFrozenRoutes(
     )
       throw new Error("notification_routes_invalid");
     ids.add(route.id);
-    if (inputVersion === 2) {
+    if (inputVersion === 2 || inputVersion === 3) {
       const exactKeys = (object: object, keys: string[]) =>
         Object.keys(object).length === keys.length &&
         Object.keys(object).every((key) => keys.includes(key));
@@ -398,7 +396,7 @@ export class NotificationWorkEventBridgeService {
           sourceEventId: source.id,
           resourceId: source.workId,
           resourceOrdinal,
-          inputVersion: 2,
+          inputVersion: 3,
           safeInput: input
             ? (JSON.parse(JSON.stringify(input)) as Prisma.InputJsonValue)
             : {},

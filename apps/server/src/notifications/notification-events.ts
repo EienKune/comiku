@@ -15,24 +15,24 @@ export const NOTIFICATION_EVENT_TYPES: readonly {
   type: NotificationEventType;
   label: string;
 }[] = Object.freeze([
-  { type: "imported", label: "已导入" },
-  { type: "stage_joined", label: "已加入阶段" },
-  { type: "stage_started", label: "已开始阶段" },
-  { type: "typeset_handoff_started", label: "已开始嵌字交接" },
-  { type: "stage_left", label: "已退出阶段" },
-  { type: "stage_assignment_updated", label: "阶段分工已调整" },
-  { type: "stage_submitted", label: "阶段已提交" },
+  { type: "imported", label: "作品已入库" },
+  { type: "stage_joined", label: "制作任务已接取" },
+  { type: "stage_started", label: "制作已开始" },
+  { type: "typeset_handoff_started", label: "嵌字交接已开始" },
+  { type: "stage_left", label: "制作参与已退出" },
+  { type: "stage_assignment_updated", label: "页码分工已调整" },
+  { type: "stage_submitted", label: "制作成果已提交" },
   { type: "proofreading_skipped", label: "已跳过校对" },
-  { type: "stage_submission_cancelled", label: "阶段提交已撤销" },
-  { type: "review_opened", label: "审核已开启" },
-  { type: "review_withdrawn", label: "审核已撤回" },
-  { type: "review_resumed", label: "审核已恢复" },
-  { type: "archived", label: "已归档" },
-  { type: "restored", label: "已恢复" },
+  { type: "stage_submission_cancelled", label: "制作成果提交已撤回" },
+  { type: "review_opened", label: "制作已暂停，原作内容待确认" },
+  { type: "review_withdrawn", label: "已撤销内容审核申请，继续制作" },
+  { type: "review_resumed", label: "已确认继续制作" },
+  { type: "archived", label: "作品已归档" },
+  { type: "restored", label: "作品已恢复" },
   { type: "publish_confirmed", label: "发布已确认" },
-  { type: "metadata_updated", label: "作品资料已更新" },
+  { type: "metadata_updated", label: "作品资料已保存" },
   { type: "collaboration_mode_updated", label: "协作模式已调整" },
-  { type: "stage_credit_updated", label: "阶段署名已更新" },
+  { type: "stage_credit_updated", label: "署名已更新" },
   { type: "stage_contribution_completed", label: "个人贡献已完成" },
   { type: "translation_imported", label: "译文已导入" },
   { type: "typeset_version_uploaded", label: "成图版本已上传" },
@@ -50,6 +50,35 @@ export const NOTIFICATION_EVENT_KEYS: readonly NotificationWorkEventType[] =
 const labels = new Map(
   NOTIFICATION_EVENT_TYPES.map((item) => [item.type, item.label]),
 );
+// The version-1 renderer is a separate immutable compatibility format. Catalog
+// copy changes must not rewrite a legacy receipt's first rendered body.
+const legacyLabels = new Map<NotificationEventType, string>([
+  ["imported", "已导入"],
+  ["stage_joined", "已加入阶段"],
+  ["stage_started", "已开始阶段"],
+  ["typeset_handoff_started", "已开始嵌字交接"],
+  ["stage_left", "已退出阶段"],
+  ["stage_assignment_updated", "阶段分工已调整"],
+  ["stage_submitted", "阶段已提交"],
+  ["proofreading_skipped", "已跳过校对"],
+  ["stage_submission_cancelled", "阶段提交已撤销"],
+  ["review_opened", "审核已开启"],
+  ["review_withdrawn", "审核已撤回"],
+  ["review_resumed", "审核已恢复"],
+  ["archived", "已归档"],
+  ["restored", "已恢复"],
+  ["publish_confirmed", "发布已确认"],
+  ["metadata_updated", "作品资料已更新"],
+  ["collaboration_mode_updated", "协作模式已调整"],
+  ["stage_credit_updated", "阶段署名已更新"],
+  ["stage_contribution_completed", "个人贡献已完成"],
+  ["translation_imported", "译文已导入"],
+  ["typeset_version_uploaded", "成图版本已上传"],
+  ["typeset_version_selected", "成图版本已选用"],
+  ["typeset_version_deleted", "成图版本已删除"],
+  ["typeset_version_restored", "成图版本已恢复"],
+  ["notification.test", "通知测试"],
+]);
 const stageLabels: Record<WorkStage, string> = {
   [WorkStage.translate]: "翻译",
   [WorkStage.proofread]: "校对",
@@ -120,6 +149,9 @@ export function normalizeNotificationEvent(
         input.workNumber < 1 ||
         input.workNumber > 2_147_483_647)) ||
     (input.stage !== undefined && !stages.has(input.stage)) ||
+    (input.participationKind !== undefined &&
+      (input.type !== "stage_joined" ||
+        !["claim", "join"].includes(input.participationKind))) ||
     [input.fromWorkflowStatus, input.toWorkflowStatus].some(
       (value) => value !== undefined && !workflowStatuses.has(value),
     ) ||
@@ -161,6 +193,9 @@ export function normalizeNotificationEvent(
       ...(input.toReviewStatus !== undefined && {
         toReviewStatus: input.toReviewStatus,
       }),
+      ...(input.participationKind !== undefined && {
+        participationKind: input.participationKind,
+      }),
     },
   };
 }
@@ -183,7 +218,7 @@ export function renderNotificationMessage(
 ): string {
   const lines = [
     options.historicalReplay ? "【Comiku 历史补发】" : "【Comiku 通知】",
-    `${event.snapshot.workNumber == null ? "通知" : `#${event.snapshot.workNumber}`} · ${labels.get(event.type) ?? "事件"}`,
+    `${event.snapshot.workNumber == null ? "通知" : `#${event.snapshot.workNumber}`} · ${legacyLabels.get(event.type) ?? "事件"}`,
     `发生时间：${event.occurredAt.toISOString()}`,
   ];
   const snapshot = event.snapshot;
@@ -393,6 +428,7 @@ export function notificationPreviewEvent(
     aggregateVersion: 1,
     occurredAt: "2026-01-01T00:00:00.000Z",
     workNumber: 1001,
+    ...(type === "stage_joined" && { participationKind: "claim" }),
     ...(missingMetadata
       ? {}
       : {
