@@ -120,7 +120,7 @@ test("malformed, unsupported and over-pixel-limit images have safe errors", asyn
   await assert.rejects(
     () => fingerprintImage(large),
     (e: unknown) =>
-      e instanceof FingerprintInputError && e.code === "invalid_image",
+      e instanceof FingerprintInputError && e.code === "pixel_limit",
   );
 });
 

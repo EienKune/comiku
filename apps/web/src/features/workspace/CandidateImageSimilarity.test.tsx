@@ -141,6 +141,22 @@ test("only preparing current image polls, stops at partial coverage, and still s
     screen.getByRole("button", { name: "对照 对白差分 第 2 页" }),
   ).toBeTruthy();
 });
+test("pixel-limited originals explain the resource boundary and retain exact-file matches", async () => {
+  vi.spyOn(client, "POST").mockResolvedValue({
+    data: { ...result("failed"), error: "pixel_limit" },
+    response: new Response(),
+  } as never);
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "查找相似图" }));
+  await screen.findByText(
+    "当前图片超过 4,000 万像素的处理上限，暂时只能检查文件是否相同。",
+  );
+  expect(screen.queryByText(/当前图片无法解码/)).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "对照 对白差分 第 2 页" }),
+  ).toBeTruthy();
+});
+
 test("closing aborts the request and ignores a late result before another query opens", async () => {
   let finish:
     ((value: { data: Result; response: Response }) => void) | undefined;

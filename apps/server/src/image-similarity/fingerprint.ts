@@ -113,6 +113,11 @@ export async function fingerprintImage(body: Uint8Array) {
     };
   } catch (error) {
     if (error instanceof FingerprintInputError) throw error;
+    if (
+      error instanceof Error &&
+      error.message === "Input image exceeds pixel limit"
+    )
+      throw new FingerprintInputError("pixel_limit");
     throw new FingerprintInputError("invalid_image");
   }
 }

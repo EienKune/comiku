@@ -2,6 +2,8 @@
 
 This tracked document records reusable implementation constraints. Business rules live in [architecture](../architecture.md), configuration in [configuration](../configuration.md), and visual rules in [DESIGN](../../DESIGN.md). Keep machine addresses, credentials, real samples, local experiments and deployment session notes outside the public repository.
 
+- Fingerprint decoding limits are resource-policy failures, not evidence of a corrupt original. Map Sharp's pixel-limit rejection to `pixel_limit`, retain exact-file matching, and test that distinction with a synthetic oversized image. Do not relax the decoding budget or change fingerprint identity merely to clear historical failures.
+
 ## CI and regression scope
 
 - Full CI runs on pushes to `main`/`dev` and on pull requests to any branch. Keep PR targets unfiltered so stacked reviews retain checks; ordinary feature pushes do not duplicate the PR run. Run affected tests during small iterations and complete the required checks before review or release.
