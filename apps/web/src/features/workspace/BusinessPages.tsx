@@ -1706,7 +1706,7 @@ export function AuthorDetailPage() {
               </p>
             )}
             {user.permissions.includes("authors:admin") && (
-              <div className="workspace-inline-actions">
+              <div className="workspace-inline-actions workspace-author-actions">
                 <AuthorArchiveControl author={author} />
               </div>
             )}
