@@ -64,7 +64,12 @@ test("Swagger exports the complete notification delivery history query contract"
     });
     assert.deepEqual(query.get("eventType"), {
       type: "string",
-      enum: [...NOTIFICATION_EVENT_KEYS, "notification.test", "work.digest"],
+      enum: [
+        ...NOTIFICATION_EVENT_KEYS,
+        "notification.test",
+        "work.digest",
+        "work.ready",
+      ],
     });
     for (const name of ["createdFrom", "createdBefore"]) {
       assert.deepEqual(query.get(name), {

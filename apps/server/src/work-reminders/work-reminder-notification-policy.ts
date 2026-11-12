@@ -9,7 +9,7 @@ import {
   MAX_OBSERVATION_GAP_MILLISECONDS,
   OVERDUE_MILLISECONDS,
 } from "./work-reminder-policy.js";
-import type { WorkDigestSnapshot } from "./work-reminder-render.js";
+import type { WorkReminderSnapshot } from "./work-reminder-render.js";
 
 export async function lockWorkReminderSettings(tx: Prisma.TransactionClient) {
   await tx.$queryRaw`SELECT id FROM work_reminder_settings WHERE id = 'global' FOR SHARE`;
@@ -24,17 +24,28 @@ export async function lockWorkReminderSubscription(
 }
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-function snapshot(value: unknown): WorkDigestSnapshot | null {
+function snapshot(value: unknown): WorkReminderSnapshot | null {
   if (!value || typeof value !== "object") return null;
-  const row = value as WorkDigestSnapshot;
+  const row = value as WorkReminderSnapshot;
   if (
-    row.kind !== "work_digest" ||
+    !["work_digest", "work_ready"].includes(row.kind) ||
     !Array.isArray(row.items) ||
     row.items.length > 5 ||
     !Number.isFinite(Date.parse(row.dueAt)) ||
     !Number.isFinite(Date.parse(row.validBefore)) ||
     !Number.isFinite(Date.parse(row.observedAt)) ||
     Date.parse(row.dueAt) >= Date.parse(row.validBefore)
+  )
+    return null;
+  if (
+    row.kind === "work_ready" &&
+    (row.items.length !== 1 || row.items[0]?.kind !== "ready")
+  )
+    return null;
+  if (
+    row.kind === "work_digest" &&
+    row.formatVersion === 2 &&
+    row.items.some((item) => !item || item.kind !== "overdue")
   )
     return null;
   for (const item of row.items) {
@@ -109,14 +120,18 @@ export async function workReminderDeliveryInvalidReason(
     !settings?.enabled ||
     settings.generation !== generations.reminderGeneration ||
     settings.acceptAfter > dueAt ||
-    !settings.sendTimes.includes(frozen.slot)
+    (frozen.kind === "work_digest" && !settings.sendTimes.includes(frozen.slot))
   )
     return "work_reminder_settings_changed";
   if (
     !scope ||
     scope.generation !== generations.reminderScopeGeneration ||
     scope.acceptAfter > dueAt ||
-    !(scope.digestEnabled || scope.readyEnabled || scope.overdueEnabled)
+    !(frozen.kind === "work_ready"
+      ? scope.readyEnabled
+      : scope.digestEnabled ||
+        scope.overdueEnabled ||
+        (frozen.formatVersion !== 2 && scope.readyEnabled))
   )
     return "work_reminder_subscription_changed";
   if (!frozen.items.length) return null;

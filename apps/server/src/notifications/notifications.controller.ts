@@ -179,7 +179,12 @@ export class NotificationsController {
   @ApiQuery({
     name: "eventType",
     required: false,
-    enum: [...NOTIFICATION_EVENT_KEYS, "notification.test", "work.digest"],
+    enum: [
+      ...NOTIFICATION_EVENT_KEYS,
+      "notification.test",
+      "work.digest",
+      "work.ready",
+    ],
   })
   @ApiQuery({
     name: "createdFrom",

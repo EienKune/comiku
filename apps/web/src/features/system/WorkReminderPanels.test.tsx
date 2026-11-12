@@ -55,7 +55,10 @@ function setup() {
     .spyOn(client, "POST")
     .mockImplementation(async (_path, options) =>
       ok({
-        text: `【工作摘要】\n合成事项\n${(options as { body: { note: string } }).body.note}`,
+        text:
+          (options as { body: { kind: string } }).body.kind === "ready"
+            ? "【任务交接提醒】\n#12 合成作品\n可以开始校对"
+            : `【工作摘要】\n翻译10部（待认领4）\n${(options as { body: { note: string } }).body.note}`,
       }),
     );
   const wrap = (enabled: boolean, template = false) => (
@@ -99,6 +102,16 @@ test("one settings editor saves times and note together with automatic server-re
     target: { value: "10:00" },
   });
   await screen.findByText(/新提示/, { selector: "pre" });
+  await screen.findByText(/可以开始校对/, { selector: "pre" });
+  expect(screen.getByText(/独立发送任务交接提醒/)).toBeTruthy();
+  const previewBodies = post.mock.calls.map(
+    (call) => (call[1] as { body: { kind: string; note?: string } }).body,
+  );
+  expect(previewBodies).toContainEqual({ kind: "digest", note: "新提示" });
+  expect(previewBodies).toContainEqual({ kind: "ready" });
+  expect(previewBodies.filter((body) => body?.kind === "ready")).toHaveLength(
+    1,
+  );
   fireEvent.click(screen.getByRole("button", { name: "添加时段" }));
   expect((screen.getByLabelText("北京时间 3") as HTMLInputElement).value).toBe(
     "12:00",
@@ -195,18 +208,49 @@ test("group CAS keeps draft and compares both channel and subscription revisions
 test("template is a read-only preview and ordinary save failures never offer stale revision adoption", async () => {
   const { patch, wrap } = setup();
   const view = render(wrap(true, true));
-  const panel = screen.getByRole("region", { name: "工作摘要模板" });
+  const panel = screen.getByRole("region", { name: "工作提醒模板" });
   await within(panel).findByText(/原提示/, { selector: "pre" });
+  await within(panel).findByText(/可以开始校对/, { selector: "pre" });
+  expect(within(panel).queryByText(/合并发送/)).toBeNull();
   expect(within(panel).queryByRole("textbox")).toBeNull();
   view.rerender(wrap(true));
   const form = await screen.findByRole("form", { name: "合成群的工作提醒" });
   patch.mockRejectedValueOnce(new Error("网络断开"));
-  fireEvent.click(within(form).getByLabelText("预认领任务已就绪"));
+  fireEvent.click(within(form).getByLabelText("任务交接提醒"));
   fireEvent.click(within(form).getByRole("button", { name: "保存群提醒" }));
   await within(form).findByText("网络断开");
   expect(within(form).queryByRole("button", { name: /当前版本/ })).toBeNull();
   expect(
-    (within(form).getByLabelText("预认领任务已就绪") as HTMLInputElement)
-      .checked,
+    (within(form).getByLabelText("任务交接提醒") as HTMLInputElement).checked,
   ).toBe(true);
+});
+
+test("hidden preview requests cancel both kinds without cancelling the newly active panel", async () => {
+  const { post, wrap } = setup();
+  const requests: {
+    body: { kind: string; note?: string };
+    signal: AbortSignal;
+  }[] = [];
+  post.mockImplementation((_path, options) => {
+    requests.push(options as (typeof requests)[number]);
+    return new Promise(() => {});
+  });
+  const view = render(wrap(true));
+  await waitFor(() => expect(requests).toHaveLength(2));
+  expect(requests.map((request) => request.body.kind).sort()).toEqual([
+    "digest",
+    "ready",
+  ]);
+  view.rerender(wrap(true, true));
+  await waitFor(() => expect(requests).toHaveLength(4));
+  expect(requests.slice(0, 2).every((request) => request.signal.aborted)).toBe(
+    true,
+  );
+  expect(requests.slice(2).every((request) => !request.signal.aborted)).toBe(
+    true,
+  );
+  view.rerender(wrap(false));
+  await waitFor(() =>
+    expect(requests.every((request) => request.signal.aborted)).toBe(true),
+  );
 });

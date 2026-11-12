@@ -94,7 +94,8 @@ export function NotificationManagement({
     status: "" as Delivery["status"] | "",
     groupId: "",
     workNumber: "",
-    eventType: "" as EventType | "notification.test" | "work.digest" | "",
+    eventType: "" as
+      EventType | "notification.test" | "work.digest" | "work.ready" | "",
     createdFrom: "",
     createdThrough: "",
   };
@@ -305,9 +306,6 @@ export function NotificationManagement({
       await unwrap(result);
       setDraft(null);
       setSuccess("配置已保存");
-      void queryClient.invalidateQueries({
-        queryKey: ["birthdays", "subscriptions"],
-      });
       void queryClient.invalidateQueries({
         queryKey: ["notification-configuration"],
       });
@@ -1147,6 +1145,7 @@ export function NotificationManagement({
               ))}
               <option value="notification.test">通知测试</option>
               <option value="work.digest">工作摘要</option>
+              <option value="work.ready">任务交接提醒</option>
             </SelectField>
             <TextField
               label="开始日期"
@@ -1211,13 +1210,15 @@ export function NotificationManagement({
               key={delivery.id}
               delivery={delivery}
               eventLabel={
-                delivery.resourceKind === "work_digest"
-                  ? "工作摘要"
-                  : delivery.eventType === "notification.test"
-                    ? "通知测试"
-                    : (eventTypes.find(
-                        (event) => event.type === delivery.eventType,
-                      )?.label ?? delivery.eventType)
+                delivery.resourceKind === "work_ready"
+                  ? "任务交接提醒"
+                  : delivery.resourceKind === "work_digest"
+                    ? "工作摘要"
+                    : delivery.eventType === "notification.test"
+                      ? "通知测试"
+                      : (eventTypes.find(
+                          (event) => event.type === delivery.eventType,
+                        )?.label ?? delivery.eventType)
               }
               onUpdated={() =>
                 void queryClient.invalidateQueries({
@@ -1325,14 +1326,15 @@ function DeliveryRow({
           {statusLabels[delivery.status] ?? delivery.status}
         </Badge>
         <strong>{eventLabel}</strong>
-        {delivery.resourceKind !== "work_digest" && (
-          <span>
-            {delivery.resourceKind === "notification_test" ||
-            delivery.workNumber === null
-              ? "合成测试"
-              : `#${delivery.workNumber}`}
-          </span>
-        )}
+        {delivery.resourceKind !== "work_digest" &&
+          delivery.resourceKind !== "work_ready" && (
+            <span>
+              {delivery.resourceKind === "notification_test" ||
+              delivery.workNumber === null
+                ? "合成测试"
+                : `#${delivery.workNumber}`}
+            </span>
+          )}
         <time dateTime={delivery.createdAt}>
           {new Date(delivery.createdAt).toLocaleString()}
         </time>
@@ -1376,15 +1378,18 @@ function DeliveryRow({
       {(delivery.status === "unknown" || delivery.status === "failed") &&
         !delivery.resolvedAt && (
           <div className="notification-resolution">
-            <label className="notification-check">
-              <input
-                type="checkbox"
-                checked={confirmed}
-                disabled={busy}
-                onChange={(event) => setConfirmed(event.target.checked)}
-              />
-              我已核对，确认补发可能重复
-            </label>
+            {delivery.resourceKind !== "work_digest" &&
+              delivery.resourceKind !== "work_ready" && (
+                <label className="notification-check">
+                  <input
+                    type="checkbox"
+                    checked={confirmed}
+                    disabled={busy}
+                    onChange={(event) => setConfirmed(event.target.checked)}
+                  />
+                  我已核对，确认补发可能重复
+                </label>
+              )}
             <div className="notification-actions">
               <Button
                 variant="secondary"
@@ -1394,14 +1399,17 @@ function DeliveryRow({
               >
                 确认已核对
               </Button>
-              <Button
-                variant="danger"
-                size="sm"
-                disabled={!confirmed || busy}
-                onClick={() => void resolve("retry")}
-              >
-                补发
-              </Button>
+              {delivery.resourceKind !== "work_digest" &&
+                delivery.resourceKind !== "work_ready" && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    disabled={!confirmed || busy}
+                    onClick={() => void resolve("retry")}
+                  >
+                    补发
+                  </Button>
+                )}
             </div>
           </div>
         )}

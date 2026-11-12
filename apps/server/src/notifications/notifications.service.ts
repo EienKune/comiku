@@ -724,9 +724,13 @@ export class NotificationsService {
         );
       if (source.status === "unknown" && !input.confirmPossibleDuplicate)
         throw new ConflictException("请明确确认补发可能重复");
-      if (notificationResourceKind(source.event) === "work_digest")
+      if (
+        ["work_digest", "work_ready"].includes(
+          notificationResourceKind(source.event),
+        )
+      )
         throw new ConflictException(
-          "工作提醒按当前任务重新汇总，请等待下一发送时段",
+          "工作提醒按当前任务自动处理，无需补发历史消息",
         );
       const channel = source.channel;
       if (

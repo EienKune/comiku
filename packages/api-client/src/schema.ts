@@ -4597,7 +4597,7 @@ export interface components {
         };
         NotificationDeliveryDto: {
             /** @enum {string} */
-            resourceKind: "work" | "notification_test" | "work_digest";
+            resourceKind: "work" | "notification_test" | "work_digest" | "work_ready";
             /** @enum {string|null} */
             metadataOrigin: "capture_current" | null;
             contentRevision: number | null;
@@ -4700,6 +4700,8 @@ export interface components {
             mentionsEnabled: boolean;
         };
         WorkReminderPreviewInputDto: {
+            /** @enum {string} */
+            kind?: "digest" | "ready";
             note?: string;
         };
         WorkReminderPreviewDto: {
@@ -18665,7 +18667,7 @@ export interface operations {
                 /** @description Exclusive creation-time upper bound. */
                 createdBefore?: string;
                 createdFrom?: string;
-                eventType?: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed" | "metadata_updated" | "collaboration_mode_updated" | "stage_credit_updated" | "stage_contribution_completed" | "translation_imported" | "typeset_version_uploaded" | "typeset_version_selected" | "typeset_version_deleted" | "typeset_version_restored" | "notification.test" | "work.digest";
+                eventType?: "imported" | "stage_joined" | "stage_started" | "typeset_handoff_started" | "stage_left" | "stage_assignment_updated" | "stage_submitted" | "proofreading_skipped" | "stage_submission_cancelled" | "review_opened" | "review_withdrawn" | "review_resumed" | "archived" | "restored" | "publish_confirmed" | "metadata_updated" | "collaboration_mode_updated" | "stage_credit_updated" | "stage_contribution_completed" | "translation_imported" | "typeset_version_uploaded" | "typeset_version_selected" | "typeset_version_deleted" | "typeset_version_restored" | "notification.test" | "work.digest" | "work.ready";
                 workNumber?: number;
                 groupId?: string;
             };

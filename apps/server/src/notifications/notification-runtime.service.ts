@@ -2,6 +2,7 @@ import {
   notificationResourceKind,
   notificationResourceTypeFilter,
 } from "./notification-resource.js";
+import { isWorkReminderResource } from "../work-reminders/work-reminder-scheduling.js";
 import {
   Inject,
   Injectable,
@@ -102,36 +103,38 @@ export class NotificationRuntimeService implements OnModuleInit {
           reminderScopeGeneration?: number;
           messageSegments?: Prisma.InputJsonValue;
         }[];
-        const reminderSettings =
-          notificationResourceKind(event) === "work_digest"
-            ? await lockWorkReminderSettings(tx)
-            : null;
+        const reminderSettings = isWorkReminderResource(
+          notificationResourceKind(event),
+        )
+          ? await lockWorkReminderSettings(tx)
+          : null;
         for (const ref of refs) {
-          if (notificationResourceKind(event) === "work_digest")
+          if (isWorkReminderResource(notificationResourceKind(event)))
             await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${ref.id}::uuid FOR SHARE`;
           const channel = await tx.notificationChannel.findUnique({
             where: { id: ref.id },
           });
           if (!channel) throw new Error("notification_channel_missing");
-          const reminderInvalid =
-            notificationResourceKind(event) === "work_digest"
-              ? ((await workReminderDeliveryInvalidReason(
-                  event.snapshot,
-                  ref,
-                  reminderSettings,
-                  await lockWorkReminderSubscription(tx, channel.id),
-                  tx,
-                )) ??
-                (!ref.content?.text ||
-                [...ref.content.text].length > 1000 ||
-                !workReminderMessageValid(
-                  event.snapshot,
-                  ref.messageSegments,
-                  ref.content.text,
-                )
-                  ? "work_reminder_content_invalid"
-                  : null))
-              : null;
+          const reminderInvalid = isWorkReminderResource(
+            notificationResourceKind(event),
+          )
+            ? ((await workReminderDeliveryInvalidReason(
+                event.snapshot,
+                ref,
+                reminderSettings,
+                await lockWorkReminderSubscription(tx, channel.id),
+                tx,
+              )) ??
+              (!ref.content?.text ||
+              [...ref.content.text].length > 1000 ||
+              !workReminderMessageValid(
+                event.snapshot,
+                ref.messageSegments,
+                ref.content.text,
+              )
+                ? "work_reminder_content_invalid"
+                : null))
+            : null;
           const current =
             !!ref.groupId &&
             !!ref.connectionKey &&
@@ -156,14 +159,14 @@ export class NotificationRuntimeService implements OnModuleInit {
               errorCode: current
                 ? null
                 : (reminderInvalid ?? "channel_configuration_changed"),
-              ...(notificationResourceKind(event) === "work_digest" && {
+              ...(isWorkReminderResource(notificationResourceKind(event)) && {
                 reminderGeneration: ref.reminderGeneration,
                 reminderScopeGeneration: ref.reminderScopeGeneration,
                 messageSegments: ref.messageSegments,
               }),
               text:
                 ref.content?.text ??
-                (notificationResourceKind(event) === "work_digest"
+                (isWorkReminderResource(notificationResourceKind(event))
                   ? ""
                   : renderNotificationMessage(
                       event as unknown as NormalizedNotificationEvent,
@@ -370,7 +373,7 @@ export class NotificationRuntimeService implements OnModuleInit {
         channel.connectionKey !== row.connectionKey
       )
         return cancel("channel_configuration_changed");
-      if (notificationResourceKind(row.event) === "work_digest") {
+      if (isWorkReminderResource(notificationResourceKind(row.event))) {
         const invalid = await workReminderDeliveryInvalidReason(
           row.event.snapshot,
           row,

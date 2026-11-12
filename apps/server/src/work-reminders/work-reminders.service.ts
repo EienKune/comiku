@@ -12,6 +12,7 @@ import { PrismaService } from "../database/prisma.service.js";
 import type {
   NotificationChannel,
   Prisma,
+  WorkReminderSettings,
   WorkReminderSubscription,
 } from "../generated/prisma/client.js";
 import { NotificationConnectionRegistry } from "../notifications/notification-connections.js";
@@ -29,12 +30,15 @@ import {
   normalizeWorkReminderNote,
   normalizeWorkReminderTimes,
   WORK_DIGEST_EVENT,
+  WORK_READY_EVENT,
 } from "./work-reminder-scheduling.js";
 import {
   renderWorkReminder,
+  renderWorkReady,
   workReminderHash,
   type WorkDigestSnapshot,
   type WorkReminderFrozenItem,
+  type WorkReminderSnapshot,
 } from "./work-reminder-render.js";
 import type {
   WorkReminderSettingsInputDto,
@@ -59,6 +63,9 @@ export async function readWorkDigestCounts(tx: Prisma.TransactionClient) {
       availableTypesetting: number;
       availableWorks: number;
       candidates: number;
+      translationTotal: number;
+      proofreadingTotal: number;
+      typesettingTotal: number;
     }[]
   >`
     WITH available AS (
@@ -79,6 +86,9 @@ export async function readWorkDigestCounts(tx: Prisma.TransactionClient) {
       (COUNT(*) FILTER (WHERE stage = 'proofread'))::int AS "availableProofreading",
       (COUNT(*) FILTER (WHERE stage = 'typeset'))::int AS "availableTypesetting",
       COUNT(DISTINCT id)::int AS "availableWorks",
+      (SELECT COUNT(*)::int FROM available WHERE stage = 'translate') AS "translationTotal",
+      (SELECT COUNT(*)::int FROM available WHERE stage = 'proofread') AS "proofreadingTotal",
+      (SELECT COUNT(*)::int FROM available WHERE stage = 'typeset') AS "typesettingTotal",
       (SELECT COUNT(*)::int FROM candidate_posts c JOIN authors a ON a.id = c.author_id
         WHERE c.status = 'pending' AND a.authorization_status = 'authorized' AND a.deleted_at IS NULL
         AND EXISTS (SELECT 1 FROM candidate_media m JOIN file_objects f ON f.id = m.file_object_id
@@ -92,6 +102,9 @@ const emptyDigest = {
   availableTypesetting: 0,
   availableWorks: 0,
   candidates: 0,
+  translationTotal: 0,
+  proofreadingTotal: 0,
+  typesettingTotal: 0,
 };
 
 @Injectable()
@@ -188,7 +201,9 @@ export class WorkRemindersService {
         await tx.notificationDelivery.updateMany({
           where: {
             status: { in: ["pending", "retry_wait"] },
-            event: { type: { in: WORK_REMINDER_EVENTS } },
+            event: {
+              type: { in: WORK_REMINDER_EVENTS },
+            },
           },
           data: {
             status: "cancelled",
@@ -250,7 +265,9 @@ export class WorkRemindersService {
         where: {
           channelId,
           status: { in: ["pending", "retry_wait"] },
-          event: { type: { in: WORK_REMINDER_EVENTS } },
+          event: {
+            type: { in: WORK_REMINDER_EVENTS },
+          },
         },
         data: {
           status: "cancelled",
@@ -261,10 +278,11 @@ export class WorkRemindersService {
       return this.channelDto(channel, scope);
     });
   }
-  async preview(note?: string) {
+  async preview(note?: string, kind: "digest" | "ready" = "digest") {
     const settings = await this.ensureSettings();
     const snapshot: WorkDigestSnapshot = {
       kind: "work_digest",
+      formatVersion: 2,
       localDate: "2026-01-01",
       slot: "09:00",
       dueAt: "2026-01-01T01:00:00.000Z",
@@ -276,24 +294,13 @@ export class WorkRemindersService {
         availableTypesetting: 1,
         availableWorks: 6,
         candidates: 4,
-        ready: 1,
+        translationTotal: 8,
+        proofreadingTotal: 4,
+        typesettingTotal: 2,
+        ready: 0,
         overdue: 1,
       },
       items: [
-        {
-          participantId: "example-ready",
-          round: 1,
-          userId: "example-user",
-          workId: "example-work",
-          workNumber: 42,
-          title: "示例作品",
-          displayName: "示例成员",
-          stage: "typeset",
-          kind: "ready",
-          qqNumber: null,
-          userRevision: 0,
-          sourceKey: "example",
-        },
         {
           participantId: "example-overdue",
           round: 1,
@@ -310,6 +317,22 @@ export class WorkRemindersService {
         },
       ],
     };
+    if (kind === "ready")
+      return {
+        text: renderWorkReady(
+          {
+            kind: "work_ready",
+            dueAt: snapshot.dueAt,
+            validBefore: snapshot.validBefore,
+            observedAt: snapshot.observedAt,
+            items: [
+              { ...snapshot.items[0]!, kind: "ready", stage: "proofread" },
+            ],
+          },
+          false,
+          this.environment?.appOrigin,
+        ).text.replace(/\/works\/example-work-two$/, "/works"),
+      };
     return {
       text: renderWorkReminder(
         snapshot,
@@ -358,22 +381,86 @@ export class WorkRemindersService {
         );
         const settings = await lockWorkReminderSettings(tx);
         if (!settings?.enabled) return;
-        const slot = currentWorkReminderSlot(settings.sendTimes, effectiveNow);
-        if (!slot || settings.acceptAfter > slot.dueAt) return;
         await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${route.channelId}::uuid FOR SHARE`;
         const scope = await lockWorkReminderSubscription(tx, route.channelId);
         const channel = await tx.notificationChannel.findUniqueOrThrow({
           where: { id: route.channelId },
         });
+        if (!scope || !subscribed(scope) || !channel.enabled) return;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`comiku:work-reminders:${channel.id}`}))`;
+        const freeze = (items: WorkReminderFrozenItem[]) =>
+          items.map(
+            ({
+              participantId,
+              round,
+              userId,
+              workId,
+              workNumber,
+              title,
+              displayName,
+              stage,
+              kind,
+              qqNumber,
+              userRevision,
+              sourceKey,
+            }) => ({
+              participantId,
+              round,
+              userId,
+              workId,
+              workNumber,
+              title,
+              displayName,
+              stage,
+              kind,
+              qqNumber: scope.mentionsEnabled ? qqNumber : null,
+              userRevision,
+              sourceKey,
+            }),
+          );
         if (
-          !scope ||
-          !subscribed(scope) ||
-          !channel.enabled ||
+          scope.readyEnabled &&
+          settings.acceptAfter <= effectiveNow &&
+          scope.acceptAfter <= effectiveNow &&
+          channel.sourceAcceptAfter <= effectiveNow
+        ) {
+          const ready = await this.projection.readItems(tx, effectiveNow, {
+            channelId: channel.id,
+            scopeGeneration: scope.generation,
+            readyEnabled: true,
+            overdueEnabled: false,
+            limit: 5,
+            counts: false,
+          });
+          for (const item of ready.items) {
+            const snapshot: WorkReminderSnapshot = {
+              kind: "work_ready",
+              dueAt: effectiveNow.toISOString(),
+              validBefore: new Date(
+                effectiveNow.getTime() + 86_400_000,
+              ).toISOString(),
+              observedAt: effectiveNow.toISOString(),
+              items: freeze([item]),
+            };
+            await this.register(
+              tx,
+              randomUUID(),
+              snapshot,
+              channel,
+              scope,
+              settings,
+            );
+          }
+        }
+        if (!scope.digestEnabled && !scope.overdueEnabled) return;
+        const slot = currentWorkReminderSlot(settings.sendTimes, effectiveNow);
+        if (
+          !slot ||
+          settings.acceptAfter > slot.dueAt ||
           scope.acceptAfter > slot.dueAt ||
           channel.sourceAcceptAfter > slot.dueAt
         )
           return;
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`comiku:work-digest:${channel.id}:${slot.localDate}:${slot.slot}`}))`;
         if (
           await tx.workDigestOccurrence.findUnique({
             where: {
@@ -386,14 +473,10 @@ export class WorkRemindersService {
           })
         )
           return;
-        // Only a conclusively unsent cancelled delivery releases its displayed notices.
-        await tx.$executeRaw`DELETE FROM work_reminder_notices n WHERE n.channel_id = ${channel.id}::uuid
-        AND EXISTS (SELECT 1 FROM notification_deliveries d WHERE d.event_id = n.event_id AND d.channel_id = n.channel_id AND d.status IN ('cancelled','failed')
-          AND NOT EXISTS (SELECT 1 FROM notification_attempts a WHERE a.delivery_id = d.id AND a.send_boundary_crossed))`;
         const candidates = await this.projection.readItems(tx, effectiveNow, {
           channelId: channel.id,
           scopeGeneration: scope.generation,
-          readyEnabled: scope.readyEnabled,
+          readyEnabled: false,
           overdueEnabled: scope.overdueEnabled,
           limit: 5,
         });
@@ -410,41 +493,17 @@ export class WorkRemindersService {
         });
         if (
           !counts.availableWorks &&
+          !counts.translationTotal &&
+          !counts.proofreadingTotal &&
+          !counts.typesettingTotal &&
           !counts.candidates &&
           !candidates.items.length
         )
           return;
-        const items: WorkReminderFrozenItem[] = candidates.items.map(
-          ({
-            participantId,
-            round,
-            userId,
-            workId,
-            workNumber,
-            title,
-            displayName,
-            stage,
-            kind,
-            qqNumber,
-            userRevision,
-            sourceKey,
-          }) => ({
-            participantId,
-            round,
-            userId,
-            workId,
-            workNumber,
-            title,
-            displayName,
-            stage,
-            kind,
-            qqNumber: scope.mentionsEnabled ? qqNumber : null,
-            userRevision,
-            sourceKey,
-          }),
-        );
+        const items = freeze(candidates.items);
         const snapshot: WorkDigestSnapshot = {
           kind: "work_digest",
+          formatVersion: 2,
           ...slot,
           dueAt: slot.dueAt.toISOString(),
           validBefore: slot.validBefore.toISOString(),
@@ -452,63 +511,102 @@ export class WorkRemindersService {
           counts,
           items,
         };
-        const rendered = renderWorkReminder(
+        const eventId = await this.register(
+          tx,
+          id,
           snapshot,
-          settings.note,
-          scope.mentionsEnabled,
-          this.environment?.appOrigin,
+          channel,
+          scope,
+          settings,
         );
-        const event = await tx.notificationEvent.create({
-          data: {
-            eventKey: `work-digest:${id}`,
-            payloadHash: workReminderHash(id, snapshot),
-            type: WORK_DIGEST_EVENT,
-            resourceId: id,
-            aggregateVersion: 1,
-            ordinal: 0,
-            occurredAt: slot.dueAt,
-            snapshot: asJson(snapshot),
-            routeRefs: asJson([
-              {
-                id: channel.id,
-                revision: channel.revision,
-                generation: channel.audienceGeneration,
-                groupId: channel.groupId,
-                connectionKey: channel.connectionKey,
-                connectionFingerprint: channel.connectionFingerprint,
-                includeDetails: false,
-                templateVersion: 1,
-                reminderGeneration: settings.generation,
-                reminderScopeGeneration: scope.generation,
-                content: {
-                  formatVersion: 1,
-                  receiverMode: "legacy",
-                  templatePolicy: null,
-                  matchedRule: null,
-                  text: rendered.text,
-                  metadataObservedAt: null,
-                  metadataOrigin: null,
-                },
-                messageSegments: rendered.messageSegments,
-              },
-            ]),
-          },
-        });
         await tx.workDigestOccurrence.update({
           where: { id },
-          data: { eventId: event.id },
+          data: { eventId },
         });
-        if (items.length)
-          await tx.workReminderNotice.createMany({
-            data: items.map((item) => ({
-              participantId: item.participantId,
-              round: item.round,
-              kind: item.kind,
-              channelId: channel.id,
-              scopeGeneration: scope.generation,
-              eventId: event.id,
-            })),
-          });
       });
+  }
+  private async register(
+    tx: Prisma.TransactionClient,
+    id: string,
+    snapshot: WorkReminderSnapshot,
+    channel: NotificationChannel,
+    scope: WorkReminderSubscription,
+    settings: WorkReminderSettings,
+  ) {
+    // Reclaim only the selected identities, using the participant-leading unique
+    // index. Never sweep a channel's accepted/unknown notice history every minute.
+    for (const item of snapshot.items)
+      await tx.$executeRaw`DELETE FROM work_reminder_notices n
+        WHERE n.participant_id = ${item.participantId}::uuid AND n.round = ${item.round}
+          AND n.kind = ${item.kind} AND n.channel_id = ${channel.id}::uuid
+          AND EXISTS (SELECT 1 FROM notification_deliveries d
+            WHERE d.event_id = n.event_id AND d.channel_id = n.channel_id AND d.status IN ('cancelled','failed')
+              AND NOT EXISTS (SELECT 1 FROM notification_attempts a WHERE a.delivery_id = d.id AND a.send_boundary_crossed)
+              AND NOT EXISTS (SELECT 1 FROM notification_deliveries sibling
+                WHERE sibling.event_id = n.event_id AND sibling.channel_id = n.channel_id
+                  AND (sibling.status NOT IN ('cancelled','failed') OR EXISTS (
+                    SELECT 1 FROM notification_attempts a WHERE a.delivery_id = sibling.id AND a.send_boundary_crossed))))`;
+    const rendered =
+      snapshot.kind === "work_ready"
+        ? renderWorkReady(
+            snapshot,
+            scope.mentionsEnabled,
+            this.environment?.appOrigin,
+          )
+        : renderWorkReminder(
+            snapshot,
+            settings.note,
+            scope.mentionsEnabled,
+            this.environment?.appOrigin,
+          );
+    const event = await tx.notificationEvent.create({
+      data: {
+        eventKey: `${snapshot.kind}:${id}`,
+        payloadHash: workReminderHash(id, snapshot),
+        type:
+          snapshot.kind === "work_ready" ? WORK_READY_EVENT : WORK_DIGEST_EVENT,
+        resourceId: id,
+        aggregateVersion: 1,
+        ordinal: 0,
+        occurredAt: new Date(snapshot.dueAt),
+        snapshot: asJson(snapshot),
+        routeRefs: asJson([
+          {
+            id: channel.id,
+            revision: channel.revision,
+            generation: channel.audienceGeneration,
+            groupId: channel.groupId,
+            connectionKey: channel.connectionKey,
+            connectionFingerprint: channel.connectionFingerprint,
+            includeDetails: false,
+            templateVersion: 1,
+            reminderGeneration: settings.generation,
+            reminderScopeGeneration: scope.generation,
+            content: {
+              formatVersion: 1,
+              receiverMode: "legacy",
+              templatePolicy: null,
+              matchedRule: null,
+              text: rendered.text,
+              metadataObservedAt: null,
+              metadataOrigin: null,
+            },
+            messageSegments: rendered.messageSegments,
+          },
+        ]),
+      },
+    });
+    if (snapshot.items.length)
+      await tx.workReminderNotice.createMany({
+        data: snapshot.items.map((item) => ({
+          participantId: item.participantId,
+          round: item.round,
+          kind: item.kind,
+          channelId: channel.id,
+          scopeGeneration: scope.generation,
+          eventId: event.id,
+        })),
+      });
+    return event.id;
   }
 }

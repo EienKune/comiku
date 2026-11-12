@@ -33,7 +33,9 @@ function WorkReminderPreview({
   note,
   enabled,
   panel,
+  kind,
 }: {
+  kind: "digest" | "ready";
   note: string;
   enabled: boolean;
   panel: string;
@@ -42,19 +44,19 @@ function WorkReminderPreview({
   const cache = useQueryClient();
   useEffect(() => {
     if (!enabled) {
-      void cache.cancelQueries({ queryKey: [...key, "preview", panel] });
+      void cache.cancelQueries({ queryKey: [...key, "preview", panel, kind] });
       return;
     }
     const timer = setTimeout(() => setSettledNote(note), 200);
     return () => clearTimeout(timer);
-  }, [note, enabled, cache, panel]);
+  }, [note, enabled, cache, panel, kind]);
   const preview = useQuery({
-    queryKey: [...key, "preview", panel, settledNote],
+    queryKey: [...key, "preview", panel, kind, settledNote],
     enabled,
     queryFn: async ({ signal }) =>
       unwrap(
         await client.POST("/api/notifications/work-reminders/preview", {
-          body: { note: settledNote },
+          body: { kind, ...(kind === "digest" ? { note: settledNote } : {}) },
           signal,
         }),
       ),
@@ -214,8 +216,8 @@ export function WorkReminderSubscriptions({ enabled }: { enabled: boolean }) {
               )}
             </div>
             <p className="notification-boundary">
-              每天按北京时间合并发送。任务可以开始制作后累计 72
-              小时仍未交稿，每轮提醒一次；已有任务从启用后开始观测，无法确认的停机时段可能使提醒延后。
+              每日摘要按北京时间发送；提前认领的任务具备制作条件后，独立发送任务交接提醒，通常一分钟内处理。累计可制作
+              72 小时仍未交稿的明细纳入每日摘要，每轮提醒一次。
             </p>
             <TextField
               label="工作摘要提示语"
@@ -228,7 +230,14 @@ export function WorkReminderSubscriptions({ enabled }: { enabled: boolean }) {
             <details className="work-reminder-preview" open>
               <summary>消息预览</summary>
               <WorkReminderPreview
+                kind="digest"
                 note={settings.note}
+                enabled={enabled}
+                panel="subscriptions"
+              />
+              <WorkReminderPreview
+                kind="ready"
+                note=""
                 enabled={enabled}
                 panel="subscriptions"
               />
@@ -368,7 +377,7 @@ function ChannelReminder({
         {(
           [
             ["digestEnabled", "每日摘要"],
-            ["readyEnabled", "预认领任务已就绪"],
+            ["readyEnabled", "任务交接提醒"],
             ["overdueEnabled", "72 小时未交稿"],
             ["mentionsEnabled", "@ 提醒成员"],
           ] as const
@@ -414,7 +423,7 @@ function ChannelReminder({
             {comparison.enabled ? "开启" : "关闭"} ·{" "}
             {[
               comparison.subscription.digestEnabled && "每日摘要",
-              comparison.subscription.readyEnabled && "预认领任务已就绪",
+              comparison.subscription.readyEnabled && "任务交接提醒",
               comparison.subscription.overdueEnabled && "72 小时未交稿",
               comparison.subscription.mentionsEnabled && "@ 提醒成员",
             ]
@@ -452,14 +461,11 @@ export function WorkReminderTemplate({
 }) {
   const query = useConfiguration(enabled, "template");
   return (
-    <section className="work-reminder-panel" aria-label="工作摘要模板">
-      <h3>工作摘要</h3>
-      <p className="notification-boundary">
-        每日摘要、预认领任务已就绪和超时事项合并发送，同一成员最多 @ 一次。
-      </p>
+    <section className="work-reminder-panel" aria-label="工作提醒模板">
+      <h3>工作提醒</h3>
       {query.isError && (
         <p role="alert">
-          工作摘要读取失败。
+          工作提醒读取失败。
           <Button
             type="button"
             variant="ghost"
@@ -471,11 +477,20 @@ export function WorkReminderTemplate({
         </p>
       )}
       {query.data && (
-        <WorkReminderPreview
-          note={query.data.settings.note}
-          enabled={enabled}
-          panel="template"
-        />
+        <>
+          <WorkReminderPreview
+            kind="digest"
+            note={query.data.settings.note}
+            enabled={enabled}
+            panel="template"
+          />
+          <WorkReminderPreview
+            kind="ready"
+            note=""
+            enabled={enabled}
+            panel="template"
+          />
+        </>
       )}
       <Button
         type="button"

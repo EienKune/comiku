@@ -18668,7 +18668,8 @@
                 "typeset_version_deleted",
                 "typeset_version_restored",
                 "notification.test",
-                "work.digest"
+                "work.digest",
+                "work.ready"
               ],
               "type": "string"
             }
@@ -28441,7 +28442,8 @@
             "enum": [
               "work",
               "notification_test",
-              "work_digest"
+              "work_digest",
+              "work_ready"
             ]
           },
           "metadataOrigin": {
@@ -28875,6 +28877,13 @@
       "WorkReminderPreviewInputDto": {
         "type": "object",
         "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "digest",
+              "ready"
+            ]
+          },
           "note": {
             "type": "string"
           }

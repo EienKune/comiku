@@ -3,14 +3,15 @@
 export const WORK_REMINDER_EVENTS = ["work.digest", "work.ready"];
 export function notificationResourceKind(event: {
   type: string;
-}): "work" | "notification_test" | "work_digest" {
-  if (WORK_REMINDER_EVENTS.includes(event.type)) return "work_digest";
+}): "work" | "notification_test" | "work_digest" | "work_ready" {
+  if (event.type === "work.digest") return "work_digest";
+  if (event.type === "work.ready") return "work_ready";
   return event.type === "notification.test" ? "notification_test" : "work";
 }
 export function notificationResourceTypeFilter(event: { type: string }) {
   const kind = notificationResourceKind(event);
-  return kind === "work_digest"
-    ? { in: WORK_REMINDER_EVENTS }
+  return kind === "work_digest" || kind === "work_ready"
+    ? { equals: event.type }
     : kind === "notification_test"
       ? { equals: "notification.test" }
       : { notIn: [...WORK_REMINDER_EVENTS, "notification.test"] };
