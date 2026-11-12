@@ -2,8 +2,11 @@
 
 This tracked document records reusable implementation constraints. Business rules live in [architecture](../architecture.md), configuration in [configuration](../configuration.md), and visual rules in [DESIGN](../../DESIGN.md). Keep machine addresses, credentials, real samples, local experiments and deployment session notes outside the public repository.
 
+- Fingerprint decoding limits are resource-policy failures, not evidence of a corrupt original. Map Sharp's pixel-limit rejection to `pixel_limit`, retain exact-file matching, and test that distinction with a synthetic oversized image. Do not relax the decoding budget or change fingerprint identity merely to clear historical failures.
+
 ## CI and regression scope
 
+- Seed large PostgreSQL fixtures in bounded statements while retaining the complete dataset and all query-plan budgets. For history rows, use each batch's global sequence and the unique event-key join rather than repeatedly scanning and splitting the full event table. Do not increase production query timeouts to accommodate fixture setup.
 - Full CI runs on pushes to `main`/`dev` and on pull requests to any branch. Keep PR targets unfiltered so stacked reviews retain checks; ordinary feature pushes do not duplicate the PR run. Run affected tests during small iterations and complete the required checks before review or release.
 - Consolidating overlapping tests must retain distinct behavior: the notification mask matrix also checks exact heading placement, actor labels and missing metadata; history pagination also checks explicit filter application, refresh with an unsubmitted draft, page reset, back navigation and stale-request cancellation. Keep permission, concurrency, retry, compatibility and database-plan regressions.
 
@@ -331,3 +334,15 @@ Pixiv profile resolution uses the native App API without enumerating works, but 
 
 - Development, CI, production and backup/restore images target PostgreSQL 18. Its official image uses `PGDATA=/var/lib/postgresql/18/docker`; mount persistent volumes and temporary databases at `/var/lib/postgresql`. Keep the isolated image drill's client/server version, data directory and container-recreation checks aligned. Changing a major image tag is not a data upgrade: preserve old volumes and migrate into an independent target first.
 - New encrypted backups carry PostgreSQL 18 metadata; readers still accept authenticated PostgreSQL 17 archives. Keep legacy-read coverage when advancing the writer, without treating archive compatibility as permission to restore a newer database into an older server.
+
+## Notification release layering
+
+- Standalone reminders derive the resource namespace from the persisted event type. Never add a default discriminator to immutable work snapshots or change their payload hashes. Keep work, test and reminder blocking queries in the same derived namespace. The optional birthday migration owns its persisted resource-kind column; do not duplicate it in an earlier release layer or rewrite that released migration.
+
+- When an optional integration later adds a persisted discriminator, preserve the canonical type-derived namespace of existing `work.digest` and `work.ready` rows whose newly added column initially defaults to `work`. Extend the shared resource filter or use a new forward-only backfill; never rewrite released migrations or snapshot/hash content. New writes in that integrated layer must retain their explicit stored namespace.
+
+- A channel may be enabled with no ordinary work-event subscriptions so independent work reminders can use the same target. Enforce the actual reminder opt-in separately; never turn empty ordinary subscriptions into a wildcard.
+
+## Birthday layer after standalone reminders
+
+- Keep published birthday migrations byte-for-byte. A standalone reminder release can precede their older dated migration: the additive birthday migration introduces its resource discriminator without colliding with reminder tables. A later forward migration backfills only defaulted `work.digest`/`work.ready` namespaces. Type-derived routing, history and blocker queries remain compatible with those old rows, and integrated producers keep explicit stored namespaces. Frozen snapshots, hashes, route references and all other event fields remain untouched.

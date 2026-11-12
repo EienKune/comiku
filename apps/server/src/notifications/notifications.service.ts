@@ -1,3 +1,4 @@
+import { notificationResourceKind } from "./notification-resource.js";
 import {
   BadRequestException,
   ConflictException,
@@ -737,12 +738,14 @@ export class NotificationsService {
       if (source.status === "unknown" && !input.confirmPossibleDuplicate)
         throw new ConflictException("请明确确认补发可能重复");
       if (
-        ["work_digest", "work_ready"].includes(source.event.resourceKind ?? "")
+        ["work_digest", "work_ready"].includes(
+          notificationResourceKind(source.event) ?? "",
+        )
       )
         throw new ConflictException(
           "工作提醒按当前任务自动处理，无需补发历史消息",
         );
-      if (source.event.resourceKind === "birthday_digest") {
+      if (notificationResourceKind(source.event) === "birthday_digest") {
         if (!this.environment.birthdays?.enabled)
           throw new ConflictException("生日功能已停用，不能补发");
         const invalid = birthdayDeliveryInvalidReason(

@@ -15,6 +15,8 @@ type Match = components["schemas"]["ImageSimilarityMatchDto"];
 type Result = components["schemas"]["ImageSimilarityResultDto"];
 const fingerprintErrorLabels: Record<string, string> = {
   invalid_image: "当前图片无法解码，暂时只能检查文件是否相同。",
+  pixel_limit:
+    "当前图片超过 4,000 万像素的处理上限，暂时只能检查文件是否相同。",
   unsupported_format: "当前图片格式不支持画面相似查询，仍可检查文件是否相同。",
   empty_image: "当前图片内容为空，无法建立画面相似指纹。",
   byte_limit: "当前图片超过相似图处理上限，暂时只能检查文件是否相同。",

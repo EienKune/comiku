@@ -1,3 +1,7 @@
+import {
+  WORK_REMINDER_EVENTS,
+  notificationResourceKind,
+} from "../notifications/notification-resource.js";
 import { randomUUID } from "node:crypto";
 import {
   ConflictException,
@@ -204,7 +208,7 @@ export class WorkRemindersService {
           where: {
             status: { in: ["pending", "retry_wait"] },
             event: {
-              resourceKind: { in: [WORK_DIGEST_RESOURCE, WORK_READY_RESOURCE] },
+              type: { in: WORK_REMINDER_EVENTS },
             },
           },
           data: {
@@ -268,7 +272,7 @@ export class WorkRemindersService {
           channelId,
           status: { in: ["pending", "retry_wait"] },
           event: {
-            resourceKind: { in: [WORK_DIGEST_RESOURCE, WORK_READY_RESOURCE] },
+            type: { in: WORK_REMINDER_EVENTS },
           },
         },
         data: {
@@ -490,7 +494,7 @@ export class WorkRemindersService {
             }[]
           ).find((route) => route.id === channel.id);
           if (
-            previous.resourceKind !== WORK_DIGEST_RESOURCE ||
+            notificationResourceKind(previous) !== WORK_DIGEST_RESOURCE ||
             frozen.kind !== "work_digest" ||
             frozen.formatVersion !== 3 ||
             ref?.generation !== channel.audienceGeneration ||

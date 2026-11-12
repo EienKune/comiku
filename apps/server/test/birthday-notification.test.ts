@@ -354,6 +354,7 @@ test("disabled birthday feature cancels frozen routes and reserved jobs without 
   };
   const event = {
     id: "event",
+    type: "birthday.reminder",
     resourceKind: "birthday_digest",
     routedAt: null,
     snapshot,
