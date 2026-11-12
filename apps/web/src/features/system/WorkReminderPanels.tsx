@@ -135,7 +135,23 @@ export function WorkReminderSubscriptions({ enabled }: { enabled: boolean }) {
       id="work-reminder-settings"
       tabIndex={-1}
     >
-      <h3>工作提醒</h3>
+      <header className="notification-heading notification-section-heading">
+        <h3>工作提醒</h3>
+        {settings && (
+          <label className="notification-check">
+            <input
+              type="checkbox"
+              aria-label="启用工作提醒"
+              disabled={!enabled || busy}
+              checked={settings.enabled}
+              onChange={(event) =>
+                setDraft({ ...settings, enabled: event.target.checked })
+              }
+            />
+            全局启用
+          </label>
+        )}
+      </header>
       {query.isError && (
         <p role="alert">
           工作提醒读取失败。
@@ -156,16 +172,6 @@ export function WorkReminderSubscriptions({ enabled }: { enabled: boolean }) {
           }}
         >
           <fieldset disabled={!enabled || busy}>
-            <label className="notification-check">
-              <input
-                type="checkbox"
-                checked={settings.enabled}
-                onChange={(event) =>
-                  setDraft({ ...settings, enabled: event.target.checked })
-                }
-              />
-              启用工作提醒
-            </label>
             <div className="work-reminder-times">
               {settings.sendTimes.map((time, index) => (
                 <TextField
@@ -300,7 +306,7 @@ export function WorkReminderSubscriptions({ enabled }: { enabled: boolean }) {
         ))}
       </div>
       {query.data?.channels.length === 0 && (
-        <p className="notification-boundary">先在群订阅中添加接收群。</p>
+        <p className="notification-boundary">先在上方添加接收群。</p>
       )}
     </section>
   );

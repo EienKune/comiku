@@ -112,6 +112,12 @@ test("one settings editor saves times and note together with automatic server-re
   expect(previewBodies.filter((body) => body?.kind === "ready")).toHaveLength(
     1,
   );
+  fireEvent.click(screen.getByLabelText("启用工作提醒"));
+  expect(patch).not.toHaveBeenCalled();
+  const group = screen.getByRole("form", { name: "合成群的工作提醒" });
+  expect(
+    (within(group).getByLabelText("每日摘要") as HTMLInputElement).checked,
+  ).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "添加时段" }));
   expect((screen.getByLabelText("北京时间 3") as HTMLInputElement).value).toBe(
     "12:00",
@@ -121,7 +127,7 @@ test("one settings editor saves times and note together with automatic server-re
   await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
   expect(patch.mock.calls[0][1]).toMatchObject({
     body: {
-      enabled: false,
+      enabled: true,
       sendTimes: ["10:00", "18:00"],
       note: "新提示",
       expectedRevision: 1,

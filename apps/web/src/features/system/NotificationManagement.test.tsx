@@ -518,7 +518,7 @@ test("shows configuration summary without claiming QQ online and labels delivery
   fireEvent.click(await screen.findByText("连接配置"));
   expect(screen.getByText("配置可用")).toBeTruthy();
   expect(screen.queryByText(/在线/)).toBeNull();
-  expect(screen.getByRole("heading", { name: "群订阅" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "接收群" })).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", { name: "投递记录" }));
   expect((await screen.findAllByText("导入作品")).length).toBeGreaterThan(0);
   expect(screen.getByText(/核心作品事件/)).toBeTruthy();
@@ -658,7 +658,7 @@ test("tabs gate record reads and retain group and template drafts", async () => 
   fireEvent.change(screen.getByLabelText("事件提示语"), {
     target: { value: "保留模板草稿" },
   });
-  fireEvent.click(screen.getByRole("tab", { name: "群订阅" }));
+  fireEvent.click(screen.getByRole("tab", { name: "推送设置" }));
   expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
     "保留群草稿",
   );
@@ -1438,7 +1438,7 @@ test.each(["history", "outer panel"])(
     await screen.findByText(/事件模板已变更/);
     expect(configurationReads()).toBe(hiddenBy === "history" ? 2 : 1);
     if (hiddenBy === "history")
-      fireEvent.click(screen.getByRole("tab", { name: "群订阅" }));
+      fireEvent.click(screen.getByRole("tab", { name: "推送设置" }));
     else setActive(true);
     await waitFor(() => expect(configurationReads()).toBe(2));
     await waitFor(() =>
@@ -1506,7 +1506,7 @@ test("running status tab keeps drafts, gates configuration and supports four-tab
         response: new Response(),
       }) as never,
   );
-  fireEvent.keyDown(screen.getByRole("tab", { name: "群订阅" }), {
+  fireEvent.keyDown(screen.getByRole("tab", { name: "推送设置" }), {
     key: "End",
   });
   await screen.findByText("通知已关闭");
