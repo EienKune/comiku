@@ -20,6 +20,13 @@
 .notification-heading .ui-field {
   min-width: 160px;
 }
+.notification-section-heading {
+  margin-bottom: var(--space-4);
+}
+header.notification-section-heading > h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
 .notification-actions {
   justify-content: flex-start;
 }
