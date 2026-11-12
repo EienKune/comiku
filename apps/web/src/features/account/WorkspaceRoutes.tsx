@@ -20,6 +20,13 @@ const CandidatesPage = lazy(async () => ({
 const WorksPage = lazy(async () => ({
   default: (await import("../workspace/BusinessPages")).WorksPage,
 }));
+const WorkSeriesDirectoryPage = lazy(async () => ({
+  default: (await import("../workspace/WorkSeriesPages"))
+    .WorkSeriesDirectoryPage,
+}));
+const WorkSeriesDetailPage = lazy(async () => ({
+  default: (await import("../workspace/WorkSeriesPages")).WorkSeriesDetailPage,
+}));
 const WorkDetailPage = lazy(async () => ({
   default: (await import("../workspace/BusinessPages")).WorkDetailPage,
 }));
@@ -63,6 +70,11 @@ export function WorkspaceRoutes() {
         <Route path="/authors/:id" element={<AuthorDetailPage />} />
         <Route path="/candidates" element={<CandidatesPage />} />
         <Route path="/works" element={<WorksPage />} />
+        <Route path="/works/series" element={<WorkSeriesDirectoryPage />} />
+        <Route
+          path="/works/series/:seriesId"
+          element={<WorkSeriesDetailPage />}
+        />
         <Route path="/works/:id" element={<WorkDetailPage />} />
         <Route path="/works/:id/editor" element={<TranslationEditorPage />} />
         <Route path="/reviews" element={<ReviewsPage />} />

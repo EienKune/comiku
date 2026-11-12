@@ -1,3 +1,6 @@
+import { WorkAlbum } from "./WorkAlbum";
+import { WorkSeriesAssociation } from "./WorkSeriesAssociation";
+import { workflowLabels, reviewLabels } from "./work-status";
 import { BirthdayStrip } from "../birthdays/BirthdayStrip";
 import {
   CandidateAuthorFilter,
@@ -75,6 +78,7 @@ import {
   Images,
   Inbox,
   Grid2X2,
+  BookOpen,
   List,
   ScanText,
   Search,
@@ -155,22 +159,6 @@ function workDisplayTitle(work: Pick<Work, "workNumber" | "title">) {
   return work.title?.trim() || `#${work.workNumber} · 待定标题`;
 }
 
-const workflowLabels: Record<WorkflowStatus, string> = {
-  pending_translate: "待翻译",
-  translating: "翻译中",
-  pending_proofread: "待校对",
-  proofreading: "校对中",
-  pending_typeset: "待嵌字",
-  typesetting: "嵌字中",
-  pending_publish: "待发布",
-  published: "已发布",
-  archived: "已归档",
-};
-const reviewLabels: Record<ReviewStatus, string> = {
-  normal: "正常",
-  needs_review: "待审核",
-  blocked: "阻塞",
-};
 const reviewResolutionLabels: Record<
   components["schemas"]["ReviewResolution"],
   string
@@ -3240,7 +3228,7 @@ export function CandidatesPage() {
       selectedCount
         ? {
             content: (
-              <div className="candidate-batch-actions">
+              <div className="workspace-topbar-actions candidate-batch-actions">
                 <div className="candidate-batch-selection">
                   <strong>已选择 {selectedCount} 项候选</strong>
                   <Button
@@ -3428,6 +3416,7 @@ export function CandidatesPage() {
         {imageImport.confirmation && (
           <CandidateImportConfirmation
             {...imageImport.confirmation}
+            onSeriesIntentChange={imageImport.setSeriesIntent}
             onEdit={(entry) => openEditor(entry.candidate)}
             onConfirm={() => void imageImport.submit()}
             onClose={imageImport.closeConfirmation}
@@ -3513,7 +3502,16 @@ export function WorksPage() {
   const isClaim =
     view === "work" && ["translate", "proofread", "typeset"].includes(tab);
   const targetClaimStage = isClaim ? (tab as ClaimStage) : undefined;
-  const [layout, setLayout] = useState<"grid" | "rows">("grid");
+  const [readLayout, setReadLayout] = useState<"grid" | "rows" | "album">(() =>
+    params.get("layout") === "album" ? "album" : "grid",
+  );
+  const [workLayout, setWorkLayout] = useState<"grid" | "rows">("grid");
+  const layout = view === "read" ? readLayout : workLayout;
+  const isAlbum = view === "read" && layout === "album";
+  function setLayout(value: "grid" | "rows" | "album") {
+    if (view === "read") setReadLayout(value);
+    else if (value !== "album") setWorkLayout(value);
+  }
   const [language, setLanguage] = useState<SourceLanguage | "all">("all");
   const [selectionMode, setSelectionMode] = useState(false);
   const [selected, setSelected] = useState<Record<string, number>>({});
@@ -3546,6 +3544,7 @@ export function WorksPage() {
     }
   }, [params, setParams, tab]);
   const query = useInfiniteQuery({
+    enabled: !isAlbum,
     queryKey: [
       "works",
       user.id,
@@ -3706,6 +3705,52 @@ export function WorksPage() {
         },
       ]
     : [{ key: "all", title: null, items }];
+  function layoutToolbar(workTotal?: number, imageTotal?: number) {
+    return (
+      <div className="workspace-work-results-toolbar">
+        <p className="workspace-result-count">
+          共 {workTotal ?? "—"} 部作品
+          {imageTotal !== undefined && ` · ${imageTotal} 张图片`}
+          {view === "work" ? " · 各职责计数独立，不相加" : ""}
+        </p>
+        <div
+          className="workspace-view-toggle"
+          role="group"
+          aria-label="作品展示方式"
+        >
+          <Button
+            size="sm"
+            variant={layout === "grid" ? "primary" : "ghost"}
+            leadingIcon={<Grid2X2 size={15} />}
+            aria-pressed={layout === "grid"}
+            onClick={() => setLayout("grid")}
+          >
+            卡片
+          </Button>
+          <Button
+            size="sm"
+            variant={layout === "rows" ? "primary" : "ghost"}
+            leadingIcon={<List size={15} />}
+            aria-pressed={layout === "rows"}
+            onClick={() => setLayout("rows")}
+          >
+            列表
+          </Button>
+          {view === "read" && (
+            <Button
+              size="sm"
+              variant={layout === "album" ? "primary" : "ghost"}
+              leadingIcon={<Images size={15} />}
+              aria-pressed={layout === "album"}
+              onClick={() => setLayout("album")}
+            >
+              相册
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  }
   return (
     <PermissionGate permission="works:read">
       <div className="account-content-boundary">
@@ -3713,9 +3758,16 @@ export function WorksPage() {
           enabled={isTodo}
           fallbackTopbar={topbarRegistration}
         />
-        <SectionHeading title="作品">
-          查看流程全貌，或按自己的职务和语言能力接取工作。
-        </SectionHeading>
+        <header className="account-heading">
+          <div className="workspace-works-title">
+            <h1>作品</h1>
+            <Link className="account-link" to="/works/series">
+              <BookOpen size={16} />
+              系列目录
+            </Link>
+          </div>
+          <p>查看流程全貌，或按自己的职务和语言能力接取工作。</p>
+        </header>
         <div
           className="workspace-view-toggle"
           role="group"
@@ -3781,7 +3833,7 @@ export function WorksPage() {
                 buttons[next].click();
               }}
             >
-              {item.label} <span>{tabCount(item.value)}</span>
+              {item.label} {summary && <span>{tabCount(item.value)}</span>}
             </button>
           ))}
         </div>
@@ -3851,113 +3903,103 @@ export function WorksPage() {
           id="work-list-panel"
           aria-labelledby={`work-tab-${view}-${tab}`}
         >
-          <PageState
-            query={query}
-            empty={(data) => (data.pages[0]?.total ?? 0) === 0}
-            emptyContent={
-              <EmptyState
-                icon={<Inbox />}
-                title={
-                  isTodo
-                    ? "这里空空如也，去接取新的任务吧"
-                    : isClaim
-                      ? "暂时没有匹配的可接取任务"
-                      : "这里暂时没有作品"
+          {isAlbum ? (
+            <WorkAlbum
+              key={`${tab}:${language}:${mine}:${deferredSearch}`}
+              phase={tab !== "all" ? (tab as WorkPhase) : undefined}
+              language={language !== "all" ? language : undefined}
+              mine={mine}
+              search={deferredSearch}
+              toolbar={layoutToolbar}
+            />
+          ) : (
+            <>
+              {layoutToolbar(summary?.total)}
+              <PageState
+                query={query}
+                empty={(data) => (data.pages[0]?.total ?? 0) === 0}
+                emptyContent={
+                  <EmptyState
+                    icon={<Inbox />}
+                    title={
+                      isTodo
+                        ? "这里空空如也，去接取新的任务吧"
+                        : isClaim
+                          ? "暂时没有匹配的可接取任务"
+                          : "这里暂时没有作品"
+                    }
+                    description={
+                      isTodo
+                        ? "提前认领的任务会在上游提交后进入待办。"
+                        : isClaim
+                          ? "工作视图只展示匹配本人职务和语言能力的空缺。"
+                          : "调整搜索或筛选条件后再试。"
+                    }
+                  />
                 }
-                description={
-                  isTodo
-                    ? "提前认领的任务会在上游提交后进入待办。"
-                    : isClaim
-                      ? "工作视图只展示匹配本人职务和语言能力的空缺。"
-                      : "调整搜索或筛选条件后再试。"
-                }
-              />
-            }
-          >
-            {() => (
-              <>
-                <p className="workspace-result-count">
-                  共 {summary?.total ?? 0} 部作品
-                  {view === "work" ? " · 各职责计数独立，不相加" : ""}
-                </p>
-                <div
-                  className="workspace-view-toggle"
-                  aria-label="作品展示方式"
-                >
-                  <Button
-                    size="sm"
-                    variant={layout === "grid" ? "primary" : "secondary"}
-                    leadingIcon={<Grid2X2 size={15} />}
-                    aria-pressed={layout === "grid"}
-                    onClick={() => setLayout("grid")}
-                  >
-                    卡片展示
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={layout === "rows" ? "primary" : "secondary"}
-                    leadingIcon={<List size={15} />}
-                    aria-pressed={layout === "rows"}
-                    onClick={() => setLayout("rows")}
-                  >
-                    按行展示
-                  </Button>
-                </div>
-                {groups
-                  .filter((group) => group.items.length)
-                  .map((group) => (
-                    <div
-                      className="dashboard-recommendation-group"
-                      key={group.key}
-                    >
-                      {group.title && <h3>{group.title}</h3>}
-                      <div
-                        className={`workspace-card-grid workspace-work-grid${layout === "rows" ? " workspace-work-grid--rows" : ""}`}
-                      >
-                        {group.items.map((work) => (
-                          <WorkCard
-                            key={work.id}
-                            work={work}
-                            actions={
-                              isTodo ? (
-                                <PersonalWorkActions work={work} view="todo" />
-                              ) : isClaim ? (
-                                <PersonalWorkActions
-                                  work={work}
-                                  view="recommended"
-                                />
-                              ) : undefined
-                            }
-                            selectionMode={selectionMode}
-                            selected={work.id in selected}
-                            selectionEligible={eligible(work)}
-                            onToggleSelected={() =>
-                              setSelected((current) => {
-                                const next = { ...current };
-                                if (work.id in next) delete next[work.id];
-                                else next[work.id] = work.revision;
-                                return next;
-                              })
-                            }
-                          />
-                        ))}
+              >
+                {() => (
+                  <>
+                    {groups
+                      .filter((group) => group.items.length)
+                      .map((group) => (
+                        <div
+                          className="dashboard-recommendation-group"
+                          key={group.key}
+                        >
+                          {group.title && <h3>{group.title}</h3>}
+                          <div
+                            className={`workspace-card-grid workspace-work-grid${layout === "rows" ? " workspace-work-grid--rows" : ""}`}
+                          >
+                            {group.items.map((work) => (
+                              <WorkCard
+                                key={work.id}
+                                work={work}
+                                actions={
+                                  isTodo ? (
+                                    <PersonalWorkActions
+                                      work={work}
+                                      view="todo"
+                                    />
+                                  ) : isClaim ? (
+                                    <PersonalWorkActions
+                                      work={work}
+                                      view="recommended"
+                                    />
+                                  ) : undefined
+                                }
+                                selectionMode={selectionMode}
+                                selected={work.id in selected}
+                                selectionEligible={eligible(work)}
+                                onToggleSelected={() =>
+                                  setSelected((current) => {
+                                    const next = { ...current };
+                                    if (work.id in next) delete next[work.id];
+                                    else next[work.id] = work.revision;
+                                    return next;
+                                  })
+                                }
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    {layout !== "album" && query.hasNextPage && (
+                      <div className="workspace-pagination">
+                        <Button
+                          variant="secondary"
+                          loading={query.isFetchingNextPage}
+                          onClick={() => void query.fetchNextPage()}
+                        >
+                          再加载 24 部作品
+                        </Button>
                       </div>
-                    </div>
-                  ))}
-                {query.hasNextPage && (
-                  <div className="workspace-pagination">
-                    <Button
-                      variant="secondary"
-                      loading={query.isFetchingNextPage}
-                      onClick={() => void query.fetchNextPage()}
-                    >
-                      再加载 24 部作品
-                    </Button>
-                  </div>
+                    )}
+                  </>
                 )}
-              </>
-            )}
-          </PageState>
+              </PageState>
+            </>
+          )}
         </div>
       </div>
     </PermissionGate>
@@ -5390,6 +5432,15 @@ export function WorkDetailPage() {
               <SectionHeading title={workDisplayTitle(work)}>
                 {work.authorName} · {work.imageCount} 页
               </SectionHeading>
+              <WorkSeriesAssociation
+                workId={work.id}
+                authorId={work.authorId}
+                canManage={
+                  user.permissions.includes("works:metadata") &&
+                  (work.workflowStatus !== "archived" ||
+                    user.permissions.includes("works:admin"))
+                }
+              />
               <div className="workspace-page-badges">
                 <WorkflowBadge value={work.workflowStatus} />
                 <ReviewBadge value={work.reviewStatus} />

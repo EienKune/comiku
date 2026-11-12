@@ -1,3 +1,5 @@
+import { SeriesImportSelector } from "./WorkSeriesAssociation";
+import type { SeriesImportIntent } from "./work-series-api";
 import { useState } from "react";
 import { Check, ChevronDown, X } from "lucide-react";
 import { Button, IconButton } from "../../components/ui";
@@ -23,6 +25,8 @@ export function CandidateImportConfirmation({
   results,
   error,
   onEdit,
+  seriesIntent = null,
+  onSeriesIntentChange,
   onConfirm,
   onClose,
 }: {
@@ -31,6 +35,8 @@ export function CandidateImportConfirmation({
   results?: readonly CandidateImportResult[];
   error?: string | null;
   onEdit: (entry: CandidateImportEntry) => void;
+  seriesIntent?: SeriesImportIntent | null;
+  onSeriesIntentChange?: (value: SeriesImportIntent | null) => void;
   onConfirm: () => void;
   onClose: () => void;
 }) {
@@ -197,6 +203,14 @@ export function CandidateImportConfirmation({
             );
           })}
         </div>
+        {entries.length === 1 && onSeriesIntentChange && (
+          <SeriesImportSelector
+            authorId={entries[0].candidate.authorId}
+            value={seriesIntent}
+            onChange={onSeriesIntentChange}
+            disabled={frozen || phase === "result"}
+          />
+        )}
         <p className="candidate-import-note">
           其余图片不进入作品，原帖图片仍完整保留。
         </p>
@@ -215,7 +229,14 @@ export function CandidateImportConfirmation({
             type="button"
             loading={busy}
             leadingIcon={<Check size={17} />}
-            disabled={!entries.length}
+            disabled={
+              !entries.length ||
+              Boolean(
+                seriesIntent &&
+                "createTitle" in seriesIntent &&
+                !seriesIntent.createTitle.trim(),
+              )
+            }
             onClick={onConfirm}
           >
             {phase === "uncertain"

@@ -18,7 +18,12 @@ import {
   normalizeCandidateFilter,
 } from "./candidate-query.js";
 import type { CreateCandidateReviewSessionDto } from "./candidates.dto.js";
+import {
+  WorkSeriesService,
+  normalizeWorkSeriesImportIntent,
+} from "../work-series/work-series.service.js";
 import { JobsService } from "../jobs/jobs.service.js";
+import type { Actor } from "../common/access.js";
 import {
   BadRequestException,
   ConflictException,
@@ -102,6 +107,19 @@ type UploadSessionDetails = Prisma.CandidateUploadSessionGetPayload<{
 const uploadSessionLifetimeMs = 24 * 60 * 60 * 1000;
 const signedUploadLifetimeSeconds = 15 * 60;
 
+function sameSeriesImportIntent(
+  stored: Prisma.JsonValue | null,
+  input: ReturnType<typeof normalizeWorkSeriesImportIntent>,
+) {
+  if (input === null) return stored === null;
+  if (stored === null || typeof stored !== "object" || Array.isArray(stored))
+    return false;
+  const entries = (value: object) =>
+    Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
+  // jsonb does not preserve the insertion order of object keys.
+  return JSON.stringify(entries(stored)) === JSON.stringify(entries(input));
+}
+
 @Injectable()
 export class CandidatesService {
   constructor(
@@ -111,6 +129,9 @@ export class CandidatesService {
     @Optional()
     @Inject(ImageAnalysisService)
     private readonly analysis?: ImageAnalysisService,
+    @Optional()
+    @Inject(WorkSeriesService)
+    private readonly series?: WorkSeriesService,
   ) {}
 
   onModuleInit() {
@@ -1133,11 +1154,16 @@ export class CandidatesService {
     return this.get(id);
   }
 
-  async batch(actorId: string, input: CandidateBatchActionDto) {
+  async batch(actorId: string, input: CandidateBatchActionDto, actor?: Actor) {
+    if (
+      input.items.length > 1 &&
+      input.items.some((item) => item.series != null)
+    )
+      throw new BadRequestException("批量入库请完成后再整理系列");
     const results = [];
     for (const item of input.items) {
       try {
-        results.push(await this.applyOne(actorId, input.action, item));
+        results.push(await this.applyOne(actorId, input.action, item, actor));
       } catch (error) {
         results.push({
           id: item.id,
@@ -1163,10 +1189,14 @@ export class CandidatesService {
     actorId: string,
     action: CandidateAction,
     item: CandidateActionItemDto,
+    actor?: Actor,
   ) {
+    if (action !== CandidateAction.import && item.series != null)
+      throw new ConflictException("系列关联仅适用于入库操作");
     if (action !== CandidateAction.import && item.mediaIds !== undefined)
       throw new ConflictException("图片选择仅适用于入库操作");
-    if (action === CandidateAction.import) return this.import(actorId, item);
+    if (action === CandidateAction.import)
+      return this.import(actorId, item, actor);
     const from = action === CandidateAction.discard ? "pending" : "discarded";
     const to = action === CandidateAction.discard ? "discarded" : "pending";
     return this.db.$transaction(async (tx) => {
@@ -1207,7 +1237,14 @@ export class CandidatesService {
     });
   }
 
-  private async import(actorId: string, item: CandidateActionItemDto) {
+  private async import(
+    actorId: string,
+    item: CandidateActionItemDto,
+    actor?: Actor,
+  ) {
+    const seriesIntent = normalizeWorkSeriesImportIntent(item.series);
+    if (seriesIntent && !this.series)
+      throw new ConflictException("系列管理暂不可用，请稍后重试");
     if (
       item.mediaIds !== undefined &&
       (!Array.isArray(item.mediaIds) ||
@@ -1217,6 +1254,12 @@ export class CandidatesService {
     )
       throw new ConflictException("请选择不重复的有效图片");
     return this.db.$transaction(async (tx) => {
+      if (seriesIntent) {
+        if (!actor || actor.userId !== actorId)
+          throw new ForbiddenException("系列入库需要有效登录会话");
+        await this.series!.authorizeImport(tx, actor);
+      }
+
       const observed = await tx.candidatePost.findUnique({
         where: { id: item.id },
         select: { authorId: true },
@@ -1225,6 +1268,14 @@ export class CandidatesService {
       // Author mutations lock this row too. Keep author before candidate, then
       // re-read the binding so a concurrent manual reassignment cannot bypass it.
       await tx.$queryRaw`SELECT id FROM authors WHERE id = ${observed.authorId}::uuid FOR SHARE`;
+      const lockedSeries = seriesIntent
+        ? await this.series!.lockImportIntent(
+            tx,
+            actorId,
+            observed.authorId,
+            item.series,
+          )
+        : null;
       await tx.$queryRaw`SELECT id FROM candidate_posts WHERE id = ${item.id}::uuid FOR UPDATE`;
       const candidate = await tx.candidatePost.findUnique({
         where: { id: item.id },
@@ -1249,6 +1300,16 @@ export class CandidatesService {
       if (mediaIds.some((id) => !mediaById.has(id)))
         throw new ConflictException("所选图片不属于该候选，请刷新后重试");
       if (candidate.status === "imported" && candidate.work) {
+        if (
+          !sameSeriesImportIntent(
+            candidate.work.candidateImportSeriesIntent,
+            seriesIntent,
+          )
+        )
+          throw new ConflictException(
+            "候选已按其他系列意图入库，请查看已有作品",
+          );
+
         if (candidate.work.candidateImportRevision === null) {
           if (item.mediaIds !== undefined)
             throw new ConflictException(
@@ -1305,6 +1366,7 @@ export class CandidatesService {
           authorId: candidate.authorId,
           sourceCandidatePostId: candidate.id,
           candidateImportRevision: item.expectedRevision,
+          candidateImportSeriesIntent: seriesIntent ?? Prisma.DbNull,
           sourcePostUrl: candidate.externalPostUrl,
           title: null,
           sourceText: candidate.text,
@@ -1325,6 +1387,14 @@ export class CandidatesService {
           };
         }),
       });
+      if (lockedSeries)
+        await this.series!.attachImportedWork(
+          tx,
+          actorId,
+          candidate.authorId,
+          work.id,
+          lockedSeries,
+        );
       await tx.workEvent.create({
         data: {
           workId: work.id,

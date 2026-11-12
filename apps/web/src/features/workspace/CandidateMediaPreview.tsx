@@ -1,3 +1,4 @@
+import { CandidateImageSimilarityAction } from "./CandidateImageSimilarity";
 import type { components } from "@comiku/api-client";
 import {
   useCallback,
@@ -419,6 +420,20 @@ export function CandidateMediaPreview({ candidate }: { candidate: Candidate }) {
           alt={`${candidate.authorName} 的候选图片第 ${viewerIndex + 1} 页`}
           index={viewerIndex}
           count={candidate.media.length}
+          footer={
+            <CandidateImageSimilarityAction
+              key={viewerMedia.id}
+              candidateId={candidate.id}
+              mediaId={viewerMedia.id}
+              authorName={candidate.authorName}
+              index={viewerIndex}
+              sourceUrl={
+                originalQuery.data?.url ??
+                viewerThumbnail.data?.url ??
+                undefined
+              }
+            />
+          }
           loading={originalQuery.isPending}
           onClose={() => setViewer(null)}
           onPrevious={

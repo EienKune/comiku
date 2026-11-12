@@ -1,3 +1,4 @@
+import { CandidateImageSimilarityAction } from "./CandidateImageSimilarity";
 import { useEffect, useRef, useState } from "react";
 import { ImageIcon } from "lucide-react";
 import { ImageLightbox } from "../../components/ImageLightbox";
@@ -121,6 +122,16 @@ export function CandidateImportPreview({
     <ImageLightbox
       src={original.data?.url ?? undefined}
       thumbnailSrc={thumbnail.data?.url ?? undefined}
+      footer={
+        <CandidateImageSimilarityAction
+          key={mediaId}
+          candidateId={candidateId}
+          mediaId={mediaId}
+          authorName={authorName}
+          index={originalIndex}
+          sourceUrl={original.data?.url ?? thumbnail.data?.url ?? undefined}
+        />
+      }
       loading={original.isPending}
       portalContainer={portalContainer}
       alt={`${authorName} · ${ordered ? `入库第 ${index + 1} 页（原图 ${originalIndex + 1}）` : `原图 ${originalIndex + 1}`}${original.isError ? " · 原图暂不可用" : ""}`}
