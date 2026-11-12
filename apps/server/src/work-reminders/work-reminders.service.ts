@@ -1,4 +1,7 @@
-import { WORK_REMINDER_EVENTS } from "../notifications/notification-resource.js";
+import {
+  WORK_REMINDER_EVENTS,
+  notificationResourceKind,
+} from "../notifications/notification-resource.js";
 import { randomUUID } from "node:crypto";
 import {
   ConflictException,
@@ -488,7 +491,7 @@ export class WorkRemindersService {
             }[]
           ).find((route) => route.id === channel.id);
           if (
-            previous.resourceKind !== WORK_DIGEST_RESOURCE ||
+            notificationResourceKind(previous) !== "work_digest" ||
             frozen.kind !== "work_digest" ||
             frozen.formatVersion !== 3 ||
             ref?.generation !== channel.audienceGeneration ||

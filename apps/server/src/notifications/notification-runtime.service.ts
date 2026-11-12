@@ -1,6 +1,6 @@
 import {
   notificationResourceKind,
-  notificationResourceTypeFilter,
+  notificationResourceWhere,
 } from "./notification-resource.js";
 import { isWorkReminderResource } from "../work-reminders/work-reminder-scheduling.js";
 import {
@@ -130,13 +130,16 @@ export class NotificationRuntimeService implements OnModuleInit {
               (!ref.content?.text ||
               !notificationMessageTextValid(
                 ref.content.text,
-                workReminderMessagePolicy(event.snapshot, event.resourceKind),
+                workReminderMessagePolicy(
+                  event.snapshot,
+                  notificationResourceKind(event),
+                ),
               ) ||
               !workReminderMessageValid(
                 event.snapshot,
                 ref.messageSegments,
                 ref.content.text,
-                event.resourceKind,
+                notificationResourceKind(event),
               )
                 ? "work_reminder_content_invalid"
                 : null))
@@ -394,7 +397,7 @@ export class NotificationRuntimeService implements OnModuleInit {
             row.event.snapshot,
             row.messageSegments,
             row.text,
-            row.event.resourceKind,
+            notificationResourceKind(row.event),
           )
         )
           return cancel("work_reminder_content_invalid");
@@ -430,8 +433,7 @@ export class NotificationRuntimeService implements OnModuleInit {
           groupId: row.groupId,
           id: { not: row.id },
           event: {
-            type: notificationResourceTypeFilter(row.event),
-            resourceId: row.event.resourceId,
+            ...notificationResourceWhere(row.event),
           },
           OR: [
             { status: "unknown", resolvedAt: null },
@@ -453,8 +455,7 @@ export class NotificationRuntimeService implements OnModuleInit {
       });
       const earlierUnrouted = await tx.notificationEvent.findFirst({
         where: {
-          type: notificationResourceTypeFilter(row.event),
-          resourceId: row.event.resourceId,
+          ...notificationResourceWhere(row.event),
           routedAt: null,
           routeRefs: {
             array_contains: [
@@ -537,7 +538,7 @@ export class NotificationRuntimeService implements OnModuleInit {
         connection,
         messagePolicy: workReminderMessagePolicy(
           row.event.snapshot,
-          row.event.resourceKind,
+          notificationResourceKind(row.event),
         ),
       };
     });

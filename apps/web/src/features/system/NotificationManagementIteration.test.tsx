@@ -145,6 +145,7 @@ const historyRow = (
   groupId: "987",
   connectionKey: "bot",
   eventType: "imported",
+  resourceKind: "work",
   workNumber,
   status: "pending" as const,
   attempts: 0,

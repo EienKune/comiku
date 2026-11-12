@@ -16,3 +16,14 @@ export function notificationResourceTypeFilter(event: { type: string }) {
       ? { equals: "notification.test" }
       : { notIn: [...WORK_REMINDER_EVENTS, "notification.test"] };
 }
+
+/** Shared by both routed blockers and earlier unrouted events. */
+export function notificationResourceWhere(event: {
+  type: string;
+  resourceId: string;
+}) {
+  return {
+    resourceId: event.resourceId,
+    type: notificationResourceTypeFilter(event),
+  };
+}
