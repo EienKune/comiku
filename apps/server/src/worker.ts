@@ -16,6 +16,7 @@ import { NotificationRuntimeService } from "./notifications/notification-runtime
 import { BirthdaysService } from "./birthdays/birthdays.service.js";
 import { BirthdayReminderService } from "./birthdays/birthday-reminder.service.js";
 import { runBirthdayWorker } from "./birthdays/birthday-worker.js";
+import { WorkRemindersService } from "./work-reminders/work-reminders.service.js";
 import { ImageSimilarityService } from "./image-similarity/image-similarity.service.js";
 
 const environment = loadEnvironment();
@@ -30,6 +31,7 @@ const sources = app.get(SourceFetchService);
 const transfers = app.get(DownloadsService);
 const analysis = app.get(ImageAnalysisService);
 const notifications = app.get(NotificationRuntimeService);
+const workReminders = app.get(WorkRemindersService);
 const similarity = app.get(ImageSimilarityService);
 let nextAnalysisScan = 0;
 let nextReviewCleanup = 0;
@@ -96,7 +98,16 @@ async function loop(lane: "heavy" | "network" | "analysis", scope = "global") {
 }
 async function notificationLoop() {
   let nextMaintenance = 0;
+  let nextWorkReminderMaintenance = 0;
   while (!stopping.signal.aborted) {
+    if (Date.now() >= nextWorkReminderMaintenance) {
+      nextWorkReminderMaintenance = Date.now() + 60_000;
+      try {
+        await workReminders.maintain();
+      } catch {
+        console.error("工作提醒维护未完成，将在下一轮恢复。");
+      }
+    }
     try {
       if (Date.now() >= nextMaintenance) {
         await notifications.maintain();

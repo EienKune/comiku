@@ -1,3 +1,4 @@
+import { notificationResourceKind } from "./notification-resource.js";
 import { ForbiddenException } from "@nestjs/common";
 import { permissionsFor } from "../common/access.js";
 import type {
@@ -66,9 +67,7 @@ export function deliveryDto(
     offsetDays?: number;
     count?: number;
   };
-  const resourceKind =
-    row.event.resourceKind ??
-    (row.event.type === "notification.test" ? "notification_test" : "work");
+  const resourceKind = notificationResourceKind(row.event);
   const route = (
     Array.isArray(row.event.routeRefs)
       ? (row.event.routeRefs as unknown as NotificationFrozenRoute[])
