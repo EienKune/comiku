@@ -852,7 +852,7 @@ test(
           where: { id: occurrence.eventId! },
         });
         const snapshot = event.snapshot as unknown as WorkDigestSnapshot;
-        assert.equal(snapshot.formatVersion, 2);
+        assert.equal(snapshot.formatVersion, 3);
         assert.equal(snapshot.counts.ready, 0);
         assert.ok(snapshot.counts.typesettingTotal! >= participantIds.length);
         assert.equal(snapshot.items.length, 1);
@@ -898,6 +898,311 @@ test(
           }),
           1,
         );
+      },
+    );
+    await t.test(
+      "one digest captures every overdue task and safely rebuilds only a conclusively unsent changed roster in the same slot",
+      async () => {
+        const due = new Date(morning.getTime() + 6 * 86_400_000);
+        const overdueIds: string[] = [];
+        for (let index = 0; index < 8; index++) {
+          const work = await makeWork("pending_typeset");
+          const participant = await db.workStageParticipant.create({
+            data: {
+              workId: work.id,
+              userId: actor.id,
+              stage: "typeset",
+              participationMode: "owner",
+              joinedAt: before,
+            },
+          });
+          overdueIds.push(participant.id);
+          participantIds.push(participant.id);
+        }
+        await projection.maintain(new Date(due.getTime() - 60_000));
+        await db.workReminderEpisode.updateMany({
+          where: { participantId: { in: overdueIds } },
+          data: { eligibleMilliseconds: 72n * 3_600_000n },
+        });
+        await reminders.maintain(due);
+        const occurrence = await db.workDigestOccurrence.findFirstOrThrow({
+          where: { channelId: channel.id, dueAt: due },
+        });
+        const original = await db.notificationEvent.findUniqueOrThrow({
+          where: { id: occurrence.eventId! },
+        });
+        const originalSnapshot =
+          original.snapshot as unknown as WorkDigestSnapshot;
+        assert.equal(originalSnapshot.formatVersion, 3);
+        assert.equal(originalSnapshot.items.length, 8);
+        assert.equal(originalSnapshot.counts.overdue, 8);
+        assert.deepEqual(
+          new Set(originalSnapshot.items.map((item) => item.participantId)),
+          new Set(overdueIds),
+        );
+        assert.equal(
+          await db.workReminderNotice.count({
+            where: { eventId: original.id, kind: "overdue" },
+          }),
+          8,
+        );
+        await reminders.maintain(due);
+        assert.equal(
+          (
+            await db.workDigestOccurrence.findUniqueOrThrow({
+              where: { id: occurrence.id },
+            })
+          ).eventId,
+          original.id,
+        );
+
+        const unsent = await delivery(original.id, "cancelled");
+        await db.notificationDelivery.update({
+          where: { id: unsent.id },
+          data: { errorCode: "work_reminder_task_changed" },
+        });
+        await db.workStageParticipant.update({
+          where: { id: overdueIds[0]! },
+          data: { submittedAt: due },
+        });
+        const filtered = await db.$transaction((tx) =>
+          projection.readItems(tx, due, {
+            channelId: channel.id,
+            scopeGeneration: 1,
+            readyEnabled: false,
+            overdueEnabled: true,
+            allOverdue: true,
+          }),
+        );
+        assert.equal(filtered.items.length, 7);
+        assert.equal(
+          filtered.overdueCount,
+          7,
+          "the complete count comes from current evidence, not stale projection rows",
+        );
+        await reminders.maintain(new Date(due.getTime() + 30_000));
+        const rebuiltOccurrence =
+          await db.workDigestOccurrence.findUniqueOrThrow({
+            where: { id: occurrence.id },
+          });
+        assert.notEqual(rebuiltOccurrence.eventId, original.id);
+        const rebuilt = await db.notificationEvent.findUniqueOrThrow({
+          where: { id: rebuiltOccurrence.eventId! },
+        });
+        const rebuiltSnapshot =
+          rebuilt.snapshot as unknown as WorkDigestSnapshot;
+        assert.equal(rebuiltSnapshot.items.length, 7);
+        assert.equal(rebuiltSnapshot.counts.overdue, 7);
+        assert.ok(
+          !rebuiltSnapshot.items.some(
+            (item) => item.participantId === overdueIds[0],
+          ),
+        );
+        assert.equal(
+          await db.workReminderNotice.count({
+            where: { eventId: rebuilt.id, kind: "overdue" },
+          }),
+          7,
+        );
+        assert.deepEqual(
+          await db.notificationEvent.findUniqueOrThrow({
+            where: { id: original.id },
+          }),
+          original,
+          "rebuilding the current intent preserves the original event and its frozen history",
+        );
+        await reminders.maintain(new Date(due.getTime() + 31_000));
+        assert.equal(
+          (
+            await db.workDigestOccurrence.findUniqueOrThrow({
+              where: { id: occurrence.id },
+            })
+          ).eventId,
+          rebuilt.id,
+        );
+        const crossed = await delivery(rebuilt.id, "cancelled", true);
+        await db.notificationDelivery.update({
+          where: { id: crossed.id },
+          data: { errorCode: "work_reminder_observation_stale" },
+        });
+        await reminders.maintain(new Date(due.getTime() + 40_000));
+        assert.equal(
+          (
+            await db.workDigestOccurrence.findUniqueOrThrow({
+              where: { id: occurrence.id },
+            })
+          ).eventId,
+          rebuilt.id,
+          "a crossed send boundary prohibits rebuilding even a task-change cancellation",
+        );
+
+        const unknownChannel = await db.notificationChannel.create({
+          data: {
+            name: "Synthetic overdue unknown",
+            groupId: String(Math.floor(Math.random() * 1e12) + 3e12),
+            connectionKey: channel.connectionKey,
+            connectionFingerprint: channel.connectionFingerprint,
+            enabled: true,
+            eventTypes: [],
+            sourceAcceptAfter: before,
+          },
+        });
+        channelIds.push(unknownChannel.id);
+        await db.workReminderSubscription.create({
+          data: {
+            channelId: unknownChannel.id,
+            overdueEnabled: true,
+            acceptAfter: before,
+          },
+        });
+        await reminders.maintain(new Date(due.getTime() + 50_000));
+        const unknownOccurrence =
+          await db.workDigestOccurrence.findFirstOrThrow({
+            where: { channelId: unknownChannel.id, dueAt: due },
+          });
+        await delivery(
+          unknownOccurrence.eventId!,
+          "unknown",
+          false,
+          unknownChannel,
+        );
+        await reminders.maintain(new Date(due.getTime() + 60_000));
+        assert.equal(
+          (
+            await db.workDigestOccurrence.findUniqueOrThrow({
+              where: { id: unknownOccurrence.id },
+            })
+          ).eventId,
+          unknownOccurrence.eventId,
+          "an unknown intent cannot be replaced in the same slot",
+        );
+        await db.workStageParticipant.update({
+          where: { id: overdueIds[0]! },
+          data: { submittedAt: null },
+        });
+        const later = new Date(evening.getTime() + 6 * 86_400_000);
+        await reminders.maintain(later);
+        const eveningOccurrence =
+          await db.workDigestOccurrence.findFirstOrThrow({
+            where: { channelId: channel.id, dueAt: later },
+          });
+        const eveningEvent = await db.notificationEvent.findUniqueOrThrow({
+          where: { id: eveningOccurrence.eventId! },
+        });
+        assert.equal(
+          (eveningEvent.snapshot as unknown as WorkDigestSnapshot).items.length,
+          0,
+          "the next scheduled summary does not repeat the already frozen overdue roster",
+        );
+      },
+    );
+    await t.test(
+      "an oversized full digest consumes no slot and cannot starve handoffs in its own or another group",
+      async (budgetTest) => {
+        const due = new Date(morning.getTime() + 7 * 86_400_000);
+        async function group(name: string, overdueEnabled: boolean) {
+          const row = await db.notificationChannel.create({
+            data: {
+              name,
+              groupId: String(Math.floor(Math.random() * 1e12) + 4e12),
+              connectionKey: channel.connectionKey,
+              connectionFingerprint: channel.connectionFingerprint,
+              enabled: true,
+              eventTypes: [],
+              sourceAcceptAfter: before,
+            },
+          });
+          channelIds.push(row.id);
+          await db.workReminderSubscription.create({
+            data: {
+              channelId: row.id,
+              readyEnabled: true,
+              overdueEnabled,
+              acceptAfter: before,
+            },
+          });
+          return row;
+        }
+        const oversized = await group("Synthetic capacity", true);
+        const unaffected = await group("Synthetic independent handoff", false);
+        // Amplify only the selected synthetic candidate result. The real formatter
+        // exercises its actual byte budget without seeding thousands of works.
+        const wrapped = new Proxy(db, {
+          get(target, property) {
+            if (property !== "$transaction")
+              return Reflect.get(target, property, target);
+            return (run: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+              target.$transaction((tx) =>
+                run(
+                  new Proxy(tx, {
+                    get(client, name) {
+                      if (name === "$queryRaw")
+                        return async (...args: unknown[]) => {
+                          const rows = (await Reflect.apply(
+                            client.$queryRaw,
+                            client,
+                            args,
+                          )) as unknown[];
+                          const query = args[0];
+                          const text = Array.isArray(query)
+                            ? query.join("?")
+                            : (query as Prisma.Sql).sql;
+                          const values = Array.isArray(query)
+                            ? args.slice(1)
+                            : (query as Prisma.Sql).values;
+                          if (
+                            /AS "eligibleMilliseconds"/.test(text) &&
+                            !/\bLIMIT\b/.test(text) &&
+                            values.includes(oversized.id)
+                          ) {
+                            assert.ok(rows.length > 0);
+                            return Array.from(
+                              { length: 4096 },
+                              (_, index) => rows[index % rows.length],
+                            );
+                          }
+                          return rows;
+                        };
+                      return Reflect.get(client, name, client);
+                    },
+                  }),
+                ),
+              );
+          },
+        });
+        const warning = budgetTest.mock.method(console, "warn", () => {});
+        await new WorkRemindersService(wrapped, registry, env).maintain(due);
+        assert.equal(warning.mock.calls.length, 1);
+        assert.equal(
+          await db.workDigestOccurrence.count({
+            where: { channelId: oversized.id },
+          }),
+          0,
+        );
+        assert.equal(
+          await db.workReminderNotice.count({
+            where: { channelId: oversized.id, kind: "overdue" },
+          }),
+          0,
+        );
+        for (const route of [oversized, unaffected]) {
+          assert.equal(
+            await db.workReminderNotice.count({
+              where: { channelId: route.id, kind: "ready" },
+            }),
+            5,
+            "digest capacity failures preserve each group's independently captured handoffs",
+          );
+          assert.equal(
+            await db.notificationEvent.count({
+              where: {
+                type: "work.ready",
+                routeRefs: { array_contains: [{ id: route.id }] },
+              },
+            }),
+            5,
+          );
+        }
       },
     );
     await t.test(

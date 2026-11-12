@@ -441,6 +441,82 @@ test(
         oldest.participantId,
       );
       assert.equal(dueDuringRotation.items[0]?.kind, "overdue");
+      await db.workReminderEpisode.updateMany({
+        where: { participantId: { in: participantIds } },
+        data: { eligibleMilliseconds: BigInt(OVERDUE_MILLISECONDS) },
+      });
+      const fullQueries: Prisma.Sql[] = [];
+      const full = await db.$transaction((tx) =>
+        projection.readItems(
+          new Proxy(tx, {
+            get(client, property) {
+              if (property === "$queryRaw")
+                return (query: Prisma.Sql) => {
+                  fullQueries.push(query);
+                  return client.$queryRaw(query);
+                };
+              if (property === "workStageParticipant")
+                return new Proxy(client.workStageParticipant, {
+                  get(model, operation) {
+                    if (operation === "findMany")
+                      return (input: { where: { id: { in: string[] } } }) => {
+                        assert.ok(
+                          input.where.id.in.length <= 100,
+                          "full roster evidence must hydrate bounded participant batches",
+                        );
+                        return model.findMany(input);
+                      };
+                    return Reflect.get(model, operation, model);
+                  },
+                });
+              return Reflect.get(client, property, client);
+            },
+          }),
+          healthyClock.lastObservedAt,
+          { ...options, readyEnabled: false, allOverdue: true },
+        ),
+      );
+      assert.equal(full.items.length, 1501);
+      assert.equal(full.overdueCount, full.items.length);
+      assert.equal(full.readyCount, 0);
+      assert.equal(
+        fullQueries.some(
+          (query) =>
+            /count\s*\(/i.test(query.sql) &&
+            /FROM work_reminder_episodes/i.test(query.sql),
+        ),
+        false,
+      );
+      const fullSelection = fullQueries.find((query) =>
+        /AS "eligibleMilliseconds"/.test(query.sql),
+      );
+      assert.ok(fullSelection);
+      assert.doesNotMatch(fullSelection.sql, /\bLIMIT\b/i);
+      const identityLocks = fullQueries.filter((query) =>
+        /FOR SHARE NOWAIT/.test(query.sql),
+      );
+      assert.ok(identityLocks.every((query) => query.values.length <= 100));
+      assert.match(identityLocks[0]!.sql, /FROM works/);
+      assert.ok(
+        identityLocks.slice(1).every((query) => /FROM users/.test(query.sql)),
+      );
+      const lockedUsers = identityLocks
+        .slice(1)
+        .flatMap((query) => query.values.map(String));
+      assert.deepEqual(
+        lockedUsers,
+        [...new Set([user.id, ...additionalUserIds])].sort(),
+        "all work locks precede globally sorted user batches",
+      );
+      await assert.rejects(
+        db.$transaction((tx) =>
+          projection.readItems(tx, healthyClock.lastObservedAt, {
+            ...options,
+            allOverdue: true,
+          }),
+        ),
+        /all_overdue_requires_ready_disabled/,
+      );
       const afterShutdown = new Date(baselineAt.getTime() + 1080_000);
       await projection.maintain(afterShutdown);
       assert.equal(

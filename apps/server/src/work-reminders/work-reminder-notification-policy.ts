@@ -1,6 +1,13 @@
-import type { Prisma } from "../generated/prisma/client.js";
-import { notificationMessageSegments } from "../notifications/notification-message-segments.js";
+import type {
+  Prisma,
+  WorkReminderEpisode,
+} from "../generated/prisma/client.js";
 import {
+  notificationMessageSegments,
+  type NotificationMessagePolicy,
+} from "../notifications/notification-message-segments.js";
+import {
+  type ReminderEvidence,
   lockReminderEvidence,
   readReminderEvidence,
   WORK_REMINDER_PROJECTION_LOCK,
@@ -30,7 +37,8 @@ function snapshot(value: unknown): WorkReminderSnapshot | null {
   if (
     !["work_digest", "work_ready"].includes(row.kind) ||
     !Array.isArray(row.items) ||
-    row.items.length > 5 ||
+    (row.items.length > 5 &&
+      !(row.kind === "work_digest" && row.formatVersion === 3)) ||
     !Number.isFinite(Date.parse(row.dueAt)) ||
     !Number.isFinite(Date.parse(row.validBefore)) ||
     !Number.isFinite(Date.parse(row.observedAt)) ||
@@ -44,10 +52,19 @@ function snapshot(value: unknown): WorkReminderSnapshot | null {
     return null;
   if (
     row.kind === "work_digest" &&
-    row.formatVersion === 2 &&
+    (row.formatVersion === 2 || row.formatVersion === 3) &&
     row.items.some((item) => !item || item.kind !== "overdue")
   )
     return null;
+  if (
+    row.kind === "work_digest" &&
+    row.formatVersion === 3 &&
+    (!row.counts ||
+      row.counts.ready !== 0 ||
+      row.counts.overdue !== row.items.length)
+  )
+    return null;
+  const participants = new Set<string>();
   for (const item of row.items) {
     if (
       !item ||
@@ -67,6 +84,10 @@ function snapshot(value: unknown): WorkReminderSnapshot | null {
           !/^[1-9][0-9]{4,19}$/.test(item.qqNumber)))
     )
       return null;
+    if (row.kind === "work_digest" && row.formatVersion === 3) {
+      if (participants.has(item.participantId)) return null;
+      participants.add(item.participantId);
+    }
   }
   return row;
 }
@@ -76,11 +97,19 @@ export function workReminderMessageValid(
   snapshotValue: unknown,
   message: unknown,
   text: string,
+  resourceKind?: string | null,
 ): boolean {
   const frozen = snapshot(snapshotValue),
-    segments = notificationMessageSegments(message);
+    segments = notificationMessageSegments(
+      message,
+      workReminderMessagePolicy(
+        snapshotValue,
+        resourceKind ?? frozen?.kind ?? null,
+      ),
+    );
   if (
     !frozen ||
+    (resourceKind != null && resourceKind !== frozen.kind) ||
     !segments ||
     segments
       .filter((s) => s.type === "text")
@@ -98,6 +127,18 @@ export function workReminderMessageValid(
     .map((s) => s.data.qq)
     .sort();
   return JSON.stringify(expected) === JSON.stringify(actual);
+}
+
+/** Extended payloads are selected only by a valid internal digest resource. */
+export function workReminderMessagePolicy(
+  value: unknown,
+  resourceKind: string | null,
+): NotificationMessagePolicy {
+  if (resourceKind !== "work_digest") return "standard";
+  const frozen = snapshot(value);
+  return frozen?.kind === "work_digest" && frozen.formatVersion === 3
+    ? "work_digest"
+    : "standard";
 }
 
 export async function workReminderDeliveryInvalidReason(
@@ -131,7 +172,9 @@ export async function workReminderDeliveryInvalidReason(
       ? scope.readyEnabled
       : scope.digestEnabled ||
         scope.overdueEnabled ||
-        (frozen.formatVersion !== 2 && scope.readyEnabled))
+        (frozen.formatVersion !== 2 &&
+          frozen.formatVersion !== 3 &&
+          scope.readyEnabled))
   )
     return "work_reminder_subscription_changed";
   if (!frozen.items.length) return null;
@@ -152,22 +195,22 @@ export async function workReminderDeliveryInvalidReason(
     frozen.items.map((item) => item.workId),
     frozen.items.map((item) => item.userId),
   );
-  const evidence = await readReminderEvidence(
-    tx,
-    frozen.items.map((item) => item.participantId),
-  );
-  const episodes = await tx.workReminderEpisode.findMany({
-    where: {
-      participantId: { in: frozen.items.map((item) => item.participantId) },
-    },
-  });
+  const byEvidence = new Map<string, ReminderEvidence>();
+  const byEpisode = new Map<string, WorkReminderEpisode>();
+  for (let offset = 0; offset < frozen.items.length; offset += 100) {
+    const ids = frozen.items
+      .slice(offset, offset + 100)
+      .map((item) => item.participantId);
+    const evidence = await readReminderEvidence(tx, ids);
+    const episodes = await tx.workReminderEpisode.findMany({
+      where: { participantId: { in: ids } },
+    });
+    for (const item of evidence) byEvidence.set(item.participantId, item);
+    for (const item of episodes) byEpisode.set(item.participantId, item);
+  }
   for (const item of frozen.items) {
-    const current = evidence.find(
-        (row) => row.participantId === item.participantId,
-      ),
-      episode = episodes.find(
-        (row) => row.participantId === item.participantId,
-      );
+    const current = byEvidence.get(item.participantId),
+      episode = byEpisode.get(item.participantId);
     if (
       !current?.eligible ||
       !episode ||
