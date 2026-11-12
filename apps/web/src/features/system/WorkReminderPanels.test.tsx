@@ -201,11 +201,12 @@ test("template is a read-only preview and ordinary save failures never offer sta
   view.rerender(wrap(true));
   const form = await screen.findByRole("form", { name: "合成群的工作提醒" });
   patch.mockRejectedValueOnce(new Error("网络断开"));
-  fireEvent.click(within(form).getByLabelText("预认领可开工"));
+  fireEvent.click(within(form).getByLabelText("预认领任务已就绪"));
   fireEvent.click(within(form).getByRole("button", { name: "保存群提醒" }));
   await within(form).findByText("网络断开");
   expect(within(form).queryByRole("button", { name: /当前版本/ })).toBeNull();
   expect(
-    (within(form).getByLabelText("预认领可开工") as HTMLInputElement).checked,
+    (within(form).getByLabelText("预认领任务已就绪") as HTMLInputElement)
+      .checked,
   ).toBe(true);
 });

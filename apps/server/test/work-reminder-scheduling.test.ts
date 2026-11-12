@@ -95,7 +95,11 @@ test("work digest freezes the actual observation time, five readable details and
     true,
     "https://comiku.example",
   );
-  assert.match(rendered.text, /截至 2026-11-12 11:15:00/);
+  assert.match(rendered.text, /截至 2026-11-12 11:15:00\n/);
+  assert.doesNotMatch(rendered.text, /上海时间|可开工/);
+  assert.match(rendered.text, /预认领任务已就绪 3 项/);
+  assert.match(rendered.text, /#42 .* · 可以开始嵌字 ·/);
+  assert.match(rendered.text, /#43 .* · 嵌字超过72小时未交稿 ·/);
   assert.match(rendered.text, /待接作品 6 部/);
   assert.match(rendered.text, /另有 2 项/);
   assert.match(rendered.text, /https:\/\/comiku.example\/works$/);
