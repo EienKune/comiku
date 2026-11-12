@@ -166,3 +166,29 @@ test("hidden queries abort in-flight reads and unmount clears midnight work", as
   await advance(20_000);
   expect(read).toHaveBeenCalledTimes(1);
 });
+
+test("an inactive settings observer does not cancel the visible editor's shared read", async () => {
+  clock();
+  let signal: AbortSignal | undefined;
+  const read = vi.fn((nextSignal: AbortSignal) => {
+    signal = nextSignal;
+    return new Promise<string>(() => {});
+  });
+  const panels = (secondEnabled: boolean) => (
+    <>
+      <Panel name="settings" read={read} />
+      <Panel name="settings" read={read} enabled={secondEnabled} />
+    </>
+  );
+  const view = mount(panels(true));
+  await advance(0);
+  view.rerender(
+    <QueryClientProvider client={view.cache}>
+      {panels(false)}
+    </QueryClientProvider>,
+  );
+  expect(signal?.aborted).toBe(false);
+  expect(read).toHaveBeenCalledTimes(1);
+  visibility(true);
+  expect(signal?.aborted).toBe(true);
+});

@@ -2,10 +2,8 @@ import {
   WorkReminderSubscriptions,
   WorkReminderTemplate,
 } from "./WorkReminderPanels";
-import {
-  BirthdaySubscriptions,
-  BirthdayTemplate,
-} from "../birthdays/BirthdayNotificationPanels";
+import { BirthdayTemplate } from "../birthdays/BirthdayNotificationPanels";
+import { BirthdayReminderSettings } from "../birthdays/BirthdayReminderSettings";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
@@ -1038,7 +1036,7 @@ export function NotificationManagement({
             </fieldset>
           </form>
         )}
-        <BirthdaySubscriptions enabled={enabled && tab === "groups"} />
+        <BirthdayReminderSettings enabled={enabled && tab === "groups"} />
         <WorkReminderSubscriptions enabled={enabled && tab === "groups"} />
       </div>
       <div
