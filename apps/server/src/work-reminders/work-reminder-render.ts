@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { WorkStage } from "../generated/prisma/client.js";
 import type { NotificationMessageSegment } from "../notifications/notification-message-segments.js";
 import {
+  NOTIFICATION_MESSAGE_PAYLOAD_MAX_BYTES,
   notificationMessageSegments,
   type NotificationMessagePolicy,
 } from "../notifications/notification-message-segments.js";
@@ -61,6 +62,17 @@ const stageName: Record<WorkStage, string> = {
   typeset: "嵌字",
   publish: "发布",
 };
+export class WorkReminderPayloadTooLargeError extends Error {
+  readonly limitBytes = NOTIFICATION_MESSAGE_PAYLOAD_MAX_BYTES;
+  constructor(
+    readonly itemCount: number,
+    readonly mentionCount: number,
+    readonly textCodeUnits: number,
+  ) {
+    super("work_reminder_payload_too_large");
+    this.name = "WorkReminderPayloadTooLargeError";
+  }
+}
 export function renderWorkReminder(
   snapshot: WorkDigestSnapshot,
   note: string,
@@ -160,7 +172,11 @@ function withMentions(
     policy === "work_digest" &&
     !notificationMessageSegments(messageSegments, policy)
   )
-    throw new Error("work_reminder_payload_too_large");
+    throw new WorkReminderPayloadTooLargeError(
+      items.length,
+      mentioned.size,
+      text.length,
+    );
   if (policy === "standard" && [...text].length > 1000)
     throw new Error("work_reminder_message_too_long");
   return { text, messageSegments };

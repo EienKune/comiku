@@ -418,6 +418,15 @@ test("full digests reject mismatched frozen text and oversized escaped payloads 
 test("async, malformed, missing receipt, redirects, and 5xx become unknown without leaks", async () => {
   for (const fixture of [
     { code: 200, body: JSON.stringify({ status: "async", retcode: 1 }) },
+    {
+      code: 200,
+      body: JSON.stringify({
+        status: "failed",
+        retcode: 12001,
+        wording: secret,
+        message: "98765432100123456789",
+      }),
+    },
     { code: 200, body: JSON.stringify({ status: "ok", retcode: 0, data: {} }) },
     { code: 200, body: "SECRET_CANARY" },
     { code: 302, body: "", location: "http://169.254.169.254/" },
@@ -441,6 +450,10 @@ test("async, malformed, missing receipt, redirects, and 5xx become unknown witho
           assert.equal(result.status, "unknown");
           assert.equal(result.sendBoundaryCrossed, true);
           assert.doesNotMatch(JSON.stringify(result), /SECRET_CANARY|169\.254/);
+          assert.doesNotMatch(JSON.stringify(result), /98765432100123456789/);
+          assert.equal(result.diagnostics?.httpStatus, fixture.code);
+          if (fixture.body.includes('"retcode":12001'))
+            assert.equal(result.diagnostics?.retcode, 12001);
         } finally {
           adapter.close();
         }
@@ -644,6 +657,10 @@ test("explicit provider rejection is permanent and never leaks provider text", a
               status: "failed",
               errorCode: "notification_provider_rejected",
               sendBoundaryCrossed: true,
+              diagnostics: {
+                httpStatus: fixture.code,
+                ...(fixture.code === 200 && { retcode: 1404 }),
+              },
             },
           );
         } finally {

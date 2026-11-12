@@ -37,6 +37,7 @@ import {
   workReminderMessagePolicy,
 } from "../work-reminders/work-reminder-notification-policy.js";
 import { notificationMessageTextValid } from "./notification-message-segments.js";
+import { safeNotificationSendDiagnostics } from "./notification-diagnostics.js";
 
 @Injectable()
 export class NotificationRuntimeService implements OnModuleInit {
@@ -656,6 +657,25 @@ export class NotificationRuntimeService implements OnModuleInit {
       });
       return true;
     });
+    if (settled && result.status !== "accepted") {
+      const diagnostics = safeNotificationSendDiagnostics(result.diagnostics);
+      console.warn(
+        JSON.stringify({
+          scope: "notifications",
+          event: "delivery_settled",
+          deliveryId: preparation.row.id,
+          attemptId: preparation.attempt.id,
+          channelId: preparation.row.channelId,
+          eventId: preparation.row.eventId,
+          eventType: preparation.row.event.type,
+          attemptNumber: preparation.attempt.number,
+          status: result.status,
+          errorCode: result.errorCode ?? null,
+          httpStatus: diagnostics.httpStatus,
+          retcode: diagnostics.retcode,
+        }),
+      );
+    }
     if (settled && safeRetry) throw new JobDeferred(retryAt, "capacity");
   }
 }
