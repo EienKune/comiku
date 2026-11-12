@@ -195,6 +195,9 @@ export function ProfilePage() {
       <section className="settings-pane">
         <div>
           <h2>个人资料</h2>
+          {!user.roles.length && (
+            <p role="status">账号已注册，等待管理员分配职责。</p>
+          )}
           <p>资料修改不会改变已经冻结的历史署名。</p>
         </div>
         <AvatarSettings />
@@ -287,7 +290,12 @@ export function PasswordPage() {
               if (user.mustChangePassword) queryClient.clear();
               queryClient.setQueryData(["me"], updated);
               if (user.mustChangePassword)
-                navigate(loginReturnTarget(location.state), { replace: true });
+                navigate(
+                  updated.roles.length
+                    ? loginReturnTarget(location.state)
+                    : "/settings?tab=profile",
+                  { replace: true },
+                );
               else action.setSuccess("密码已更新");
             }),
           )}
