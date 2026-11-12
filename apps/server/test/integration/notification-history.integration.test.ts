@@ -122,24 +122,27 @@ test(
     const jobIds: string[] = [];
     let deepestGroupCursor: string | null = null;
     try {
-      await db.$executeRaw(Prisma.sql`INSERT INTO notification_events
+      for (let first = 1; first <= 40000; first += 5000)
+        await db.$executeRaw(Prisma.sql`INSERT INTO notification_events
         (id,event_key,payload_hash,type,resource_id,aggregate_version,ordinal,occurred_at,snapshot,route_refs,created_at)
         SELECT gen_random_uuid(), ${prefix} || ':' || g::text, repeat('a',64),
           CASE WHEN g <= 3 THEN 'archived' ELSE 'imported' END,
           CASE WHEN g <= 3 THEN ${work.id}::uuid ELSE gen_random_uuid() END,
           1, 0, ${date}::timestamptz, jsonb_build_object('workNumber', ${work.workNumber}::int), '[]'::jsonb,
-          ${date}::timestamptz FROM generate_series(1,40000) g`);
-      await db.$executeRaw(Prisma.sql`INSERT INTO notification_deliveries
+          ${date}::timestamptz FROM generate_series(${first}::int,${first + 4999}::int) g`);
+      for (let first = 1; first <= 40000; first += 5000)
+        await db.$executeRaw(Prisma.sql`INSERT INTO notification_deliveries
         (id,event_id,channel_id,audience_generation,connection_key,connection_fingerprint,group_id,channel_revision,text,status,resolved_at,created_at,updated_at)
         SELECT gen_random_uuid(), e.id, ${channel.id}::uuid, 1, 'fixture', repeat('a',64),
-          CASE WHEN split_part(e.event_key,':',2)::int <= 300 THEN ${groupId} ELSE ${groupId + "1"} END,
+          CASE WHEN g <= 300 THEN ${groupId} ELSE ${groupId + "1"} END,
           0, 'Frozen original synthetic body',
-          CASE WHEN split_part(e.event_key,':',2)::int <= 22000 THEN
-            CASE WHEN split_part(e.event_key,':',2)::int % 2 = 0 THEN 'failed' ELSE 'unknown' END
+          CASE WHEN g <= 22000 THEN
+            CASE WHEN g % 2 = 0 THEN 'failed' ELSE 'unknown' END
             ELSE 'pending' END,
-          CASE WHEN split_part(e.event_key,':',2)::int <= 22000 THEN ${date}::timestamptz ELSE NULL END,
+          CASE WHEN g <= 22000 THEN ${date}::timestamptz ELSE NULL END,
           ${date}::timestamptz, ${date}::timestamptz
-        FROM notification_events e WHERE e.event_key LIKE ${prefix + ":%"}`);
+        FROM generate_series(${first}::int,${first + 4999}::int) g
+        JOIN notification_events e ON e.event_key = ${prefix} || ':' || g::text`);
       await db.notificationChannel.update({
         where: { id: channel.id },
         data: { groupId: groupId + "2", revision: 1, audienceGeneration: 2 },
