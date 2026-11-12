@@ -295,3 +295,30 @@ test("zoom is bounded, touch pans when enlarged, and only changing page resets t
     "translate(0px, 0px) scale(1)",
   );
 });
+
+test("optional footer remains focusable without replacing zoom or page navigation", () => {
+  const close = vi.fn(),
+    next = vi.fn();
+  render(
+    <ImageLightbox
+      src="/samples/demo-work.png"
+      alt="候选图片"
+      index={0}
+      count={2}
+      onClose={close}
+      onNext={next}
+      footer={<button type="button">查找相似图</button>}
+    />,
+  );
+  const preview = screen.getByRole("dialog");
+  expect(preview.classList.contains("ui-lightbox--with-footer")).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "放大图片" }));
+  expect(screen.getByLabelText("图片缩放比例").textContent).toBe("120%");
+  fireEvent.click(screen.getByRole("button", { name: "下一张" }));
+  expect(next).toHaveBeenCalledOnce();
+  screen.getByRole("button", { name: "查找相似图" }).focus();
+  fireEvent.keyDown(document, { key: "Tab" });
+  expect(document.activeElement).toBe(
+    screen.getByRole("button", { name: "缩小图片" }),
+  );
+});

@@ -16,6 +16,7 @@ import { NotificationRuntimeService } from "./notifications/notification-runtime
 import { BirthdaysService } from "./birthdays/birthdays.service.js";
 import { BirthdayReminderService } from "./birthdays/birthday-reminder.service.js";
 import { runBirthdayWorker } from "./birthdays/birthday-worker.js";
+import { ImageSimilarityService } from "./image-similarity/image-similarity.service.js";
 
 const environment = loadEnvironment();
 const app = await NestFactory.createApplicationContext(
@@ -29,6 +30,7 @@ const sources = app.get(SourceFetchService);
 const transfers = app.get(DownloadsService);
 const analysis = app.get(ImageAnalysisService);
 const notifications = app.get(NotificationRuntimeService);
+const similarity = app.get(ImageSimilarityService);
 let nextAnalysisScan = 0;
 let nextReviewCleanup = 0;
 let nextSourceRecoveryScan = 0;
@@ -59,6 +61,7 @@ async function maintenanceLoop() {
         nextSourceRecoveryScan = Date.now() + 60_000;
       }
       await transfers.scheduleCleanup();
+      await similarity.schedulePending();
       if (Date.now() >= nextReviewCleanup) {
         await app.get(CandidatesService).cleanupReviewSessions();
         nextReviewCleanup = Date.now() + 60_000;

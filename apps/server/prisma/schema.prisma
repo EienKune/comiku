@@ -11,6 +11,8 @@ datasource db {
 }
 
 model User {
+  workSeriesAudits WorkSeriesAudit[]
+  workSeriesMutationReceipts WorkSeriesMutationReceipt[]
   authorCreationRequests AuthorCreationRequest[]
   candidateReviewSessions CandidateReviewSession[]
   reviewRevisionParticipations        ReviewRevisionParticipant[]
@@ -158,6 +160,7 @@ model FileObject {
   downloadPreparations DownloadPreparation[]
   imageDerivatives     ImageDerivative[]             @relation("DerivativeSource")
   derivativeOutputs    ImageDerivative[]             @relation("DerivativeOutput")
+  imageFingerprints    ImageFingerprint[]
   authorAvatars        Author[]                      @relation("AuthorAvatar")
   accountAvatars       AuthorExternalAccount[]       @relation("ExternalAccountAvatar")
   userAvatars          User[]                        @relation("UserAvatar")
@@ -174,10 +177,40 @@ model FileObject {
 
   @@index([bucketScope, kind, lifecycleStatus])
   @@index([createdById])
+  @@index([checksum])
   @@map("file_objects")
 }
 
+enum ImageFingerprintStatus {
+  queued
+  running
+  ready
+  failed
+}
+
+model ImageFingerprint {
+  id            String                 @id @default(uuid()) @db.Uuid
+  fileObjectId  String                 @map("file_object_id") @db.Uuid
+  fileObject    FileObject             @relation(fields: [fileObjectId], references: [id], onDelete: Cascade)
+  recipeVersion String                 @map("recipe_version") @db.VarChar(64)
+  sourceSha256  String                 @map("source_sha256") @db.Char(64)
+  status        ImageFingerprintStatus @default(queued)
+  phashHex      String?                @map("phash_hex") @db.Char(16)
+  width         Int?
+  height        Int?
+  jobId         String?                @map("job_id") @db.Uuid
+  lastError     String?                @map("last_error") @db.VarChar(64)
+  createdAt     DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([fileObjectId, recipeVersion])
+  @@index([recipeVersion, status, createdAt, id])
+  @@index([recipeVersion, sourceSha256, status])
+  @@map("image_fingerprints")
+}
+
 model Author {
+  workSeries WorkSeries[]
   notes                  String? @db.Text
   creationRequests AuthorCreationRequest[]
   id                  String                  @id @default(uuid()) @db.Uuid
@@ -821,6 +854,8 @@ model CandidateMediaAnalysis {
 }
 
 model Work {
+  seriesEntry WorkSeriesEntry?
+  candidateImportSeriesIntent Json? @map("candidate_import_series_intent")
   reviewRevisions                   WorkReviewRevision[]
   requiredHandoffVersionId          String?                     @map("required_handoff_version_id") @db.Uuid
   requiredHandoffVersion            TranslationVersion?         @relation("RequiredHandoff", fields: [requiredHandoffVersionId], references: [id], onDelete: Restrict)
@@ -878,6 +913,61 @@ model Work {
   @@index([reviewStatus, updatedAt])
   @@index([authorId, importedAt])
   @@map("works")
+}
+
+model WorkSeries {
+  id String @id @default(uuid()) @db.Uuid
+  authorId String @map("author_id") @db.Uuid
+  author Author @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  title String @db.VarChar(200)
+  revision Int @default(0)
+  archived Boolean @default(false)
+  entries WorkSeriesEntry[]
+  audits WorkSeriesAudit[]
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@index([authorId, archived, updatedAt, id])
+  @@index([archived, updatedAt, id])
+  @@map("work_series")
+}
+
+model WorkSeriesEntry {
+  id String @id @default(uuid()) @db.Uuid
+  seriesId String @map("series_id") @db.Uuid
+  series WorkSeries @relation(fields: [seriesId], references: [id], onDelete: Restrict)
+  workId String @unique @map("work_id") @db.Uuid
+  work Work @relation(fields: [workId], references: [id], onDelete: Restrict)
+  orderIndex Float @map("order_index") @db.DoublePrecision
+  label String? @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@index([seriesId, orderIndex, id])
+  @@map("work_series_entries")
+}
+
+model WorkSeriesAudit {
+  id String @id @default(uuid()) @db.Uuid
+  seriesId String @map("series_id") @db.Uuid
+  series WorkSeries @relation(fields: [seriesId], references: [id], onDelete: Restrict)
+  actorId String @map("actor_id") @db.Uuid
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  revision Int
+  action String @db.VarChar(64)
+  detail Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@unique([seriesId, revision])
+  @@map("work_series_audits")
+}
+
+model WorkSeriesMutationReceipt {
+  id String @id @default(uuid()) @db.Uuid
+  actorId String @map("actor_id") @db.Uuid
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  requestId String @map("request_id") @db.Uuid
+  payloadHash String @map("payload_hash") @db.Char(64)
+  result Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@unique([actorId, requestId])
+  @@map("work_series_mutation_receipts")
 }
 
 model CandidateActionLog {
