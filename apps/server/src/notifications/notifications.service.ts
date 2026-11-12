@@ -252,8 +252,6 @@ export class NotificationsService {
         })),
       input.eventTypes,
     );
-    if (input.enabled && !rules.length)
-      throw new BadRequestException("启用群通知前至少选择一个事件");
     return {
       name: input.name.trim(),
       connectionKey: connection.key,
