@@ -380,3 +380,4 @@ Pixiv profile resolution uses the native App API without enumerating works, but 
 
 - Pointer capture 在取消时释放后，浏览器可能把同手势的兼容 click 发给 dialog 共同祖先；抑制范围须绑定手势和编辑器 root，延迟松开仍保护，新的 pointerdown 立即放行。键盘 click 不应被吞掉。
 - 大量图片的拖动浮层坐标应直接更新 DOM ref，仅落点变化触发 React；缩略图复用稳定 props 的 memo 边界，保持签名 URL 按需读取。草稿和冻结请求是受离开保护的页面会话状态，不额外把来源资料写入 localStorage。
+- 顶部操作栏保留横向滚动时，内部绝对定位提示会触发另一轴的自动滚动，导致按钮位移且提示被裁切。禁用原因复用现有 portal 提示；回归须包含真实 `.workspace-topbar-context`，同时检查悬浮前后坐标、窄屏横向滚动和键盘聚焦。
