@@ -79,3 +79,24 @@ test("keyboard focus previews immediately; touch does not open a hover preview",
   expect(screen.queryByRole("tooltip")).toBeNull();
   fireEvent.blur(marker);
 });
+
+test("a queued focus-scroll keeps a positioned keyboard hint, but moving its anchor dismisses it", () => {
+  render(
+    <MarkerTooltip text="不可合并的原因">
+      <span tabIndex={0}>禁用操作</span>
+    </MarkerTooltip>,
+  );
+  const marker = screen.getByText("禁用操作");
+  const bounds = vi
+    .spyOn(marker, "getBoundingClientRect")
+    .mockReturnValue(new DOMRect(40, 24, 90, 32));
+  act(() => marker.focus());
+  expect(screen.getByRole("tooltip")).toBeTruthy();
+  // Native focus has already scrolled the trigger into view before its queued
+  // scroll event reaches listeners; the position measured on focus is current.
+  fireEvent.scroll(window);
+  expect(screen.getByRole("tooltip")).toBeTruthy();
+  bounds.mockReturnValue(new DOMRect(60, 24, 90, 32));
+  fireEvent.scroll(window);
+  expect(screen.queryByRole("tooltip")).toBeNull();
+});

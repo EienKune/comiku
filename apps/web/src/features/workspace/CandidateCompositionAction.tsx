@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { MarkerTooltip } from "../../components/MarkerTooltip";
 import { Button } from "../../components/ui";
 import "./candidate-composition.css";
 
@@ -11,27 +11,24 @@ export function CandidateCompositionAction({
   label: string;
   onClick: () => void;
 }) {
-  const id = useId();
-  return (
-    <span
-      className="candidate-composition-disabled-action"
-      tabIndex={reason ? 0 : undefined}
-      aria-describedby={reason ? id : undefined}
+  const button = (
+    <Button
+      type="button"
+      size="sm"
+      variant="secondary"
+      disabled={Boolean(reason)}
+      onClick={onClick}
     >
-      <Button
-        type="button"
-        size="sm"
-        variant="secondary"
-        disabled={Boolean(reason)}
-        onClick={onClick}
-      >
-        {label}
-      </Button>
-      {reason && (
-        <span id={id} role="tooltip">
-          {reason}
-        </span>
-      )}
-    </span>
+      {label}
+    </Button>
+  );
+  return reason ? (
+    <MarkerTooltip text={reason}>
+      <span className="candidate-composition-disabled-action" tabIndex={0}>
+        {button}
+      </span>
+    </MarkerTooltip>
+  ) : (
+    button
   );
 }

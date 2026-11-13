@@ -176,29 +176,11 @@
   font-size: var(--text-xs);
 }
 .candidate-composition-disabled-action {
-  position: relative;
   display: inline-flex;
+  flex-shrink: 0;
 }
-.candidate-composition-disabled-action > [role="tooltip"] {
-  display: none;
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: max-content;
-  max-width: min(260px, calc(100vw - 40px));
-  padding: 8px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text-soft);
-  box-shadow: var(--shadow-sm);
-  font-size: var(--text-xs);
-  z-index: 2;
-}
-.candidate-composition-disabled-action:hover > [role="tooltip"],
-.candidate-composition-disabled-action:focus > [role="tooltip"] {
-  display: block;
+.candidate-composition-disabled-action > .ui-button:disabled {
+  pointer-events: none;
 }
 .candidate-imported-works {
   display: flex;

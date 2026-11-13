@@ -488,7 +488,10 @@ test("composition eligibility gives focusable disabled reasons and cancellation 
     name: "合并入库",
   }).parentElement!;
   expect(wrapper.tabIndex).toBe(0);
+  fireEvent.focus(wrapper);
   expect(wrapper.getAttribute("aria-describedby")).toBeTruthy();
+  expect(screen.getByRole("tooltip").textContent).toBe("至少选择 2 个帖子");
+  fireEvent.blur(wrapper);
   fireEvent.click(screen.getByRole("button", { name: "拆分入库" }));
   let editor = screen.getByRole("dialog", { name: "拆分入库" });
   fireEvent.change(within(editor).getByRole("textbox"), {
@@ -502,7 +505,12 @@ test("composition eligibility gives focusable disabled reasons and cancellation 
   );
   fireEvent.click(within(editor).getByRole("button", { name: "取消" }));
   fireEvent.click(screen.getByRole("checkbox", { name: "选择 作者 b 的帖子" }));
-  expect(screen.getByText("所选帖子作者不同，无法合并")).toBeTruthy();
+  fireEvent.focus(
+    screen.getByRole("button", { name: "合并入库" }).parentElement!,
+  );
+  expect(screen.getByRole("tooltip").textContent).toBe(
+    "所选帖子作者不同，无法合并",
+  );
 });
 
 test("lost composition response locks conflicting actions and 404 lookup retries the identical intent while excluded selections remain pending", async () => {
