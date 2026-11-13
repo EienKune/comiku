@@ -1,3 +1,7 @@
+import { WorkAlbum } from "./WorkAlbum";
+import { WorkSeriesAssociation } from "./WorkSeriesAssociation";
+import { WorkViewNavigation, type WorkPerspective } from "./WorkViewNavigation";
+import { workflowLabels, reviewLabels } from "./work-status";
 import { BirthdayStrip } from "../birthdays/BirthdayStrip";
 import {
   CandidateAuthorFilter,
@@ -82,7 +86,13 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { Link, Navigate, useParams, useSearchParams } from "react-router";
+import {
+  Link,
+  Navigate,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router";
 import { SkipProofreadingButton } from "./SkipProofreadingButton";
 import {
   Badge,
@@ -155,22 +165,6 @@ function workDisplayTitle(work: Pick<Work, "workNumber" | "title">) {
   return work.title?.trim() || `#${work.workNumber} · 待定标题`;
 }
 
-const workflowLabels: Record<WorkflowStatus, string> = {
-  pending_translate: "待翻译",
-  translating: "翻译中",
-  pending_proofread: "待校对",
-  proofreading: "校对中",
-  pending_typeset: "待嵌字",
-  typesetting: "嵌字中",
-  pending_publish: "待发布",
-  published: "已发布",
-  archived: "已归档",
-};
-const reviewLabels: Record<ReviewStatus, string> = {
-  normal: "正常",
-  needs_review: "待审核",
-  blocked: "阻塞",
-};
 const reviewResolutionLabels: Record<
   components["schemas"]["ReviewResolution"],
   string
@@ -1712,7 +1706,7 @@ export function AuthorDetailPage() {
               </p>
             )}
             {user.permissions.includes("authors:admin") && (
-              <div className="workspace-inline-actions">
+              <div className="workspace-inline-actions workspace-author-actions">
                 <AuthorArchiveControl author={author} />
               </div>
             )}
@@ -3240,7 +3234,7 @@ export function CandidatesPage() {
       selectedCount
         ? {
             content: (
-              <div className="candidate-batch-actions">
+              <div className="workspace-topbar-actions candidate-batch-actions">
                 <div className="candidate-batch-selection">
                   <strong>已选择 {selectedCount} 项候选</strong>
                   <Button
@@ -3428,6 +3422,7 @@ export function CandidatesPage() {
         {imageImport.confirmation && (
           <CandidateImportConfirmation
             {...imageImport.confirmation}
+            onSeriesIntentChange={imageImport.setSeriesIntent}
             onEdit={(entry) => openEditor(entry.candidate)}
             onConfirm={() => void imageImport.submit()}
             onClose={imageImport.closeConfirmation}
@@ -3506,6 +3501,7 @@ export function CandidatesPage() {
 
 export function WorksPage() {
   const user = useAccount();
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const { view, tab, tabs } = workViewState(params, user);
   const qualificationKey = `${user.roles.join(",")}:${user.languageCapabilities.join(",")}:${user.permissions.join(",")}`;
@@ -3513,12 +3509,32 @@ export function WorksPage() {
   const isClaim =
     view === "work" && ["translate", "proofread", "typeset"].includes(tab);
   const targetClaimStage = isClaim ? (tab as ClaimStage) : undefined;
-  const [layout, setLayout] = useState<"grid" | "rows">("grid");
-  const [language, setLanguage] = useState<SourceLanguage | "all">("all");
+  const [readLayout, setReadLayout] = useState<"grid" | "rows" | "album">(() =>
+    params.get("layout") === "album"
+      ? "album"
+      : params.get("layout") === "rows"
+        ? "rows"
+        : "grid",
+  );
+  const [workLayout, setWorkLayout] = useState<"grid" | "rows">(() =>
+    params.get("layout") === "rows" ? "rows" : "grid",
+  );
+  const layout = view === "read" ? readLayout : workLayout;
+  const isAlbum = view === "read" && layout === "album";
+  function setLayout(value: "grid" | "rows" | "album") {
+    if (view === "read") setReadLayout(value);
+    else if (value !== "album") setWorkLayout(value);
+  }
+  const [language, setLanguage] = useState<SourceLanguage | "all">(() => {
+    const value = params.get("language");
+    return value && Object.hasOwn(sourceLanguageLabels, value)
+      ? (value as SourceLanguage)
+      : "all";
+  });
   const [selectionMode, setSelectionMode] = useState(false);
   const [selected, setSelected] = useState<Record<string, number>>({});
-  const [search, setSearch] = useState("");
-  const [mine, setMine] = useState(false);
+  const [search, setSearch] = useState(() => params.get("search") ?? "");
+  const [mine, setMine] = useState(() => params.get("mine") === "1");
   const deferredSearch = useDeferredValue(search.trim());
   const action = useAction();
   const runWorkAction = action.run;
@@ -3531,6 +3547,23 @@ export function WorksPage() {
       next.delete("phase");
       next.delete("unassignedStage");
       return next;
+    });
+  }
+  async function changePerspective(next: WorkPerspective) {
+    if (next !== "series") return changeView(next);
+    const saved = new URLSearchParams(params);
+    saved.set("view", view);
+    saved.set("tab", tab);
+    saved.set("layout", layout);
+    if (search) saved.set("search", search);
+    else saved.delete("search");
+    if (language !== "all") saved.set("language", language);
+    else saved.delete("language");
+    if (mine) saved.set("mine", "1");
+    else saved.delete("mine");
+    await navigate(`/works?${saved.toString()}`, { replace: true });
+    await navigate("/works/series", {
+      state: { worksViewQuery: saved.toString() },
     });
   }
   useEffect(() => {
@@ -3546,6 +3579,7 @@ export function WorksPage() {
     }
   }, [params, setParams, tab]);
   const query = useInfiniteQuery({
+    enabled: !isAlbum,
     queryKey: [
       "works",
       user.id,
@@ -3706,6 +3740,52 @@ export function WorksPage() {
         },
       ]
     : [{ key: "all", title: null, items }];
+  function layoutToolbar(workTotal?: number, imageTotal?: number) {
+    return (
+      <div className="workspace-work-results-toolbar">
+        <p className="workspace-result-count">
+          共 {workTotal ?? "—"} 部作品
+          {imageTotal !== undefined && ` · ${imageTotal} 张图片`}
+          {view === "work" ? " · 各职责计数独立，不相加" : ""}
+        </p>
+        <div
+          className="workspace-view-toggle"
+          role="group"
+          aria-label="作品展示方式"
+        >
+          <Button
+            size="sm"
+            variant={layout === "grid" ? "primary" : "ghost"}
+            leadingIcon={<Grid2X2 size={15} />}
+            aria-pressed={layout === "grid"}
+            onClick={() => setLayout("grid")}
+          >
+            卡片
+          </Button>
+          <Button
+            size="sm"
+            variant={layout === "rows" ? "primary" : "ghost"}
+            leadingIcon={<List size={15} />}
+            aria-pressed={layout === "rows"}
+            onClick={() => setLayout("rows")}
+          >
+            列表
+          </Button>
+          {view === "read" && (
+            <Button
+              size="sm"
+              variant={layout === "album" ? "primary" : "ghost"}
+              leadingIcon={<Images size={15} />}
+              aria-pressed={layout === "album"}
+              onClick={() => setLayout("album")}
+            >
+              相册
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  }
   return (
     <PermissionGate permission="works:read">
       <div className="account-content-boundary">
@@ -3716,28 +3796,7 @@ export function WorksPage() {
         <SectionHeading title="作品">
           查看流程全貌，或按自己的职务和语言能力接取工作。
         </SectionHeading>
-        <div
-          className="workspace-view-toggle"
-          role="group"
-          aria-label="作品视角"
-        >
-          <Button
-            size="sm"
-            variant={view === "work" ? "primary" : "secondary"}
-            aria-pressed={view === "work"}
-            onClick={() => changeView("work")}
-          >
-            工作视图
-          </Button>
-          <Button
-            size="sm"
-            variant={view === "read" ? "primary" : "secondary"}
-            aria-pressed={view === "read"}
-            onClick={() => changeView("read")}
-          >
-            查看视图
-          </Button>
-        </div>
+        <WorkViewNavigation active={view} onChange={changePerspective} />
         <div
           className="workspace-tabs"
           role="tablist"
@@ -3781,7 +3840,7 @@ export function WorksPage() {
                 buttons[next].click();
               }}
             >
-              {item.label} <span>{tabCount(item.value)}</span>
+              {item.label} {summary && <span>{tabCount(item.value)}</span>}
             </button>
           ))}
         </div>
@@ -3851,113 +3910,103 @@ export function WorksPage() {
           id="work-list-panel"
           aria-labelledby={`work-tab-${view}-${tab}`}
         >
-          <PageState
-            query={query}
-            empty={(data) => (data.pages[0]?.total ?? 0) === 0}
-            emptyContent={
-              <EmptyState
-                icon={<Inbox />}
-                title={
-                  isTodo
-                    ? "这里空空如也，去接取新的任务吧"
-                    : isClaim
-                      ? "暂时没有匹配的可接取任务"
-                      : "这里暂时没有作品"
+          {isAlbum ? (
+            <WorkAlbum
+              key={`${tab}:${language}:${mine}:${deferredSearch}`}
+              phase={tab !== "all" ? (tab as WorkPhase) : undefined}
+              language={language !== "all" ? language : undefined}
+              mine={mine}
+              search={deferredSearch}
+              toolbar={layoutToolbar}
+            />
+          ) : (
+            <>
+              {layoutToolbar(summary?.total)}
+              <PageState
+                query={query}
+                empty={(data) => (data.pages[0]?.total ?? 0) === 0}
+                emptyContent={
+                  <EmptyState
+                    icon={<Inbox />}
+                    title={
+                      isTodo
+                        ? "这里空空如也，去接取新的任务吧"
+                        : isClaim
+                          ? "暂时没有匹配的可接取任务"
+                          : "这里暂时没有作品"
+                    }
+                    description={
+                      isTodo
+                        ? "提前认领的任务会在上游提交后进入待办。"
+                        : isClaim
+                          ? "工作视图只展示匹配本人职务和语言能力的空缺。"
+                          : "调整搜索或筛选条件后再试。"
+                    }
+                  />
                 }
-                description={
-                  isTodo
-                    ? "提前认领的任务会在上游提交后进入待办。"
-                    : isClaim
-                      ? "工作视图只展示匹配本人职务和语言能力的空缺。"
-                      : "调整搜索或筛选条件后再试。"
-                }
-              />
-            }
-          >
-            {() => (
-              <>
-                <p className="workspace-result-count">
-                  共 {summary?.total ?? 0} 部作品
-                  {view === "work" ? " · 各职责计数独立，不相加" : ""}
-                </p>
-                <div
-                  className="workspace-view-toggle"
-                  aria-label="作品展示方式"
-                >
-                  <Button
-                    size="sm"
-                    variant={layout === "grid" ? "primary" : "secondary"}
-                    leadingIcon={<Grid2X2 size={15} />}
-                    aria-pressed={layout === "grid"}
-                    onClick={() => setLayout("grid")}
-                  >
-                    卡片展示
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={layout === "rows" ? "primary" : "secondary"}
-                    leadingIcon={<List size={15} />}
-                    aria-pressed={layout === "rows"}
-                    onClick={() => setLayout("rows")}
-                  >
-                    按行展示
-                  </Button>
-                </div>
-                {groups
-                  .filter((group) => group.items.length)
-                  .map((group) => (
-                    <div
-                      className="dashboard-recommendation-group"
-                      key={group.key}
-                    >
-                      {group.title && <h3>{group.title}</h3>}
-                      <div
-                        className={`workspace-card-grid workspace-work-grid${layout === "rows" ? " workspace-work-grid--rows" : ""}`}
-                      >
-                        {group.items.map((work) => (
-                          <WorkCard
-                            key={work.id}
-                            work={work}
-                            actions={
-                              isTodo ? (
-                                <PersonalWorkActions work={work} view="todo" />
-                              ) : isClaim ? (
-                                <PersonalWorkActions
-                                  work={work}
-                                  view="recommended"
-                                />
-                              ) : undefined
-                            }
-                            selectionMode={selectionMode}
-                            selected={work.id in selected}
-                            selectionEligible={eligible(work)}
-                            onToggleSelected={() =>
-                              setSelected((current) => {
-                                const next = { ...current };
-                                if (work.id in next) delete next[work.id];
-                                else next[work.id] = work.revision;
-                                return next;
-                              })
-                            }
-                          />
-                        ))}
+              >
+                {() => (
+                  <>
+                    {groups
+                      .filter((group) => group.items.length)
+                      .map((group) => (
+                        <div
+                          className="dashboard-recommendation-group"
+                          key={group.key}
+                        >
+                          {group.title && <h3>{group.title}</h3>}
+                          <div
+                            className={`workspace-card-grid workspace-work-grid${layout === "rows" ? " workspace-work-grid--rows" : ""}`}
+                          >
+                            {group.items.map((work) => (
+                              <WorkCard
+                                key={work.id}
+                                work={work}
+                                actions={
+                                  isTodo ? (
+                                    <PersonalWorkActions
+                                      work={work}
+                                      view="todo"
+                                    />
+                                  ) : isClaim ? (
+                                    <PersonalWorkActions
+                                      work={work}
+                                      view="recommended"
+                                    />
+                                  ) : undefined
+                                }
+                                selectionMode={selectionMode}
+                                selected={work.id in selected}
+                                selectionEligible={eligible(work)}
+                                onToggleSelected={() =>
+                                  setSelected((current) => {
+                                    const next = { ...current };
+                                    if (work.id in next) delete next[work.id];
+                                    else next[work.id] = work.revision;
+                                    return next;
+                                  })
+                                }
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    {layout !== "album" && query.hasNextPage && (
+                      <div className="workspace-pagination">
+                        <Button
+                          variant="secondary"
+                          loading={query.isFetchingNextPage}
+                          onClick={() => void query.fetchNextPage()}
+                        >
+                          再加载 24 部作品
+                        </Button>
                       </div>
-                    </div>
-                  ))}
-                {query.hasNextPage && (
-                  <div className="workspace-pagination">
-                    <Button
-                      variant="secondary"
-                      loading={query.isFetchingNextPage}
-                      onClick={() => void query.fetchNextPage()}
-                    >
-                      再加载 24 部作品
-                    </Button>
-                  </div>
+                    )}
+                  </>
                 )}
-              </>
-            )}
-          </PageState>
+              </PageState>
+            </>
+          )}
         </div>
       </div>
     </PermissionGate>
@@ -5390,6 +5439,15 @@ export function WorkDetailPage() {
               <SectionHeading title={workDisplayTitle(work)}>
                 {work.authorName} · {work.imageCount} 页
               </SectionHeading>
+              <WorkSeriesAssociation
+                workId={work.id}
+                authorId={work.authorId}
+                canManage={
+                  user.permissions.includes("works:metadata") &&
+                  (work.workflowStatus !== "archived" ||
+                    user.permissions.includes("works:admin"))
+                }
+              />
               <div className="workspace-page-badges">
                 <WorkflowBadge value={work.workflowStatus} />
                 <ReviewBadge value={work.reviewStatus} />

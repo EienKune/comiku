@@ -88,6 +88,7 @@ function importFixture(imported = false) {
       ? {
           id: "work",
           candidateImportRevision: 7,
+          candidateImportSeriesIntent: null,
           images: [{ sourceCandidateMediaId: mediaB, orderIndex: 0 }],
         }
       : null,

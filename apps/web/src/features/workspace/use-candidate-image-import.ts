@@ -1,3 +1,4 @@
+import type { SeriesImportIntent } from "./work-series-api";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { client, unwrap } from "../account/api";
 import {
@@ -21,6 +22,7 @@ import type {
 } from "./CandidateImportConfirmation";
 
 type Confirmation = {
+  seriesIntent?: SeriesImportIntent | null;
   entries: CandidateImportEntry[];
   phase: CandidateImportPhase;
   results?: CandidateImportResult[];
@@ -105,6 +107,7 @@ export function useCandidateImageImport(onComplete: () => Promise<unknown>) {
       setState(next);
       if (confirmation && confirmationVisible)
         setConfirmation({
+          seriesIntent: confirmation.seriesIntent,
           entries: buildCandidateImportIntent(next),
           phase: "review",
         });
@@ -134,6 +137,7 @@ export function useCandidateImageImport(onComplete: () => Promise<unknown>) {
       setEditor(latest);
       if (confirmation && confirmationVisible)
         setConfirmation({
+          seriesIntent: confirmation.seriesIntent,
           entries: buildCandidateImportIntent(next),
           phase: "review",
         });
@@ -174,6 +178,14 @@ export function useCandidateImageImport(onComplete: () => Promise<unknown>) {
     )
       return;
     const entries = confirmation.entries;
+    const seriesIntent =
+      entries.length === 1 ? confirmation.seriesIntent : null;
+    if (
+      seriesIntent &&
+      "createTitle" in seriesIntent &&
+      !seriesIntent.createTitle.trim()
+    )
+      return;
     running.current = true;
     setConfirmation({ ...confirmation, phase: "submitting", error: undefined });
     setError("");
@@ -187,6 +199,7 @@ export function useCandidateImageImport(onComplete: () => Promise<unknown>) {
               id,
               expectedRevision,
               mediaIds: [...mediaIds],
+              ...(seriesIntent ? { series: seriesIntent } : {}),
             })),
           },
         }),
@@ -237,7 +250,12 @@ export function useCandidateImageImport(onComplete: () => Promise<unknown>) {
     } catch (e) {
       const message =
         e instanceof Error ? e.message : "请求未完成，请重试本次入库";
-      setConfirmation({ entries, phase: "uncertain", error: message });
+      setConfirmation({
+        entries,
+        seriesIntent,
+        phase: "uncertain",
+        error: message,
+      });
       setError("本次入库结果尚未确认，请继续查看并重试原请求。");
     } finally {
       running.current = false;
@@ -312,6 +330,14 @@ export function useCandidateImageImport(onComplete: () => Promise<unknown>) {
     submit: () => operations.current.submit(),
   }));
   return {
+    setSeriesIntent: (seriesIntent: SeriesImportIntent | null) => {
+      if (!locked && !running.current)
+        setConfirmation((current) =>
+          current && current.entries.length === 1 && current.phase === "review"
+            ? { ...current, seriesIntent }
+            : current,
+        );
+    },
     selected,
     state,
     editor,

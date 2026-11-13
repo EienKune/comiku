@@ -1,3 +1,9 @@
+.system-management {
+  min-width: 0;
+  max-width: var(--content-max);
+  margin-inline: auto;
+}
+
 .system-tabs {
   display: flex;
   min-width: 0;

@@ -17,7 +17,7 @@ import {
   MinLength,
   ValidateNested,
 } from "class-validator";
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional, OmitType } from "@nestjs/swagger";
 import {
   ReviewStatus,
   SourceLanguage,
@@ -149,6 +149,47 @@ export class WorkImageDto {
   @ApiProperty({ type: Number }) orderIndex!: number;
   @ApiProperty({ type: Number, nullable: true }) width!: number | null;
   @ApiProperty({ type: Number, nullable: true }) height!: number | null;
+}
+
+export class WorkAlbumQueryDto extends OmitType(WorkQueryDto, [
+  "cursor",
+  "limit",
+] as const) {
+  @ApiPropertyOptional({ type: String, maxLength: 2000 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  cursor?: string;
+  @ApiPropertyOptional({ type: Number, minimum: 1, maximum: 100, default: 60 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit = 60;
+}
+export class WorkAlbumImageDto {
+  @ApiProperty({ type: String, format: "uuid" }) id!: string;
+  @ApiProperty({ type: String, format: "uuid" }) workId!: string;
+  @ApiProperty({ type: Number }) workNumber!: number;
+  @ApiProperty({ type: String, nullable: true }) workTitle!: string | null;
+  @ApiProperty({ type: String }) authorName!: string;
+  @ApiProperty({ type: Number }) orderIndex!: number;
+  @ApiProperty({ type: Number }) imageCount!: number;
+  @ApiProperty({ enum: SourceLanguage, enumName: "SourceLanguage" })
+  sourceLanguage!: SourceLanguage;
+  @ApiProperty({ enum: WorkflowStatus, enumName: "WorkflowStatus" })
+  workflowStatus!: WorkflowStatus;
+  @ApiProperty({ enum: ReviewStatus, enumName: "ReviewStatus" })
+  reviewStatus!: ReviewStatus;
+  @ApiProperty({ type: String, format: "date-time" }) importedAt!: string;
+}
+export class WorkAlbumPageDto {
+  @ApiProperty({ type: WorkAlbumImageDto, isArray: true })
+  items!: WorkAlbumImageDto[];
+  @ApiProperty({ type: Number }) total!: number;
+  @ApiProperty({ type: Number }) workTotal!: number;
+  @ApiProperty({ type: String, nullable: true }) nextCursor!: string | null;
 }
 
 export class WorkParticipantDto {

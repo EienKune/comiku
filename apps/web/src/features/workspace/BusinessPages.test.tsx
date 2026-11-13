@@ -13,8 +13,12 @@ import {
   QueryClientProvider,
   focusManager,
 } from "@tanstack/react-query";
-import { MemoryRouter, Outlet, Route, Routes } from "react-router";
+import { MemoryRouter, Outlet, Route, Routes, useNavigate } from "react-router";
 import type { CurrentUser } from "@comiku/api-client";
+import {
+  WorkSeriesDirectoryPage,
+  WorkSeriesDetailPage,
+} from "./WorkSeriesPages";
 import { client, queryClient } from "../account/api";
 import {
   TopbarActionsContext,
@@ -1749,4 +1753,244 @@ test("manual source upload uses a signed session before finalizing candidates", 
     ),
   );
   expect(window.localStorage.length).toBe(0);
+});
+
+test("reading album has its own query boundary, stays available after a card-list error and is absent from work view", async () => {
+  const user: CurrentUser = {
+    id: "album-viewer",
+    username: "viewer",
+    displayName: "读者",
+    roles: ["translator"],
+    languageCapabilities: ["ja"],
+    isActive: true,
+    mustChangePassword: false,
+    canSkipProofreading: false,
+    revision: 1,
+    permissions: ["works:read", "works:translate"],
+  };
+  const paths: string[] = [];
+  vi.spyOn(client, "GET").mockImplementation((async (path: string) => {
+    paths.push(path);
+    if (path === "/api/works") throw new Error("卡片列表暂不可用");
+    if (path === "/api/works/album")
+      return {
+        data: {
+          items: [
+            {
+              id: "adopted",
+              workId: "work",
+              workNumber: 42,
+              workTitle: "相册作品",
+              authorName: "相册作者",
+              orderIndex: 0,
+              imageCount: 1,
+              sourceLanguage: "ja",
+              workflowStatus: "translating",
+              reviewStatus: "normal",
+              importedAt: "2026-11-12T00:00:00Z",
+            },
+          ],
+          total: 1,
+          workTotal: 1,
+          nextCursor: null,
+        },
+        response: new Response(),
+      };
+    return {
+      data: {
+        url: "https://example.invalid/synthetic.png",
+        expiresInSeconds: 3600,
+        status: "ready",
+      },
+      response: new Response(),
+    };
+  }) as typeof client.GET);
+  const cache = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const view = render(
+    <QueryClientProvider client={cache}>
+      <MemoryRouter initialEntries={["/works?view=read&layout=album"]}>
+        <Routes>
+          <Route element={<WorkspaceTestShell user={user} />}>
+            <Route path="/works" element={<WorksPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await screen.findByRole("button", { name: "相册作者 作品 #42 第 1 / 1 页" });
+  expect(paths.includes("/api/works")).toBe(false);
+  expect(screen.getByText("共 1 部作品 · 1 张图片")).toBeTruthy();
+  const toolbar = screen.getByRole("group", { name: "作品展示方式" });
+  expect(
+    toolbar.parentElement?.querySelector(".workspace-result-count"),
+  ).toBeTruthy();
+  expect(
+    screen
+      .getByRole("button", { name: "系列视图" })
+      .getAttribute("aria-pressed"),
+  ).toBe("false");
+  expect(screen.queryByRole("link", { name: "系列目录" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "卡片" }));
+  await screen.findByText("卡片列表暂不可用");
+  fireEvent.click(screen.getByRole("button", { name: "相册" }));
+  await screen.findByRole("button", { name: "相册作者 作品 #42 第 1 / 1 页" });
+  expect(screen.queryByText("卡片列表暂不可用")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "工作视图" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "相册" })).toBeNull(),
+  );
+  view.unmount();
+  cache.clear();
+});
+
+test("series perspective is independent, and directory/detail/back navigation restores work filters and layout", async () => {
+  const user: CurrentUser = {
+    id: "series-viewer",
+    username: "source",
+    displayName: "图源",
+    roles: ["source"],
+    languageCapabilities: [],
+    isActive: true,
+    mustChangePassword: false,
+    canSkipProofreading: false,
+    revision: 1,
+    permissions: ["works:read", "works:metadata", "authors:read"],
+  };
+  const calls: { path: string; query?: Record<string, unknown> }[] = [];
+  const summary = {
+    id: "series",
+    title: "约定",
+    authorId: "author",
+    authorName: "作者",
+    revision: 1,
+    memberCount: 0,
+    updatedAt: "2026-11-12T00:00:00Z",
+    coverImages: [],
+  };
+  vi.spyOn(client, "GET").mockImplementation((async (
+    path: string,
+    options?: { params?: { query?: Record<string, unknown> } },
+  ) => {
+    calls.push({ path, query: options?.params?.query });
+    const data =
+      path === "/api/works"
+        ? {
+            items: [],
+            total: 4,
+            nextCursor: null,
+            phaseCounts: [],
+            claimCounts: [],
+          }
+        : path === "/api/works/album"
+          ? { items: [], total: 0, workTotal: 4, nextCursor: null }
+          : path === "/api/work-series"
+            ? { items: [summary], total: 1, nextCursor: null }
+            : {
+                ...summary,
+                entries: [],
+                archived: false,
+                visibleTotal: 0,
+                nextCursor: null,
+              };
+    return { data, response: new Response() };
+  }) as typeof client.GET);
+  function Back() {
+    const navigate = useNavigate();
+    return <button onClick={() => void navigate(-1)}>浏览器后退</button>;
+  }
+  const cache = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const view = render(
+    <QueryClientProvider client={cache}>
+      <MemoryRouter
+        initialEntries={[
+          "/works?view=read&tab=proofread&layout=rows&language=ja&search=旧词&mine=1",
+        ]}
+      >
+        <Back />
+        <Routes>
+          <Route element={<WorkspaceTestShell user={user} />}>
+            <Route path="/works" element={<WorksPage />} />
+            <Route path="/works/series" element={<WorkSeriesDirectoryPage />} />
+            <Route
+              path="/works/series/:seriesId"
+              element={<WorkSeriesDetailPage />}
+            />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await waitFor(() =>
+    expect(calls.some((c) => c.path === "/api/works")).toBe(true),
+  );
+  expect(
+    screen.getByRole("button", { name: "列表" }).getAttribute("aria-pressed"),
+  ).toBe("true");
+  fireEvent.change(screen.getByLabelText("搜索作品或作者"), {
+    target: { value: "新词" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "相册" }));
+  await waitFor(() =>
+    expect(
+      calls.some(
+        (c) => c.path === "/api/works/album" && c.query?.search === "新词",
+      ),
+    ).toBe(true),
+  );
+  const beforeSeries = calls.length;
+  fireEvent.click(screen.getByRole("button", { name: "系列视图" }));
+  await screen.findByRole("link", { name: "约定" });
+  expect(
+    screen
+      .getByRole("button", { name: "系列视图" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  expect(screen.queryByRole("tablist")).toBeNull();
+  expect(screen.queryByRole("group", { name: "作品展示方式" })).toBeNull();
+  expect(screen.queryByLabelText("来源语言")).toBeNull();
+  expect(
+    calls.slice(beforeSeries).every((c) => c.path === "/api/work-series"),
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("link", { name: "约定" }));
+  await screen.findByRole("heading", { name: "约定" });
+  fireEvent.click(screen.getByRole("link", { name: "返回系列" }));
+  await screen.findByRole("link", { name: "约定" });
+  fireEvent.click(screen.getByRole("button", { name: "查看视图" }));
+  await screen.findByLabelText("搜索作品或作者");
+  expect(
+    (screen.getByLabelText("搜索作品或作者") as HTMLInputElement).value,
+  ).toBe("新词");
+  expect(
+    (screen.getByRole("checkbox", { name: "只看我参与的" }) as HTMLInputElement)
+      .checked,
+  ).toBe(true);
+  expect(
+    screen.getByRole("button", { name: "相册" }).getAttribute("aria-pressed"),
+  ).toBe("true");
+  expect(
+    screen.getByRole("tab", { name: /校对中/ }).getAttribute("aria-selected"),
+  ).toBe("true");
+  await waitFor(() =>
+    expect(
+      calls.filter((c) => c.path === "/api/works/album").at(-1)?.query,
+    ).toMatchObject({
+      phase: "proofread",
+      sourceLanguage: "ja",
+      search: "新词",
+      mine: true,
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "系列视图" }));
+  await screen.findByLabelText("搜索系列名称");
+  fireEvent.click(screen.getByRole("button", { name: "浏览器后退" }));
+  await screen.findByLabelText("搜索作品或作者");
+  expect(
+    (screen.getByLabelText("搜索作品或作者") as HTMLInputElement).value,
+  ).toBe("新词");
+  view.unmount();
+  cache.clear();
 });

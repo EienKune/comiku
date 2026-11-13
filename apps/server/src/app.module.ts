@@ -20,6 +20,8 @@ import { TypesettingModule } from "./typesetting/typesetting.module.js";
 import { PublishingModule } from "./publishing/publishing.module.js";
 import { NotificationsModule } from "./notifications/notifications.module.js";
 import { BirthdaysModule } from "./birthdays/birthdays.module.js";
+import { WorkSeriesModule } from "./work-series/work-series.module.js";
+import { ImageSimilarityModule } from "./image-similarity/image-similarity.module.js";
 
 @Module({
   imports: [
@@ -41,6 +43,8 @@ import { BirthdaysModule } from "./birthdays/birthdays.module.js";
     DashboardModule,
     NotificationsModule,
     BirthdaysModule,
+    WorkSeriesModule,
+    ImageSimilarityModule,
   ],
   controllers: [HealthController],
 })

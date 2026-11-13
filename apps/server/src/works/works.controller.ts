@@ -40,6 +40,8 @@ import {
   WorkMutationDto,
   WorkPageDto,
   WorkQueryDto,
+  WorkAlbumQueryDto,
+  WorkAlbumPageDto,
   WorkSourceDto,
 } from "./works.dto.js";
 import { WorksService } from "./works.service.js";
@@ -60,6 +62,18 @@ export class WorksController {
     @Query(bodyValidation(WorkQueryDto)) query: WorkQueryDto,
   ) {
     return this.works.list(request.actor.userId, query);
+  }
+
+  @Get("album")
+  @Access({ permission: "works:read" })
+  @ApiOperation({ operationId: "listWorkAlbumImages" })
+  @ApiQuery({ type: WorkAlbumQueryDto })
+  @ApiOkResponse({ type: WorkAlbumPageDto })
+  album(
+    @Req() request: AuthRequest,
+    @Query(bodyValidation(WorkAlbumQueryDto)) query: WorkAlbumQueryDto,
+  ) {
+    return this.works.album(request.actor.userId, query);
   }
 
   @Get(":id")

@@ -1,0 +1,198 @@
+.similarity-dialog {
+  width: min(1080px, calc(100vw - 32px));
+  max-height: 90dvh;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: 0;
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+.similarity-dialog::backdrop {
+  background: var(--color-overlay);
+}
+.similarity-header,
+.similarity-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  flex-wrap: wrap;
+}
+.similarity-header {
+  border-bottom: 1px solid var(--color-border);
+}
+.similarity-header h2,
+.similarity-header p {
+  margin: 0;
+}
+.similarity-header p,
+.similarity-footer > span {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+.similarity-scroll {
+  overflow: auto;
+  max-height: calc(90dvh - 170px);
+  padding: var(--space-5);
+}
+.similarity-layout {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
+  gap: var(--space-5);
+}
+.similarity-source {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+.similarity-source img {
+  width: 100%;
+  max-height: 350px;
+  object-fit: contain;
+  background: var(--color-surface-muted);
+  border-radius: var(--radius-md);
+}
+.similarity-source > span {
+  color: var(--color-text-muted);
+}
+.similarity-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.similarity-summary > span {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+.similarity-hint {
+  font-size: var(--text-sm);
+  padding: var(--space-3);
+  background: var(--color-surface-soft);
+  border-radius: var(--radius-sm);
+}
+.similarity-matches {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.similarity-match {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  min-width: 0;
+}
+.similarity-match-image {
+  width: 100%;
+  height: 180px;
+  display: grid;
+  place-items: center;
+  background: var(--color-surface-muted);
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.similarity-match-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.similarity-match > div {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  font-size: var(--text-sm);
+}
+.similarity-match a {
+  color: var(--color-text);
+  font-weight: var(--font-weight-control);
+  overflow-wrap: anywhere;
+}
+.similarity-match span {
+  overflow-wrap: anywhere;
+}
+.similarity-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+.similarity-comparison {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-5);
+}
+.similarity-comparison figure {
+  margin: 0;
+  min-width: 0;
+}
+.similarity-comparison figcaption {
+  font-weight: var(--font-weight-control);
+  margin-bottom: var(--space-3);
+  overflow-wrap: anywhere;
+}
+.similarity-comparison img {
+  width: 100%;
+  max-height: 65dvh;
+  object-fit: contain;
+  background: var(--color-surface-muted);
+}
+.similarity-footer {
+  border-top: 1px solid var(--color-border);
+}
+@media (max-width: 700px) {
+  .similarity-layout {
+    grid-template-columns: 1fr;
+  }
+  .similarity-source {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+  }
+  .similarity-source img {
+    grid-row: span 2;
+    max-height: 96px;
+  }
+  .similarity-matches {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .similarity-comparison {
+    gap: var(--space-2);
+  }
+  .similarity-header,
+  .similarity-scroll,
+  .similarity-footer {
+    padding: var(--space-3);
+  }
+}
+
+.similarity-header {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+.similarity-header > div {
+  flex: 1;
+  min-width: 0;
+}
+.similarity-header > .ui-icon-button {
+  flex: 0 0 auto;
+}
+.similarity-match-image {
+  overflow: hidden;
+  min-height: 0;
+}
+.similarity-match-image .series-image {
+  min-height: 0;
+  max-height: 100%;
+}
+.similarity-match-image img {
+  object-fit: contain;
+  max-height: 100%;
+  min-height: 0;
+}
+.similarity-match > div {
+  position: relative;
+  background: var(--color-surface);
+}

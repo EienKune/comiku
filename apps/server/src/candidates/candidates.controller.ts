@@ -162,7 +162,7 @@ export class CandidatesController {
     @Body(bodyValidation(CandidateBatchActionDto))
     input: CandidateBatchActionDto,
   ) {
-    return this.candidates.batch(request.actor.userId, input);
+    return this.candidates.batch(request.actor.userId, input, request.actor);
   }
 
   @Post("uploads")

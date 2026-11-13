@@ -54,6 +54,7 @@ export function ImageLightboxDemo() {
           alt={`大图交互示例 ${index + 1}`}
           index={index}
           count={2}
+          footer={<span>示例作品 · 第 {index + 1} 页</span>}
           portalContainer={editor ? dialog.current : undefined}
           onClose={() => setIndex(null)}
           onPrevious={index > 0 ? () => setIndex(index - 1) : undefined}

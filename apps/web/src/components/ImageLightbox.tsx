@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   ChevronLeft,
@@ -24,6 +24,7 @@ export function ImageLightbox({
   onPrevious,
   onNext,
   portalContainer,
+  footer,
 }: {
   src?: string;
   alt: string;
@@ -35,6 +36,7 @@ export function ImageLightbox({
   onPrevious?: () => void;
   onNext?: () => void;
   portalContainer?: HTMLElement | null;
+  footer?: ReactNode;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const callbacks = useRef({ onClose, onPrevious, onNext });
@@ -110,7 +112,7 @@ export function ImageLightbox({
 
   return createPortal(
     <div
-      className="ui-lightbox"
+      className={`ui-lightbox${footer ? " ui-lightbox--with-footer" : ""}`}
       ref={dialogRef}
       tabIndex={-1}
       role="dialog"
@@ -134,6 +136,7 @@ export function ImageLightbox({
           onNext,
         }}
       />
+      {footer && <footer className="ui-lightbox__footer">{footer}</footer>}
     </div>,
     portalContainer ?? document.body,
   );
