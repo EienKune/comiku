@@ -76,31 +76,45 @@ function mockManagement() {
   } as never);
   return vi.spyOn(client, "GET").mockImplementation((async (path: string) => ({
     data:
-      path === "/api/notifications/work-reminders"
+      path === "/api/archive-exports/settings"
         ? {
-            settings: {
-              enabled: false,
-              sendTimes: ["09:00", "18:00"],
-              note: "",
-              revision: 0,
-            },
-            channels: [],
+            enabled: false,
+            revision: 0,
+            bandwidthLimitMiB: 0,
+            packageTargetBytes: "2147483648",
+            retentionDays: 7,
           }
-        : path === "/api/source-fetch/runs"
-          ? { items: [], nextCursor: null, observedAt: "2026-11-10T00:00:00Z" }
-          : path.endsWith("/configuration")
+        : path === "/api/archive-exports"
+          ? { items: [], nextCursor: null }
+          : path === "/api/notifications/work-reminders"
             ? {
-                enabled: false,
-                configurationError: null,
-                connections: [
-                  { key: "bot", name: "测试连接", available: true },
-                ],
-                eventTypes: [{ type: "imported", label: "导入作品" }],
+                settings: {
+                  enabled: false,
+                  sendTimes: ["09:00", "18:00"],
+                  note: "",
+                  revision: 0,
+                },
                 channels: [],
               }
-            : path.endsWith("/deliveries")
-              ? { items: [], nextCursor: null }
-              : [],
+            : path === "/api/source-fetch/runs"
+              ? {
+                  items: [],
+                  nextCursor: null,
+                  observedAt: "2026-11-10T00:00:00Z",
+                }
+              : path.endsWith("/configuration")
+                ? {
+                    enabled: false,
+                    configurationError: null,
+                    connections: [
+                      { key: "bot", name: "测试连接", available: true },
+                    ],
+                    eventTypes: [{ type: "imported", label: "导入作品" }],
+                    channels: [],
+                  }
+                : path.endsWith("/deliveries")
+                  ? { items: [], nextCursor: null }
+                  : [],
     response: new Response(),
   })) as never);
 }
@@ -147,12 +161,12 @@ test("tab arrows wrap and Home/End activate and focus their panels", async () =>
   mockManagement();
   openPage(["system:manage"]);
   const collection = screen.getByRole("tab", { name: "图源采集" });
-  const notifications = screen.getByRole("tab", { name: "推送通知" });
+  const notifications = screen.getByRole("tab", { name: "数据导出" });
   collection.focus();
   fireEvent.keyDown(collection, { key: "ArrowLeft" });
   expect(document.activeElement).toBe(notifications);
   expect(notifications.getAttribute("aria-selected")).toBe("true");
-  const panel = screen.getByRole("tabpanel", { name: "推送通知" });
+  const panel = screen.getByRole("tabpanel", { name: "数据导出" });
   expect(panel.getAttribute("aria-labelledby")).toBe(notifications.id);
   expect(notifications.getAttribute("aria-controls")).toBe(panel.id);
   fireEvent.keyDown(notifications, { key: "Home" });
@@ -329,5 +343,36 @@ test("technical-management permission alone never exposes or fetches account man
   expect(screen.queryByRole("tab", { name: "账号管理" })).toBeNull();
   expect(
     get.mock.calls.some((call) => String(call[0]).startsWith("/api/users")),
+  ).toBe(false);
+});
+
+test("the export URL reads only export data and preserves its form across system tabs", async () => {
+  const get = mockManagement();
+  openPage(["system:manage"], "/settings/system?tab=exports&keep=yes");
+  await screen.findByText("暂无导出记录。");
+  expect(get.mock.calls.map((call) => call[0])).toEqual([
+    "/api/archive-exports/settings",
+    "/api/archive-exports",
+  ]);
+  fireEvent.change(screen.getByLabelText("入库年份"), {
+    target: { value: "2021" },
+  });
+  fireEvent.click(screen.getByRole("tab", { name: "图源采集" }));
+  await screen.findByText("暂无同步记录。");
+  fireEvent.click(screen.getByRole("tab", { name: "数据导出" }));
+  expect((screen.getByLabelText("入库年份") as HTMLInputElement).value).toBe(
+    "2021",
+  );
+});
+
+test("an account-only administrator cannot read archive exports through a direct URL", async () => {
+  const get = mockManagement();
+  openPage(["accounts:manage"], "/settings/system?tab=exports");
+  await screen.findByRole("heading", { name: "分发新账号" });
+  expect(screen.queryByRole("tab", { name: "数据导出" })).toBeNull();
+  expect(
+    get.mock.calls.some((call) =>
+      String(call[0]).startsWith("/api/archive-exports"),
+    ),
   ).toBe(false);
 });
