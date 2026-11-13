@@ -8,6 +8,7 @@ import {
   createOpenApiDocument,
 } from "../src/application.js";
 import { PrismaService } from "../src/database/prisma.service.js";
+import { parseEnvironment } from "../src/config/environment.js";
 
 test("HTTP liveness, readiness and OpenAPI remain distinct when the database fails", async () => {
   let unavailable = false;
@@ -33,6 +34,9 @@ test("HTTP liveness, readiness and OpenAPI remain distinct when the database fai
         typesetBatchMaxBytes: 512 * 1024 * 1024,
         typesetBatchMaxWorks: 20,
         objectStorageDriver: "memory",
+        archiveExports: parseEnvironment({
+          DATABASE_URL: "postgresql://unused:unused@127.0.0.1:1/unused",
+        }).archiveExports,
       }),
     ],
   })

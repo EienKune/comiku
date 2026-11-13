@@ -1,4 +1,5 @@
 import { readFile, mkdir, writeFile } from "node:fs/promises";
+import { parseEnvironment } from "../src/config/environment.js";
 import {
   createApplication,
   createOpenApiDocument,
@@ -25,6 +26,9 @@ const app = await createApplication({
   typesetBatchMaxBytes: 512 * 1024 * 1024,
   typesetBatchMaxWorks: 20,
   objectStorageDriver: "memory",
+  archiveExports: parseEnvironment({
+    DATABASE_URL: "postgresql://offline:offline@127.0.0.1:1/offline",
+  }).archiveExports,
 });
 try {
   const document = createOpenApiDocument(app);

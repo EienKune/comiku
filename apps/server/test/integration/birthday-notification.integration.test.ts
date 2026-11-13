@@ -1,3 +1,5 @@
+import { BaBirthdayDataAdapter } from "../../src/birthdays/adapters/ba/ba-birthday-data.adapter.js";
+import type { Environment } from "../../src/config/environment.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -68,7 +70,15 @@ test(
         roles: { create: { role: "admin" } },
       },
     });
-    const reminders = new BirthdayReminderService(db, registry);
+    const reminders = new BirthdayReminderService(
+      db,
+      registry,
+      new BaBirthdayDataAdapter(
+        db,
+        { register() {} } as unknown as JobsService,
+        { birthdays: { enabled: true } } as Environment,
+      ),
+    );
     const publisher = new NotificationPublisherService(db);
     const management = new NotificationsService(db, publisher, registry, env);
     const channel = await management.createChannel(actor.id, {
@@ -304,7 +314,15 @@ test(
           });
           await Promise.all([
             reminders.maintain(now),
-            new BirthdayReminderService(db, registry).maintain(now),
+            new BirthdayReminderService(
+              db,
+              registry,
+              new BaBirthdayDataAdapter(
+                db,
+                { register() {} } as unknown as JobsService,
+                { birthdays: { enabled: true } } as Environment,
+              ),
+            ).maintain(now),
           ]);
           assert.equal(
             await db.birthdayReminderOccurrence.count({
@@ -533,7 +551,15 @@ test(
           }
           assert.equal(sent.length, 2);
           assert.ok(sent.every((text) => text.includes("冻结祝福")));
-          await new BirthdayReminderService(db, registry).maintain(now);
+          await new BirthdayReminderService(
+            db,
+            registry,
+            new BaBirthdayDataAdapter(
+              db,
+              { register() {} } as unknown as JobsService,
+              { birthdays: { enabled: true } } as Environment,
+            ),
+          ).maintain(now);
           await worker().maintain();
           assert.equal(
             await db.birthdayReminderOccurrence.count({
@@ -679,7 +705,15 @@ test(
           });
           await Promise.all([
             reminders.maintain(now),
-            new BirthdayReminderService(db, registry).maintain(now),
+            new BirthdayReminderService(
+              db,
+              registry,
+              new BaBirthdayDataAdapter(
+                db,
+                { register() {} } as unknown as JobsService,
+                { birthdays: { enabled: true } } as Environment,
+              ),
+            ).maintain(now),
           ]);
           const occurrence =
             await db.birthdayReminderOccurrence.findFirstOrThrow({
