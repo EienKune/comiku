@@ -1379,6 +1379,10 @@
   gap: var(--space-3);
   margin-top: var(--space-4);
 }
+.workspace-author-actions {
+  max-width: var(--content-max);
+  margin: var(--space-4) auto;
+}
 .workspace-handoff-panel {
   display: grid;
   min-width: 0;

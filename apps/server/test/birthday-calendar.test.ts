@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { birthdayCalendar } from "../src/birthdays/birthday-calendar.js";
-import type { BirthdayPerson } from "../src/birthdays/providers/schaledb.js";
+import type { BirthdayPerson } from "../src/birthdays/birthday-data.adapter.js";
 
 const person = (
   key: string,
@@ -13,9 +13,7 @@ const person = (
   aliases: [],
   month,
   day,
-  originalEntryId: 10000,
-  entryIds: [10000],
-  notificationEligible: month !== null,
+  avatarUrl: "https://schaledb.com/images/student/icon/10000.webp",
 });
 
 test("Shanghai midnight defines today independently of local host time; window includes days zero through six", () => {
@@ -74,10 +72,10 @@ test("leap day finds the next real February 29 rather than normalizing to March"
   );
 });
 
-test("unknown and malformed dates cannot enter summary or loop indefinitely; original avatar requires accepted original ID", () => {
+test("unknown and malformed dates cannot enter summary; avatars come from the adapter", () => {
   const unknown = person("unknown", null, null);
   const invalid = person("invalid", 2, 30);
-  const alternate = { ...person("alternate", null, null), entryIds: [10031] };
+  const alternate = { ...person("alternate", null, null), avatarUrl: null };
   const result = birthdayCalendar(
     [unknown, invalid, alternate],
     new Date("2026-11-11T00:00:00Z"),
@@ -99,18 +97,15 @@ test("calendar projection does not mutate its persisted snapshot", () => {
   const before = structuredClone(source);
   const result = birthdayCalendar(source, new Date("2026-11-11T00:00:00Z"));
   result.people[0].aliases.push("temporary");
-  result.people[0].entryIds.push(10031);
   assert.deepEqual(source, before);
 });
 
-test("supplemental avatars work without a Schale original and preserve the legacy fallback", () => {
+test("calendar keeps adapter-provided avatars and never invents a source fallback", () => {
   const avatarUrl = "https://static.kivo.wiki/images/students/example.png";
   const result = birthdayCalendar(
     [
       {
         ...person("kivo:123", 11, 11),
-        originalEntryId: null,
-        entryIds: [],
         avatarUrl,
       },
       { ...person("legacy", 11, 11), avatarUrl: null },
@@ -121,8 +116,5 @@ test("supplemental avatars work without a Schale original and preserve the legac
     result.people.find((p) => p.key === "kivo:123")?.avatarUrl,
     avatarUrl,
   );
-  assert.equal(
-    result.people.find((p) => p.key === "legacy")?.avatarUrl,
-    "https://schaledb.com/images/student/icon/10000.webp",
-  );
+  assert.equal(result.people.find((p) => p.key === "legacy")?.avatarUrl, null);
 });

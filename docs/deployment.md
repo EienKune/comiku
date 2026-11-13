@@ -1,25 +1,35 @@
 # 生产运行与真实服务联调
 
-本仓库提供基于 Ubuntu/Linux 的生产部署模板（涵盖 Pages 前端、Caddy 反向代理、API/worker 服务、PostgreSQL、私有 R2 存储及加密备份策略）。由于外部平台接口及各团队生产环境存在差异，真实服务的连通性、生产容量及长期稳定性需由部署者在目标环境中完成实测。
+本仓库提供基于 Ubuntu/Linux 的生产部署模板，涵盖 Pages 前端、Caddy 反向代理、API/worker 服务、PostgreSQL、私有 R2 存储及加密备份。部署时按团队需要启用采集、通知和生日服务，并在目标环境验证外部连接与资源配置。
 
 ## 1. 配置入口
 
-| 文件                                                                   | 用途                                                                    |
-| ---------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `deploy/Dockerfile`                                                    | Node 24.22.1 / pnpm 9.1.2 多阶段构建；runtime、tools、backup 三个目标   |
-| `deploy/compose.production.yml`                                        | API、worker、迁移、PostgreSQL、Caddy；ops/backup/restore 为显式 profile |
-| `deploy/production.env`                                                | 由 `.example` 复制，填写 IMAGE_TAG、APP_DOMAIN、API_DOMAIN；不放密钥    |
-| `deploy/.secrets/runtime.env`                                          | 数据库 URL、业务 R2、X、抓取和容量参数；由 `runtime.env.example` 复制   |
-| `deploy/.secrets/postgres-password`                                    | 应用账号 comiku 的密码，必须匹配 runtime.env URL                        |
-| `deploy/.secrets/postgres-admin-password` / `postgres-backup-password` | PostgreSQL 管理员与只读备份账号的独立密码                               |
-| `deploy/.secrets/origin-cert.pem` / `origin-key.pem`                   | Cloudflare Origin CA 证书和私钥                                         |
-| `deploy/.secrets/backup.env` / `backup-key`                            | 独立备份 R2 凭据、政策、32 字节随机加密密钥的 64 位十六进制文本         |
-| `deploy/.secrets/restore-password`                                     | 隔离恢复库密码，必须匹配 `RESTORE_DATABASE_URL`                         |
-| `deploy/.backups/`                                                     | 可选离线加密归档输入/解密输出，不进入镜像或 Git                         |
+| 文件                                                                   | 用途                                                                                        |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `deploy/Dockerfile`                                                    | Node 24.22.1 / pnpm 9.1.2；runtime、可选 gallery-runtime、tools、backup 目标                |
+| `deploy/compose.production.yml`                                        | API、worker、迁移、PostgreSQL、Caddy；ops/backup/restore 为显式 profile                     |
+| `deploy/production.env`                                                | 由 `.example` 复制，填写 IMAGE_TAG、APP_DOMAIN、API_DOMAIN；不放密钥                        |
+| `deploy/.secrets/runtime.env`                                          | 数据库 URL、R2、采集、通知、生日和容量参数；由 `runtime.env.example` 复制，按需补充可选配置 |
+| `deploy/.secrets/postgres-password`                                    | 应用账号 comiku 的密码，必须匹配 runtime.env URL                                            |
+| `deploy/.secrets/postgres-admin-password` / `postgres-backup-password` | PostgreSQL 管理员与只读备份账号的独立密码                                                   |
+| `deploy/.secrets/origin-cert.pem` / `origin-key.pem`                   | Cloudflare Origin CA 证书和私钥                                                             |
+| `deploy/.secrets/backup.env` / `backup-key`                            | 独立备份 R2 凭据、政策、32 字节随机加密密钥的 64 位十六进制文本                             |
+| `deploy/.secrets/restore-password`                                     | 隔离恢复库密码，必须匹配 `RESTORE_DATABASE_URL`                                             |
+| `deploy/.backups/`                                                     | 可选离线加密归档输入/解密输出，不进入镜像或 Git                                             |
 
 真实文件均被 Git 和 Docker 构建上下文排除。Compose secrets 是宿主文件挂载，不是自动加密的密钥保险库；限制宿主访问。Linux 上 runtime.env、backup.env、backup-key 由 uid 1000 所有，权限 0400；三个 PostgreSQL 密码文件及 restore-password 由 uid 999 所有、0400，供 PostgreSQL 初始化读取；源站私钥只给 Caddy 读取。数据库密码使用 32–128 位独立随机英数字/下划线/连字符，便于安全注入 SQL 与 URL。`deploy/.backups` 若需要解密输出，设为 uid 1000 所有、0700。Windows Docker Desktop 的权限映射不同，正式服务器再核对。
 
 API/worker/tools 通过绝对 `COMIKU_ENV_FILE` 加载相同配置，显式容器环境优先。备份只加载 `COMIKU_BACKUP_ENV_FILE`，不注入业务 R2/X 凭据。`pnpm deploy:check` 校验域名、提交标识、数据库密码对应关系、完整 R2 参数、证书匹配/有效期及已确认备份政策，不输出原始密钥。`--test` 只用于静态配置检查，不启用生产备份，也不证明真实凭据有效。
+
+### 可选服务
+
+仓库 Compose 使用 `runtime` 镜像。需要 gallery-dl 时，在部署者维护的 Compose 覆盖文件中，将 API 和 worker 的构建目标设为 `gallery-runtime`，保留同一提交标识，并在构建、启动和维护命令中一并加载该覆盖文件。设置 `GALLERY_DL_PYTHON=/opt/gallery-dl/bin/python`，按需配置 `GALLERY_DL_X_CONFIG`、`GALLERY_DL_PIXIV_CONFIG`；两类进程以相同容器路径挂载私有 JSON 及其引用的 Cookie 文件。平台配置和使用方式见 [gallery-dl 说明](../apps/server/src/source-ingestion/adapters/gallery-dl/README.md)。
+
+群通知使用 `NOTIFICATIONS_ENABLED=true` 和 `NOTIFICATION_CONNECTIONS_FILE`。将私有连接 JSON 只读挂载到 API/worker 相同路径，向两者提供连接中 `tokenEnv` 指定的环境变量，并配置可达的 OneBot 地址与精确 IP 白名单。通知总开关、群订阅、模板和发送测试见[群通知](notifications.md)。
+
+角色生日使用 `BIRTHDAYS_ENABLED=true`，API 与 worker 同时设置并重启；默认 BA 实现通过 HTTPS 获取 SchaleDB 和 Kivo 资料。工作台展示可单独启用，群提醒同时使用通知连接和生日订阅。数据实现替换与开关见[角色生日](birthdays.md)。
+
+在线图源凭据维护通过 `SOURCE_CREDENTIALS_STATE_DIRECTORY` 启用。配置目录、Cookie 目录和操作状态目录需要在所有 API/worker 中共享同一份可写文件，采用目录挂载；Linux 下目录由服务用户所有并设为 0700，凭据文件设为 0600。现有只读挂载方式适用于部署者维护文件，启用网页更新时须同步调整挂载及权限。操作按暂停、确认排空、保存、可选验证、显式恢复的顺序进行；详细要求见[在线凭据维护](configuration.md#online-source-credential-maintenance)和[采集适配器](adapters/source-ingestion.md)。
 
 ## 2. 网络、HTTPS 与 Pages
 

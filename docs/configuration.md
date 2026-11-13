@@ -57,7 +57,7 @@ local 与 R2 不是自动迁移关系：更换驱动不会搬运已有对象。�
 
 角色生日使用独立的 `BIRTHDAYS_ENABLED`（默认 false），API 与 worker 保持一致。开启后系统管理可配置工作台展示、上海时区的提醒时间和 0／1／7 天偏移；提醒还需要通知总开关及目标群的生日订阅。未开启不请求 SchaleDB、Kivo 或轮询生日任务，开启只展示也不需要配置群通知。Kivo 公开资料不需要平台登录凭据，分批缓存后合并至本地名册。资料与提醒的恢复、有效期和身份规则见[角色生日](birthdays.md)。
 
-日常采集与账号资料同步只使用 gallery-dl 的 X/Pixiv 实现，配置见下方 gallery-dl 章节。旧网页会话与官方 API 实现仅保留为历史源码和合成测试，不注册到运行时，不作为失败回退；旧凭据环境变量不再读取。
+日常采集与账号资料同步使用 gallery-dl 的 X/Pixiv 实现，Python 环境、平台配置文件和首次同步范围见 [gallery-dl 说明](../apps/server/src/source-ingestion/adapters/gallery-dl/README.md)。旧网页会话与官方 API 实现保留为历史源码和合成测试；运行时按已配置的 gallery-dl 通道执行。
 
 | 配置                                                   | 用途                                     |
 | ------------------------------------------------------ | ---------------------------------------- |
@@ -72,7 +72,7 @@ local 与 R2 不是自动迁移关系：更换驱动不会搬运已有对象。�
 
 继续通过 `.env` 或 `COMIKU_ENV_FILE` 指定 API/worker 配置。`IMAGE_ANALYSIS_ADAPTER` 默认 disabled；example 仅演示，ba-pixai 使用 `IMAGE_ANALYSIS_CONFIG_FILE` 指向仓库外的私有 JSON，external 另需模块绝对路径。详见[模型接口](adapters/image-analysis.md)。
 
-当前模型由上述配置加载的 adapter 身份生成 modelKey，API 与 worker 必须使用一致配置；已有持久激活记录时，先排空并停止旧 worker，再按[模型接口的受控激活流程](adapters/image-analysis.md#persistent-scheduling-and-activation)切换，最后一起重启。普通 worker 不会覆盖不匹配的激活记录。逐图历史结果按 `(mediaId, modelKey)` 保留；候选的 `analysisModelKey` 只是汇总缓存的来源标记，不是启用开关。只有与当前模型匹配的成功汇总才参与优先级和排序；其余暂按原分组内时间排序。worker 每轮最多从 20 条已有当前模型结果的候选重建汇总，无需重新推理已成功的图片。未配置模型时保留数据库历史，页面不使用旧分数。
+当前模型由上述配置加载的 adapter 身份生成 modelKey，API 与 worker 使用一致配置；已有持久激活记录时，先排空并停止旧 worker，再按[模型接口的受控激活流程](adapters/image-analysis.md#persistent-scheduling-and-activation)切换，最后一起重启。识别任务由匹配已激活身份的 worker 处理。逐图历史结果按 `(mediaId, modelKey)` 保留；候选的 `analysisModelKey` 记录汇总缓存的来源。审核分区、代表分类和排序直接核验当前模型的逐图结果及文件 SHA，采用有效图片的最高排序分，标签规则和有效逐图证据共同决定自动区域。无有效分数时按时间和 ID 排序。稳定审核会话固定当次分区与顺序，显式刷新后采用最新规则和分数。worker 每轮最多处理 20 条候选的汇总修复，复用已有逐图结果。识别关闭时保留历史记录，审核继续使用原帖标签规则。
 
 BA 常驻推理进程可用独立 EnvironmentFile 注入 `PIXAI_MODEL_DIR`、`PIXAI_CHECKPOINT`、`PIXAI_HEAD_FILE`、`PIXAI_SERVICE_TOKEN` 与线程预算；三个模型路径必须绝对，不搜索默认或隐藏目录。环境文件放在部署者选定的私有位置，不需要在仓库新增 config 或 models 目录。API/worker 的 dotenv 加载不会自动为另一个 Python 进程注入变量；由服务管理器或启动环境提供。
 

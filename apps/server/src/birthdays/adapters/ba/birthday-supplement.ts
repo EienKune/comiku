@@ -1,19 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import type { PrismaService } from "../database/prisma.service.js";
-import type { JobsService } from "../jobs/jobs.service.js";
+import type { PrismaService } from "../../../database/prisma.service.js";
+import type { JobsService } from "../../../jobs/jobs.service.js";
 import type {
   BackgroundJob,
   BirthdaySyncState,
   Prisma,
-} from "../generated/prisma/client.js";
+} from "../../../generated/prisma/client.js";
 import {
   fetchKivoIndex,
   fetchKivoProfile,
   kivoProfileHash,
   type KivoProfile,
 } from "./providers/kivo.js";
-import { BIRTHDAY_RETRY_MS, BIRTHDAY_SCOPE } from "./birthday-scheduling.js";
+import {
+  BIRTHDAY_RETRY_MS,
+  BIRTHDAY_SCOPE,
+} from "../../birthday-scheduling.js";
 
 export const KIVO_SYNC_KIND = "birthday_kivo_sync";
 const HOUR = 3_600_000;

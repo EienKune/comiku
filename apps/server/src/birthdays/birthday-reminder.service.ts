@@ -23,59 +23,15 @@ import {
   BIRTHDAY_NOTIFICATION_EVENT,
   BIRTHDAY_OFFSETS,
   BIRTHDAY_RESOURCE_KIND,
-  BIRTHDAY_SOURCE_MAX_AGE_MS,
   normalizeBirthdayNote,
   validateBirthdaySchedule,
 } from "./birthday-policy.js";
 import {
   birthdayNotificationHash,
   renderBirthdayNotification,
-  type BirthdayNotificationPerson,
   type BirthdayNotificationSnapshot,
 } from "./birthday-notification.js";
-import { readBirthdayPeople } from "./birthdays.service.js";
-import type { BirthdayPerson } from "./providers/schaledb.js";
-
-interface ExternalBirthdayEvidence {
-  personKey: string | null;
-  status: string;
-  profileHash: string | null;
-  lastCheckedAt: Date | null;
-}
-
-/** A refreshed index or an unrelated source cannot renew a frozen birthday fact. */
-export function birthdayReminderCheckedAt(
-  person: BirthdayPerson,
-  schaleCheckedAt: Date | null,
-  external: ExternalBirthdayEvidence | undefined,
-  now: Date,
-): Date | null {
-  if (!person.notificationEligible) return null;
-  const source = person.birthdaySource;
-  let checkedAt: Date | null;
-  if (source?.source === "kivo") {
-    if (
-      !external ||
-      external.status !== "confirmed" ||
-      external.personKey !== person.key ||
-      external.profileHash !== source.profileHash
-    )
-      return null;
-    checkedAt = external.lastCheckedAt;
-  } else {
-    // SchaleDB still requires a reviewed original; Kivo identity is separate.
-    if (person.originalEntryId === null) return null;
-    checkedAt = schaleCheckedAt;
-  }
-  if (
-    !checkedAt ||
-    !Number.isFinite(checkedAt.getTime()) ||
-    checkedAt > now ||
-    checkedAt.getTime() + BIRTHDAY_SOURCE_MAX_AGE_MS <= now.getTime()
-  )
-    return null;
-  return checkedAt;
-}
+import { BirthdayDataAdapter } from "./birthday-data.adapter.js";
 
 type SettingsInput = {
   expectedRevision: number;
@@ -93,6 +49,7 @@ export class BirthdayReminderService {
     @Inject(PrismaService) private readonly db: PrismaService,
     @Inject(NotificationConnectionRegistry)
     private readonly registry: NotificationConnectionRegistry,
+    @Inject(BirthdayDataAdapter) private readonly data: BirthdayDataAdapter,
   ) {}
 
   private ensureSettings(tx: Prisma.TransactionClient = this.db) {
@@ -303,7 +260,6 @@ export class BirthdayReminderService {
               name: "示例学生",
               month: 1,
               day: 1 + offset,
-              originalEntryId: 1,
             },
           ],
         },
@@ -314,7 +270,7 @@ export class BirthdayReminderService {
 
   /** One bounded DB-only pass; the existing notification engine owns all sends. */
   async maintain(now = new Date()) {
-    if (!this.registry.enabled) return;
+    if (!this.data.enabled || !this.registry.enabled) return;
     const initial = await this.db.birthdaySettings.findUnique({
       where: { id: "global" },
     });
@@ -356,7 +312,7 @@ export class BirthdayReminderService {
         // Serialize same-date writers without taking a write lock on global settings.
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`comiku:birthday:${sendLocalDate}:${offset}`}))`;
         const unique = {
-          namespace: "schaledb",
+          namespace: this.data.namespace,
           sendLocalDate,
           offsetDays: offset,
         };
@@ -366,76 +322,14 @@ export class BirthdayReminderService {
           })
         )
           return;
-        await tx.$queryRaw`SELECT id FROM birthday_sync_states WHERE id = 'combined' FOR SHARE`;
-        let source = await tx.birthdaySyncState.findUnique({
-          where: { id: "combined" },
-          include: { catalog: true },
-        });
-        if (!source?.catalog) {
-          await tx.$queryRaw`SELECT id FROM birthday_sync_states WHERE id = 'schaledb' FOR SHARE`;
-          source = await tx.birthdaySyncState.findUnique({
-            where: { id: "schaledb" },
-            include: { catalog: true },
-          });
-        }
-        if (!source?.catalog) return;
         const targetLocalDate = birthdayAddDays(sendLocalDate, offset);
-        const candidates = readBirthdayPeople(source.catalog.people).filter(
-          (person) =>
-            person.notificationEligible &&
-            person.month === Number(targetLocalDate.slice(5, 7)) &&
-            person.day === Number(targetLocalDate.slice(8, 10)),
+        const publication = await this.data.reminderPublication(
+          tx,
+          targetLocalDate,
+          now,
         );
-        const kivoIds = candidates.flatMap((person) =>
-          person.birthdaySource?.source === "kivo"
-            ? [person.birthdaySource.entryId]
-            : [],
-        );
-        const [schale, external] = await Promise.all([
-          source.id === "schaledb"
-            ? Promise.resolve(source)
-            : tx.birthdaySyncState.findUnique({ where: { id: "schaledb" } }),
-          kivoIds.length
-            ? tx.birthdayExternalEntry.findMany({
-                where: { source: "kivo", entryId: { in: kivoIds } },
-                select: {
-                  entryId: true,
-                  personKey: true,
-                  status: true,
-                  profileHash: true,
-                  lastCheckedAt: true,
-                },
-              })
-            : Promise.resolve([]),
-        ]);
-        const externalById = new Map(
-          external.map((entry) => [entry.entryId, entry]),
-        );
-        const eligible = candidates.flatMap((person) => {
-          const checkedAt = birthdayReminderCheckedAt(
-            person,
-            schale?.lastCheckedAt ?? null,
-            person.birthdaySource?.source === "kivo"
-              ? externalById.get(person.birthdaySource.entryId)
-              : undefined,
-            now,
-          );
-          return checkedAt ? [{ person, checkedAt }] : [];
-        });
-        const people: BirthdayNotificationPerson[] = eligible
-          .map(({ person }) => person)
-          .map(({ key, name, month, day, originalEntryId }) => ({
-            key,
-            name,
-            month: month!,
-            day: day!,
-            originalEntryId,
-          }))
-          .sort((a, b) => a.key.localeCompare(b.key));
-        if (!people.length) return;
-        const checkedAt = new Date(
-          Math.min(...eligible.map((entry) => entry.checkedAt.getTime())),
-        );
+        if (!publication || !publication.people.length) return;
+        const { people, checkedAt } = publication;
         const routes = [];
         const subscriptions = await tx.birthdayChannelSubscription.findMany({
           where: {
@@ -481,7 +375,7 @@ export class BirthdayReminderService {
         const validBefore = new Date(
           Math.min(
             birthdayDueAt(birthdayAddDays(sendLocalDate, 1), "00:00").getTime(),
-            checkedAt.getTime() + BIRTHDAY_SOURCE_MAX_AGE_MS,
+            publication.validBefore.getTime(),
           ),
         );
         if (validBefore <= now) return;
@@ -492,8 +386,8 @@ export class BirthdayReminderService {
           offsetDays: offset,
           dueAt: dueAt.toISOString(),
           validBefore: validBefore.toISOString(),
-          catalogId: source.catalog.id,
-          catalogVersion: source.catalog.contentHash,
+          catalogId: publication.catalogId,
+          catalogVersion: publication.catalogVersion,
           checkedAt: checkedAt.toISOString(),
           people,
           count: people.length,
@@ -509,7 +403,7 @@ export class BirthdayReminderService {
             targetLocalDate,
             dueAt,
             validBefore,
-            catalogId: source.catalog.id,
+            catalogId: publication.catalogId,
             snapshot: asJson(snapshot),
             globalGeneration: settings.reminderGeneration,
             offsetGeneration: offsetState.generation,
@@ -517,7 +411,7 @@ export class BirthdayReminderService {
         });
         const event = await tx.notificationEvent.create({
           data: {
-            eventKey: `birthday:schaledb:${sendLocalDate}:${offset}`,
+            eventKey: `birthday:${this.data.namespace}:${sendLocalDate}:${offset}`,
             payloadHash: birthdayNotificationHash(id, snapshot),
             type: BIRTHDAY_NOTIFICATION_EVENT,
             resourceKind: BIRTHDAY_RESOURCE_KIND,

@@ -3,12 +3,12 @@ import test from "node:test";
 import {
   combineBirthdayCatalog,
   type ExternalBirthdayEntry,
-} from "../src/birthdays/providers/combined.js";
+} from "../src/birthdays/adapters/ba/providers/combined.js";
 import {
   kivoProfileHash,
   type KivoProfile,
-} from "../src/birthdays/providers/kivo.js";
-import type { BirthdayPerson } from "../src/birthdays/providers/schaledb.js";
+} from "../src/birthdays/adapters/ba/providers/kivo.js";
+import type { BirthdayPerson } from "../src/birthdays/adapters/ba/providers/schaledb.js";
 
 const schale = (
   id = 90001,

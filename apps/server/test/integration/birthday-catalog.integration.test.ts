@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 import {
-  BirthdaysService,
+  BaBirthdayDataAdapter,
   BIRTHDAY_SYNC_KIND,
-} from "../../src/birthdays/birthdays.service.js";
+} from "../../src/birthdays/adapters/ba/ba-birthday-data.adapter.js";
 import { parseEnvironment } from "../../src/config/environment.js";
 import { PrismaService } from "../../src/database/prisma.service.js";
 import type { Prisma } from "../../src/generated/prisma/client.js";
@@ -164,7 +164,7 @@ test(
               },
             });
             const facade = transactionFacade(tx);
-            const service = new BirthdaysService(
+            const service = new BaBirthdayDataAdapter(
               facade,
               new JobsService(facade),
               environment,
@@ -320,7 +320,7 @@ test(
             const unused = [];
             for (let i = 0; i < 25; i++) unused.push(await make(`unused:${i}`));
             const facade = transactionFacade(tx);
-            const service = new BirthdaysService(
+            const service = new BaBirthdayDataAdapter(
               facade,
               new JobsService(facade),
               environment,

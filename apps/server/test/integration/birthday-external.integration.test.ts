@@ -1,14 +1,15 @@
+import { BirthdaysService } from "../../src/birthdays/birthdays.service.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 import {
-  BirthdaysService,
+  BaBirthdayDataAdapter,
   BIRTHDAY_SYNC_KIND,
   readBirthdayPeople,
-} from "../../src/birthdays/birthdays.service.js";
-import { KIVO_SYNC_KIND } from "../../src/birthdays/birthday-supplement.js";
-import { validateKivoProfile } from "../../src/birthdays/providers/kivo.js";
+} from "../../src/birthdays/adapters/ba/ba-birthday-data.adapter.js";
+import { KIVO_SYNC_KIND } from "../../src/birthdays/adapters/ba/birthday-supplement.js";
+import { validateKivoProfile } from "../../src/birthdays/adapters/ba/providers/kivo.js";
 import { parseEnvironment } from "../../src/config/environment.js";
 import { PrismaService } from "../../src/database/prisma.service.js";
 import type {
@@ -211,7 +212,11 @@ test(
                 register(kind, handler);
               },
             );
-            const service = new BirthdaysService(facade, jobs, environment);
+            const service = new BaBirthdayDataAdapter(
+              facade,
+              jobs,
+              environment,
+            );
             assert.deepEqual(
               [...handlers.keys()].sort(),
               [BIRTHDAY_SYNC_KIND, KIVO_SYNC_KIND].sort(),
@@ -287,7 +292,9 @@ test(
             });
             assert.equal(emptyCombined.catalogId, null);
             assert.deepEqual(
-              (await service.calendar()).people.map((person) => person.key),
+              (
+                await new BirthdaysService(facade, service).calendar()
+              ).people.map((person) => person.key),
               [`schaledb:${oldId}`],
             );
 
