@@ -1186,6 +1186,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/candidates/compositions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["composeCandidates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/candidates/compositions/{idempotencyKey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getCandidateCompositionResult"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/candidates": {
         parameters: {
             query?: never;
@@ -3828,8 +3860,56 @@ export interface components {
             /** Format: uuid */
             nextCursor: string | null;
         };
+        CandidateCompositionInputDto: {
+            /** Format: uuid */
+            id: string;
+            expectedRevision: number;
+        };
+        CandidateCompositionOutputInputDto: {
+            title: string | null;
+            mediaIds: string[];
+        };
+        ComposeCandidatesDto: {
+            /** Format: uuid */
+            idempotencyKey: string;
+            /** @enum {string} */
+            mode: "merge" | "split";
+            candidates: components["schemas"]["CandidateCompositionInputDto"][];
+            works: components["schemas"]["CandidateCompositionOutputInputDto"][];
+        };
+        CandidateCompositionWorkDto: {
+            /** Format: uuid */
+            workId: string;
+            workNumber: number;
+            title: string | null;
+            imageCount: number;
+            sourceCandidateIds: string[];
+        };
+        CandidateCompositionCandidateDto: {
+            /** Format: uuid */
+            id: string;
+            revision: number;
+            /** @enum {string} */
+            status: "imported";
+            workIds: string[];
+        };
+        CandidateCompositionResultDto: {
+            /** Format: uuid */
+            idempotencyKey: string;
+            /** @enum {string} */
+            mode: "merge" | "split";
+            works: components["schemas"]["CandidateCompositionWorkDto"][];
+            candidates: components["schemas"]["CandidateCompositionCandidateDto"][];
+            unadoptedMediaIds: string[];
+        };
         /** @enum {string} */
         CandidateStatus: "pending" | "imported" | "discarded";
+        CandidateWorkDto: {
+            /** Format: uuid */
+            id: string;
+            workNumber: number;
+            title: string | null;
+        };
         CandidateTagRuleMatchDto: {
             normalizedValue: string;
             displayValue: string;
@@ -3852,6 +3932,7 @@ export interface components {
             mediaType: string;
         };
         CandidateDto: {
+            works: components["schemas"]["CandidateWorkDto"][];
             canRetryAnalysis?: boolean;
             classificationTags?: components["schemas"]["CandidateClassificationTagDto"][];
             /** @enum {string} */
@@ -4390,7 +4471,16 @@ export interface components {
             /** Format: uuid */
             openReviewCaseId: string | null;
         };
+        SourceAdoptedWorkDto: {
+            /** Format: uuid */
+            id: string;
+            workNumber: number;
+            title: string | null;
+        };
         WorkSourceMediaDto: {
+            /** @enum {string} */
+            disposition: "this_work" | "other_work" | "unadopted" | "unknown";
+            adoptedByWork: components["schemas"]["SourceAdoptedWorkDto"] | null;
             /** Format: uuid */
             id: string;
             orderIndex: number;
@@ -4403,6 +4493,17 @@ export interface components {
             workOrderIndex: number | null;
             available: boolean;
         };
+        WorkCandidateSourceDto: {
+            mappingKnown: boolean;
+            /** Format: uuid */
+            candidateId: string;
+            platform: string;
+            externalPostId: string;
+            sourceUrl: string | null;
+            sourceText: string | null;
+            importedSourceText: string | null;
+            media: components["schemas"]["WorkSourceMediaDto"][];
+        };
         WorkSourceDto: {
             /** Format: uuid */
             candidateId: string;
@@ -4412,6 +4513,7 @@ export interface components {
             sourceText: string | null;
             importedSourceText: string | null;
             media: components["schemas"]["WorkSourceMediaDto"][];
+            sources: components["schemas"]["WorkCandidateSourceDto"][];
         };
         UpdateWorkDto: {
             expectedRevision: number;
@@ -13018,6 +13120,176 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BusinessAuditPageDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    composeCandidates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposeCandidatesDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateCompositionResultDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    getCandidateCompositionResult: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                idempotencyKey: unknown;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateCompositionResultDto"];
                 };
             };
             /** @description 请求字段无效 */

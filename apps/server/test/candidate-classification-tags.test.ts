@@ -158,7 +158,7 @@ test("candidate tags require valid current results even when sibling work is inc
     hashtags: [],
     status: "imported",
     media: [],
-    work: null,
+    workSources: [],
     postedAt: new Date(0),
     fetchedAt: new Date(0),
   };

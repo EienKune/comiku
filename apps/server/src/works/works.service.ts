@@ -668,27 +668,43 @@ export class WorksService {
     const work = await this.db.work.findUnique({
       where: { id: workId },
       select: {
-        sourceText: true,
-        images: {
-          select: { id: true, orderIndex: true, sourceCandidateMediaId: true },
-        },
-        sourceCandidatePost: {
+        sourceCandidatePostId: true,
+        sources: {
+          orderBy: { orderIndex: "asc" },
           select: {
-            id: true,
-            platform: true,
-            externalPostId: true,
-            externalPostUrl: true,
-            text: true,
-            media: {
-              orderBy: { orderIndex: "asc" },
+            sourceText: true,
+            mappingKnown: true,
+            candidatePost: {
               select: {
                 id: true,
-                orderIndex: true,
-                width: true,
-                height: true,
-                mediaType: true,
-                fileObject: {
-                  select: { lifecycleStatus: true, deletedAt: true },
+                platform: true,
+                externalPostId: true,
+                externalPostUrl: true,
+                text: true,
+                media: {
+                  orderBy: { orderIndex: "asc" },
+                  select: {
+                    id: true,
+                    orderIndex: true,
+                    width: true,
+                    height: true,
+                    mediaType: true,
+                    fileObjectId: true,
+                    fileObject: {
+                      select: { lifecycleStatus: true, deletedAt: true },
+                    },
+                    workImage: {
+                      select: {
+                        id: true,
+                        workId: true,
+                        originalFileObjectId: true,
+                        orderIndex: true,
+                        work: {
+                          select: { id: true, workNumber: true, title: true },
+                        },
+                      },
+                    },
+                  },
                 },
               },
             },
@@ -697,39 +713,66 @@ export class WorksService {
       },
     });
     if (!work) throw new NotFoundException("作品不存在");
-    const candidate = work.sourceCandidatePost;
-    const pages = new Map(
-      work.images.flatMap((image) =>
-        image.sourceCandidateMediaId
-          ? [[image.sourceCandidateMediaId, image] as const]
-          : [],
-      ),
-    );
-    const completeMapping =
-      work.images.length > 0 && pages.size === work.images.length;
+    const sources = work.sources.map((source) => {
+      const candidate = source.candidatePost;
+      return {
+        candidateId: candidate.id,
+        platform: candidate.platform,
+        externalPostId: candidate.externalPostId,
+        sourceUrl: candidate.externalPostUrl,
+        sourceText: candidate.text,
+        importedSourceText: source.sourceText,
+        mappingKnown: source.mappingKnown,
+        media: candidate.media.map((media) => {
+          const image =
+            media.workImage?.originalFileObjectId === media.fileObjectId
+              ? media.workImage
+              : null;
+          const disposition = image
+            ? image.workId === workId
+              ? ("this_work" as const)
+              : ("other_work" as const)
+            : source.mappingKnown
+              ? ("unadopted" as const)
+              : ("unknown" as const);
+          return {
+            id: media.id,
+            orderIndex: media.orderIndex,
+            width: media.width,
+            height: media.height,
+            mediaType: media.mediaType,
+            disposition,
+            adoptedByWork: image?.work ?? null,
+            adopted:
+              disposition === "this_work"
+                ? true
+                : disposition === "unadopted"
+                  ? false
+                  : null,
+            workImageId: disposition === "this_work" ? image!.id : null,
+            workOrderIndex:
+              disposition === "this_work" ? image!.orderIndex : null,
+            available:
+              media.fileObject.lifecycleStatus === "active" &&
+              media.fileObject.deletedAt === null,
+          };
+        }),
+      };
+    });
+    const primary =
+      sources.find(
+        (source) => source.candidateId === work.sourceCandidatePostId,
+      ) ?? sources[0];
+    if (!primary) throw new ConflictException("作品缺少来源记录，请联系管理员");
     return {
-      candidateId: candidate.id,
-      platform: candidate.platform,
-      externalPostId: candidate.externalPostId,
-      sourceUrl: candidate.externalPostUrl,
-      sourceText: candidate.text,
-      importedSourceText: work.sourceText,
-      media: candidate.media.map((media) => {
-        const image = pages.get(media.id);
-        return {
-          id: media.id,
-          orderIndex: media.orderIndex,
-          width: media.width,
-          height: media.height,
-          mediaType: media.mediaType,
-          adopted: image ? true : completeMapping ? false : null,
-          workImageId: image?.id ?? null,
-          workOrderIndex: image?.orderIndex ?? null,
-          available:
-            media.fileObject.lifecycleStatus === "active" &&
-            media.fileObject.deletedAt === null,
-        };
-      }),
+      candidateId: primary.candidateId,
+      platform: primary.platform,
+      externalPostId: primary.externalPostId,
+      sourceUrl: primary.sourceUrl,
+      sourceText: primary.sourceText,
+      importedSourceText: primary.importedSourceText,
+      media: primary.media,
+      sources,
     };
   }
 
@@ -739,7 +782,10 @@ export class WorksService {
     variant: "original" | "thumbnail" = "original",
   ) {
     const media = await this.db.candidateMedia.findFirst({
-      where: { id: mediaId, candidatePost: { work: { id: workId } } },
+      where: {
+        id: mediaId,
+        candidatePost: { workSources: { some: { workId } } },
+      },
       select: { fileObjectId: true },
     });
     if (!media) throw new NotFoundException("作品来源图片不存在");
