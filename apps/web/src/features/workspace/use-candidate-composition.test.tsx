@@ -10,7 +10,7 @@ import {
   selectCandidateForImport,
   type ImportCandidate,
 } from "./candidate-import-state";
-const state = () =>
+const state = (tokenSuffix = "") =>
   ["a", "b"].reduce(
     (current, id) =>
       selectCandidateForImport(
@@ -24,7 +24,7 @@ const state = () =>
           status: "pending",
           media: [{ id: `${id}-1` }],
         } as ImportCandidate,
-        id,
+        id + tokenSuffix,
       ),
     emptyCandidateImportState(),
   );
@@ -143,4 +143,70 @@ test("submitting is synchronously guarded and a successful lookup settles the or
   await act(() => result.current.lookup());
   await waitFor(() => expect(settle).toHaveBeenCalledTimes(1));
   expect(result.current.phase).toBe("result");
+});
+
+test("reselecting unchanged sources restores the composition with fresh selection identities", async () => {
+  const settle = vi.fn();
+  vi.spyOn(compositionApi, "submit").mockImplementation(async (intent) => ({
+    ...receipt(intent.idempotencyKey),
+    works: [{ ...receipt(intent.idempotencyKey).works[0], title: "保留名称" }],
+  }));
+  const { result } = renderHook(() =>
+    useCandidateComposition(settle, async () => {}),
+  );
+  act(() => result.current.open("merge", state()));
+  act(() =>
+    result.current.update((draft) => ({
+      ...draft,
+      version: draft.version + 1,
+      groups: [
+        { ...draft.groups[0], title: "保留名称", mediaIds: ["b-1", "a-1"] },
+      ],
+    })),
+  );
+  act(() => result.current.close());
+  act(() => result.current.open("merge", state("-reselected")));
+  expect(result.current.draft?.groups[0]).toMatchObject({
+    title: "保留名称",
+    mediaIds: ["b-1", "a-1"],
+  });
+  expect(
+    result.current.draft?.sources.map((source) => source.selectionToken),
+  ).toEqual(["a-reselected", "b-reselected"]);
+  act(() => result.current.review());
+  await act(() => result.current.submit());
+  expect(
+    settle.mock.calls[0][0].map(
+      (source: { selectionToken: string }) => source.selectionToken,
+    ),
+  ).toEqual(["a-reselected", "b-reselected"]);
+  expect(result.current.phase).toBe("result");
+  expect(result.current.dirty).toBe(false);
+});
+
+test("successful import clears older cached compositions involving the processed sources", async () => {
+  vi.spyOn(compositionApi, "submit").mockImplementation(async (intent) =>
+    receipt(intent.idempotencyKey),
+  );
+  const { result } = renderHook(() =>
+    useCandidateComposition(vi.fn(), async () => {}),
+  );
+  act(() => result.current.open("merge", state()));
+  act(() => result.current.update((draft) => ({ ...draft, version: 1 })));
+  act(() => result.current.close());
+  const updated = state("-updated");
+  for (const entry of updated.selected.values()) entry.candidate.revision = 4;
+  act(() => result.current.open("merge", updated));
+  expect(result.current.draft?.version).toBe(0);
+  act(() => result.current.review());
+  vi.mocked(compositionApi.submit).mockImplementation(async (intent) => ({
+    ...receipt(intent.idempotencyKey),
+    candidates: receipt(intent.idempotencyKey).candidates.map((source) => ({
+      ...source,
+      revision: 5,
+    })),
+  }));
+  await act(() => result.current.submit());
+  expect(result.current.phase).toBe("result");
+  expect(result.current.dirty).toBe(false);
 });
