@@ -2,6 +2,9 @@ vi.mock("./WorkReminderPanels", () => ({
   WorkReminderSubscriptions: () => null,
   WorkReminderTemplate: () => null,
 }));
+vi.mock("../birthdays/BirthdayReminderSettings", () => ({
+  BirthdayReminderSettings: () => null,
+}));
 // @vitest-environment jsdom
 import { afterEach, expect, test, vi } from "vitest";
 import {
@@ -146,6 +149,7 @@ const historyRow = (
   connectionKey: "bot",
   eventType: "imported",
   resourceKind: "work",
+  birthday: null,
   workNumber,
   status: "pending" as const,
   attempts: 0,

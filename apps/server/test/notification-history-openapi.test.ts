@@ -67,6 +67,7 @@ test("Swagger exports the complete notification delivery history query contract"
       enum: [
         ...NOTIFICATION_EVENT_KEYS,
         "notification.test",
+        "birthday.reminder",
         "work.digest",
         "work.ready",
       ],

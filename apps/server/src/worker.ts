@@ -13,6 +13,9 @@ import { SourceFetchService } from "./source-ingestion/source-fetch.service.js";
 import { PrismaService } from "./database/prisma.service.js";
 import { writeWorkerHealth } from "./ops/worker-health.js";
 import { NotificationRuntimeService } from "./notifications/notification-runtime.service.js";
+import { BirthdaysService } from "./birthdays/birthdays.service.js";
+import { BirthdayReminderService } from "./birthdays/birthday-reminder.service.js";
+import { runBirthdayWorker } from "./birthdays/birthday-worker.js";
 import { WorkRemindersService } from "./work-reminders/work-reminders.service.js";
 
 const environment = loadEnvironment();
@@ -114,6 +117,17 @@ async function notificationLoop() {
     await delay(5_000, undefined, { signal: stopping.signal }).catch(() => {});
   }
 }
+async function birthdayLoop() {
+  await runBirthdayWorker(
+    {
+      birthdays: app.get(BirthdaysService),
+      reminders: app.get(BirthdayReminderService),
+      jobs,
+      notificationsEnabled: notifications.enabled,
+    },
+    stopping.signal,
+  );
+}
 try {
   await Promise.all([
     maintenanceLoop(),
@@ -123,6 +137,7 @@ try {
     loop("network", "source:x"),
     loop("network", "source:pixiv"),
     ...(notifications.enabled ? [notificationLoop()] : []),
+    ...(environment.birthdays?.enabled ? [birthdayLoop()] : []),
   ]);
 } finally {
   clearInterval(healthTimer);

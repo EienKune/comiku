@@ -182,6 +182,7 @@ export class NotificationsController {
     enum: [
       ...NOTIFICATION_EVENT_KEYS,
       "notification.test",
+      "birthday.reminder",
       "work.digest",
       "work.ready",
     ],

@@ -206,12 +206,27 @@ export class NotificationPreviewDto {
   @ApiProperty({ type: String }) text!: string;
 }
 
+export class NotificationBirthdaySummaryDto {
+  @ApiProperty({ type: String, format: "date" }) sendLocalDate!: string;
+  @ApiProperty({ type: String, format: "date" }) targetLocalDate!: string;
+  @ApiProperty({ type: Number, enum: [0, 1, 7] }) offsetDays!: number;
+  @ApiProperty({ type: Number, minimum: 1 }) count!: number;
+}
+
 export class NotificationDeliveryDto {
   @ApiProperty({
     type: String,
-    enum: ["work", "notification_test", "work_digest", "work_ready"],
+    enum: [
+      "work",
+      "notification_test",
+      "birthday_digest",
+      "work_digest",
+      "work_ready",
+    ],
   })
   resourceKind!: string;
+  @ApiProperty({ type: NotificationBirthdaySummaryDto, nullable: true })
+  birthday!: NotificationBirthdaySummaryDto | null;
   @ApiProperty({ enum: ["capture_current"], nullable: true })
   metadataOrigin!: "capture_current" | null;
   @ApiProperty({ type: Number, nullable: true }) contentRevision!:
@@ -270,6 +285,7 @@ export class NotificationDeliveryQueryDto {
     enum: [
       ...NOTIFICATION_EVENT_KEYS,
       "notification.test",
+      "birthday.reminder",
       "work.digest",
       "work.ready",
     ],
@@ -278,6 +294,7 @@ export class NotificationDeliveryQueryDto {
   @IsIn([
     ...NOTIFICATION_EVENT_KEYS,
     "notification.test",
+    "birthday.reminder",
     "work.digest",
     "work.ready",
   ])

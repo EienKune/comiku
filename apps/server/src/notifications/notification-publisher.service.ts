@@ -122,6 +122,8 @@ export class NotificationPublisherService {
         eventKey: event.eventKey,
         payloadHash,
         type: event.type,
+        resourceKind:
+          event.type === "notification.test" ? "notification_test" : "work",
         resourceId: event.resourceId,
         aggregateVersion: event.aggregateVersion,
         ordinal: event.ordinal,

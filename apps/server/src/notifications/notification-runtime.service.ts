@@ -29,6 +29,11 @@ import {
   NOTIFICATION_SCOPE,
 } from "./notification-engine.helpers.js";
 import {
+  birthdayDeliveryInvalidReason,
+  lockBirthdaySettings,
+  lockBirthdaySubscription,
+} from "./notification-birthday-policy.js";
+import {
   lockWorkReminderSettings,
   lockWorkReminderSubscription,
   workReminderDeliveryInvalidReason,
@@ -102,22 +107,49 @@ export class NotificationRuntimeService implements OnModuleInit {
           connectionFingerprint?: string;
           includeDetails?: boolean;
           content?: NotificationFrozenContent;
+          birthdayGlobalGeneration?: number;
+          birthdayOffsetGeneration?: number;
+          birthdayScopeGeneration?: number;
           reminderGeneration?: number;
           reminderScopeGeneration?: number;
           messageSegments?: Prisma.InputJsonValue;
         }[];
+        const birthdaySettings =
+          notificationResourceKind(event) === "birthday_digest" &&
+          this.environment.birthdays?.enabled
+            ? await lockBirthdaySettings(tx)
+            : null;
         const reminderSettings = isWorkReminderResource(
           notificationResourceKind(event),
         )
           ? await lockWorkReminderSettings(tx)
           : null;
         for (const ref of refs) {
-          if (isWorkReminderResource(notificationResourceKind(event)))
+          if (
+            notificationResourceKind(event) === "birthday_digest" ||
+            isWorkReminderResource(notificationResourceKind(event))
+          )
             await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${ref.id}::uuid FOR SHARE`;
           const channel = await tx.notificationChannel.findUnique({
             where: { id: ref.id },
           });
           if (!channel) throw new Error("notification_channel_missing");
+          const birthdayInvalid =
+            notificationResourceKind(event) === "birthday_digest"
+              ? ((!this.environment.birthdays?.enabled
+                  ? "birthday_feature_disabled"
+                  : birthdayDeliveryInvalidReason(
+                      event.snapshot,
+                      ref,
+                      birthdaySettings,
+                      await lockBirthdaySubscription(tx, channel.id),
+                    )) ??
+                (typeof ref.content?.text === "string" &&
+                ref.content.text.trim() &&
+                [...ref.content.text].length <= 1000
+                  ? null
+                  : "birthday_frozen_content_invalid"))
+              : null;
           const reminderInvalid = isWorkReminderResource(
             notificationResourceKind(event),
           )
@@ -154,6 +186,7 @@ export class NotificationRuntimeService implements OnModuleInit {
             channel.groupId === ref.groupId &&
             channel.connectionKey === ref.connectionKey &&
             channel.connectionFingerprint === ref.connectionFingerprint &&
+            !birthdayInvalid &&
             !reminderInvalid;
           await tx.notificationDelivery.createMany({
             data: {
@@ -168,7 +201,14 @@ export class NotificationRuntimeService implements OnModuleInit {
               status: current ? "pending" : "cancelled",
               errorCode: current
                 ? null
-                : (reminderInvalid ?? "channel_configuration_changed"),
+                : (birthdayInvalid ??
+                  reminderInvalid ??
+                  "channel_configuration_changed"),
+              ...(notificationResourceKind(event) === "birthday_digest" && {
+                birthdayGlobalGeneration: ref.birthdayGlobalGeneration,
+                birthdayOffsetGeneration: ref.birthdayOffsetGeneration,
+                birthdayScopeGeneration: ref.birthdayScopeGeneration,
+              }),
               ...(isWorkReminderResource(notificationResourceKind(event)) && {
                 reminderGeneration: ref.reminderGeneration,
                 reminderScopeGeneration: ref.reminderScopeGeneration,
@@ -176,7 +216,8 @@ export class NotificationRuntimeService implements OnModuleInit {
               }),
               text:
                 ref.content?.text ??
-                (isWorkReminderResource(notificationResourceKind(event))
+                (notificationResourceKind(event) === "birthday_digest" ||
+                isWorkReminderResource(notificationResourceKind(event))
                   ? ""
                   : renderNotificationMessage(
                       event as unknown as NormalizedNotificationEvent,
@@ -327,12 +368,23 @@ export class NotificationRuntimeService implements OnModuleInit {
         where: { id: job.resourceId },
       });
       if (!initial) return null;
-      // Lock reminder policy before the shared channel send reservation.
+      // Only birthday deliveries query birthday policy tables. Lock them before
+      // the shared channel row so settings changes fence the send reservation.
+      const birthdaySettings =
+        initial.birthdayGlobalGeneration != null &&
+        this.environment.birthdays?.enabled
+          ? await lockBirthdaySettings(tx)
+          : null;
       const reminderSettings =
         initial.reminderGeneration != null
           ? await lockWorkReminderSettings(tx)
           : null;
       await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${initial.channelId}::uuid FOR UPDATE`;
+      const birthdaySubscription =
+        initial.birthdayGlobalGeneration != null &&
+        this.environment.birthdays?.enabled
+          ? await lockBirthdaySubscription(tx, initial.channelId)
+          : null;
       const reminderSubscription =
         initial.reminderGeneration != null
           ? await lockWorkReminderSubscription(tx, initial.channelId)
@@ -383,6 +435,18 @@ export class NotificationRuntimeService implements OnModuleInit {
         channel.connectionKey !== row.connectionKey
       )
         return cancel("channel_configuration_changed");
+      if (notificationResourceKind(row.event) === "birthday_digest") {
+        if (!this.environment.birthdays?.enabled)
+          return cancel("birthday_feature_disabled");
+        const invalid = birthdayDeliveryInvalidReason(
+          row.event.snapshot,
+          row,
+          birthdaySettings,
+          birthdaySubscription,
+          now,
+        );
+        if (invalid) return cancel(invalid);
+      }
       if (isWorkReminderResource(notificationResourceKind(row.event))) {
         const invalid = await workReminderDeliveryInvalidReason(
           row.event.snapshot,

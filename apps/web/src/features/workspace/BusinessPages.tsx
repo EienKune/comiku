@@ -1,3 +1,4 @@
+import { BirthdayStrip } from "../birthdays/BirthdayStrip";
 import {
   CandidateAuthorFilter,
   type CandidateAuthorChoice,
@@ -388,6 +389,7 @@ export function DashboardPage() {
           从当前待办开始，共同完成每一页。
         </SectionHeading>
       </div>
+      <BirthdayStrip enabled={user.permissions.includes("dashboard:read")} />
       <PageState query={query}>
         {(data) => (
           <>

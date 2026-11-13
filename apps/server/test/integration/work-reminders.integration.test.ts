@@ -1,4 +1,3 @@
-import { notificationResourceKind } from "../../src/notifications/notification-resource.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -409,7 +408,7 @@ test(
         });
         const snapshot = event.snapshot as unknown as WorkReadySnapshot;
         assert.equal(event.type, "work.ready");
-        assert.equal(notificationResourceKind(event), "work_ready");
+        assert.equal(event.resourceKind, "work_ready");
         assert.equal(snapshot.items.length, 1);
         assert.equal(snapshot.observedAt, observedAt.toISOString());
         assert.equal(
@@ -547,6 +546,7 @@ test(
             await db.notificationEvent.update({
               where: { id: event.id },
               data: {
+                resourceKind: "work_digest",
                 type: "work.digest",
                 snapshot: legacy as unknown as Prisma.InputJsonValue,
               },

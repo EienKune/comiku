@@ -56,6 +56,11 @@ import {
   buildHistoricalReplayText,
   notificationTemplatePreview,
 } from "./notification-content.js";
+import {
+  birthdayDeliveryInvalidReason,
+  lockBirthdaySettings,
+  lockBirthdaySubscription,
+} from "./notification-birthday-policy.js";
 
 export interface NotificationChannelInput {
   name: string;
@@ -675,10 +680,20 @@ export class NotificationsService {
     return this.db.$transaction(async (tx) => {
       const initial = await tx.notificationDelivery.findUnique({
         where: { id },
-        select: { channelId: true },
+        select: { channelId: true, birthdayGlobalGeneration: true },
       });
       if (!initial) throw new NotFoundException("通知投递不存在");
+      const birthdaySettings =
+        initial.birthdayGlobalGeneration != null &&
+        this.environment.birthdays?.enabled
+          ? await lockBirthdaySettings(tx)
+          : null;
       await tx.$queryRaw`SELECT id FROM notification_channels WHERE id = ${initial.channelId}::uuid FOR UPDATE`;
+      const birthdaySubscription =
+        initial.birthdayGlobalGeneration != null &&
+        this.environment.birthdays?.enabled
+          ? await lockBirthdaySubscription(tx, initial.channelId)
+          : null;
       await tx.$queryRaw`SELECT id FROM notification_deliveries WHERE id = ${id}::uuid FOR UPDATE`;
       await assertNotificationAdministrator(tx, actorId);
       const requestKey = `resolve:${actorId}:${input.idempotencyKey}`;
@@ -724,12 +739,24 @@ export class NotificationsService {
         throw new ConflictException("请明确确认补发可能重复");
       if (
         ["work_digest", "work_ready"].includes(
-          notificationResourceKind(source.event),
+          notificationResourceKind(source.event) ?? "",
         )
       )
         throw new ConflictException(
           "工作提醒按当前任务自动处理，无需补发历史消息",
         );
+      if (notificationResourceKind(source.event) === "birthday_digest") {
+        if (!this.environment.birthdays?.enabled)
+          throw new ConflictException("生日功能已停用，不能补发");
+        const invalid = birthdayDeliveryInvalidReason(
+          source.event.snapshot,
+          source,
+          birthdaySettings,
+          birthdaySubscription,
+        );
+        if (invalid)
+          throw new ConflictException("生日提醒已过期或订阅已变化，不能补发");
+      }
       const channel = source.channel;
       if (
         !channel.enabled ||
@@ -764,6 +791,9 @@ export class NotificationsService {
             eventId: source.eventId,
             channelId: source.channelId,
             audienceGeneration: source.audienceGeneration,
+            birthdayGlobalGeneration: source.birthdayGlobalGeneration,
+            birthdayOffsetGeneration: source.birthdayOffsetGeneration,
+            birthdayScopeGeneration: source.birthdayScopeGeneration,
             replayGeneration: (max._max.replayGeneration ?? 0) + 1,
             sourceDeliveryId: id,
             requestKey,

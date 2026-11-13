@@ -18,6 +18,7 @@ export interface Environment {
     enabled: boolean;
     connectionsFile?: string;
   };
+  birthdays?: { enabled: boolean };
   galleryDl?: {
     python: string;
     xConfigPath?: string;
@@ -71,6 +72,11 @@ export function loadRootEnvironment(): void {
 }
 
 export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
+  if (
+    input.BIRTHDAYS_ENABLED !== undefined &&
+    !["true", "false"].includes(input.BIRTHDAYS_ENABLED)
+  )
+    throw new Error("BIRTHDAYS_ENABLED must be true or false.");
   const nodeEnv = input.NODE_ENV ?? "development";
   if (!["development", "test", "production"].includes(nodeEnv)) {
     throw new Error("NODE_ENV must be development, test or production.");
@@ -257,6 +263,9 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
       "SOURCE_CREDENTIALS_STATE_DIRECTORY must be a literal absolute path.",
     );
   return {
+    ...(input.BIRTHDAYS_ENABLED !== undefined
+      ? { birthdays: { enabled: input.BIRTHDAYS_ENABLED === "true" } }
+      : {}),
     ...(sourceCredentialsStateDirectory
       ? {
           sourceCredentialsStateDirectory: resolve(

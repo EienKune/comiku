@@ -25,6 +25,69 @@ test("deferral rejects arbitrary runtime reason strings", () => {
   );
 });
 
+test("handler retry delay rejects invalid values without registering a handler", () => {
+  const jobs = new JobsService(executionDb({}));
+  for (const retryDelayMs of [0, -1, NaN, Infinity, 1.5])
+    assert.throws(
+      () => jobs.register("fixture", async () => {}, { retryDelayMs }),
+      /Invalid/,
+    );
+  jobs.register("fixture", async () => {});
+});
+
+test("handler retry delays persist eligibility and retain the three-attempt budget; defaults stay unchanged", async () => {
+  for (const custom of [true, false]) {
+    for (const attempt of [1, 2, 3]) {
+      let saved:
+        | {
+            availableAt: Date;
+            status: string;
+            attempts?: unknown;
+            completedAt?: Date;
+          }
+        | undefined;
+      const jobs = new JobsService(
+        executionDb({
+          backgroundJob: {
+            async updateMany({ data }: { data: NonNullable<typeof saved> }) {
+              saved = data;
+              return { count: 1 };
+            },
+          },
+        }),
+      );
+      jobs.register(
+        "fixture",
+        async () => {
+          throw new Error("synthetic failure");
+        },
+        custom ? { retryDelayMs: 300_000 } : undefined,
+      );
+      const before = Date.now();
+      await jobs.execute({
+        id: "job",
+        kind: "fixture",
+        resourceId: "resource",
+        lane: "network",
+        leaseId: "lease",
+        attempts: attempt,
+      } as BackgroundJob);
+      const after = Date.now();
+      assert.ok(saved);
+      const expected = custom ? 300_000 : 5000 * 2 ** (attempt - 1);
+      assert.ok(saved.availableAt.getTime() >= before + expected);
+      assert.ok(saved.availableAt.getTime() <= after + expected);
+      assert.equal(saved.status, attempt === 3 ? "failed" : "queued");
+      assert.equal(Boolean(saved.completedAt), attempt === 3);
+      assert.equal(
+        saved.attempts,
+        undefined,
+        "a failed attempt must not be refunded",
+      );
+    }
+  }
+});
+
 test("expired retry time cannot turn refunded attempts into a hot loop", async () => {
   let availableAt: Date | undefined;
   const db = {

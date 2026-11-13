@@ -2,6 +2,8 @@ import {
   WorkReminderSubscriptions,
   WorkReminderTemplate,
 } from "./WorkReminderPanels";
+import { BirthdayTemplate } from "../birthdays/BirthdayNotificationPanels";
+import { BirthdayReminderSettings } from "../birthdays/BirthdayReminderSettings";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
@@ -95,7 +97,12 @@ export function NotificationManagement({
     groupId: "",
     workNumber: "",
     eventType: "" as
-      EventType | "notification.test" | "work.digest" | "work.ready" | "",
+      | EventType
+      | "notification.test"
+      | "birthday.reminder"
+      | "work.digest"
+      | "work.ready"
+      | "",
     createdFrom: "",
     createdThrough: "",
   };
@@ -306,6 +313,9 @@ export function NotificationManagement({
       await unwrap(result);
       setDraft(null);
       setSuccess("配置已保存");
+      void queryClient.invalidateQueries({
+        queryKey: ["birthdays", "subscriptions"],
+      });
       void queryClient.invalidateQueries({
         queryKey: ["notification-configuration"],
       });
@@ -1026,6 +1036,7 @@ export function NotificationManagement({
             </fieldset>
           </form>
         )}
+        <BirthdayReminderSettings enabled={enabled && tab === "groups"} />
         <WorkReminderSubscriptions enabled={enabled && tab === "groups"} />
       </div>
       <div
@@ -1044,6 +1055,7 @@ export function NotificationManagement({
             })
           }
         />
+        <BirthdayTemplate enabled={enabled && tab === "templates"} />
         <WorkReminderTemplate
           enabled={enabled && tab === "templates"}
           onEdit={() => {
@@ -1144,6 +1156,7 @@ export function NotificationManagement({
                 </option>
               ))}
               <option value="notification.test">通知测试</option>
+              <option value="birthday.reminder">角色生日</option>
               <option value="work.digest">工作摘要</option>
               <option value="work.ready">任务交接提醒</option>
             </SelectField>
@@ -1214,11 +1227,13 @@ export function NotificationManagement({
                   ? "任务交接提醒"
                   : delivery.resourceKind === "work_digest"
                     ? "工作摘要"
-                    : delivery.eventType === "notification.test"
-                      ? "通知测试"
-                      : (eventTypes.find(
-                          (event) => event.type === delivery.eventType,
-                        )?.label ?? delivery.eventType)
+                    : delivery.resourceKind === "birthday_digest"
+                      ? "角色生日"
+                      : delivery.eventType === "notification.test"
+                        ? "通知测试"
+                        : (eventTypes.find(
+                            (event) => event.type === delivery.eventType,
+                          )?.label ?? delivery.eventType)
               }
               onUpdated={() =>
                 void queryClient.invalidateQueries({
@@ -1329,10 +1344,14 @@ function DeliveryRow({
         {delivery.resourceKind !== "work_digest" &&
           delivery.resourceKind !== "work_ready" && (
             <span>
-              {delivery.resourceKind === "notification_test" ||
-              delivery.workNumber === null
-                ? "合成测试"
-                : `#${delivery.workNumber}`}
+              {delivery.resourceKind === "birthday_digest"
+                ? delivery.birthday
+                  ? `${delivery.birthday.targetLocalDate} · ${delivery.birthday.count} 位角色 · ${delivery.birthday.offsetDays === 0 ? "生日当天" : `提前 ${delivery.birthday.offsetDays} 天`}`
+                  : "生日摘要"
+                : delivery.resourceKind === "notification_test" ||
+                    delivery.workNumber === null
+                  ? "合成测试"
+                  : `#${delivery.workNumber}`}
             </span>
           )}
         <time dateTime={delivery.createdAt}>

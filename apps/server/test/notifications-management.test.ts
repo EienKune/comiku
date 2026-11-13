@@ -116,6 +116,52 @@ test("channel writes reject unavailable connection before any database write", a
   );
 });
 
+test("enabled group targets may keep work subscriptions empty for independent birthday use", async () => {
+  const tx = {
+    $executeRaw: async () => 0,
+    $queryRaw: async () => [],
+    user: {
+      findUnique: async () => ({
+        isActive: true,
+        mustChangePassword: false,
+        roles: [{ role: "admin" }],
+      }),
+    },
+    notificationChannel: {
+      count: async () => 0,
+      findUnique: async () => null,
+      create: async ({ data }: { data: Record<string, unknown> }) => ({
+        id: "birthday-only",
+        revision: 0,
+        audienceGeneration: 1,
+        ...data,
+      }),
+    },
+  };
+  const service = new NotificationsService(
+    {
+      $transaction: (action: (value: typeof tx) => Promise<unknown>) =>
+        action(tx),
+    } as never,
+    {} as never,
+    { get: () => ({ key: "fixture", fingerprint: "a".repeat(64) }) } as never,
+    { appOrigin: "https://example.test" } as Environment,
+  );
+  const channel = await service.createChannel("actor", {
+    name: "Birthday only",
+    connectionKey: "fixture",
+    groupId: "123",
+    enabled: true,
+    eventTypes: [],
+    subscriptionRules: [],
+    receiverMode: "templates",
+    includeDetails: false,
+  });
+  assert.equal(channel.enabled, true);
+  assert.deepEqual(channel.eventTypes, []);
+  assert.deepEqual(channel.subscriptionRules, []);
+});
+
 test("an administrator can disable an existing channel while its manifest connection is unavailable", async () => {
   const channel = {
     id: "channel",
@@ -304,50 +350,4 @@ test("replaying a full Unicode message preserves one historical header and the c
   assert.ok([...result.preview].length <= 1000);
   assert.ok(result.preview.endsWith(`${appOrigin}/works/${event.resourceId}`));
   assert.equal(result.preview.match(/历史补发/g)?.length, 1);
-});
-
-test("enabled group targets may keep work subscriptions empty for independent reminder use", async () => {
-  const tx = {
-    $executeRaw: async () => 0,
-    $queryRaw: async () => [],
-    user: {
-      findUnique: async () => ({
-        isActive: true,
-        mustChangePassword: false,
-        roles: [{ role: "admin" }],
-      }),
-    },
-    notificationChannel: {
-      count: async () => 0,
-      findUnique: async () => null,
-      create: async ({ data }: { data: Record<string, unknown> }) => ({
-        id: "reminders-only",
-        revision: 0,
-        audienceGeneration: 1,
-        ...data,
-      }),
-    },
-  };
-  const service = new NotificationsService(
-    {
-      $transaction: (action: (value: typeof tx) => Promise<unknown>) =>
-        action(tx),
-    } as never,
-    {} as never,
-    { get: () => ({ key: "fixture", fingerprint: "a".repeat(64) }) } as never,
-    { appOrigin: "https://example.test" } as Environment,
-  );
-  const channel = await service.createChannel("actor", {
-    name: "Reminders only",
-    connectionKey: "fixture",
-    groupId: "123",
-    enabled: true,
-    eventTypes: [],
-    subscriptionRules: [],
-    receiverMode: "templates",
-    includeDetails: false,
-  });
-  assert.equal(channel.enabled, true);
-  assert.deepEqual(channel.eventTypes, []);
-  assert.deepEqual(channel.subscriptionRules, []);
 });

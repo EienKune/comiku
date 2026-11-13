@@ -19,6 +19,7 @@ import { TranslationsModule } from "./translations/translations.module.js";
 import { TypesettingModule } from "./typesetting/typesetting.module.js";
 import { PublishingModule } from "./publishing/publishing.module.js";
 import { NotificationsModule } from "./notifications/notifications.module.js";
+import { BirthdaysModule } from "./birthdays/birthdays.module.js";
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { NotificationsModule } from "./notifications/notifications.module.js";
     ReviewsModule,
     DashboardModule,
     NotificationsModule,
+    BirthdaysModule,
   ],
   controllers: [HealthController],
 })

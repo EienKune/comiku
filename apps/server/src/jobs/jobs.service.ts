@@ -15,6 +15,7 @@ export type JobHandler = (
   signal: AbortSignal,
 ) => Promise<void>;
 export const JOB_LEASE_MS = 60_000;
+const EXPIRED_LEASE_ERROR = "执行租约过期，已排队恢复";
 export type JobDeferredReason =
   | "capacity"
   | "credential_unavailable"
@@ -76,6 +77,7 @@ export class JobsService {
   readonly ownerId = randomUUID();
   private readonly leaseContext = new AsyncLocalStorage<BackgroundJob>();
   private handlers = new Map<string, JobHandler>();
+  private retryDelays = new Map<string, number>();
   private gates = new Map<string, JobClaimGate>();
   private lifecycles = new Map<string, JobExecutionLifecycle>();
   private policies = new Map<string, QueuePolicy>();
@@ -123,9 +125,21 @@ export class JobsService {
   }
   constructor(@Inject(PrismaService) private readonly db: PrismaService) {}
 
-  register(kind: string, handler: JobHandler) {
+  register(
+    kind: string,
+    handler: JobHandler,
+    options?: { retryDelayMs: number },
+  ) {
     if (this.handlers.has(kind))
       throw new Error("Duplicate background handler");
+    if (options) {
+      if (
+        !Number.isSafeInteger(options.retryDelayMs) ||
+        options.retryDelayMs < 1
+      )
+        throw new Error("Invalid background retry delay");
+      this.retryDelays.set(kind, options.retryDelayMs);
+    }
     this.handlers.set(kind, handler);
   }
 
@@ -193,7 +207,7 @@ export class JobsService {
             lastError: "资料同步执行已中断，请重新提交请求",
           },
         });
-      await tx.backgroundJob.updateMany({
+      const recovered = await tx.backgroundJob.updateMany({
         where: {
           lane,
           executionScope,
@@ -205,9 +219,28 @@ export class JobsService {
           leaseId: null,
           leaseUntil: null,
           availableAt: now,
-          lastError: "执行租约过期，已排队恢复",
+          lastError: EXPIRED_LEASE_ERROR,
         },
       });
+      if (recovered.count && this.retryDelays.size) {
+        const byDelay = new Map<number, string[]>();
+        for (const [kind, ms] of this.retryDelays)
+          byDelay.set(ms, [...(byDelay.get(ms) ?? []), kind]);
+        // Scope serialization keeps this recovery stamp stable. Only actual
+        // recovered handlers pay for an additional write; ordinary claims do not.
+        for (const [ms, kinds] of byDelay)
+          await tx.backgroundJob.updateMany({
+            where: {
+              lane,
+              executionScope,
+              status: "queued",
+              availableAt: now,
+              lastError: EXPIRED_LEASE_ERROR,
+              kind: { in: kinds },
+            },
+            data: { availableAt: new Date(now.getTime() + ms) },
+          });
+      }
       if (
         await tx.backgroundJob.count({
           where: {
@@ -461,7 +494,10 @@ export class JobsService {
           );
         return;
       }
-      const retryAt = new Date(Date.now() + retryDelay(job.attempts));
+      const retryAt = new Date(
+        Date.now() +
+          (this.retryDelays.get(job.kind) ?? retryDelay(job.attempts)),
+      );
       const fail = async (tx: Prisma.TransactionClient) => {
         const changed = await tx.backgroundJob.updateMany({
           where: { id: job.id, leaseId: job.leaseId, status: "running" },

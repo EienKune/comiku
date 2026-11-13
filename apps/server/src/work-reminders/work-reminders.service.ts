@@ -33,7 +33,9 @@ import {
   normalizeWorkReminderNote,
   normalizeWorkReminderTimes,
   WORK_DIGEST_EVENT,
+  WORK_DIGEST_RESOURCE,
   WORK_READY_EVENT,
+  WORK_READY_RESOURCE,
 } from "./work-reminder-scheduling.js";
 import {
   renderWorkReminder,
@@ -492,7 +494,7 @@ export class WorkRemindersService {
             }[]
           ).find((route) => route.id === channel.id);
           if (
-            notificationResourceKind(previous) !== "work_digest" ||
+            notificationResourceKind(previous) !== WORK_DIGEST_RESOURCE ||
             frozen.kind !== "work_digest" ||
             frozen.formatVersion !== 3 ||
             ref?.generation !== channel.audienceGeneration ||
@@ -651,6 +653,10 @@ export class WorkRemindersService {
         payloadHash: workReminderHash(id, snapshot),
         type:
           snapshot.kind === "work_ready" ? WORK_READY_EVENT : WORK_DIGEST_EVENT,
+        resourceKind:
+          snapshot.kind === "work_ready"
+            ? WORK_READY_RESOURCE
+            : WORK_DIGEST_RESOURCE,
         resourceId: id,
         aggregateVersion: 1,
         ordinal: 0,

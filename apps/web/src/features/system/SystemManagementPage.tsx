@@ -1,3 +1,4 @@
+import { BirthdaySettings } from "../birthdays/BirthdaySettings";
 import { useSearchParams } from "react-router";
 import { useAccount } from "../account/account-context";
 import { SectionHeading } from "../account/forms";
@@ -8,6 +9,7 @@ import "./system.css";
 
 const tabs = [
   { value: "collection", label: "图源采集", permission: "system:manage" },
+  { value: "birthdays", label: "角色生日", permission: "system:manage" },
   { value: "notifications", label: "推送通知", permission: "system:manage" },
   { value: "accounts", label: "账号管理", permission: "accounts:manage" },
 ] as const;
@@ -85,6 +87,17 @@ export function SystemManagementPage() {
           tabIndex={0}
         >
           <SourceManagement enabled={active === "collection"} />
+        </div>
+      )}
+      {user.permissions.includes("system:manage") && (
+        <div
+          id="system-panel-birthdays"
+          role="tabpanel"
+          aria-labelledby="system-tab-birthdays"
+          hidden={active !== "birthdays"}
+          tabIndex={0}
+        >
+          <BirthdaySettings enabled={active === "birthdays"} />
         </div>
       )}
       {user.permissions.includes("system:manage") && (
