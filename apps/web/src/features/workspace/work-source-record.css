@@ -43,6 +43,22 @@
   padding: var(--space-4);
   border-top: 1px solid var(--color-border);
 }
+.work-source-record__post + .work-source-record__post {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-border);
+}
+.work-source-record__work {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  color: var(--color-brand-700);
+  overflow-wrap: anywhere;
+}
+.work-source-record__work svg {
+  flex-shrink: 0;
+}
 .work-source-record__origin {
   display: flex;
   justify-content: space-between;

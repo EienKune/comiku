@@ -9797,6 +9797,219 @@
         ]
       }
     },
+    "/api/candidates/compositions": {
+      "post": {
+        "operationId": "composeCandidates",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComposeCandidatesDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateCompositionResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "candidates"
+        ]
+      }
+    },
+    "/api/candidates/compositions/{idempotencyKey}": {
+      "get": {
+        "operationId": "getCandidateCompositionResult",
+        "parameters": [
+          {
+            "name": "idempotencyKey",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateCompositionResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "candidates"
+        ]
+      }
+    },
     "/api/candidates": {
       "get": {
         "operationId": "listCandidates",
@@ -27397,12 +27610,217 @@
           "nextCursor"
         ]
       },
+      "CandidateCompositionInputDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "expectedRevision"
+        ]
+      },
+      "CandidateCompositionOutputInputDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 200
+          },
+          "mediaIds": {
+            "minItems": 1,
+            "maxItems": 1000,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "mediaIds"
+        ]
+      },
+      "ComposeCandidatesDto": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "merge",
+              "split"
+            ]
+          },
+          "candidates": {
+            "minItems": 1,
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandidateCompositionInputDto"
+            }
+          },
+          "works": {
+            "minItems": 1,
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandidateCompositionOutputInputDto"
+            }
+          }
+        },
+        "required": [
+          "idempotencyKey",
+          "mode",
+          "candidates",
+          "works"
+        ]
+      },
+      "CandidateCompositionWorkDto": {
+        "type": "object",
+        "properties": {
+          "workId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workNumber": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "imageCount": {
+            "type": "number"
+          },
+          "sourceCandidateIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "workId",
+          "workNumber",
+          "title",
+          "imageCount",
+          "sourceCandidateIds"
+        ]
+      },
+      "CandidateCompositionCandidateDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "imported"
+            ]
+          },
+          "workIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "status",
+          "workIds"
+        ]
+      },
+      "CandidateCompositionResultDto": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "merge",
+              "split"
+            ]
+          },
+          "works": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandidateCompositionWorkDto"
+            }
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandidateCompositionCandidateDto"
+            }
+          },
+          "unadoptedMediaIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "idempotencyKey",
+          "mode",
+          "works",
+          "candidates",
+          "unadoptedMediaIds"
+        ]
+      },
       "CandidateStatus": {
         "type": "string",
         "enum": [
           "pending",
           "imported",
           "discarded"
+        ]
+      },
+      "CandidateWorkDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workNumber": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "workNumber",
+          "title"
         ]
       },
       "CandidateTagRuleMatchDto": {
@@ -27485,6 +27903,12 @@
       "CandidateDto": {
         "type": "object",
         "properties": {
+          "works": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandidateWorkDto"
+            }
+          },
           "canRetryAnalysis": {
             "type": "boolean"
           },
@@ -27621,6 +28045,7 @@
           }
         },
         "required": [
+          "works",
           "triageGroup",
           "triageReasons",
           "tagRuleMatches",
@@ -29691,9 +30116,48 @@
           "openReviewCaseId"
         ]
       },
+      "SourceAdoptedWorkDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workNumber": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "workNumber",
+          "title"
+        ]
+      },
       "WorkSourceMediaDto": {
         "type": "object",
         "properties": {
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "this_work",
+              "other_work",
+              "unadopted",
+              "unknown"
+            ]
+          },
+          "adoptedByWork": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceAdoptedWorkDto"
+              }
+            ]
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -29730,6 +30194,8 @@
           }
         },
         "required": [
+          "disposition",
+          "adoptedByWork",
           "id",
           "orderIndex",
           "width",
@@ -29739,6 +30205,52 @@
           "workImageId",
           "workOrderIndex",
           "available"
+        ]
+      },
+      "WorkCandidateSourceDto": {
+        "type": "object",
+        "properties": {
+          "mappingKnown": {
+            "type": "boolean"
+          },
+          "candidateId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "externalPostId": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "sourceText": {
+            "type": "string",
+            "nullable": true
+          },
+          "importedSourceText": {
+            "type": "string",
+            "nullable": true
+          },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkSourceMediaDto"
+            }
+          }
+        },
+        "required": [
+          "mappingKnown",
+          "candidateId",
+          "platform",
+          "externalPostId",
+          "sourceUrl",
+          "sourceText",
+          "importedSourceText",
+          "media"
         ]
       },
       "WorkSourceDto": {
@@ -29771,6 +30283,12 @@
             "items": {
               "$ref": "#/components/schemas/WorkSourceMediaDto"
             }
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkCandidateSourceDto"
+            }
           }
         },
         "required": [
@@ -29780,7 +30298,8 @@
           "sourceUrl",
           "sourceText",
           "importedSourceText",
-          "media"
+          "media",
+          "sources"
         ]
       },
       "UpdateWorkDto": {

@@ -84,17 +84,23 @@ function importFixture(imported = false) {
     externalPostUrl: null,
     text: "source",
     media,
-    work: imported
-      ? {
-          id: "work",
-          candidateImportRevision: 7,
-          candidateImportSeriesIntent: null,
-          images: [{ sourceCandidateMediaId: mediaB, orderIndex: 0 }],
-        }
-      : null,
+    workSources: imported
+      ? [
+          {
+            importedRevision: 7,
+            work: {
+              id: "work",
+              candidateCompositionId: null,
+              candidateImportSeriesIntent: null,
+              images: [{ sourceCandidateMediaId: mediaB, orderIndex: 0 }],
+            },
+          },
+        ]
+      : [],
   };
   const tx = {
     $queryRaw: async () => [],
+    fileObject: { count: async () => 2 },
     candidatePost: {
       findUnique: async () => candidate,
       updateMany: async () => ({ count: 1 }),
@@ -177,7 +183,7 @@ test("committed replay requires the same original revision and exact ordered sel
 
 test("explicit selection never silently replays unknown legacy import intent", async () => {
   const f = importFixture(true);
-  Object.assign(f.candidate.work!, { candidateImportRevision: null });
+  Object.assign(f.candidate.workSources[0], { importedRevision: null });
   const result = await f.service.batch("actor", {
     action: CandidateAction.import,
     items: [{ id: candidateId, expectedRevision: 7, mediaIds: [mediaB] }],

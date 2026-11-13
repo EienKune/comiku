@@ -18,6 +18,10 @@ import {
   type TopbarActionRegistration,
 } from "../account/topbar-actions";
 import { CandidatesPage } from "./BusinessPages";
+import {
+  compositionApi,
+  CompositionRequestError,
+} from "./candidate-composition-api";
 
 const actor = {
   id: "actor",
@@ -66,6 +70,7 @@ const post = (
   fetchedAt: "2026-01-01T00:00:00Z",
   reviewedAt: null,
   workId: null,
+  works: [],
 });
 function Shell() {
   const [actions, setActions] = useState<TopbarActionRegistration | null>(null);
@@ -208,7 +213,10 @@ test("Apply remains local across snapshot refresh; final confirmation atomically
   mount();
   const editor = await editA();
   fireEvent.click(within(editor).getByRole("checkbox", { name: "选入原图 2" }));
-  fireEvent.click(within(editor).getByRole("button", { name: "上移原图 3" }));
+  fireEvent.keyDown(
+    within(editor).getByRole("button", { name: "拖动 原图 3 调整顺序" }),
+    { key: "ArrowUp" },
+  );
   fireEvent.click(within(editor).getByRole("button", { name: "应用调整" }));
   expect(state.writes).toEqual([]);
   fireEvent.click(screen.getByRole("button", { name: "刷新列表" }));
@@ -403,4 +411,204 @@ test("single-post series creation stays optional and freezes its exact intent ac
   fireEvent.click(within(dialog).getByRole("button", { name: "重试本次入库" }));
   await screen.findByText("1 项入库完成");
   expect(state.writes[1]).toEqual(state.writes[0]);
+});
+
+test("topbar split creates every named work through a single confirmation and displays all result links", async () => {
+  const { state } = fixture();
+  const submit = vi
+    .spyOn(compositionApi, "submit")
+    .mockImplementation(async (intent) => ({
+      idempotencyKey: intent.idempotencyKey,
+      mode: "split",
+      works: intent.works.map((work, index) => ({
+        workId: `created-${index}`,
+        workNumber: index + 10,
+        title: work.title,
+        imageCount: work.mediaIds.length,
+        sourceCandidateIds: ["a"],
+      })),
+      candidates: [
+        {
+          id: "a",
+          revision: 3,
+          status: "imported",
+          workIds: ["created-0", "created-1"],
+        },
+      ],
+      unadoptedMediaIds: [],
+    }));
+  mount();
+  await screen.findByText("正文 a");
+  selectA();
+  fireEvent.click(screen.getByRole("button", { name: "拆分入库" }));
+  let dialog = screen.getByRole("dialog", { name: "拆分入库" });
+  fireEvent.click(
+    within(dialog).getByRole("checkbox", { name: "选择 来源帖 1 · 原图 2" }),
+  );
+  fireEvent.click(within(dialog).getByRole("button", { name: "新建作品" }));
+  const titles = within(dialog).getAllByRole("textbox");
+  fireEvent.change(titles[0], { target: { value: "第一作" } });
+  fireEvent.change(titles[1], { target: { value: "第二作" } });
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "创建 2 部作品" }),
+  );
+  expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  dialog = screen.getByRole("dialog", { name: "确认创建 2 部作品" });
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "确认创建 2 部作品" }),
+  );
+  const result = await screen.findByRole("dialog", { name: "已创建作品" });
+  expect(
+    within(result)
+      .getByRole("link", { name: /第一作/ })
+      .getAttribute("href"),
+  ).toBe("/works/created-0");
+  expect(
+    within(result)
+      .getByRole("link", { name: /第二作/ })
+      .getAttribute("href"),
+  ).toBe("/works/created-1");
+  expect(submit.mock.calls[0][0].works.map((work) => work.mediaIds)).toEqual([
+    ["a-one", "a-three"],
+    ["a-two"],
+  ]);
+  expect(state.writes).toEqual([]);
+});
+
+test("composition eligibility gives focusable disabled reasons and cancellation keeps the local named draft", async () => {
+  fixture([post("a"), { ...post("b"), authorId: "another" }]);
+  mount();
+  await screen.findByText("正文 b");
+  selectA();
+  expect(
+    (screen.getByRole("button", { name: "合并入库" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  const wrapper = screen.getByRole("button", {
+    name: "合并入库",
+  }).parentElement!;
+  expect(wrapper.tabIndex).toBe(0);
+  expect(wrapper.getAttribute("aria-describedby")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "拆分入库" }));
+  let editor = screen.getByRole("dialog", { name: "拆分入库" });
+  fireEvent.change(within(editor).getByRole("textbox"), {
+    target: { value: "保留的名称" },
+  });
+  fireEvent.click(within(editor).getByRole("button", { name: "取消" }));
+  fireEvent.click(screen.getByRole("button", { name: "拆分入库" }));
+  editor = screen.getByRole("dialog", { name: "拆分入库" });
+  expect((within(editor).getByRole("textbox") as HTMLInputElement).value).toBe(
+    "保留的名称",
+  );
+  fireEvent.click(within(editor).getByRole("button", { name: "取消" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "选择 作者 b 的帖子" }));
+  expect(screen.getByText("所选帖子作者不同，无法合并")).toBeTruthy();
+});
+
+test("lost composition response locks conflicting actions and 404 lookup retries the identical intent while excluded selections remain pending", async () => {
+  fixture([post("a"), post("b"), post("c")]);
+  const submit = vi
+    .spyOn(compositionApi, "submit")
+    .mockRejectedValueOnce(new TypeError("response lost"));
+  vi.spyOn(compositionApi, "lookup").mockRejectedValue(
+    new CompositionRequestError(404, "未找到回执"),
+  );
+  mount();
+  await screen.findByText("正文 c");
+  for (const id of ["a", "b", "c"])
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: `选择 作者 ${id} 的帖子` }),
+    );
+  fireEvent.click(screen.getByRole("button", { name: "合并入库" }));
+  let dialog = screen.getByRole("dialog", { name: "合并入库" });
+  for (const n of [1, 2, 3])
+    fireEvent.click(
+      within(dialog).getByRole("checkbox", {
+        name: `采用 来源帖 3 · 原图 ${n}`,
+      }),
+    );
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "移出本次合并并保留待处理" }),
+  );
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "合并为 1 部作品" }),
+  );
+  dialog = screen.getByRole("dialog", { name: "确认合并入库" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "确认合并入库" }));
+  await screen.findByRole("button", { name: "查询本次结果" });
+  const frozen = structuredClone(submit.mock.calls[0][0]);
+  fireEvent.click(within(dialog).getByRole("button", { name: "返回候选池" }));
+  expect(
+    (screen.getByRole("button", { name: /入库所选/ }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  expect(
+    (
+      screen.getAllByRole("button", {
+        name: "整理图片",
+      })[0] as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  expect(
+    (screen.getByRole("button", { name: "取消选择" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "查看本次拆合入库" }));
+  dialog = screen.getByRole("dialog", { name: "确认合并入库" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "查询本次结果" }));
+  await screen.findByText("未找到回执");
+  expect(screen.queryByRole("button", { name: "返回调整" })).toBeNull();
+  submit.mockImplementation(async (intent) => ({
+    idempotencyKey: intent.idempotencyKey,
+    mode: "merge",
+    works: [
+      {
+        workId: "merged",
+        workNumber: 12,
+        title: null,
+        imageCount: 6,
+        sourceCandidateIds: ["a", "b"],
+      },
+    ],
+    candidates: ["a", "b"].map((id) => ({
+      id,
+      revision: 3,
+      status: "imported",
+      workIds: ["merged"],
+    })),
+    unadoptedMediaIds: [],
+  }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "重试本次入库" }));
+  await screen.findByRole("dialog", { name: "已创建作品" });
+  expect(submit.mock.calls[1][0]).toEqual(frozen);
+  expect(frozen.candidates.map((source) => source.id)).toEqual(["a", "b"]);
+  fireEvent.click(screen.getByRole("button", { name: "返回候选池" }));
+  expect(screen.getByText("已选择 1 项候选")).toBeTruthy();
+  expect(
+    (
+      screen.getByRole("checkbox", {
+        name: "选择 作者 c 的帖子",
+      }) as HTMLInputElement
+    ).checked,
+  ).toBe(true);
+});
+
+test("imported candidate lists link every created work instead of relying on the legacy single workId", async () => {
+  const imported = {
+    ...post("a"),
+    status: "imported",
+    workId: null,
+    works: [
+      { id: "first", workNumber: 21, title: "上篇" },
+      { id: "second", workNumber: 22, title: "下篇" },
+    ],
+  } as components["schemas"]["CandidateDto"];
+  fixture([imported]);
+  mount();
+  expect(
+    (await screen.findByRole("link", { name: "上篇" })).getAttribute("href"),
+  ).toBe("/works/first");
+  expect(screen.getByRole("link", { name: "下篇" }).getAttribute("href")).toBe(
+    "/works/second",
+  );
 });

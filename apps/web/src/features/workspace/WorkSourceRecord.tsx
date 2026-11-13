@@ -63,14 +63,28 @@ function SourceThumbnail({
       </button>
       <strong>原图 {media.orderIndex + 1}</strong>
       <Badge tone={media.adopted === true ? "success" : "neutral"}>
-        {media.adopted === null
-          ? "采用情况未知"
-          : media.adopted
-            ? media.workOrderIndex === null
-              ? "已采用"
-              : `采用 · 第 ${media.workOrderIndex + 1} 页`
-            : "未采用"}
+        {media.disposition === "other_work"
+          ? "用于另一作品"
+          : media.adopted === null
+            ? "采用情况未知"
+            : media.adopted
+              ? media.workOrderIndex === null
+                ? "已采用"
+                : `采用 · 第 ${media.workOrderIndex + 1} 页`
+              : "未采用"}
       </Badge>
+      {media.disposition === "other_work" && media.adoptedByWork && (
+        <a
+          className="work-source-record__work"
+          href={`/works/${media.adoptedByWork.id}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          #{media.adoptedByWork.workNumber}
+          {media.adoptedByWork.title ? ` · ${media.adoptedByWork.title}` : ""}
+          <ExternalLink size={12} aria-hidden="true" />
+        </a>
+      )}
       {!media.available && <span>原图不可用</span>}
       {image.isError && (
         <Button variant="ghost" size="sm" onClick={() => void image.refetch()}>
@@ -238,13 +252,20 @@ function SourceRecord({ workId }: { workId: string }) {
     enabled: open,
   });
   const source: Source | undefined = query.isError ? undefined : query.data;
-  const adopted =
-    source?.media.filter((media) => media.adopted === true).length ?? 0;
-  const unselected =
-    source?.media.filter((media) => media.adopted === false).length ?? 0;
-  const unknown =
-    source?.media.filter((media) => media.adopted === null).length ?? 0;
-  const url = sourceLink(source?.sourceUrl ?? null);
+  const sources = source
+    ? source.sources?.length
+      ? source.sources
+      : [source]
+    : [];
+  const allMedia = sources.flatMap((item) => item.media);
+  const adopted = allMedia.filter((media) => media.adopted === true).length;
+  const unselected = allMedia.filter((media) => media.adopted === false).length;
+  const usedElsewhere = allMedia.filter(
+    (media) => media.disposition === "other_work",
+  ).length;
+  const unknown = allMedia.filter(
+    (media) => media.adopted === null && media.disposition !== "other_work",
+  ).length;
   return (
     <details
       ref={section}
@@ -257,8 +278,10 @@ function SourceRecord({ workId }: { workId: string }) {
           <strong>来源记录</strong>
           {source && (
             <span>
-              原帖 {source.media.length} 张 · 采用 {adopted} 张 · 未采用{" "}
-              {unselected} 张{unknown > 0 ? ` · 未知 ${unknown} 张` : ""}
+              {sources.length > 1 ? `${sources.length} 个来源 · ` : ""}原帖{" "}
+              {allMedia.length} 张 · 采用 {adopted} 张 · 未采用 {unselected} 张
+              {usedElsewhere > 0 ? ` · 另一作品 ${usedElsewhere} 张` : ""}
+              {unknown > 0 ? ` · 未知 ${unknown} 张` : ""}
             </span>
           )}
         </div>
@@ -279,45 +302,51 @@ function SourceRecord({ workId }: { workId: string }) {
               </Button>
             </div>
           )}
-          {source && (
-            <>
-              <div className="work-source-record__origin">
-                <span>
-                  {source.platform.toUpperCase()} · {source.externalPostId}
-                </span>
-                {url && (
-                  <a href={url} target="_blank" rel="noreferrer">
-                    查看原帖
-                    <ExternalLink size={14} aria-hidden="true" />
-                  </a>
+          {sources.map((post) => {
+            const url = sourceLink(post.sourceUrl);
+            return (
+              <section
+                key={post.candidateId}
+                className="work-source-record__post"
+              >
+                <div className="work-source-record__origin">
+                  <span>
+                    {post.platform.toUpperCase()} · {post.externalPostId}
+                  </span>
+                  {url && (
+                    <a href={url} target="_blank" rel="noreferrer">
+                      查看原帖
+                      <ExternalLink size={14} aria-hidden="true" />
+                    </a>
+                  )}
+                </div>
+                {post.media.length ? (
+                  <SourceImages
+                    workId={workId}
+                    media={post.media}
+                    portalContainer={
+                      section.current?.closest("dialog[open]") ?? null
+                    }
+                  />
+                ) : (
+                  <p>没有来源图片</p>
                 )}
-              </div>
-              {source.media.length ? (
-                <SourceImages
-                  workId={workId}
-                  media={source.media}
-                  portalContainer={
-                    section.current?.closest("dialog[open]") ?? null
-                  }
-                />
-              ) : (
-                <p>没有来源图片</p>
-              )}
-              {source.sourceText && (
-                <section className="work-source-record__text">
-                  <h3>原帖文字</h3>
-                  <p>{source.sourceText}</p>
-                </section>
-              )}
-              {source.importedSourceText &&
-                source.importedSourceText !== source.sourceText && (
+                {post.sourceText && (
                   <section className="work-source-record__text">
-                    <h3>入库时的文字</h3>
-                    <p>{source.importedSourceText}</p>
+                    <h3>原帖文字</h3>
+                    <p>{post.sourceText}</p>
                   </section>
                 )}
-            </>
-          )}
+                {post.importedSourceText &&
+                  post.importedSourceText !== post.sourceText && (
+                    <section className="work-source-record__text">
+                      <h3>入库时的文字</h3>
+                      <p>{post.importedSourceText}</p>
+                    </section>
+                  )}
+              </section>
+            );
+          })}
         </div>
       )}
     </details>

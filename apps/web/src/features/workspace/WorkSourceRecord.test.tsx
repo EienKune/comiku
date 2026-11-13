@@ -19,6 +19,7 @@ vi.mock("../account/account-context", () => ({
 
 const clients: QueryClient[] = [];
 const source: components["schemas"]["WorkSourceDto"] = {
+  sources: [],
   candidateId: "synthetic-source",
   platform: "x",
   externalPostId: "synthetic-post",
@@ -33,6 +34,8 @@ const source: components["schemas"]["WorkSourceDto"] = {
       height: 800,
       mediaType: "image",
       adopted: true,
+      disposition: "this_work",
+      adoptedByWork: null,
       workImageId: "page-two",
       workOrderIndex: 1,
       available: true,
@@ -44,6 +47,8 @@ const source: components["schemas"]["WorkSourceDto"] = {
       height: 800,
       mediaType: "image",
       adopted: false,
+      disposition: "unadopted",
+      adoptedByWork: null,
       workImageId: null,
       workOrderIndex: null,
       available: true,
@@ -55,6 +60,8 @@ const source: components["schemas"]["WorkSourceDto"] = {
       height: null,
       mediaType: "image",
       adopted: null,
+      disposition: "unknown",
+      adoptedByWork: null,
       workImageId: null,
       workOrderIndex: null,
       available: false,
@@ -89,6 +96,62 @@ function mount() {
 function expand() {
   fireEvent.click(screen.getByText("来源记录"));
 }
+
+test("shows every contributing post and distinguishes another output from unused media", async () => {
+  vi.spyOn(client, "GET").mockResolvedValue(
+    response({
+      ...source,
+      sources: [
+        {
+          ...source,
+          media: [
+            {
+              ...source.media[0],
+              disposition: "this_work",
+              adoptedByWork: null,
+            },
+            {
+              ...source.media[1],
+              adopted: null,
+              disposition: "other_work",
+              adoptedByWork: {
+                id: "another-work",
+                workNumber: 42,
+                title: "后篇",
+              },
+            },
+            { ...source.media[2], disposition: "unknown", adoptedByWork: null },
+          ],
+        },
+        {
+          ...source,
+          candidateId: "second-source",
+          platform: "pixiv",
+          externalPostId: "second-post",
+          sourceUrl: "https://example.test/second-post",
+          sourceText: "第二帖正文",
+          importedSourceText: "第二帖正文",
+          media: [
+            {
+              ...source.media[1],
+              id: "unused-second",
+              disposition: "unadopted",
+              adoptedByWork: null,
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  mount();
+  expand();
+  expect(await screen.findByText("第二帖正文")).toBeTruthy();
+  const usedElsewhere = screen.getByRole("link", { name: /42.*后篇/ });
+  expect(usedElsewhere.getAttribute("href")).toBe("/works/another-work");
+  expect(screen.getAllByText("未采用")).toHaveLength(1);
+  expect(screen.getAllByRole("link", { name: "查看原帖" })).toHaveLength(2);
+  expect(screen.getByText(/2 个来源/)).toBeTruthy();
+});
 function observer() {
   const observers: {
     callback: IntersectionObserverCallback;

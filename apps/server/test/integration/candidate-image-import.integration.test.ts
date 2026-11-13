@@ -53,9 +53,9 @@ test("an atomic ordered subset creates one work and retains every source media a
     assert.equal(result.outcome, "succeeded");
     const work = await f.db.work.findUniqueOrThrow({
       where: { id: result.workId! },
-      include: { images: { orderBy: { orderIndex: "asc" } } },
+      include: { sources: true, images: { orderBy: { orderIndex: "asc" } } },
     });
-    assert.equal(work.candidateImportRevision, 0);
+    assert.equal(work.sources[0].importedRevision, 0);
     assert.deepEqual(
       work.images.map((image) => [
         image.sourceCandidateMediaId,
@@ -414,9 +414,9 @@ test("legacy omitted replay is compatible while explicit selections cannot claim
         items: [item],
       })
     ).results[0];
-    await f.db.work.update({
-      where: { id: first.workId! },
-      data: { candidateImportRevision: null },
+    await f.db.workCandidateSource.updateMany({
+      where: { workId: first.workId! },
+      data: { importedRevision: null, mappingKnown: false },
     });
     await f.db.workImage.updateMany({
       where: { workId: first.workId! },

@@ -14,6 +14,8 @@ import {
   type CandidateImageDraft,
 } from "./candidate-image-drafts";
 import { useCandidateDialog } from "./use-candidate-dialog";
+import { useImageDrag } from "./use-image-drag";
+import { imageDragSnapshot, moveImage } from "./image-drag-model";
 import "./candidate-image-editor.css";
 
 export function CandidateImageEditor({
@@ -38,11 +40,10 @@ export function CandidateImageEditor({
   const baseline = candidateImageDraft(draft, candidate),
     [ids, setIds] = useState([...baseline.mediaIds]);
   const [preview, setPreview] = useState<{
-      id: string;
-      ordered: boolean;
-      sequence: string[];
-    } | null>(null),
-    [dragging, setDragging] = useState(false);
+    id: string;
+    ordered: boolean;
+    sequence: string[];
+  } | null>(null);
   const dialog = useCandidateDialog(),
     scroll = useRef<HTMLDivElement>(null);
   const sourceIds = candidate.media.map((media) => media.id),
@@ -52,6 +53,36 @@ export function CandidateImageEditor({
       (selectionRevision !== undefined &&
         selectionRevision !== candidate.revision);
   const disabled = reloading || conflict;
+  const groups = [{ id: "adopted", mediaIds: ids }],
+    epoch = JSON.stringify([
+      candidate.id,
+      candidate.revision,
+      candidate.status,
+      disabled,
+    ]),
+    { drag, feedback } = useImageDrag({
+      groups,
+      validIds: sourceIds,
+      snapshot: imageDragSnapshot(groups, sourceIds, epoch),
+      rootRef: dialog,
+      scrollRef: scroll,
+      disabled,
+      caption: (id) => `原图 ${sourceIds.indexOf(id) + 1}`,
+      onDrop: (id, groupId, slot, snapshot) => {
+        setIds((current) => [
+          ...moveImage(
+            [{ id: "adopted", mediaIds: current }],
+            id,
+            groupId,
+            slot,
+            snapshot,
+            sourceIds,
+            epoch,
+          )[0].mediaIds,
+        ]);
+      },
+    }),
+    dragging = !!drag.id;
   function openPreview(id: string, ordered: boolean) {
     setPreview({ id, ordered, sequence: ordered ? [...ids] : sourceIds });
   }
@@ -117,12 +148,14 @@ export function CandidateImageEditor({
                 <article
                   key={media.id}
                   className={`candidate-original-tile ${ids.includes(media.id) ? "is-adopted" : "is-excluded"}`}
+                  onPointerDown={(event) => drag.start(event, media.id)}
+                  onDragStart={(event) => event.preventDefault()}
                 >
                   <div className="candidate-original-picture">
                     <button
                       type="button"
+                      data-image-drag-preview
                       aria-label={`查看原图 ${index + 1} 大图`}
-                      disabled={dragging}
                       onClick={() => openPreview(media.id, false)}
                     >
                       <CandidateImportThumbnail
@@ -166,8 +199,7 @@ export function CandidateImageEditor({
             ids={ids}
             onChange={setIds}
             onPreview={(id) => openPreview(id, true)}
-            scrollContainer={scroll}
-            onDraggingChange={setDragging}
+            drag={drag}
             disabled={disabled}
           />
         </div>
@@ -199,6 +231,7 @@ export function CandidateImageEditor({
           </Button>
         </div>
       </footer>
+      {feedback}
       {preview && (
         <CandidateImportPreview
           key={`${candidate.id}:${preview.id}`}
