@@ -37,6 +37,8 @@ test("archive keysets and per-work package planning avoid unrelated month and sn
     data: { displayName: "Synthetic plan author" },
   });
   let runId: string | undefined;
+  const workIds: string[] = [],
+    postIds: string[] = [];
   try {
     const targetDate = new Date("2040-11-15T00:00:00Z");
     const target = Array.from({ length: 400 }, () => ({
@@ -63,6 +65,7 @@ test("archive keysets and per-work package planning avoid unrelated month and sn
           status: "imported",
         })),
       });
+      postIds.push(...batch.map((value) => value.postId));
       await db.work.createMany({
         data: batch.map((value) => ({
           id: value.id,
@@ -72,6 +75,7 @@ test("archive keysets and per-work package planning avoid unrelated month and sn
           createdAt: value.createdAt,
         })),
       });
+      workIds.push(...batch.map((value) => value.id));
     }
     await db.$executeRawUnsafe("ANALYZE works");
     target.sort((a, b) => a.id.localeCompare(b.id));
@@ -199,13 +203,32 @@ test("archive keysets and per-work package planning avoid unrelated month and sn
     );
   } finally {
     if (runId) {
-      await db.archiveExportEntry.deleteMany({ where: { runId } });
+      for (let ordinal = 0; ordinal < 20_000; ordinal += 500) {
+        await db.archiveExportEntry.deleteMany({
+          where: { runId, ordinal: { gte: ordinal, lt: ordinal + 500 } },
+        });
+      }
       await db.archiveExportWorkSnapshot.deleteMany({ where: { runId } });
       await db.archiveExportMonth.deleteMany({ where: { runId } });
       await db.archiveExportRun.delete({ where: { id: runId } });
     }
-    await db.work.deleteMany({ where: { authorId: author.id } });
-    await db.candidatePost.deleteMany({ where: { authorId: author.id } });
+    // FK checks multiply the cost of a single 20k-row DELETE on small CI runners.
+    // Keep the complete query-plan fixture, but bound each cleanup statement too.
+    for (let offset = 0; offset < workIds.length; offset += 250) {
+      await db.work.deleteMany({
+        where: { id: { in: workIds.slice(offset, offset + 250) } },
+      });
+    }
+    for (let offset = 0; offset < postIds.length; offset += 500) {
+      await db.candidatePost.deleteMany({
+        where: { id: { in: postIds.slice(offset, offset + 500) } },
+      });
+    }
+    assert.equal(await db.work.count({ where: { authorId: author.id } }), 0);
+    assert.equal(
+      await db.candidatePost.count({ where: { authorId: author.id } }),
+      0,
+    );
     await db.author.delete({ where: { id: author.id } });
     await db.user.delete({ where: { id: user.id } });
     await db.$disconnect();
