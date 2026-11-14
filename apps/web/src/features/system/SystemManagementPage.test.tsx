@@ -76,45 +76,52 @@ function mockManagement() {
   } as never);
   return vi.spyOn(client, "GET").mockImplementation((async (path: string) => ({
     data:
-      path === "/api/archive-exports/settings"
+      path === "/api/site/settings"
         ? {
-            enabled: false,
+            name: "Comiku",
+            themePresetId: "teal",
+            iconVersion: null,
             revision: 0,
-            bandwidthLimitMiB: 0,
-            packageTargetBytes: "2147483648",
-            retentionDays: 7,
           }
-        : path === "/api/archive-exports"
-          ? { items: [], nextCursor: null }
-          : path === "/api/notifications/work-reminders"
-            ? {
-                settings: {
-                  enabled: false,
-                  sendTimes: ["09:00", "18:00"],
-                  note: "",
-                  revision: 0,
-                },
-                channels: [],
-              }
-            : path === "/api/source-fetch/runs"
+        : path === "/api/archive-exports/settings"
+          ? {
+              enabled: false,
+              revision: 0,
+              bandwidthLimitMiB: 0,
+              packageTargetBytes: "2147483648",
+              retentionDays: 7,
+            }
+          : path === "/api/archive-exports"
+            ? { items: [], nextCursor: null }
+            : path === "/api/notifications/work-reminders"
               ? {
-                  items: [],
-                  nextCursor: null,
-                  observedAt: "2026-11-10T00:00:00Z",
-                }
-              : path.endsWith("/configuration")
-                ? {
+                  settings: {
                     enabled: false,
-                    configurationError: null,
-                    connections: [
-                      { key: "bot", name: "测试连接", available: true },
-                    ],
-                    eventTypes: [{ type: "imported", label: "导入作品" }],
-                    channels: [],
+                    sendTimes: ["09:00", "18:00"],
+                    note: "",
+                    revision: 0,
+                  },
+                  channels: [],
+                }
+              : path === "/api/source-fetch/runs"
+                ? {
+                    items: [],
+                    nextCursor: null,
+                    observedAt: "2026-11-10T00:00:00Z",
                   }
-                : path.endsWith("/deliveries")
-                  ? { items: [], nextCursor: null }
-                  : [],
+                : path.endsWith("/configuration")
+                  ? {
+                      enabled: false,
+                      configurationError: null,
+                      connections: [
+                        { key: "bot", name: "测试连接", available: true },
+                      ],
+                      eventTypes: [{ type: "imported", label: "导入作品" }],
+                      channels: [],
+                    }
+                  : path.endsWith("/deliveries")
+                    ? { items: [], nextCursor: null }
+                    : [],
     response: new Response(),
   })) as never);
 }
@@ -161,12 +168,12 @@ test("tab arrows wrap and Home/End activate and focus their panels", async () =>
   mockManagement();
   openPage(["system:manage"]);
   const collection = screen.getByRole("tab", { name: "图源采集" });
-  const notifications = screen.getByRole("tab", { name: "数据导出" });
+  const notifications = screen.getByRole("tab", { name: "站点设置" });
   collection.focus();
   fireEvent.keyDown(collection, { key: "ArrowLeft" });
   expect(document.activeElement).toBe(notifications);
   expect(notifications.getAttribute("aria-selected")).toBe("true");
-  const panel = screen.getByRole("tabpanel", { name: "数据导出" });
+  const panel = screen.getByRole("tabpanel", { name: "站点设置" });
   expect(panel.getAttribute("aria-labelledby")).toBe(notifications.id);
   expect(notifications.getAttribute("aria-controls")).toBe(panel.id);
   fireEvent.keyDown(notifications, { key: "Home" });

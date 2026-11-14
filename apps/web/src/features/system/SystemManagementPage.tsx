@@ -6,6 +6,7 @@ import { SourceManagement } from "./SourceManagement";
 import { NotificationManagement } from "./NotificationManagement";
 import { AccountsPage } from "../account/AccountsPage";
 import { ArchiveExportManagement } from "./ArchiveExportManagement";
+import { SiteSettings } from "./SiteSettings";
 import "./system.css";
 
 const tabs = [
@@ -14,6 +15,7 @@ const tabs = [
   { value: "notifications", label: "推送通知", permission: "system:manage" },
   { value: "exports", label: "数据导出", permission: "system:manage" },
   { value: "accounts", label: "账号管理", permission: "accounts:manage" },
+  { value: "site", label: "站点设置", permission: "system:manage" },
 ] as const;
 
 export function SystemManagementPage() {
@@ -80,6 +82,17 @@ export function SystemManagementPage() {
           </button>
         ))}
       </div>
+      {user.permissions.includes("system:manage") && (
+        <div
+          id="system-panel-site"
+          role="tabpanel"
+          aria-labelledby="system-tab-site"
+          hidden={active !== "site"}
+          tabIndex={0}
+        >
+          <SiteSettings enabled={active === "site"} />
+        </div>
+      )}
       {user.permissions.includes("system:manage") && (
         <div
           id="system-panel-collection"

@@ -455,6 +455,8 @@ export class FileObjectsService {
           authorAvatars: { none: {} },
           accountAvatars: { none: {} },
           userAvatars: { none: {} },
+          siteBrandIcons: { none: {} },
+          siteBrandFavicons: { none: {} },
           authorEvidence: { none: {} },
           labelPlusFiles: { none: {} },
           typesetPackages: { none: {} },

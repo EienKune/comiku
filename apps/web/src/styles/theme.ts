@@ -8,13 +8,13 @@ export const defaultTheme: ThemePreference = {
   style: "soft",
 };
 export const themePresets = [
-  { name: "青绿", brand: "#33ccbb", style: "soft" },
-  { name: "晴蓝", brand: "#5599ff", style: "soft" },
-  { name: "淡紫", brand: "#a78bfa", style: "soft" },
-  { name: "樱粉", brand: "#ff6699", style: "soft" },
-  { name: "琥珀", brand: "#f6ba4c", style: "soft" },
-  { name: "黑白极简", brand: "#171717", style: "minimal" },
-] satisfies (ThemePreference & { name: string })[];
+  { id: "teal", name: "青绿", brand: "#33ccbb", style: "soft" },
+  { id: "sky", name: "晴蓝", brand: "#5599ff", style: "soft" },
+  { id: "lavender", name: "淡紫", brand: "#a78bfa", style: "soft" },
+  { id: "pink", name: "樱粉", brand: "#ff6699", style: "soft" },
+  { id: "amber", name: "琥珀", brand: "#f6ba4c", style: "soft" },
+  { id: "minimal", name: "黑白极简", brand: "#171717", style: "minimal" },
+] satisfies (ThemePreference & { name: string; id: string })[];
 
 export const themeStorageKey = "comiku.playground.theme.v1";
 export const isHexColor = (value: string) => /^#[a-f\d]{6}$/i.test(value);
@@ -71,7 +71,10 @@ export function brandReadability(brand: string) {
   return { normal: foreground(base), hover: foreground(hover) };
 }
 
-export function applyTheme(theme: ThemePreference) {
+export function applyTheme(
+  theme: ThemePreference,
+  options: { persist?: boolean } = {},
+) {
   const root = document.documentElement;
   const contrast = brandReadability(theme.brand);
   root.style.setProperty("--color-brand", theme.brand);
@@ -79,7 +82,8 @@ export function applyTheme(theme: ThemePreference) {
   root.style.setProperty("--color-on-brand-hover", contrast.hover.color);
   root.dataset.themeStyle = theme.style;
   try {
-    localStorage.setItem(themeStorageKey, JSON.stringify(theme));
+    if (options.persist !== false)
+      localStorage.setItem(themeStorageKey, JSON.stringify(theme));
   } catch {
     /* The active theme remains usable when browser storage is unavailable. */
   }
