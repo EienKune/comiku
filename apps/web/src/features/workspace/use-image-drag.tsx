@@ -169,12 +169,16 @@ export function useImageDrag(options: {
     }
     if (current.capture.hasPointerCapture?.(current.pointerId))
       current.capture.releasePointerCapture(current.pointerId);
-    if (current.active) {
+    // A cancelled press must not become a click even before the drag threshold.
+    // Ordinary short presses still commit without suppressing their preview.
+    if (current.active || !commit) {
       clickToken.current = {
         root: current.root,
         pointerId: current.pointerId,
         expires: commit ? performance.now() + 600 : Infinity,
       };
+    }
+    if (current.active) {
       const target = commit ? hit(current) : null;
       if (
         target &&
