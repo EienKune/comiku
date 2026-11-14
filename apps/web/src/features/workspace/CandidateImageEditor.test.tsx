@@ -71,7 +71,10 @@ test("choosing and reordering submits only a local ordered subset; source stays 
   const post = vi.spyOn(client, "POST");
   const { apply } = mount();
   fireEvent.click(screen.getByRole("checkbox", { name: "选入原图 2" }));
-  fireEvent.click(screen.getByRole("button", { name: "上移原图 3" }));
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: "拖动 原图 3 调整顺序" }),
+    { key: "ArrowUp" },
+  );
   fireEvent.click(screen.getByRole("button", { name: "应用调整" }));
   expect(apply).toHaveBeenCalledWith(["three", "one"]);
   expect(post).not.toHaveBeenCalled();
@@ -91,7 +94,10 @@ test("zero images cannot apply and Cancel never applies", () => {
 });
 test("ordered thumbnail preview stays inside native editor and follows the chosen order", () => {
   const { close } = mount();
-  fireEvent.click(screen.getByRole("button", { name: "上移原图 3" }));
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: "拖动 原图 3 调整顺序" }),
+    { key: "ArrowUp" },
+  );
   fireEvent.click(
     screen.getByRole("button", { name: "预览入库第 2 页，原图 3" }),
   );

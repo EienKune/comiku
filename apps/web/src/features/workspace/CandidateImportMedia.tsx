@@ -1,5 +1,5 @@
 import { CandidateImageSimilarityAction } from "./CandidateImageSimilarity";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { ImageIcon } from "lucide-react";
 import { ImageLightbox } from "../../components/ImageLightbox";
 import { isDisplayableImageUrl } from "../../components/media-url";
@@ -53,7 +53,7 @@ function useCandidateImportUrl(
     enabled,
   );
 }
-export function CandidateImportThumbnail({
+export const CandidateImportThumbnail = memo(function CandidateImportThumbnail({
   candidateId,
   mediaId,
 }: {
@@ -82,7 +82,7 @@ export function CandidateImportThumbnail({
       )}
     </span>
   );
-}
+});
 export function CandidateImportPreview({
   candidateId,
   mediaIds,

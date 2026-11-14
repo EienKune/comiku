@@ -32,7 +32,7 @@ function fixture(activeModelKey: string | null) {
     media: [],
     postedAt: new Date(`2026-01-0${day}T00:00:00Z`),
     fetchedAt: new Date(0),
-    work: null,
+    workSources: [],
   }));
   const db = {
     $queryRaw: async () => [],

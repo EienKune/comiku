@@ -21,6 +21,7 @@ export function MarkerTooltip({
   const suppressFocus = useRef(false);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const tooltip = useRef<HTMLDivElement>(null);
+  const positionedAnchor = useRef<DOMRect | null>(null);
   const [position, setPosition] = useState<{
     left: number;
     top: number;
@@ -34,6 +35,7 @@ export function MarkerTooltip({
   useLayoutEffect(() => {
     if (!anchor || !tooltip.current) return;
     const trigger = anchor.getBoundingClientRect();
+    positionedAnchor.current = trigger;
     const box = tooltip.current.getBoundingClientRect();
     const margin = 16;
     const gap = 8;
@@ -66,14 +68,30 @@ export function MarkerTooltip({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") dismiss();
     };
+    const onScroll = () => {
+      const measured = positionedAnchor.current;
+      const current = anchor.getBoundingClientRect();
+      // Focusing an offscreen control scrolls it before layout is measured, but
+      // the native scroll event may arrive after this listener is installed.
+      if (
+        document.activeElement === anchor &&
+        measured &&
+        current.left === measured.left &&
+        current.top === measured.top &&
+        current.width === measured.width &&
+        current.height === measured.height
+      )
+        return;
+      dismiss();
+    };
     window.addEventListener("resize", dismiss);
-    window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("scroll", onScroll, true);
     window.addEventListener("wheel", dismiss, true);
     document.addEventListener("pointerdown", dismiss);
     document.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("resize", dismiss);
-      window.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("wheel", dismiss, true);
       document.removeEventListener("pointerdown", dismiss);
       document.removeEventListener("keydown", onKeyDown);

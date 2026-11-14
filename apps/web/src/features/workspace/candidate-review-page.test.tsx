@@ -77,6 +77,7 @@ function candidate(
     fetchedAt: "2026-01-01T00:00:00Z",
     reviewedAt: null,
     workId: null,
+    works: [],
   };
 }
 afterEach(() => {

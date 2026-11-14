@@ -369,3 +369,16 @@ Pixiv profile resolution uses the native App API without enumerating works, but 
 - Calendar, HTTP facade and reminder orchestration consume BirthdayDataAdapter. Keep provider identities, avatar resolution, acquisition, persistent evidence validation, source locks and freshness inside adapters/ba. Source adapters return a persisted catalog reference and a local, transactionally validated reminder publication; core never performs network I/O in that transaction.
 - Preserve BA source keys, job kinds, hash field order and the schaledb occurrence/event namespace across refactors. Adapter-owned audit fields remain in frozen people without interpretation by the generic renderer. A disabled adapter must stop facade reads/scheduling/cleanup and reminder registration; feature-flag routing/pre-send/replay guards remain in the notification engine.
 - Test replacement with synthetic non-BA string identities and a different freshness period, including actual generic reminder registration and duplicate maintenance. Keep public response allowlists so adapter-private fields never become HTTP fields. BA avatar fallback belongs in the adapter and needs its own regression.
+
+
+## 候选拆合入库与来源边界
+
+- 普通逐帖重放不能冒认合并或拆分结果；特殊操作依赖发起人和操作标识的完整回执。查询不到回执不能清除不确定请求，重发仍使用同一意图。
+- 主来源只是发布兼容摘要，完整来源必须通过显式关联读取。来源媒体授权只沿当前作品的直接来源，不沿共享来源跳到另一作品的其他帖子。
+- 历史请求版本未知与图片映射未知是两件事，迁移不能根据空 revision 猜测图片是否采用。来源记录须区分另一作品采用和未采用。
+- 原生 dialog 内的拖动浮层必须留在顶层弹窗中；整卡拖动要区分短点预览、独立按钮和兼容 click，草稿变更时取消旧拖动。浏览器拖动/自动滚动验证需将测试页置于前台，后台 rAF 节流不等于逻辑故障。
+
+- Pointer capture 在取消时释放后，浏览器可能把同手势的兼容 click 发给 dialog 共同祖先；抑制范围须绑定手势和编辑器 root，延迟松开仍保护，新的 pointerdown 立即放行。键盘 click 不应被吞掉。
+- 取消保护同样覆盖尚未达到拖动阈值的按压；正常短点仍可预览。拆合草稿按来源、版本和有序图片内容恢复，选择代际只用于结算；恢复时更新选择快照，成功后清理包含已处理来源的其他草稿，保留不相交草稿。
+- 大量图片的拖动浮层坐标应直接更新 DOM ref，仅落点变化触发 React；缩略图复用稳定 props 的 memo 边界，保持签名 URL 按需读取。草稿和冻结请求是受离开保护的页面会话状态，不额外把来源资料写入 localStorage。
+- 顶部操作栏保留横向滚动时，内部绝对定位提示会触发另一轴的自动滚动，导致按钮位移且提示被裁切。禁用原因复用现有 portal 提示；回归须包含真实 `.workspace-topbar-context`，同时检查悬浮前后坐标、窄屏横向滚动和键盘聚焦。
