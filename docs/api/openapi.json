@@ -35763,7 +35763,12 @@
           "minimal",
           "schale",
           "archive",
-          "shittim"
+          "shittim",
+          "arona",
+          "plana",
+          "shittim-duo",
+          "ba-cyan",
+          "ba-azure"
         ]
       },
       "SiteSettingsDto": {

@@ -22,6 +22,8 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## Personal and administrative settings
 
+- Character identity and light/dark mode are separate: a silver-white/pink Plana profile is still light. Register manual profiles without timers or system-mode behavior until explicitly requested. Share layout and component dimensions across color comparisons, retain role/status colors, and verify muted/decorative text on its actual light surface rather than only white. Capture settled theme frames: CSS transitions can temporarily show the previous button color even after the preset indicator and root tokens have updated.
+
 - Complete theme profiles reuse the persisted `brand/style` contract. Keep client presets, style validation and server preset IDs in sync and regenerate API artifacts. Remove all profile-owned root variables when returning to a legacy theme, and snapshot/restore the full palette during Playground previews. A site update during a preview must become visible on exit without saving a personal preference.
 - A page-wide background gradient must remain continuous through transparent hero containers. Test actual primary button normal/hover pairs and fixed marker label backgrounds instead of assuming the brand color is the button background. Demo-only marker colors must not override production editor markers with different backgrounds. New theme CSS is scoped; artwork may follow theme colors, real work images and semantic status colors must retain their meaning.
 

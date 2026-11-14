@@ -60,48 +60,55 @@ test("authentication cache clearing preserves the active public site observer on
   await screen.findByText("登录后的品牌");
 });
 
-test.each(["sky", "schale", "archive", "shittim"])(
-  "Playground exits to the latest active %s site theme",
-  async (preset) => {
-    localStorage.setItem(
-      previewThemeStorageKey,
-      JSON.stringify({ brand: "#a78bfa", style: "soft" }),
-    );
-    vi.spyOn(client, "GET").mockImplementation(() => new Promise(() => {}));
-    const cache = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
+test.each([
+  "sky",
+  "schale",
+  "archive",
+  "shittim",
+  "arona",
+  "plana",
+  "shittim-duo",
+  "ba-cyan",
+  "ba-azure",
+])("Playground exits to the latest active %s site theme", async (preset) => {
+  localStorage.setItem(
+    previewThemeStorageKey,
+    JSON.stringify({ brand: "#a78bfa", style: "soft" }),
+  );
+  vi.spyOn(client, "GET").mockImplementation(() => new Promise(() => {}));
+  const cache = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const tree = (show: boolean) => (
+    <QueryClientProvider client={cache}>
+      <SiteProvider>
+        {show ? <ThemePreview /> : <div>正常页面</div>}
+      </SiteProvider>
+    </QueryClientProvider>
+  );
+  const view = render(tree(true));
+  expect(document.documentElement.style.getPropertyValue("--color-brand")).toBe(
+    "#a78bfa",
+  );
+  await act(async () => {
+    cache.setQueryData(siteQueryKey, {
+      ...defaultSite,
+      themePresetId: preset,
+      revision: 1,
     });
-    const tree = (show: boolean) => (
-      <QueryClientProvider client={cache}>
-        <SiteProvider>
-          {show ? <ThemePreview /> : <div>正常页面</div>}
-        </SiteProvider>
-      </QueryClientProvider>
-    );
-    const view = render(tree(true));
-    expect(
-      document.documentElement.style.getPropertyValue("--color-brand"),
-    ).toBe("#a78bfa");
-    await act(async () => {
-      cache.setQueryData(siteQueryKey, {
-        ...defaultSite,
-        themePresetId: preset,
-        revision: 1,
-      });
-    });
-    expect(
-      document.documentElement.style.getPropertyValue("--color-brand"),
-    ).toBe("#a78bfa");
-    view.rerender(tree(false));
-    expect(
-      document.documentElement.style.getPropertyValue("--color-brand"),
-    ).toBe(siteTheme(preset).brand);
-    expect(document.documentElement.dataset.themeStyle).toBe(
-      siteTheme(preset).style,
-    );
-    expect(localStorage.getItem(themeSelectionKey)).toBeNull();
-  },
-);
+  });
+  expect(document.documentElement.style.getPropertyValue("--color-brand")).toBe(
+    "#a78bfa",
+  );
+  view.rerender(tree(false));
+  expect(document.documentElement.style.getPropertyValue("--color-brand")).toBe(
+    siteTheme(preset).brand,
+  );
+  expect(document.documentElement.dataset.themeStyle).toBe(
+    siteTheme(preset).style,
+  );
+  expect(localStorage.getItem(themeSelectionKey)).toBeNull();
+});
 function Preferences() {
   const site = useSite();
   return (

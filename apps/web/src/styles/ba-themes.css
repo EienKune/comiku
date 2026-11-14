@@ -2,7 +2,12 @@
 :root:is(
   [data-theme-style="schale"],
   [data-theme-style="archive"],
-  [data-theme-style="shittim"]
+  [data-theme-style="shittim"],
+  [data-theme-style="arona"],
+  [data-theme-style="plana"],
+  [data-theme-style="shittim-duo"],
+  [data-theme-style="ba-cyan"],
+  [data-theme-style="ba-azure"]
 ) {
   --color-surface-glass: #fff;
   --shadow-button: 0 1px 2px rgb(23 52 84 / 8%);
@@ -18,7 +23,12 @@
   :root:is(
     [data-theme-style="schale"],
     [data-theme-style="archive"],
-    [data-theme-style="shittim"]
+    [data-theme-style="shittim"],
+    [data-theme-style="arona"],
+    [data-theme-style="plana"],
+    [data-theme-style="shittim-duo"],
+    [data-theme-style="ba-cyan"],
+    [data-theme-style="ba-azure"]
   ) {
     --press-scale: 0.99;
   }
@@ -27,7 +37,12 @@
 :root:is(
     [data-theme-style="schale"],
     [data-theme-style="archive"],
-    [data-theme-style="shittim"]
+    [data-theme-style="shittim"],
+    [data-theme-style="arona"],
+    [data-theme-style="plana"],
+    [data-theme-style="shittim-duo"],
+    [data-theme-style="ba-cyan"],
+    [data-theme-style="ba-azure"]
   )
   .ui-button--primary {
   background: var(--ba-action-bg);
@@ -38,7 +53,12 @@
 :root:is(
     [data-theme-style="schale"],
     [data-theme-style="archive"],
-    [data-theme-style="shittim"]
+    [data-theme-style="shittim"],
+    [data-theme-style="arona"],
+    [data-theme-style="plana"],
+    [data-theme-style="shittim-duo"],
+    [data-theme-style="ba-cyan"],
+    [data-theme-style="ba-azure"]
   )
   .ui-button--primary:hover:not(:disabled) {
   background: var(--ba-action-hover);
@@ -48,7 +68,12 @@
 :root:is(
     [data-theme-style="schale"],
     [data-theme-style="archive"],
-    [data-theme-style="shittim"]
+    [data-theme-style="shittim"],
+    [data-theme-style="arona"],
+    [data-theme-style="plana"],
+    [data-theme-style="shittim-duo"],
+    [data-theme-style="ba-cyan"],
+    [data-theme-style="ba-azure"]
   )
   .brand-mark {
   border-radius: var(--radius-md);
@@ -58,7 +83,12 @@
 :root:is(
     [data-theme-style="schale"],
     [data-theme-style="archive"],
-    [data-theme-style="shittim"]
+    [data-theme-style="shittim"],
+    [data-theme-style="arona"],
+    [data-theme-style="plana"],
+    [data-theme-style="shittim-duo"],
+    [data-theme-style="ba-cyan"],
+    [data-theme-style="ba-azure"]
   )
   .brand-mark
   svg {
@@ -68,7 +98,12 @@
 :root:is(
     [data-theme-style="schale"],
     [data-theme-style="archive"],
-    [data-theme-style="shittim"]
+    [data-theme-style="shittim"],
+    [data-theme-style="arona"],
+    [data-theme-style="plana"],
+    [data-theme-style="shittim-duo"],
+    [data-theme-style="ba-cyan"],
+    [data-theme-style="ba-azure"]
   )
   .playground-sidebar {
   backdrop-filter: none;
@@ -91,7 +126,12 @@
 :root:is(
     [data-theme-style="schale"],
     [data-theme-style="archive"],
-    [data-theme-style="shittim"]
+    [data-theme-style="shittim"],
+    [data-theme-style="arona"],
+    [data-theme-style="plana"],
+    [data-theme-style="shittim-duo"],
+    [data-theme-style="ba-cyan"],
+    [data-theme-style="ba-azure"]
   )
   .hero-spark {
   color: var(--color-decor-accent);
@@ -101,7 +141,12 @@
 :root:is(
     [data-theme-style="schale"],
     [data-theme-style="archive"],
-    [data-theme-style="shittim"]
+    [data-theme-style="shittim"],
+    [data-theme-style="arona"],
+    [data-theme-style="plana"],
+    [data-theme-style="shittim-duo"],
+    [data-theme-style="ba-cyan"],
+    [data-theme-style="ba-azure"]
   )
   .hero-work-card__cover {
   background:
@@ -120,7 +165,12 @@
 :root:is(
     [data-theme-style="schale"],
     [data-theme-style="archive"],
-    [data-theme-style="shittim"]
+    [data-theme-style="shittim"],
+    [data-theme-style="arona"],
+    [data-theme-style="plana"],
+    [data-theme-style="shittim-duo"],
+    [data-theme-style="ba-cyan"],
+    [data-theme-style="ba-azure"]
   )
   .hero-work-card__cover
   span:first-child {
@@ -130,7 +180,12 @@
 :root:is(
     [data-theme-style="schale"],
     [data-theme-style="archive"],
-    [data-theme-style="shittim"]
+    [data-theme-style="shittim"],
+    [data-theme-style="arona"],
+    [data-theme-style="plana"],
+    [data-theme-style="shittim-duo"],
+    [data-theme-style="ba-cyan"],
+    [data-theme-style="ba-azure"]
   )
   .hero-work-card__cover
   span:last-child {
@@ -140,7 +195,12 @@
 :root:is(
     [data-theme-style="schale"],
     [data-theme-style="archive"],
-    [data-theme-style="shittim"]
+    [data-theme-style="shittim"],
+    [data-theme-style="arona"],
+    [data-theme-style="plana"],
+    [data-theme-style="shittim-duo"],
+    [data-theme-style="ba-cyan"],
+    [data-theme-style="ba-azure"]
   )
   .hero-orbit--two {
   border-color: color-mix(in srgb, var(--color-decor-accent) 28%, transparent);
@@ -150,7 +210,12 @@
 :root:is(
     [data-theme-style="schale"],
     [data-theme-style="archive"],
-    [data-theme-style="shittim"]
+    [data-theme-style="shittim"],
+    [data-theme-style="arona"],
+    [data-theme-style="plana"],
+    [data-theme-style="shittim-duo"],
+    [data-theme-style="ba-cyan"],
+    [data-theme-style="ba-azure"]
   )
   .marker-demo
   :is(
@@ -169,4 +234,22 @@
 :root[data-theme-style="shittim"] .ui-badge,
 :root[data-theme-style="archive"] .ui-badge {
   border-radius: var(--radius-sm);
+}
+
+/* Keep the five color comparisons on the same quiet, light material. */
+:root:is(
+    [data-theme-style="arona"],
+    [data-theme-style="plana"],
+    [data-theme-style="shittim-duo"],
+    [data-theme-style="ba-cyan"],
+    [data-theme-style="ba-azure"]
+  )
+  .hero__visual::before {
+  background: var(--color-surface-soft);
+}
+:root[data-theme-style="arona"] .hero-orbit--two {
+  border-color: #db9bb8;
+}
+:root[data-theme-style="shittim-duo"] .hero-orbit--one {
+  border-color: #5391b0;
 }

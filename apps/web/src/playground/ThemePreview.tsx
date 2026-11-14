@@ -127,9 +127,15 @@ export function ThemePreview() {
         >
           <option value="soft">柔彩 · 圆润与轻回弹</option>
           <option value="minimal">极简 · 克制与清晰边界</option>
-          <option value="schale">夏莱终端</option>
-          <option value="archive">古书馆图册</option>
-          <option value="shittim">什亭工作台</option>
+          {themePresets
+            .filter(
+              (preset) => preset.style !== "soft" && preset.style !== "minimal",
+            )
+            .map((preset) => (
+              <option key={preset.id} value={preset.style}>
+                {preset.name}
+              </option>
+            ))}
         </SelectField>
       </div>
       <div className="theme-scale" aria-label="品牌派生色阶">

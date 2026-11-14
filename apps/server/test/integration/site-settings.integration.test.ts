@@ -121,7 +121,16 @@ test("site settings keep anonymous assets, CAS, account barriers and recoverable
     await t.test(
       "rounded theme presets survive HTTP save and readback",
       async () => {
-        for (const themePresetId of ["schale", "archive", "shittim"]) {
+        for (const themePresetId of [
+          "schale",
+          "archive",
+          "shittim",
+          "arona",
+          "plana",
+          "shittim-duo",
+          "ba-cyan",
+          "ba-azure",
+        ]) {
           const current = await readSettings();
           const response = await save(current.revision, { themePresetId });
           assert.equal(response.status, 200);

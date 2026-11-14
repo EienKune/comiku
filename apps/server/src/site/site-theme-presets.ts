@@ -10,6 +10,11 @@ export const siteThemePresetIds = [
   "schale",
   "archive",
   "shittim",
+  "arona",
+  "plana",
+  "shittim-duo",
+  "ba-cyan",
+  "ba-azure",
 ] as const;
 export type SiteThemePresetId = (typeof siteThemePresetIds)[number];
 export function normalizeSiteName(value: string): string {

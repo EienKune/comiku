@@ -28,6 +28,11 @@ test("site names are plain bounded Unicode and existing themes remain available"
     "schale",
     "archive",
     "shittim",
+    "arona",
+    "plana",
+    "shittim-duo",
+    "ba-cyan",
+    "ba-azure",
   ]);
 });
 

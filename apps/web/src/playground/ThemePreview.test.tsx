@@ -74,31 +74,37 @@ test("blocked storage does not prevent temporary theme switching or reset", () =
   );
 });
 
-test.each(["夏莱终端", "古书馆图册", "什亭工作台"])(
-  "%s persists complete style and releases its palette",
-  (name) => {
-    const view = render(
-      <StrictMode>
-        <ThemePreview />
-      </StrictMode>,
-    );
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(name) }));
-    const style = document.documentElement.dataset.themeStyle;
-    expect(JSON.parse(localStorage.getItem(themeStorageKey)!)).toMatchObject({
-      style,
-    });
-    expect(
-      document.documentElement.style.getPropertyValue("--ba-action-bg"),
-    ).not.toBe("");
-    view.unmount();
-    expect(
-      document.documentElement.style.getPropertyValue("--ba-action-bg"),
-    ).toBe("");
-    render(<ThemePreview />);
-    expect(document.documentElement.dataset.themeStyle).toBe(style);
-    fireEvent.click(screen.getByRole("button", { name: /青绿/ }));
-    expect(
-      document.documentElement.style.getPropertyValue("--ba-action-bg"),
-    ).toBe("");
-  },
-);
+test.each([
+  "夏莱终端",
+  "古书馆图册",
+  "什亭工作台",
+  "阿罗娜",
+  "普拉娜",
+  "什亭双人",
+  "BA 青蓝白",
+  "BA 亮蓝炭灰",
+])("%s persists complete style and releases its palette", (name) => {
+  const view = render(
+    <StrictMode>
+      <ThemePreview />
+    </StrictMode>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(name) }));
+  const style = document.documentElement.dataset.themeStyle;
+  expect(JSON.parse(localStorage.getItem(themeStorageKey)!)).toMatchObject({
+    style,
+  });
+  expect(
+    document.documentElement.style.getPropertyValue("--ba-action-bg"),
+  ).not.toBe("");
+  view.unmount();
+  expect(
+    document.documentElement.style.getPropertyValue("--ba-action-bg"),
+  ).toBe("");
+  render(<ThemePreview />);
+  expect(document.documentElement.dataset.themeStyle).toBe(style);
+  fireEvent.click(screen.getByRole("button", { name: /青绿/ }));
+  expect(
+    document.documentElement.style.getPropertyValue("--ba-action-bg"),
+  ).toBe("");
+});

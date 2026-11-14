@@ -33,6 +33,11 @@ test("site preset IDs are stable and unknown IDs fall back without changing old 
     "schale",
     "archive",
     "shittim",
+    "arona",
+    "plana",
+    "shittim-duo",
+    "ba-cyan",
+    "ba-azure",
   ]);
   expect(siteTheme("sky")).toEqual({ brand: "#5599ff", style: "soft" });
   expect(siteTheme("unknown")).toEqual(defaultTheme);

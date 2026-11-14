@@ -18,35 +18,41 @@ afterEach(() => {
   localStorage.clear();
 });
 
-test.each(["schale", "archive", "shittim"] as const)(
-  "%s survives site selection and saved personal preferences",
-  (style) => {
-    const selected = siteTheme(style);
-    expect(selected.style).toBe(style);
-    expect(readTheme(JSON.stringify(selected))).toEqual(selected);
-    expect(
-      readThemeSelection(
-        JSON.stringify({ mode: "custom", theme: selected }),
-        null,
-      ),
-    ).toEqual({ mode: "custom", theme: selected });
-    applyTheme(selected);
-    expect(document.documentElement.dataset.themeStyle).toBe(style);
-    expect(
-      document.documentElement.style.getPropertyValue("--radius-button"),
-    ).toBe("999px");
-    const contrast = themeReadability(selected);
-    expect(contrast.normal.contrast).toBeGreaterThanOrEqual(4.5);
-    expect(contrast.hover.contrast).toBeGreaterThanOrEqual(4.5);
-    applyTheme(defaultTheme, { persist: false });
-    expect(
-      document.documentElement.style.getPropertyValue("--color-text"),
-    ).toBe("");
-    expect(
-      document.documentElement.style.getPropertyValue("--ba-action-bg"),
-    ).toBe("");
-  },
-);
+test.each([
+  "schale",
+  "archive",
+  "shittim",
+  "arona",
+  "plana",
+  "shittim-duo",
+  "ba-cyan",
+  "ba-azure",
+])("%s survives site selection and saved personal preferences", (style) => {
+  const selected = siteTheme(style);
+  expect(selected.style).toBe(style);
+  expect(readTheme(JSON.stringify(selected))).toEqual(selected);
+  expect(
+    readThemeSelection(
+      JSON.stringify({ mode: "custom", theme: selected }),
+      null,
+    ),
+  ).toEqual({ mode: "custom", theme: selected });
+  applyTheme(selected);
+  expect(document.documentElement.dataset.themeStyle).toBe(style);
+  expect(
+    document.documentElement.style.getPropertyValue("--radius-button"),
+  ).toBe("999px");
+  const contrast = themeReadability(selected);
+  expect(contrast.normal.contrast).toBeGreaterThanOrEqual(4.5);
+  expect(contrast.hover.contrast).toBeGreaterThanOrEqual(4.5);
+  applyTheme(defaultTheme, { persist: false });
+  expect(document.documentElement.style.getPropertyValue("--color-text")).toBe(
+    "",
+  );
+  expect(
+    document.documentElement.style.getPropertyValue("--ba-action-bg"),
+  ).toBe("");
+});
 
 test("nested previews restore complete palettes without writing personal preferences", () => {
   const root = document.documentElement;
@@ -86,6 +92,14 @@ test.each(baThemeStyles)(
     ]) {
       expect(
         contrast(tokens["--color-text-muted"], tokens[surface]),
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+    for (const [foreground, background] of [
+      ["--color-decor-text", "--color-decor-tint"],
+      ["--color-decor-cool-text", "--color-decor-cool"],
+    ]) {
+      expect(
+        contrast(tokens[foreground], tokens[background]),
       ).toBeGreaterThanOrEqual(4.5);
     }
     for (const background of ["#ff6699", "#a78bfa"]) {
