@@ -12,7 +12,6 @@ import {
   Menu,
   PanelTopClose,
   PanelTopOpen,
-  Sparkles,
   Settings,
   Settings2,
   Users,
@@ -26,8 +25,9 @@ import {
   useNavigate,
 } from "react-router";
 import { Button, IconButton } from "../../components/ui";
-import { applyTheme, readTheme, themeStorageKey } from "../../styles/theme";
-import { client, queryClient, unwrap, useMe } from "./api";
+import { SiteBrand } from "../site/SiteBrand";
+import { useSite } from "../site/site-context";
+import { client, queryClient, unwrap, useMe, clearAccountCache } from "./api";
 import { ErrorState, Feedback, LoadingState } from "./forms";
 import { useAction } from "./use-action";
 import {
@@ -109,6 +109,7 @@ function readLayoutPreference() {
 
 export function AccountLayout() {
   const me = useMe();
+  const { settings: siteSettings } = useSite();
   useSessionActivity(me.data);
   const location = useLocation();
   const navigate = useNavigate();
@@ -126,9 +127,6 @@ export function AccountLayout() {
   const [topbarActions, setTopbarActions] =
     useState<TopbarActionRegistration | null>(null);
 
-  useLayoutEffect(() => {
-    applyTheme(readTheme(localStorage.getItem(themeStorageKey)));
-  }, []);
   useLayoutEffect(() => {
     try {
       localStorage.setItem(
@@ -159,7 +157,7 @@ export function AccountLayout() {
   async function logout() {
     await action.run(async () => {
       await unwrap(await client.POST("/api/auth/logout", { body: {} }));
-      queryClient.clear();
+      clearAccountCache();
       queryClient.setQueryData(["me"], null);
       navigate("/login", { replace: true });
     });
@@ -186,15 +184,12 @@ export function AccountLayout() {
               className={`workspace-sidebar${mobileOpen ? " is-open" : ""}`}
             >
               <div className="workspace-brand-row">
-                <Link className="account-brand" to="/" title="Comiku">
-                  <span className="workspace-brand-mark" aria-hidden="true">
-                    <span>C</span>
-                    <Sparkles size={10} />
-                  </span>
-                  <span className="workspace-brand-copy">
-                    <strong>Comiku</strong>
-                    <small>Workspace</small>
-                  </span>
+                <Link
+                  className="account-brand"
+                  to="/"
+                  title={siteSettings.name}
+                >
+                  <SiteBrand variant="sidebar" />
                 </Link>
                 <IconButton
                   className="workspace-sidebar-collapse"

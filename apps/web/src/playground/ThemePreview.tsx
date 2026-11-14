@@ -1,4 +1,9 @@
-import { useLayoutEffect, useState, type CSSProperties } from "react";
+import {
+  useContext,
+  useLayoutEffect,
+  useState,
+  type CSSProperties,
+} from "react";
 import { Palette, RotateCcw } from "lucide-react";
 import {
   Badge,
@@ -18,11 +23,17 @@ import {
   type ThemeStyle,
 } from "../styles/theme";
 import "./theme-preview.css";
+import { previewThemeStorageKey } from "../features/site/theme-selection";
+import { SitePreviewContext } from "../features/site/site-context";
 
 export function ThemePreview() {
+  const preview = useContext(SitePreviewContext);
   const [theme, setTheme] = useState<ThemePreference>(() => {
     try {
-      return readTheme(localStorage.getItem(themeStorageKey));
+      return readTheme(
+        localStorage.getItem(previewThemeStorageKey) ??
+          localStorage.getItem(themeStorageKey),
+      );
     } catch {
       return { ...defaultTheme };
     }
@@ -34,6 +45,7 @@ export function ThemePreview() {
     setDraft(next.brand);
   }
   useLayoutEffect(() => {
+    const release = preview?.acquire();
     const root = document.documentElement;
     const values = {
       "--color-brand": theme.brand,
@@ -51,7 +63,7 @@ export function ThemePreview() {
     );
     root.dataset.themeStyle = theme.style;
     try {
-      localStorage.setItem(themeStorageKey, JSON.stringify(theme));
+      localStorage.setItem(previewThemeStorageKey, JSON.stringify(theme));
     } catch {
       /* Preview remains usable when storage is blocked. */
     }
@@ -63,8 +75,9 @@ export function ThemePreview() {
       );
       if (previousStyle === null) root.removeAttribute("data-theme-style");
       else root.setAttribute("data-theme-style", previousStyle);
+      release?.();
     };
-  }, [theme, contrast.normal.color, contrast.hover.color]);
+  }, [theme, contrast.normal.color, contrast.hover.color, preview]);
 
   return (
     <Surface className="theme-preview" id="theme">

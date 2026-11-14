@@ -8,6 +8,7 @@ import { LoginPage } from "./features/account/LoginPage";
 import { RegisterPage } from "./features/account/RegisterPage";
 import { WorkspaceRoutes } from "./features/account/WorkspaceRoutes";
 import { DesignSystemPlayground } from "./playground/DesignSystemPlayground";
+import { SiteProvider } from "./features/site/SiteProvider";
 import "./styles/tokens.css";
 import "./styles/global.css";
 import "./features/workspace/workspace.css";
@@ -28,7 +29,9 @@ const router = createBrowserRouter([
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <SiteProvider>
+        <RouterProvider router={router} />
+      </SiteProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

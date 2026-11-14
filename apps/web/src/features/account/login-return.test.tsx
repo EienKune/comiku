@@ -14,6 +14,10 @@ import { PasswordPage } from "./ProfilePage";
 
 const mocks = vi.hoisted(() => ({ current: null as unknown, post: vi.fn() }));
 vi.mock("./api", () => ({
+  publicSiteQueryKey: ["site"],
+  clearAccountCache: () => {
+    mocks.current = null;
+  },
   useMe: () => ({ data: mocks.current, isPending: false, isError: false }),
   client: { POST: mocks.post, GET: vi.fn() },
   authenticatedFetch: vi.fn(),
