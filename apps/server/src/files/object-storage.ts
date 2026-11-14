@@ -5,6 +5,7 @@ export interface StoredObjectMetadata {
 }
 
 export interface PutObjectInput {
+  signal?: AbortSignal;
   key: string;
   body: Uint8Array | Readable;
   size: number;
@@ -40,7 +41,7 @@ export interface ObjectStorage {
     expiresInSeconds: number,
   ): Promise<SignedWriteTarget>;
   writeSigned?(token: string, body: Uint8Array): Promise<void>;
-  delete(key: string): Promise<void>;
+  delete(key: string, signal?: AbortSignal): Promise<void>;
 }
 
 export const OBJECT_STORAGE = Symbol("OBJECT_STORAGE");

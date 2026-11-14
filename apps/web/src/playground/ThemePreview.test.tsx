@@ -2,7 +2,8 @@ import { StrictMode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ThemePreview } from "./ThemePreview";
-import { themeStorageKey } from "../styles/theme";
+import { themeStorageKey as legacyThemeStorageKey } from "../styles/theme";
+import { previewThemeStorageKey as themeStorageKey } from "../features/site/theme-selection";
 
 afterEach(() => {
   cleanup();
@@ -13,6 +14,10 @@ afterEach(() => {
 });
 
 test("preview persists choices, ignores incomplete color input and restores app styles on exit", () => {
+  localStorage.setItem(
+    legacyThemeStorageKey,
+    JSON.stringify({ brand: "#123456", style: "soft" }),
+  );
   const root = document.documentElement;
   root.style.setProperty("--color-brand", "#123456", "important");
   root.dataset.themeStyle = "soft";
@@ -36,6 +41,10 @@ test("preview persists choices, ignores incomplete color input and restores app 
     "true",
   );
   unmount();
+  expect(JSON.parse(localStorage.getItem(legacyThemeStorageKey)!)).toEqual({
+    brand: "#123456",
+    style: "soft",
+  });
   expect(root.style.getPropertyValue("--color-brand")).toBe("#123456");
   // jsdom drops priority on custom properties; real-browser QA covers restoration.
   expect(root.style.getPropertyValue("--color-on-brand")).toBe("");
@@ -63,4 +72,39 @@ test("blocked storage does not prevent temporary theme switching or reset", () =
   expect(document.documentElement.style.getPropertyValue("--color-brand")).toBe(
     "#33ccbb",
   );
+});
+
+test.each([
+  "夏莱终端",
+  "古书馆图册",
+  "什亭工作台",
+  "阿罗娜",
+  "普拉娜",
+  "什亭双人",
+  "BA 青蓝白",
+  "BA 亮蓝炭灰",
+])("%s persists complete style and releases its palette", (name) => {
+  const view = render(
+    <StrictMode>
+      <ThemePreview />
+    </StrictMode>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(name) }));
+  const style = document.documentElement.dataset.themeStyle;
+  expect(JSON.parse(localStorage.getItem(themeStorageKey)!)).toMatchObject({
+    style,
+  });
+  expect(
+    document.documentElement.style.getPropertyValue("--ba-action-bg"),
+  ).not.toBe("");
+  view.unmount();
+  expect(
+    document.documentElement.style.getPropertyValue("--ba-action-bg"),
+  ).toBe("");
+  render(<ThemePreview />);
+  expect(document.documentElement.dataset.themeStyle).toBe(style);
+  fireEvent.click(screen.getByRole("button", { name: /青绿/ }));
+  expect(
+    document.documentElement.style.getPropertyValue("--ba-action-bg"),
+  ).toBe("");
 });

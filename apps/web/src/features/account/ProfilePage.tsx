@@ -11,17 +11,11 @@ import {
 } from "react-router";
 import { Palette, UserRound, KeyRound } from "lucide-react";
 import { Button, SelectField, Surface, TextField } from "../../components/ui";
-import {
-  applyTheme,
-  defaultTheme,
-  isHexColor,
-  readTheme,
-  themePresets,
-  themeStorageKey,
-  type ThemeStyle,
-} from "../../styles/theme";
+import { isHexColor, themePresets, type ThemeStyle } from "../../styles/theme";
+import { useSite } from "../site/site-context";
+import { resolveTheme, siteTheme } from "../site/theme-selection";
 import { useAccount } from "./account-context";
-import { client, queryClient, unwrap } from "./api";
+import { client, queryClient, unwrap, clearAccountCache } from "./api";
 import { Feedback, SectionHeading } from "./forms";
 import { AvatarSettings } from "./AvatarSettings";
 import { refreshMemberProfile } from "./profile-cache";
@@ -93,14 +87,15 @@ function SettingsFrame({
 }
 
 function AppearanceSettings() {
-  const [theme, setTheme] = useState(() =>
-    readTheme(localStorage.getItem(themeStorageKey)),
-  );
-  const [draft, setDraft] = useState(theme.brand);
+  const { settings, selection, selectTheme } = useSite();
+  const theme = resolveTheme(selection, siteTheme(settings.themePresetId));
+  const [draft, setDraft] = useState<string>();
   function choose(next: { brand: string; style: ThemeStyle }) {
-    setTheme(next);
-    setDraft(next.brand);
-    applyTheme(next);
+    setDraft(undefined);
+    selectTheme({
+      mode: "custom",
+      theme: { brand: next.brand, style: next.style },
+    });
   }
   return (
     <section className="settings-pane">
@@ -130,8 +125,12 @@ function AppearanceSettings() {
       <div className="account-form-row">
         <TextField
           label="自定义品牌色"
-          value={draft}
-          error={!isHexColor(draft) ? "请输入 # 加六位十六进制色值" : undefined}
+          value={draft ?? theme.brand}
+          error={
+            !isHexColor(draft ?? theme.brand)
+              ? "请输入 # 加六位十六进制色值"
+              : undefined
+          }
           onChange={(event) => {
             const value = event.target.value;
             setDraft(value);
@@ -148,10 +147,26 @@ function AppearanceSettings() {
         >
           <option value="soft">柔彩</option>
           <option value="minimal">黑白极简</option>
+          {themePresets
+            .filter(
+              (preset) => preset.style !== "soft" && preset.style !== "minimal",
+            )
+            .map((preset) => (
+              <option key={preset.id} value={preset.style}>
+                {preset.name}
+              </option>
+            ))}
         </SelectField>
       </div>
-      <Button variant="secondary" onClick={() => choose({ ...defaultTheme })}>
-        恢复默认
+      <Button
+        variant="secondary"
+        aria-pressed={selection.mode === "site"}
+        onClick={() => {
+          setDraft(undefined);
+          selectTheme({ mode: "site" });
+        }}
+      >
+        跟随站点
       </Button>
     </section>
   );
@@ -287,7 +302,7 @@ export function PasswordPage() {
                 }),
               );
               reset();
-              if (user.mustChangePassword) queryClient.clear();
+              if (user.mustChangePassword) clearAccountCache();
               queryClient.setQueryData(["me"], updated);
               if (user.mustChangePassword)
                 navigate(

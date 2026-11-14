@@ -1,0 +1,28 @@
+.account-brand > .site-brand-image {
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  object-fit: contain;
+}
+.workspace-brand-mark > .site-brand-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.workspace-brand-copy {
+  min-width: 0;
+}
+.workspace-brand-copy strong {
+  overflow-wrap: anywhere;
+}
+.account-login-card .account-brand {
+  max-width: 100%;
+  min-width: 0;
+}
+.site-brand-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.account-login-card .account-brand > svg {
+  flex-shrink: 0;
+}

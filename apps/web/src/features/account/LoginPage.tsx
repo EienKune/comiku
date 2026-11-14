@@ -3,9 +3,9 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Link, Navigate, useLocation, useNavigate } from "react-router";
-import { BookOpen } from "lucide-react";
+import { SiteBrand } from "../site/SiteBrand";
 import { Button, Surface, TextField } from "../../components/ui";
-import { client, queryClient, unwrap, useMe } from "./api";
+import { client, queryClient, unwrap, useMe, clearAccountCache } from "./api";
 import { ErrorState, Feedback, LoadingState } from "./forms";
 import "./account.css";
 import { loginReturnTarget } from "./login-return";
@@ -48,8 +48,7 @@ export function LoginPage() {
     <main className="account-login">
       <Surface className="account-login-card">
         <div className="account-brand">
-          <BookOpen aria-hidden="true" />
-          Comiku
+          <SiteBrand />
         </div>
         <h1>一起，把故事带给更多人。</h1>
         <form
@@ -60,7 +59,7 @@ export function LoginPage() {
                 await client.POST("/api/auth/login", { body: values }),
               );
               resetField("password");
-              queryClient.clear();
+              clearAccountCache();
               queryClient.setQueryData(["me"], user);
               navigate(
                 user.mustChangePassword
