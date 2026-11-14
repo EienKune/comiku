@@ -5,12 +5,14 @@ import { SectionHeading } from "../account/forms";
 import { SourceManagement } from "./SourceManagement";
 import { NotificationManagement } from "./NotificationManagement";
 import { AccountsPage } from "../account/AccountsPage";
+import { ArchiveExportManagement } from "./ArchiveExportManagement";
 import "./system.css";
 
 const tabs = [
   { value: "collection", label: "图源采集", permission: "system:manage" },
   { value: "birthdays", label: "角色生日", permission: "system:manage" },
   { value: "notifications", label: "推送通知", permission: "system:manage" },
+  { value: "exports", label: "数据导出", permission: "system:manage" },
   { value: "accounts", label: "账号管理", permission: "accounts:manage" },
 ] as const;
 
@@ -109,6 +111,17 @@ export function SystemManagementPage() {
           tabIndex={0}
         >
           <NotificationManagement enabled={active === "notifications"} />
+        </div>
+      )}
+      {user.permissions.includes("system:manage") && (
+        <div
+          id="system-panel-exports"
+          role="tabpanel"
+          aria-labelledby="system-tab-exports"
+          hidden={active !== "exports"}
+          tabIndex={0}
+        >
+          <ArchiveExportManagement enabled={active === "exports"} />
         </div>
       )}
       {user.permissions.includes("accounts:manage") && (

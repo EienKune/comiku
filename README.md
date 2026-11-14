@@ -75,6 +75,7 @@ pnpm dev
 
 - [环境配置与故障排查](docs/configuration.md)
 - [部署、备份与恢复](docs/deployment.md)
+- [作品归档导出](docs/work-archives.md)
 - [图源抓取适配器](docs/adapters/source-ingestion.md)
 - [图像分类适配器与 BA PixAI 接入](docs/adapters/image-analysis.md)
 - [群通知与工作提醒](docs/notifications.md)

@@ -460,6 +460,8 @@ export class FileObjectsService {
           typesetPackages: { none: {} },
           typesetUploadImages: { none: {} },
           typesetImages: { none: {} },
+          archiveExportEntries: { none: {} },
+          archiveExportPackages: { none: {} },
         },
       });
       if (!unreferenced) return null;

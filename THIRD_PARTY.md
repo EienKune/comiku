@@ -8,6 +8,8 @@ Comiku 的原创代码、文档和自有示例图采用 MIT；第三方包保留
 
 主要依赖包括 React、Vite、NestJS、Prisma、AWS SDK、Sharp/libvips、fflate、Lucide、OpenAPI 工具和 PostgreSQL；具体许可证和声明以安装版本中的 LICENSE、NOTICE 和包元数据为准。Sharp 包含原生图像库，Docker 镜像也包含独立授权的系统组件。
 
+归档导出的流式 ZIP64 writer 使用 `yazl` 3.3.1（MIT），类型声明使用 `@types/yazl` 3.3.0（MIT）；保留这些包及其传递依赖随包提供的许可证。现有小包仍使用 fflate。
+
 若分发前端构建产物、二进制或容器，需要为实际包含的依赖和原生库整理许可证、声明及适用的对应源码；不能仅附项目 MIT 许可证文本替代这些义务。本仓库提供源码，不分发依赖目录或预构建镜像。完整的传递依赖许可证清单需根据实际分发产物另行核对。
 
 ## 图标与示例

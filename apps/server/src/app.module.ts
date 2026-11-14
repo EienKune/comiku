@@ -22,6 +22,7 @@ import { NotificationsModule } from "./notifications/notifications.module.js";
 import { BirthdaysModule } from "./birthdays/birthdays.module.js";
 import { WorkSeriesModule } from "./work-series/work-series.module.js";
 import { ImageSimilarityModule } from "./image-similarity/image-similarity.module.js";
+import { ArchiveExportsModule } from "./archive-exports/archive-exports.module.js";
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { ImageSimilarityModule } from "./image-similarity/image-similarity.modul
     BirthdaysModule,
     WorkSeriesModule,
     ImageSimilarityModule,
+    ArchiveExportsModule,
   ],
   controllers: [HealthController],
 })
