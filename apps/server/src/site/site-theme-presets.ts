@@ -7,6 +7,9 @@ export const siteThemePresetIds = [
   "pink",
   "amber",
   "minimal",
+  "schale",
+  "archive",
+  "shittim",
 ] as const;
 export type SiteThemePresetId = (typeof siteThemePresetIds)[number];
 export function normalizeSiteName(value: string): string {

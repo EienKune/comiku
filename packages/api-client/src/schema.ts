@@ -5762,7 +5762,7 @@ export interface components {
             fileName: string;
         };
         /** @enum {string} */
-        SiteThemePresetId: "teal" | "sky" | "lavender" | "pink" | "amber" | "minimal";
+        SiteThemePresetId: "teal" | "sky" | "lavender" | "pink" | "amber" | "minimal" | "schale" | "archive" | "shittim";
         SiteSettingsDto: {
             name: string;
             themePresetId: components["schemas"]["SiteThemePresetId"];

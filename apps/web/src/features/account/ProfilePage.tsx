@@ -147,6 +147,9 @@ function AppearanceSettings() {
         >
           <option value="soft">柔彩</option>
           <option value="minimal">黑白极简</option>
+          <option value="schale">夏莱终端</option>
+          <option value="archive">古书馆图册</option>
+          <option value="shittim">什亭工作台</option>
         </SelectField>
       </div>
       <Button

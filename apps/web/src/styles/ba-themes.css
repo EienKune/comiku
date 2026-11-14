@@ -1,0 +1,172 @@
+/* Optional rounded profiles; existing presets retain their default tokens. */
+:root:is(
+  [data-theme-style="schale"],
+  [data-theme-style="archive"],
+  [data-theme-style="shittim"]
+) {
+  --color-surface-glass: #fff;
+  --shadow-button: 0 1px 2px rgb(23 52 84 / 8%);
+  --shadow-button-hover: 0 2px 5px rgb(23 52 84 / 12%);
+  --shadow-xs: 0 1px 2px rgb(23 52 84 / 4%);
+  --shadow-sm: 0 2px 8px rgb(23 52 84 / 5%);
+  --shadow-md: 0 8px 24px rgb(23 52 84 / 8%);
+  --shadow-hover: 0 4px 14px rgb(23 52 84 / 9%);
+  --lift-control: 0px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root:is(
+    [data-theme-style="schale"],
+    [data-theme-style="archive"],
+    [data-theme-style="shittim"]
+  ) {
+    --press-scale: 0.99;
+  }
+}
+
+:root:is(
+    [data-theme-style="schale"],
+    [data-theme-style="archive"],
+    [data-theme-style="shittim"]
+  )
+  .ui-button--primary {
+  background: var(--ba-action-bg);
+  color: var(--ba-action-text);
+  border-color: var(--ba-action-border);
+}
+
+:root:is(
+    [data-theme-style="schale"],
+    [data-theme-style="archive"],
+    [data-theme-style="shittim"]
+  )
+  .ui-button--primary:hover:not(:disabled) {
+  background: var(--ba-action-hover);
+  color: var(--ba-action-text-hover);
+}
+
+:root:is(
+    [data-theme-style="schale"],
+    [data-theme-style="archive"],
+    [data-theme-style="shittim"]
+  )
+  .brand-mark {
+  border-radius: var(--radius-md);
+  box-shadow: none;
+}
+
+:root:is(
+    [data-theme-style="schale"],
+    [data-theme-style="archive"],
+    [data-theme-style="shittim"]
+  )
+  .brand-mark
+  svg {
+  background: var(--color-decor-accent);
+}
+
+:root:is(
+    [data-theme-style="schale"],
+    [data-theme-style="archive"],
+    [data-theme-style="shittim"]
+  )
+  .playground-sidebar {
+  backdrop-filter: none;
+  box-shadow: var(--shadow-sm);
+}
+
+:root[data-theme-style="schale"] .sidebar-nav button.is-active {
+  border-left-color: #128afa;
+}
+
+:root[data-theme-style="archive"] .ui-surface {
+  box-shadow: 0 1px 2px rgb(48 60 80 / 4%);
+}
+
+:root[data-theme-style="archive"] .work-card__cover {
+  margin: 10px;
+  border-radius: var(--radius-lg);
+}
+
+:root:is(
+    [data-theme-style="schale"],
+    [data-theme-style="archive"],
+    [data-theme-style="shittim"]
+  )
+  .hero-spark {
+  color: var(--color-decor-accent);
+}
+
+/* The cover is a CSS illustration in the lab, not an adopted work image. */
+:root:is(
+    [data-theme-style="schale"],
+    [data-theme-style="archive"],
+    [data-theme-style="shittim"]
+  )
+  .hero-work-card__cover {
+  background:
+    radial-gradient(
+      circle at 65% 22%,
+      rgb(255 255 255 / 92%) 0 16%,
+      transparent 17%
+    ),
+    linear-gradient(
+      154deg,
+      var(--color-brand-200) 0 48%,
+      var(--color-decor-tint) 49% 100%
+    );
+}
+
+:root:is(
+    [data-theme-style="schale"],
+    [data-theme-style="archive"],
+    [data-theme-style="shittim"]
+  )
+  .hero-work-card__cover
+  span:first-child {
+  background: color-mix(in srgb, var(--color-text) 75%, transparent);
+}
+
+:root:is(
+    [data-theme-style="schale"],
+    [data-theme-style="archive"],
+    [data-theme-style="shittim"]
+  )
+  .hero-work-card__cover
+  span:last-child {
+  border-color: color-mix(in srgb, var(--color-text) 75%, transparent);
+}
+
+:root:is(
+    [data-theme-style="schale"],
+    [data-theme-style="archive"],
+    [data-theme-style="shittim"]
+  )
+  .hero-orbit--two {
+  border-color: color-mix(in srgb, var(--color-decor-accent) 28%, transparent);
+}
+
+/* Marker meanings keep their pink/violet backgrounds and an independent dark label. */
+:root:is(
+    [data-theme-style="schale"],
+    [data-theme-style="archive"],
+    [data-theme-style="shittim"]
+  )
+  .marker-demo
+  :is(
+    .translation-marker:hover,
+    .translation-marker.is-selected,
+    .translation-marker--outside:not(.is-selected)
+  ) {
+  color: var(--ba-marker-text);
+}
+
+:root[data-theme-style="shittim"] .section-heading h2 {
+  border-left: 4px solid var(--color-brand);
+  padding-left: 12px;
+}
+
+:root[data-theme-style="shittim"] .ui-badge,
+:root[data-theme-style="archive"] .ui-badge {
+  border-radius: var(--radius-sm);
+}

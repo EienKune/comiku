@@ -1,6 +1,7 @@
 import {
   defaultTheme,
   isHexColor,
+  isThemeStyle,
   readTheme,
   themePresets,
   themeStorageKey,
@@ -19,7 +20,7 @@ function valid(value: unknown): value is ThemePreference {
     typeof value.brand === "string" &&
     isHexColor(value.brand) &&
     "style" in value &&
-    (value.style === "soft" || value.style === "minimal")
+    isThemeStyle(value.style)
   );
 }
 export function readThemeSelection(

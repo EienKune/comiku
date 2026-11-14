@@ -118,6 +118,19 @@ test("site settings keep anonymous assets, CAS, account barriers and recoverable
       admin.cookie,
     );
   try {
+    await t.test(
+      "rounded theme presets survive HTTP save and readback",
+      async () => {
+        for (const themePresetId of ["schale", "archive", "shittim"]) {
+          const current = await readSettings();
+          const response = await save(current.revision, { themePresetId });
+          assert.equal(response.status, 200);
+          assert.equal((await readSettings()).themePresetId, themePresetId);
+        }
+        const current = await readSettings();
+        assert.equal((await save(current.revision)).status, 200);
+      },
+    );
     await t.test("anonymous fields, ETag and administrator scope", async () => {
       const response = await request("/api/site"),
         value = (await response.json()) as SiteSettingsDto;

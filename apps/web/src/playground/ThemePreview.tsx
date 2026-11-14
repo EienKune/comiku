@@ -13,7 +13,8 @@ import {
   TextField,
 } from "../components/ui";
 import {
-  brandReadability,
+  themeReadability,
+  mountTheme,
   defaultTheme,
   isHexColor,
   readTheme,
@@ -39,42 +40,21 @@ export function ThemePreview() {
     }
   });
   const [draft, setDraft] = useState(theme.brand);
-  const contrast = brandReadability(theme.brand);
+  const contrast = themeReadability(theme);
   function choose(next: ThemePreference) {
     setTheme({ brand: next.brand, style: next.style });
     setDraft(next.brand);
   }
   useLayoutEffect(() => {
     const release = preview?.acquire();
-    const root = document.documentElement;
-    const values = {
-      "--color-brand": theme.brand,
-      "--color-on-brand": contrast.normal.color,
-      "--color-on-brand-hover": contrast.hover.color,
-    };
-    const previous = Object.keys(values).map((key) => [
-      key,
-      root.style.getPropertyValue(key),
-      root.style.getPropertyPriority(key),
-    ]);
-    const previousStyle = root.getAttribute("data-theme-style");
-    Object.entries(values).forEach(([key, value]) =>
-      root.style.setProperty(key, value),
-    );
-    root.dataset.themeStyle = theme.style;
+    const restore = mountTheme(document.documentElement, theme);
     try {
       localStorage.setItem(previewThemeStorageKey, JSON.stringify(theme));
     } catch {
       /* Preview remains usable when storage is blocked. */
     }
     return () => {
-      previous.forEach(([key, value, priority]) =>
-        value
-          ? root.style.setProperty(key, value, priority)
-          : root.style.removeProperty(key),
-      );
-      if (previousStyle === null) root.removeAttribute("data-theme-style");
-      else root.setAttribute("data-theme-style", previousStyle);
+      restore();
       release?.();
     };
   }, [theme, contrast.normal.color, contrast.hover.color, preview]);
@@ -95,7 +75,7 @@ export function ThemePreview() {
           恢复默认
         </Button>
       </div>
-      <p>同一套组件，六种表情。切换后往下浏览，或在“交互手感”里试试。</p>
+      <p>同一套组件，多种表情。切换后往下浏览，或在“交互手感”里试试。</p>
       <div className="theme-presets" role="group" aria-label="主题预设">
         {themePresets.map((preset) => (
           <button
@@ -147,6 +127,9 @@ export function ThemePreview() {
         >
           <option value="soft">柔彩 · 圆润与轻回弹</option>
           <option value="minimal">极简 · 克制与清晰边界</option>
+          <option value="schale">夏莱终端</option>
+          <option value="archive">古书馆图册</option>
+          <option value="shittim">什亭工作台</option>
         </SelectField>
       </div>
       <div className="theme-scale" aria-label="品牌派生色阶">
@@ -165,7 +148,7 @@ export function ThemePreview() {
         按钮文字对比度：默认{" "}
         <strong>{contrast.normal.contrast.toFixed(2)}:1</strong> · 悬停{" "}
         <strong>{contrast.hover.contrast.toFixed(2)}:1</strong>
-        （各自自动选择黑/白字，目标 ≥ 4.5:1）
+        （按当前主题的实际操作色计算，目标 ≥ 4.5:1）
       </div>
       <div className="theme-semantic">
         <span>状态色保持独立</span>

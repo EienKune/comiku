@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { createBrowserRouter, RouterProvider } from "react-router";
+import { createBrowserRouter, RouterProvider, Navigate } from "react-router";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./features/account/api";
 import { AccountLayout } from "./features/account/AccountApp";
@@ -11,9 +11,14 @@ import { DesignSystemPlayground } from "./playground/DesignSystemPlayground";
 import { SiteProvider } from "./features/site/SiteProvider";
 import "./styles/tokens.css";
 import "./styles/global.css";
+import "./styles/ba-themes.css";
 import "./features/workspace/workspace.css";
 
 const router = createBrowserRouter([
+  {
+    path: "/playground/ba-themes",
+    element: <Navigate to="/playground" replace />,
+  },
   { path: "/login", element: <LoginPage /> },
   { path: "/register", element: <RegisterPage /> },
   {

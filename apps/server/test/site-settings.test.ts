@@ -25,6 +25,9 @@ test("site names are plain bounded Unicode and existing themes remain available"
     "pink",
     "amber",
     "minimal",
+    "schale",
+    "archive",
+    "shittim",
   ]);
 });
 
