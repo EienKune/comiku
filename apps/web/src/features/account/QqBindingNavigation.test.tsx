@@ -111,6 +111,8 @@ test("the legacy account route opens the authorized system tab without a persona
     if (path === "/api/users") return ok([member]);
     if (path === "/api/users/roles")
       return ok([{ value: "admin", label: "管理员" }]);
+    if (path === "/api/users/registration-settings")
+      return ok({ enabled: false, allowRoleSelection: false, revision: 0 });
     throw new Error("Unexpected read: " + path);
   });
   setup("/settings/users?keep=yes#history");
@@ -125,7 +127,11 @@ test("the legacy account route opens the authorized system tab without a persona
   expect(screen.queryByRole("tab", { name: "图源采集" })).toBeNull();
   expect(
     readPaths(get).every((path) =>
-      ["/api/users", "/api/users/roles"].includes(path),
+      [
+        "/api/users",
+        "/api/users/roles",
+        "/api/users/registration-settings",
+      ].includes(path),
     ),
   ).toBe(true);
 });

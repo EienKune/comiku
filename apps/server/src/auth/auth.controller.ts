@@ -3,6 +3,7 @@ import {
   BadRequestException,
   Controller,
   Get,
+  Header,
   HttpCode,
   Inject,
   Post,
@@ -30,6 +31,10 @@ import { UsersService } from "../users/users.service.js";
 import { SESSION_COOKIE } from "./auth.guard.js";
 import { RateLimit } from "./rate-limit.js";
 import { sessionCookieOptions } from "./cookie.js";
+import {
+  RegisterDto,
+  RegistrationOptionsDto,
+} from "../users/registration.dto.js";
 
 @ApiTags("auth")
 @ApiCookieAuth()
@@ -46,6 +51,33 @@ export class AuthController {
       maxAge: this.environment.authSessionAbsoluteSeconds * 1000,
     });
   }
+  @Get("registration")
+  @Header("Cache-Control", "no-store")
+  @Access({ public: true })
+  @ApiOperation({ operationId: "getRegistrationOptions", security: [] })
+  @ApiOkResponse({ type: RegistrationOptionsDto })
+  registration() {
+    return this.users.registrationOptions();
+  }
+
+  @Post("register")
+  @HttpCode(200)
+  @Access({ public: true })
+  @ApiOperation({ operationId: "registerAccount", security: [] })
+  @ApiBody({ type: RegisterDto })
+  @ApiOkResponse({ type: AuthUserDto })
+  async register(
+    @Body(bodyValidation(RegisterDto)) input: RegisterDto,
+    @Req() req: AuthRequest,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    this.rate.check(`register-ip:${req.ip}`, 30);
+    this.rate.check(`register-user:${input.username}`, 5);
+    const result = await this.users.register(input);
+    this.cookie(res, result.token);
+    return result.user;
+  }
+
   @Post("login")
   @HttpCode(200)
   @Access({ public: true })

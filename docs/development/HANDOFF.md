@@ -349,6 +349,11 @@ Pixiv profile resolution uses the native App API without enumerating works, but 
 
 - Keep published birthday migrations byte-for-byte. A standalone reminder release can precede their older dated migration: the additive birthday migration introduces its resource discriminator without colliding with reminder tables. A later forward migration backfills only defaulted `work.digest`/`work.ready` namespaces. Type-derived routing, history and blocker queries remain compatible with those old rows, and integrated producers keep explicit stored namespaces. Frozen snapshots, hashes, route references and all other event fields remain untouched.
 
+## Registration and account qualifications
+
+- Public registration and registration-time role selection are separate persisted flags, both closed by default. Bind a signup to the settings revision shown to its author, then recheck enabled/policy/revision inside the same account-administration barrier as account creation, audit and session issuance. Hash passwords before taking that barrier. When selection is disabled, reject submitted capabilities rather than silently granting them; a new role-free member can still reach personal settings and await an administrator.
+- Only administrators change existing members' roles and language capabilities. Reject changes that remove an unfinished participant's actual stage/language qualification, including reservations, archived work and active legacy revision participants; preserve submitted history. Acquire the shared account barrier before work locks when creating or restoring participation, and recheck qualification within it. Cancellation restores a whole submitted round, so every restored member must remain qualified. Use observed PostgreSQL lock waiters/holders in concurrency regressions, not timing sleeps; select a scalar from advisory-lock functions to avoid unsupported PostgreSQL `void` results.
+
 ## Birthday adapter boundary
 
 - Calendar, HTTP facade and reminder orchestration consume BirthdayDataAdapter. Keep provider identities, avatar resolution, acquisition, persistent evidence validation, source locks and freshness inside adapters/ba. Source adapters return a persisted catalog reference and a local, transactionally validated reminder publication; core never performs network I/O in that transaction.
