@@ -19,6 +19,18 @@ export interface Environment {
     connectionsFile?: string;
   };
   birthdays?: { enabled: boolean };
+  archiveExports: {
+    enabled: boolean;
+    packageTargetBytes: number;
+    maxEntriesPerPackage: number;
+    partSizeBytes: number;
+    uploadConcurrency: number;
+    maxRunBytes: number;
+    maxCacheBytes: number;
+    maxActiveRuns: number;
+    deadlineHours: number;
+    retentionDays: number;
+  };
   galleryDl?: {
     python: string;
     xConfigPath?: string;
@@ -72,6 +84,11 @@ export function loadRootEnvironment(): void {
 }
 
 export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
+  if (
+    input.ARCHIVE_EXPORT_ENABLED !== undefined &&
+    !["true", "false"].includes(input.ARCHIVE_EXPORT_ENABLED)
+  )
+    throw new Error("ARCHIVE_EXPORT_ENABLED must be true or false.");
   if (
     input.BIRTHDAYS_ENABLED !== undefined &&
     !["true", "false"].includes(input.BIRTHDAYS_ENABLED)
@@ -140,6 +157,56 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
     }
     return Number(value);
   };
+  const archiveInteger = (
+    suffix: string,
+    fallback: number,
+    minimum: number,
+    maximum: number,
+  ) => {
+    const name = `ARCHIVE_EXPORT_${suffix}`;
+    const value = integer(name, fallback, minimum);
+    if (!Number.isSafeInteger(value) || value > maximum)
+      throw new Error(
+        `${name} must be an integer between ${minimum} and ${maximum}.`,
+      );
+    return value;
+  };
+  const archiveExports: Environment["archiveExports"] = {
+    enabled: input.ARCHIVE_EXPORT_ENABLED === "true",
+    packageTargetBytes: archiveInteger(
+      "PACKAGE_BYTES",
+      2 ** 31,
+      2 ** 26,
+      2 ** 34,
+    ),
+    maxEntriesPerPackage: archiveInteger("MAX_ENTRIES", 20_000, 1, 20_000),
+    partSizeBytes: archiveInteger(
+      "PART_BYTES",
+      16 * 2 ** 20,
+      5 * 2 ** 20,
+      32 * 2 ** 20,
+    ),
+    uploadConcurrency: archiveInteger("UPLOAD_CONCURRENCY", 1, 1, 2),
+    maxRunBytes: archiveInteger(
+      "MAX_RUN_BYTES",
+      2 ** 40,
+      2 ** 26,
+      10 * 2 ** 40,
+    ),
+    maxCacheBytes: archiveInteger(
+      "CACHE_BYTES",
+      2 ** 41,
+      2 ** 26,
+      20 * 2 ** 40,
+    ),
+    maxActiveRuns: archiveInteger("MAX_ACTIVE_RUNS", 1, 1, 4),
+    deadlineHours: archiveInteger("DEADLINE_HOURS", 72, 1, 168),
+    retentionDays: archiveInteger("RETENTION_DAYS", 7, 1, 30),
+  };
+  if (archiveExports.maxRunBytes > archiveExports.maxCacheBytes)
+    throw new Error(
+      "ARCHIVE_EXPORT_MAX_RUN_BYTES must not exceed ARCHIVE_EXPORT_CACHE_BYTES.",
+    );
   const authSessionIdleSeconds = integer("AUTH_SESSION_IDLE_SECONDS", 1800, 1);
   const authSessionAbsoluteSeconds = integer(
     "AUTH_SESSION_ABSOLUTE_SECONDS",
@@ -263,6 +330,7 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
       "SOURCE_CREDENTIALS_STATE_DIRECTORY must be a literal absolute path.",
     );
   return {
+    archiveExports,
     ...(input.BIRTHDAYS_ENABLED !== undefined
       ? { birthdays: { enabled: input.BIRTHDAYS_ENABLED === "true" } }
       : {}),

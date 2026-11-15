@@ -1,0 +1,239 @@
+.archive-export-management {
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+}
+.archive-export-panel {
+  padding: var(--space-5);
+  min-width: 0;
+}
+.archive-export-panel h2 {
+  margin: 0;
+  font-size: var(--text-xl);
+}
+.archive-export-panel h3,
+.archive-export-dialog h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+.archive-export-panel h4 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--text-md);
+}
+.archive-export-muted,
+.archive-export-identity time,
+.archive-export-packages span {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+.archive-export-form {
+  display: grid;
+  grid-template-columns: minmax(130px, 180px) minmax(130px, 180px) minmax(
+      160px,
+      240px
+    );
+  gap: var(--space-4);
+  margin-block: var(--space-4);
+}
+.archive-export-form .ui-field,
+.archive-export-bandwidth .ui-field,
+.archive-export-form .ui-field__control {
+  min-width: 0;
+}
+.archive-export-heading,
+.archive-export-actions,
+.archive-export-facts,
+.archive-export-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+.archive-export-heading {
+  justify-content: space-between;
+}
+.archive-export-actions {
+  margin-block: var(--space-3);
+}
+.archive-export-actions .ui-button,
+.archive-export-pagination .ui-button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.archive-export-check {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+.archive-export-check input {
+  accent-color: var(--color-brand);
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.archive-export-preview {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  margin-top: var(--space-4);
+}
+.archive-export-facts {
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  margin-block: var(--space-3);
+}
+.archive-export-facts > span,
+.archive-export-count {
+  white-space: nowrap;
+}
+.archive-export-bandwidth {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+.archive-export-bandwidth .ui-field {
+  flex: 0 1 380px;
+}
+.archive-export-bandwidth > .ui-button {
+  margin-top: var(--space-5);
+}
+.archive-export-run {
+  border-bottom: 1px solid var(--color-border);
+}
+.archive-export-summary {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(90px, auto) auto minmax(
+      160px,
+      auto
+    );
+  gap: var(--space-4);
+  align-items: center;
+  padding-block: var(--space-4);
+}
+.archive-export-identity,
+.archive-export-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.archive-export-state > span:not(.ui-badge) {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+.archive-export-summary .archive-export-actions {
+  justify-content: flex-end;
+  margin: 0;
+}
+.archive-export-details {
+  padding-bottom: var(--space-4);
+  min-width: 0;
+}
+.archive-export-packages,
+.archive-export-issues {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.archive-export-packages li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-block: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+.archive-export-packages li > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.archive-export-packages .ui-button {
+  flex-shrink: 0;
+}
+.archive-export-packages code {
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+.archive-export-issues li {
+  padding-block: var(--space-2);
+  overflow-wrap: anywhere;
+}
+.archive-export-pagination {
+  justify-content: flex-end;
+  margin-top: var(--space-4);
+}
+.archive-export-dialog {
+  box-sizing: border-box;
+  width: min(560px, calc(100vw - 2 * var(--space-4)));
+  max-height: calc(100dvh - 2 * var(--space-4));
+  padding: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text);
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+}
+.archive-export-dialog::backdrop {
+  background: var(--color-overlay);
+}
+.archive-export-dialog p {
+  line-height: var(--leading-normal);
+  margin-block: var(--space-4);
+}
+.archive-export-dialog > .archive-export-actions {
+  justify-content: flex-end;
+  margin-bottom: 0;
+}
+@media (max-width: 1000px) {
+  .archive-export-summary {
+    grid-template-columns: minmax(180px, 1fr) auto;
+  }
+  .archive-export-summary .archive-export-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+@media (max-width: 620px) {
+  .archive-export-panel,
+  .archive-export-dialog {
+    padding: var(--space-4);
+  }
+  .archive-export-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+  }
+  .archive-export-form > :last-child {
+    grid-column: 1 / -1;
+  }
+  .archive-export-summary {
+    gap: var(--space-3);
+  }
+  .archive-export-identity {
+    grid-column: 1 / -1;
+  }
+  .archive-export-packages li {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .archive-export-packages .ui-button {
+    align-self: flex-start;
+  }
+  .archive-export-bandwidth > .ui-button {
+    margin-top: 0;
+  }
+  .archive-export-dialog .archive-export-actions .ui-button {
+    flex: 1 1 auto;
+  }
+}

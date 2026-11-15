@@ -11,6 +11,7 @@ datasource db {
 }
 
 model User {
+  archiveExportRuns ArchiveExportRun[]
   workSeriesAudits WorkSeriesAudit[]
   workSeriesMutationReceipts WorkSeriesMutationReceipt[]
   authorCreationRequests AuthorCreationRequest[]
@@ -157,6 +158,8 @@ enum FileLifecycleStatus {
 }
 
 model FileObject {
+  archiveExportEntries ArchiveExportEntry[]
+  archiveExportPackages ArchiveExportPackage[]
   id                   String                        @id @default(uuid()) @db.Uuid
   objectKey            String                        @unique @map("object_key") @db.Text
   bucketScope          String                        @map("bucket_scope") @db.VarChar(32)
@@ -922,7 +925,190 @@ model Work {
   @@index([workflowStatus, reviewStatus, priority, importedAt])
   @@index([reviewStatus, updatedAt])
   @@index([authorId, importedAt])
+  @@index([createdAt, id], map: "works_created_archive_idx")
   @@map("works")
+}
+
+model ArchiveExportSettings {
+  id String @id @default("global") @db.VarChar(20)
+  revision Int @default(0)
+  bandwidthLimitMiB Int @default(0) @map("bandwidth_limit_mib")
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@map("archive_export_settings")
+}
+
+model ArchiveExportRun {
+  id String @id @default(uuid()) @db.Uuid
+  actorId String @map("actor_id") @db.Uuid
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  idempotencyKey String @map("idempotency_key") @db.Uuid
+  payloadHash String @map("payload_hash") @db.Char(64)
+  revision Int @default(0)
+  generation Int @default(1)
+  status String @default("queued") @db.VarChar(24)
+  year Int
+  month Int?
+  content String @db.VarChar(16)
+  includeArchived Boolean @default(false) @map("include_archived")
+  includeDiscarded Boolean @default(false) @map("include_discarded")
+  workCount Int @default(0) @map("work_count")
+  imageCount Int @default(0) @map("image_count")
+  textCount Int @default(0) @map("text_count")
+  warningCount Int @default(0) @map("warning_count")
+  failureCount Int @default(0) @map("failure_count")
+  missingRenderedCount Int @default(0) @map("missing_rendered_count")
+  packageCount Int @default(0) @map("package_count")
+  completedPackageCount Int @default(0) @map("completed_package_count")
+  capturedMonthCount Int @default(0) @map("captured_month_count")
+  estimatedBytes BigInt @default(0) @map("estimated_bytes")
+  completedBytes BigInt @default(0) @map("completed_bytes")
+  error String? @db.VarChar(100)
+  filesStatus String @default("available") @map("files_status") @db.VarChar(24)
+  filesDeletedAt DateTime? @map("files_deleted_at") @db.Timestamptz(3)
+  deletionError String? @map("deletion_error") @db.VarChar(100)
+  deadlineAt DateTime @map("deadline_at") @db.Timestamptz(3)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  expiresAt DateTime? @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  months ArchiveExportMonth[]
+  snapshots ArchiveExportWorkSnapshot[]
+  entries ArchiveExportEntry[]
+  packages ArchiveExportPackage[]
+  mutations ArchiveExportMutation[]
+  @@unique([actorId, idempotencyKey])
+  @@index([createdAt, id])
+  @@index([status, createdAt])
+  @@index([filesStatus, expiresAt])
+  @@map("archive_export_runs")
+}
+
+model ArchiveExportMonth {
+  id String @id @default(uuid()) @db.Uuid
+  runId String @map("run_id") @db.Uuid
+  run ArchiveExportRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+  month Int
+  capturedAt DateTime @map("captured_at") @db.Timestamptz(3)
+  manifestHash String @map("manifest_hash") @db.Char(64)
+  snapshots ArchiveExportWorkSnapshot[]
+  @@unique([runId, month])
+  @@map("archive_export_months")
+}
+
+model ArchiveExportWorkSnapshot {
+  id String @id @default(uuid()) @db.Uuid
+  runId String @map("run_id") @db.Uuid
+  run ArchiveExportRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+  monthId String @map("month_id") @db.Uuid
+  month ArchiveExportMonth @relation(fields: [monthId], references: [id], onDelete: Restrict)
+  workId String @map("work_id") @db.Uuid
+  workNumber Int @map("work_number")
+  workRevision Int @map("work_revision")
+  editorEpoch Int @map("editor_epoch")
+  workflowStatus String @map("workflow_status") @db.VarChar(32)
+  reviewStatus String @map("review_status") @db.VarChar(32)
+  textSource String @map("text_source") @db.VarChar(48)
+  translationVersionId String? @map("translation_version_id") @db.Uuid
+  typesetVersionId String? @map("typeset_version_id") @db.Uuid
+  facts Json
+  issues Json @default("[]")
+  entries ArchiveExportEntry[]
+  @@unique([runId, workId])
+  @@index([runId, workNumber, id])
+  @@index([monthId])
+  @@map("archive_export_work_snapshots")
+}
+
+model ArchiveExportEntry {
+  id String @id @default(uuid()) @db.Uuid
+  runId String @map("run_id") @db.Uuid
+  run ArchiveExportRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+  snapshotId String? @map("snapshot_id") @db.Uuid
+  snapshot ArchiveExportWorkSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  packageId String? @map("package_id") @db.Uuid
+  package ArchiveExportPackage? @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  ordinal Int
+  kind String @db.VarChar(16)
+  path String @db.Text
+  fileObjectId String? @map("file_object_id") @db.Uuid
+  fileObject FileObject? @relation(fields: [fileObjectId], references: [id], onDelete: Restrict)
+  sourceFileObjectId String? @map("source_file_object_id") @db.Uuid
+  sourceKey String? @map("source_key") @db.Text
+  workImageId String? @map("work_image_id") @db.Uuid
+  contentText String? @map("content_text") @db.Text
+  size BigInt
+  checksum String @db.Char(64)
+  @@unique([runId, ordinal])
+  @@unique([runId, path])
+  @@index([fileObjectId])
+  @@index([packageId, ordinal])
+  @@index([snapshotId, ordinal])
+  @@map("archive_export_entries")
+}
+
+model ArchiveExportPackage {
+  id String @id @default(uuid()) @db.Uuid
+  runId String @map("run_id") @db.Uuid
+  run ArchiveExportRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+  ordinal Int
+  status String @default("queued") @db.VarChar(24)
+  fileName String @map("file_name") @db.VarChar(255)
+  manifestHash String @map("manifest_hash") @db.Char(64)
+  estimatedBytes BigInt @map("estimated_bytes")
+  bytes BigInt?
+  checksum String? @db.Char(64)
+  fileObjectId String? @unique @map("file_object_id") @db.Uuid
+  fileObject FileObject? @relation(fields: [fileObjectId], references: [id], onDelete: Restrict)
+  adoptedAttemptId String? @unique @map("adopted_attempt_id") @db.Uuid
+  error String? @db.VarChar(100)
+  jobId String? @map("job_id") @db.Uuid
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  entries ArchiveExportEntry[]
+  attempts ArchiveExportAttempt[]
+  @@unique([runId, ordinal])
+  @@index([runId, status, ordinal])
+  @@map("archive_export_packages")
+}
+
+model ArchiveExportAttempt {
+  id String @id @default(uuid()) @db.Uuid
+  packageId String @map("package_id") @db.Uuid
+  package ArchiveExportPackage @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  generation Int
+  jobId String @map("job_id") @db.Uuid
+  leaseId String @map("lease_id") @db.Uuid
+  ownerId String @map("owner_id") @db.Uuid
+  objectKey String @unique @map("object_key") @db.Text
+  manifestHash String @map("manifest_hash") @db.Char(64)
+  uploadId String? @map("upload_id") @db.Text
+  parts Json @default("[]")
+  status String @default("running") @db.VarChar(24)
+  completeIntent Boolean @default(false) @map("complete_intent")
+  expectedBytes BigInt? @map("expected_bytes")
+  expectedChecksum String? @map("expected_checksum") @db.Char(64)
+  error String? @db.VarChar(100)
+  cleanupStatus String @default("pending") @map("cleanup_status") @db.VarChar(24)
+  cleanupError String? @map("cleanup_error") @db.VarChar(100)
+  startedAt DateTime @default(now()) @map("started_at") @db.Timestamptz(3)
+  settledAt DateTime? @map("settled_at") @db.Timestamptz(3)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  @@unique([jobId, leaseId])
+  @@index([settledAt, startedAt])
+  @@index([packageId, cleanupStatus])
+  @@map("archive_export_attempts")
+}
+
+model ArchiveExportMutation {
+  id String @id @default(uuid()) @db.Uuid
+  runId String @map("run_id") @db.Uuid
+  run ArchiveExportRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+  actorId String @map("actor_id") @db.Uuid
+  idempotencyKey String @map("idempotency_key") @db.Uuid
+  operation String @db.VarChar(24)
+  payloadHash String @map("payload_hash") @db.Char(64)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@unique([actorId, idempotencyKey])
+  @@map("archive_export_mutations")
 }
 
 model WorkSeries {

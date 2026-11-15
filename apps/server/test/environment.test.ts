@@ -4,6 +4,49 @@ import { parseEnvironment } from "../src/config/environment.js";
 
 const databaseUrl = "postgresql://test:secret@127.0.0.1:5432/comiku_test";
 
+test("archive export is opt-in and bounds buffers, capacity and time independently", () => {
+  const defaults = parseEnvironment({
+    DATABASE_URL: databaseUrl,
+  }).archiveExports;
+  assert.equal(defaults.enabled, false);
+  assert.equal(defaults.partSizeBytes, 16 * 2 ** 20);
+  assert.equal(defaults.uploadConcurrency, 1);
+  assert.equal(defaults.packageTargetBytes, 2 ** 31);
+  assert.equal(defaults.maxActiveRuns, 1);
+  assert.equal(defaults.retentionDays, 7);
+  assert.equal(
+    parseEnvironment({
+      DATABASE_URL: databaseUrl,
+      ARCHIVE_EXPORT_ENABLED: "true",
+    }).archiveExports.enabled,
+    true,
+  );
+  for (const [key, value] of [
+    ["ARCHIVE_EXPORT_ENABLED", "1"],
+    ["ARCHIVE_EXPORT_PART_BYTES", "1048576"],
+    ["ARCHIVE_EXPORT_PART_BYTES", "67108864"],
+    ["ARCHIVE_EXPORT_UPLOAD_CONCURRENCY", "3"],
+    ["ARCHIVE_EXPORT_MAX_ENTRIES", "0"],
+    ["ARCHIVE_EXPORT_PACKAGE_BYTES", "Infinity"],
+    ["ARCHIVE_EXPORT_MAX_RUN_BYTES", "9007199254740993"],
+    ["ARCHIVE_EXPORT_RETENTION_DAYS", "0"],
+    ["ARCHIVE_EXPORT_DEADLINE_HOURS", "1000"],
+  ]) {
+    assert.throws(
+      () => parseEnvironment({ DATABASE_URL: databaseUrl, [key!]: value }),
+      /ARCHIVE_EXPORT_/,
+    );
+  }
+  assert.throws(
+    () =>
+      parseEnvironment({
+        DATABASE_URL: databaseUrl,
+        ARCHIVE_EXPORT_CACHE_BYTES: String(2 ** 30),
+      }),
+    /must not exceed/,
+  );
+});
+
 test("birthday integration is explicitly opt-in", () => {
   assert.equal(
     parseEnvironment({ DATABASE_URL: databaseUrl }).birthdays,
@@ -60,6 +103,18 @@ test("online source credentials are opt-in with a literal absolute state directo
 
 test("validates configuration and uses explicit development defaults", () => {
   assert.deepEqual(parseEnvironment({ DATABASE_URL: databaseUrl }), {
+    archiveExports: {
+      enabled: false,
+      packageTargetBytes: 2 ** 31,
+      maxEntriesPerPackage: 20_000,
+      partSizeBytes: 16 * 2 ** 20,
+      uploadConcurrency: 1,
+      maxRunBytes: 2 ** 40,
+      maxCacheBytes: 2 ** 41,
+      maxActiveRuns: 1,
+      deadlineHours: 72,
+      retentionDays: 7,
+    },
     nodeEnv: "development",
     host: "127.0.0.1",
     port: 3000,

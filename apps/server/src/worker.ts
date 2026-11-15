@@ -18,6 +18,8 @@ import { BirthdayReminderService } from "./birthdays/birthday-reminder.service.j
 import { runBirthdayWorker } from "./birthdays/birthday-worker.js";
 import { WorkRemindersService } from "./work-reminders/work-reminders.service.js";
 import { ImageSimilarityService } from "./image-similarity/image-similarity.service.js";
+import { ArchiveRuntimeService } from "./archive-exports/archive-runtime.service.js";
+import { ARCHIVE_SCOPE } from "./archive-exports/archive-common.js";
 
 const environment = loadEnvironment();
 const app = await NestFactory.createApplicationContext(
@@ -33,6 +35,7 @@ const analysis = app.get(ImageAnalysisService);
 const notifications = app.get(NotificationRuntimeService);
 const workReminders = app.get(WorkRemindersService);
 const similarity = app.get(ImageSimilarityService);
+const archives = app.get(ArchiveRuntimeService);
 let nextAnalysisScan = 0;
 let nextReviewCleanup = 0;
 let nextSourceRecoveryScan = 0;
@@ -131,6 +134,16 @@ async function birthdayLoop() {
     stopping.signal,
   );
 }
+async function archiveMaintenanceLoop() {
+  while (!stopping.signal.aborted) {
+    try {
+      await archives.maintain();
+    } catch {
+      console.error("归档维护未完成，请查看数据导出任务状态。");
+    }
+    await delay(60_000, undefined, { signal: stopping.signal }).catch(() => {});
+  }
+}
 try {
   await Promise.all([
     maintenanceLoop(),
@@ -141,6 +154,9 @@ try {
     loop("network", "source:pixiv"),
     ...(notifications.enabled ? [notificationLoop()] : []),
     ...(environment.birthdays?.enabled ? [birthdayLoop()] : []),
+    ...(archives.enabled
+      ? [loop("heavy", ARCHIVE_SCOPE), archiveMaintenanceLoop()]
+      : []),
   ]);
 } finally {
   clearInterval(healthTimer);

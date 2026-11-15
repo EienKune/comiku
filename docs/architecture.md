@@ -6,7 +6,7 @@
 
 React 前端使用共享 OpenAPI 客户端访问 NestJS。PostgreSQL 保存账号、作者、候选、作品、译文、版本、事件和任务；文件正文存于开发 local 或生产私有 R2，数据库只记录文件元信息、摘要、引用与生命周期。
 
-API 处理认证、权限、短事务和任务登记；独立 worker 通过 PostgreSQL 租约执行网络及图片/ZIP 工作。X、Pixiv 采集各有一个平台执行槽，可跨平台并行；图片识别使用独立的 analysis/global 单槽，导出与缩略图使用 heavy/global 单槽，其他网络任务使用 network/global 单槽。租约支持进程退出后恢复，任务采用有限重试。健康心跳记录进程与数据库连接状态，执行结果见各任务记录。
+API 处理认证、权限、短事务和任务登记；独立 worker 通过 PostgreSQL 租约执行网络及图片/ZIP 工作。X、Pixiv 采集各有一个平台执行槽，可跨平台并行；图片识别使用独立的 analysis/global 单槽，制作交接导出与缩略图使用 heavy/global 单槽，可选作品归档使用 heavy/archive:global 单槽，其他网络任务使用 network/global 单槽。租约支持进程退出后恢复，任务采用有限重试。健康心跳记录进程与数据库连接状态，执行结果见各任务记录。
 
 业务模块通过公开服务和契约协作，不直接依赖其他模块的内部实现。X、文件存储、LabelPlus、分类器通过适配器隔离；测试替身不调用真实 X/R2。
 
