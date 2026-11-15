@@ -69,7 +69,7 @@ test("composition rejects duplicate, empty, invalid and overbudget intents befor
     );
 });
 
-test("split requires one source and at least two nonempty named outputs without media duplication", () => {
+test("split requires one source and at least two nonempty outputs without media duplication", () => {
   const split = {
     ...merge(),
     mode: "split" as const,
@@ -82,12 +82,51 @@ test("split requires one source and at least two nonempty named outputs without 
   assert.equal(normalizeCandidateComposition(split).works.length, 2);
   for (const changed of [
     { works: [split.works[0]] },
-    { works: [split.works[0], { title: " ", mediaIds: [imageB] }] },
+    { works: [split.works[0], { title: null, mediaIds: [] }] },
     { works: [split.works[0], { title: "Two", mediaIds: [imageA] }] },
     { candidates: merge().candidates },
   ])
     assert.throws(() =>
       normalizeCandidateComposition({ ...split, ...changed }),
+    );
+});
+
+test("split accepts blank or repeated titles and retains type and length validation", () => {
+  const split = {
+    ...merge(),
+    mode: "split" as const,
+    candidates: [{ id: a, expectedRevision: 0 }],
+    works: [
+      { title: null as string | null, mediaIds: [imageA] },
+      { title: "  ", mediaIds: [imageB] },
+    ],
+  };
+  const blank = normalizeCandidateComposition(split);
+  assert.deepEqual(
+    blank.works.map((work) => work.title),
+    [null, null],
+  );
+  assert.equal(
+    blank.payloadHash,
+    normalizeCandidateComposition({
+      ...split,
+      works: split.works.map((work) => ({ ...work, title: "" })),
+    }).payloadHash,
+  );
+  const repeated = normalizeCandidateComposition({
+    ...split,
+    works: split.works.map((work) => ({ ...work, title: " Same " })),
+  });
+  assert.deepEqual(
+    repeated.works.map((work) => work.title),
+    ["Same", "Same"],
+  );
+  for (const title of ["x".repeat(201), 123, undefined])
+    assert.throws(() =>
+      normalizeCandidateComposition({
+        ...split,
+        works: [{ ...split.works[0], title }, split.works[1]],
+      } as never),
     );
 });
 

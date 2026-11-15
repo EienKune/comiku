@@ -131,8 +131,6 @@ export function compositionProblem(draft: CompositionDraft) {
       return "请为每部作品移入图片，或移除空作品";
     if (draft.groups.length < 2)
       return "至少分成 2 部作品；只有一部时请使用普通入库";
-    if (draft.groups.some((group) => !group.title.trim()))
-      return "请为每部作品填写名称";
   }
   if (draft.groups.some((group) => group.title.trim().length > 200))
     return "作品名称最多 200 个字符";
