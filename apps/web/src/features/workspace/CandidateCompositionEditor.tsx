@@ -335,17 +335,13 @@ export function CandidateCompositionEditor({
                 <TextField
                   label={
                     draft.mode === "split"
-                      ? `作品 ${index + 1} 名称 *`
+                      ? `作品 ${index + 1} 名称（可选）`
                       : "作品名称（可选）"
                   }
                   value={group.title}
                   maxLength={200}
                   disabled={dragging}
-                  placeholder={
-                    draft.mode === "split"
-                      ? "填写作品名称"
-                      : "可稍后在作品中修改"
-                  }
+                  placeholder="可稍后在作品中修改"
                   onChange={(event) => {
                     const title = event.target.value;
                     onChange((current) => ({

@@ -54,13 +54,14 @@ export function useCandidateComposition(
       initial.sources.map((source) => [
         source.id,
         source.expectedRevision,
-        source.selectionToken,
-        source.draftVersion,
+        source.mediaIds,
       ]),
     ]);
+    const cached = stored.current.get(key);
     setSession({
       key,
-      draft: stored.current.get(key) ?? initial,
+      // Selection tokens fence settlement, not the identity of editable content.
+      draft: cached ? { ...cached, sources: initial.sources } : initial,
       phase: "editing",
     });
     setVisible(true);
@@ -128,9 +129,13 @@ export function useCandidateComposition(
         ]),
       );
       const result = validateCompositionReceipt(data, value.intent, originals);
-      callbacks.current.onSettled(compositionSources(value.draft));
-      if (stored.current.get(value.key)?.version === value.draft.version)
-        stored.current.delete(value.key);
+      const sources = compositionSources(value.draft);
+      callbacks.current.onSettled(sources);
+      const settledIds = new Set(sources.map((source) => source.id));
+      for (const [key, cached] of stored.current) {
+        if (cached.sources.some((source) => settledIds.has(source.id)))
+          stored.current.delete(key);
+      }
       setSession({ ...value, phase: "result", result, error: undefined });
       void callbacks.current.onComplete().catch(() => {});
     } catch (error) {

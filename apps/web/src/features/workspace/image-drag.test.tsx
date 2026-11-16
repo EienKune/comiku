@@ -226,6 +226,48 @@ test("Escape then late release on dialog padding cannot close the editor; next d
   fireEvent.click(root, { detail: 1 });
   expect(closeEditor).toHaveBeenCalledOnce();
 });
+test.each([
+  "Escape",
+  "blur",
+  "pointercancel",
+  "lostpointercapture",
+  "revision",
+])(
+  "%s before the drag threshold suppresses the late gesture click but permits keyboard and new presses",
+  (kind) => {
+    const view = render(<Harness />);
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const thumb = screen.getByRole("button", { name: "预览第 1 页，a" }),
+      root = screen.getByTestId("editor-root");
+    pointerStart(thumb);
+    fireEvent.pointerMove(window, { clientX: 14, clientY: 10, pointerId: 1 });
+    expect(screen.queryByTestId("image-drag-feedback")).toBeNull();
+    if (kind === "Escape") fireEvent.keyDown(window, { key: "Escape" });
+    else if (kind === "blur") fireEvent.blur(window);
+    else if (kind === "pointercancel")
+      fireEvent.pointerCancel(window, { pointerId: 1 });
+    else if (kind === "lostpointercapture")
+      fireEvent.lostPointerCapture(thumb, { pointerId: 1 });
+    else view.rerender(<Harness epoch="2" />);
+
+    now = 1000;
+    fireEvent.click(thumb, { detail: 0 });
+    expect(preview).toHaveBeenCalledOnce();
+    fireEvent.pointerUp(root, { clientX: 3, clientY: 3, pointerId: 1 });
+    fireEvent.click(root, { detail: 1 });
+    expect(closeEditor).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toContain(
+      '"mediaIds":["a","b"]',
+    );
+
+    const remove = screen.getByRole("button", { name: "移出 a" });
+    pointerStart(remove);
+    fireEvent.click(remove, { detail: 1 });
+    expect(screen.getByRole("status").textContent).not.toContain('"a"');
+  },
+);
+
 test("Escape followed by a late release cannot open the dragged preview", () => {
   render(<Harness />);
   let now = 0;

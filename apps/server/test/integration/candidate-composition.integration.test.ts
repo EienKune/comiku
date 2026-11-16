@@ -664,6 +664,35 @@ test("split returns every work, shared source dispositions, and rejects ordinary
   }
 });
 
+test("untitled and same-title splits persist independent numbers and replay without duplicate works", async () => {
+  const f = await fixture();
+  try {
+    for (const title of [null, "  ", "Same title"]) {
+      const input = await split(f);
+      input.works = input.works.map((work) => ({ ...work, title }));
+      const result = await f.service.compose(f.actor, input);
+      const ids = result.works.map((work) => work.workId);
+      const saved = await f.db.work.findMany({ where: { id: { in: ids } } });
+      assert.equal(saved.length, 2);
+      assert.equal(new Set(saved.map((work) => work.workNumber)).size, 2);
+      assert(saved.every((work) => work.title === (title?.trim() || null)));
+      assert(
+        result.works.every((work) => work.title === (title?.trim() || null)),
+      );
+      assert.deepEqual(await f.service.compose(f.actor, input), result);
+      assert.equal(await f.db.work.count({ where: { id: { in: ids } } }), 2);
+      assert.equal(
+        await f.db.workEvent.count({
+          where: { workId: { in: ids }, action: "imported" },
+        }),
+        2,
+      );
+    }
+  } finally {
+    await f.close();
+  }
+});
+
 test("second output failure rolls back every work, source, event, candidate transition and receipt", async () => {
   const f = await fixture();
   try {

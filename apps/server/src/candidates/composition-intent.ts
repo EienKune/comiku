@@ -71,10 +71,7 @@ export function normalizeCandidateComposition(input: ComposeCandidatesDto) {
   if (
     seen.size > 1000 ||
     (input.mode === "merge" && (candidates.length < 2 || works.length !== 1)) ||
-    (input.mode === "split" &&
-      (candidates.length !== 1 ||
-        works.length < 2 ||
-        works.some((work) => !work.title)))
+    (input.mode === "split" && (candidates.length !== 1 || works.length < 2))
   )
     invalid();
   const intent = { mode: input.mode, candidates, works };
