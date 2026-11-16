@@ -60,6 +60,7 @@ test("hidden site settings do not query; edits and cancel stay local until save"
       }),
     }),
   );
+  expect(patch.mock.calls[0]?.[1]).not.toHaveProperty("body.themePresetId");
 });
 test("conflicts retain edits and require reading the current revision before retry", async () => {
   vi.spyOn(client, "GET").mockResolvedValue({
@@ -83,4 +84,30 @@ test("conflicts retain edits and require reading the current revision before ret
   ).toBe(true);
   expect(screen.getByRole("button", { name: "读取当前设置" })).toBeTruthy();
   expect(patch).toHaveBeenCalledTimes(1);
+});
+
+test("explicit preset choice sends the replacement while unrelated edits omit it", async () => {
+  vi.spyOn(client, "GET").mockResolvedValue({
+    data: saved,
+    response: new Response(),
+  } as never);
+  const patch = vi.spyOn(client, "PATCH").mockResolvedValue({
+    data: { ...saved, themePresetId: "sky", revision: 1 },
+    response: new Response(),
+  } as never);
+  mount();
+  const field = await screen.findByRole("combobox", { name: "默认外观" });
+  await waitFor(() =>
+    expect((field as HTMLButtonElement).disabled).toBe(false),
+  );
+  fireEvent.click(field);
+  fireEvent.click(await screen.findByRole("option", { name: "晴蓝" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+  await screen.findByText("站点设置已保存");
+  expect(patch).toHaveBeenCalledWith(
+    "/api/site/settings",
+    expect.objectContaining({
+      body: expect.objectContaining({ themePresetId: "sky" }),
+    }),
+  );
 });

@@ -5771,7 +5771,8 @@ export interface components {
         };
         UpdateSiteSettingsDto: {
             name: string;
-            themePresetId: components["schemas"]["SiteThemePresetId"];
+            /** @description 省略时保留已保存的主题选择 */
+            themePresetId?: components["schemas"]["SiteThemePresetId"];
             expectedRevision: number;
             /** @enum {string} */
             iconAction: "keep" | "remove" | "adopt";

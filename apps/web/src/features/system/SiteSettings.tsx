@@ -39,6 +39,7 @@ export function SiteSettings({ enabled }: { enabled: boolean }) {
   const [conflict, setConflict] = useState(false);
   const [current, setCurrent] = useState<Settings>();
   const [validation, setValidation] = useState("");
+  const [themeChosen, setThemeChosen] = useState(false);
   const value: Draft = draft ?? {
     ...(settings.data ?? defaultSite),
     iconAction: "keep",
@@ -59,6 +60,7 @@ export function SiteSettings({ enabled }: { enabled: boolean }) {
     setConflict(false);
     setCurrent(undefined);
     setValidation("");
+    setThemeChosen(false);
     action.clearError();
     action.setSuccess("");
   }
@@ -100,7 +102,7 @@ export function SiteSettings({ enabled }: { enabled: boolean }) {
       const result = await client.PATCH("/api/site/settings", {
         body: {
           name: value.name.trim(),
-          themePresetId: value.themePresetId,
+          ...(themeChosen ? { themePresetId: value.themePresetId } : {}),
           expectedRevision: revision ?? settings.data!.revision,
           iconAction: value.iconAction,
           ...(value.iconAction === "adopt" ? { assetId: asset?.assetId } : {}),
@@ -200,9 +202,10 @@ export function SiteSettings({ enabled }: { enabled: boolean }) {
           label="默认外观"
           value={value.themePresetId}
           disabled={disabled}
-          onValueChange={(themePresetId) =>
-            edit({ themePresetId: themePresetId as Settings["themePresetId"] })
-          }
+          onValueChange={(themePresetId) => {
+            setThemeChosen(true);
+            edit({ themePresetId: themePresetId as Settings["themePresetId"] });
+          }}
         >
           {themePresets.map((preset) => (
             <option key={preset.id} value={preset.id}>

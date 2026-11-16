@@ -22,6 +22,8 @@ This tracked document records reusable implementation constraints. Business rule
 
 ## Personal and administrative settings
 
+- Theme core consumes the shared catalog and browser registry, without importing optional pack implementations. Keep pack-specific tests beside their tokens/CSS. Validate default-only builds as well as the normal composition, preserve stable preset IDs and visual values, and regenerate contracts when the installed catalog changes. Missing theme selections fall back for presentation without rewriting saved database/localStorage values or discarding valid branding. Runtime CSS and Playground-only decoration load separately.
+
 - Character identity and light/dark mode are separate: a silver-white/pink Plana profile is still light. Register manual profiles without timers or system-mode behavior until explicitly requested. Share layout and component dimensions across color comparisons, retain role/status colors, and verify muted/decorative text on its actual light surface rather than only white. Capture settled theme frames: CSS transitions can temporarily show the previous button color even after the preset indicator and root tokens have updated.
 
 - Complete theme profiles reuse the persisted `brand/style` contract. Keep client presets, style validation and server preset IDs in sync and regenerate API artifacts. Remove all profile-owned root variables when returning to a legacy theme, and snapshot/restore the full palette during Playground previews. A site update during a preview must become visible on exit without saving a personal preference.

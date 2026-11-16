@@ -1,3 +1,4 @@
+import { themeCatalog, type ThemeCatalog } from "@comiku/theme-catalog";
 import {
   BadRequestException,
   ConflictException,
@@ -16,10 +17,12 @@ import { lockAccountMembership } from "../users/account-membership-lock.js";
 import { normalizeSiteName, siteThemePresetIds } from "./site-theme-presets.js";
 import type { SiteSettingsDto, UpdateSiteSettingsDto } from "./site.dto.js";
 
-export const siteDto = (saved: SiteSettings | null): SiteSettingsDto => ({
+export const siteDto = (
+  saved: SiteSettings | null,
+  catalog: ThemeCatalog = themeCatalog,
+): SiteSettingsDto => ({
   name: saved?.name ?? "Comiku",
-  themePresetId: (saved?.themePresetId ??
-    "teal") as SiteSettingsDto["themePresetId"],
+  themePresetId: catalog.resolvePresetId(saved?.themePresetId ?? "teal"),
   iconVersion: saved?.iconAssetId ?? null,
   revision: saved?.revision ?? 0,
 });
@@ -76,7 +79,8 @@ export class SiteService {
   async update(actor: Actor, input: UpdateSiteSettingsDto) {
     const name = normalizeSiteName(input.name);
     if (
-      !siteThemePresetIds.includes(input.themePresetId) ||
+      (input.themePresetId !== undefined &&
+        !siteThemePresetIds.includes(input.themePresetId)) ||
       !["keep", "remove", "adopt"].includes(input.iconAction) ||
       (input.iconAction === "adopt"
         ? !input.assetId
@@ -93,6 +97,7 @@ export class SiteService {
       });
       if (before.revision !== input.expectedRevision)
         throw new ConflictException("站点设置已更新，请读取当前设置后重试");
+      const themePresetId = input.themePresetId ?? before.themePresetId;
       let iconAssetId = before.iconAssetId;
       if (input.iconAction === "remove") iconAssetId = null;
       if (input.iconAction === "adopt") {
@@ -110,7 +115,7 @@ export class SiteService {
       }
       if (
         before.name === name &&
-        before.themePresetId === input.themePresetId &&
+        before.themePresetId === themePresetId &&
         before.iconAssetId === iconAssetId
       )
         return siteDto(before);
@@ -131,7 +136,7 @@ export class SiteService {
         where: { id: "global" },
         data: {
           name,
-          themePresetId: input.themePresetId,
+          themePresetId,
           iconAssetId,
           revision: { increment: 1 },
         },

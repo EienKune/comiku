@@ -8,6 +8,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc .node-version .nvmrc
 COPY apps/server/package.json ./apps/server/package.json
 COPY apps/web/package.json ./apps/web/package.json
 COPY packages/api-client/package.json ./packages/api-client/package.json
+COPY packages/theme-catalog/package.json ./packages/theme-catalog/package.json
 COPY scripts/check-runtime.mjs ./scripts/check-runtime.mjs
 RUN pnpm install --frozen-lockfile
 COPY . .
@@ -29,6 +30,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /app/apps/server
 COPY --from=production-dependencies /app/node_modules /app/node_modules
 COPY --from=production-dependencies /app/apps/server/node_modules ./node_modules
+COPY --from=production-dependencies /app/packages/theme-catalog/package.json /app/packages/theme-catalog/package.json
+COPY --from=production-dependencies /app/packages/theme-catalog/src /app/packages/theme-catalog/src
 COPY --from=build /app/apps/server/package.json ./package.json
 COPY --from=build /app/apps/server/dist ./dist
 ARG COMIKU_RELEASE=unconfigured
@@ -49,6 +52,8 @@ COPY --from=build /usr/local/bin/node /usr/local/bin/node
 WORKDIR /app/apps/server
 COPY --from=production-dependencies /app/node_modules /app/node_modules
 COPY --from=production-dependencies /app/apps/server/node_modules ./node_modules
+COPY --from=production-dependencies /app/packages/theme-catalog/package.json /app/packages/theme-catalog/package.json
+COPY --from=production-dependencies /app/packages/theme-catalog/src /app/packages/theme-catalog/src
 COPY --from=build /app/apps/server/package.json ./package.json
 COPY --from=build /app/apps/server/dist-ops ./dist-ops
 ARG COMIKU_RELEASE=unconfigured

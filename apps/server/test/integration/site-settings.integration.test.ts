@@ -193,6 +193,44 @@ test("site settings keep anonymous assets, CAS, account barriers and recoverable
       },
     );
     await t.test(
+      "branding edits preserve an unavailable stored theme until explicitly replaced",
+      async () => {
+        await db.siteSettings.update({
+          where: { id: "global" },
+          data: { themePresetId: "removed-theme" },
+        });
+        const before = await readSettings();
+        assert.equal(before.themePresetId, "teal");
+        const edited = await request(
+          "/api/site/settings",
+          "PATCH",
+          {
+            name: "保留主题的站点",
+            expectedRevision: before.revision,
+            iconAction: "keep",
+          },
+          admin.cookie,
+        );
+        assert.equal(edited.status, 200);
+        assert.equal((await readSettings()).name, "保留主题的站点");
+        assert.equal(
+          (await db.siteSettings.findUniqueOrThrow({ where: { id: "global" } }))
+            .themePresetId,
+          "removed-theme",
+        );
+        const current = await readSettings();
+        assert.equal(
+          (await save(current.revision, { themePresetId: "sky" })).status,
+          200,
+        );
+        assert.equal(
+          (await db.siteSettings.findUniqueOrThrow({ where: { id: "global" } }))
+            .themePresetId,
+          "sky",
+        );
+      },
+    );
+    await t.test(
       "multipart upload remains private until adoption and only current derivatives are public",
       async () => {
         const body = new FormData();

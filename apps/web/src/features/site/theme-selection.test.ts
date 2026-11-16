@@ -23,22 +23,17 @@ test("legacy selection is preserved while absent or corrupt storage follows the 
 });
 
 test("site preset IDs are stable and unknown IDs fall back without changing old values", () => {
-  expect(themePresets.map((p) => p.id)).toEqual([
+  expect(themePresets.slice(0, 6).map((preset) => preset.id)).toEqual([
     "teal",
     "sky",
     "lavender",
     "pink",
     "amber",
     "minimal",
-    "schale",
-    "archive",
-    "shittim",
-    "arona",
-    "plana",
-    "shittim-duo",
-    "ba-cyan",
-    "ba-azure",
   ]);
+  expect(new Set(themePresets.map((preset) => preset.id)).size).toBe(
+    themePresets.length,
+  );
   expect(siteTheme("sky")).toEqual({ brand: "#5599ff", style: "soft" });
   expect(siteTheme("unknown")).toEqual(defaultTheme);
 });

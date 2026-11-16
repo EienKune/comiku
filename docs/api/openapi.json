@@ -35807,6 +35807,7 @@
             "maxLength": 128
           },
           "themePresetId": {
+            "description": "省略时保留已保存的主题选择",
             "allOf": [
               {
                 "$ref": "#/components/schemas/SiteThemePresetId"
@@ -35831,7 +35832,6 @@
         },
         "required": [
           "name",
-          "themePresetId",
           "expectedRevision",
           "iconAction"
         ]
