@@ -2372,3 +2372,18 @@ test("a queued recovery never reopens an established terminal attention ledger",
   assert.equal(f.posts.get("1").state, "needs_attention");
   assert.equal(f.posts.get("1").failureCode, "preserve_reason");
 });
+
+test("source commit refuses a reparented account even when both revisions match", async () => {
+  const f = fixture();
+  f.db.authorExternalAccount.count = async ({ where }: any) =>
+    !where.authorId || where.authorId === "replacement-author" ? 1 : 0;
+  await assert.rejects(
+    f.service.assertEligible(f.account, f.snapshot, undefined),
+    /Source account changed/,
+  );
+  await f.service.assertEligible(
+    { ...f.account, authorId: "replacement-author" },
+    f.snapshot,
+    undefined,
+  );
+});

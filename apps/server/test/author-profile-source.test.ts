@@ -182,3 +182,96 @@ test("selected valid profile may have a null optional avatar", async () => {
   );
   assert.equal(f.row.avatarFileObjectId, null);
 });
+
+test("creation accepts distinct normalized identities on the same platform", async () => {
+  const f = fixture();
+  const account = {
+    platform: "pixiv",
+    externalUserId: " 51 ",
+    fetchEnabled: false,
+    firstSyncMode: "none" as const,
+  };
+  await f.service.create(
+    { ...base, accounts: [account, { ...account, externalUserId: "52" }] },
+    "actor",
+  );
+  assert.equal(f.writes(), 3);
+});
+
+test("creation rejects repeated normalized identities before any account write", async () => {
+  const f = fixture();
+  const account = {
+    platform: "pixiv",
+    externalUserId: "51",
+    fetchEnabled: false,
+    firstSyncMode: "none" as const,
+  };
+  await assert.rejects(
+    f.service.create(
+      {
+        ...base,
+        accounts: [
+          account,
+          { ...account, platform: "PIXIV", externalUserId: " 51 " },
+        ],
+      },
+      "actor",
+    ),
+    /重复/,
+  );
+  assert.equal(f.writes(), 0);
+});
+
+test("a selected platform with multiple accounts rejects ambiguous profile adoption", async () => {
+  const f = fixture();
+  await assert.rejects(
+    f.service.create(
+      {
+        ...base,
+        profileSourcePlatform: "pixiv",
+        accounts: [
+          f.accounts[1]!,
+          {
+            platform: "pixiv",
+            externalUserId: "51",
+            fetchEnabled: false,
+            firstSyncMode: "none",
+          },
+        ],
+      },
+      "actor",
+    ),
+    /多个.*资料来源|资料来源.*多个/,
+  );
+  assert.equal(f.writes(), 0);
+});
+
+test("a committed creation receipt replays before new profile ambiguity checks", async () => {
+  const f = fixture();
+  const input = {
+    ...base,
+    idempotencyKey: "receipt",
+    profileSourcePlatform: "pixiv" as const,
+    accounts: [
+      f.accounts[1]!,
+      {
+        platform: "pixiv",
+        externalUserId: "51",
+        fetchEnabled: false,
+        firstSyncMode: "none" as const,
+      },
+    ],
+  };
+  const hash = (
+    f.service as unknown as { creationPayloadHash(input: object): string }
+  ).creationPayloadHash(input);
+  const db = (f.service as unknown as { db: Record<string, unknown> }).db;
+  db.authorCreationRequest = {
+    findUnique: async () => ({
+      payloadHash: hash,
+      author: { ...f.row, tags: [], externalAccounts: [] },
+    }),
+  };
+  assert.equal((await f.service.create(input, "actor")).id, "author");
+  assert.equal(f.writes(), 0);
+});

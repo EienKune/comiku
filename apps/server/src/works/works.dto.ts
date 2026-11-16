@@ -1,3 +1,5 @@
+import { SourceAccountSummaryDto } from "../authors/authors.dto.js";
+import { SourceFilterQueryDto } from "../source-identity/source-filter.js";
 import { Transform, Type } from "class-transformer";
 import {
   ArrayMaxSize,
@@ -72,6 +74,8 @@ export class WorkSourceMediaDto {
 }
 
 export class WorkCandidateSourceDto {
+  @ApiProperty({ type: SourceAccountSummaryDto, nullable: true })
+  sourceAccount!: SourceAccountSummaryDto | null;
   @ApiProperty({ type: Boolean }) mappingKnown!: boolean;
   @ApiProperty({ type: String, format: "uuid" }) candidateId!: string;
   @ApiProperty({ type: String }) platform!: string;
@@ -91,7 +95,7 @@ export class WorkSourceDto extends OmitType(WorkCandidateSourceDto, [
   sources!: WorkCandidateSourceDto[];
 }
 
-export class WorkQueryDto {
+export class WorkQueryDto extends SourceFilterQueryDto {
   @ApiPropertyOptional({ enum: WorkView, enumName: "WorkView" })
   @IsOptional()
   @IsEnum(WorkView)

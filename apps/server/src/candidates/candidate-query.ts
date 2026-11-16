@@ -1,3 +1,7 @@
+import {
+  normalizeSourceFilter,
+  sourceCandidateSql,
+} from "../source-identity/source-filter.js";
 import { BadRequestException } from "@nestjs/common";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { Prisma } from "../generated/prisma/client.js";
@@ -16,6 +20,7 @@ export function normalizeCandidateFilter(query: Partial<CandidateQueryDto>) {
     fetchedBefore: query.fetchedBefore
       ? new Date(query.fetchedBefore).toISOString()
       : null,
+    ...normalizeSourceFilter(query),
   };
 }
 export type CandidateFilter = ReturnType<typeof normalizeCandidateFilter>;
@@ -115,6 +120,7 @@ export function candidateBaseWhere(filter: CandidateFilter) {
   const clauses = [
     Prisma.sql`c.status = ${filter.status}::"CandidateStatus"`,
     Prisma.sql`a.deleted_at IS NULL`,
+    ...sourceCandidateSql(filter),
   ];
   if (filter.authorId)
     clauses.push(Prisma.sql`c.author_id = ${filter.authorId}::uuid`);

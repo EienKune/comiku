@@ -20,6 +20,7 @@ vi.mock("../account/account-context", () => ({
 const clients: QueryClient[] = [];
 const source: components["schemas"]["WorkSourceDto"] = {
   sources: [],
+  sourceAccount: null,
   candidateId: "synthetic-source",
   platform: "x",
   externalPostId: "synthetic-post",

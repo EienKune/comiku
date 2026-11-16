@@ -1,7 +1,111 @@
-import { afterEach, expect, test } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { PlatformLinks } from "./PlatformLinks";
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+test("recomputes the available account budget on resize and preserves a truncated long identity", () => {
+  let width = 320;
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: Element) {
+      const measured = this.hasAttribute("data-account-measure");
+      const measuredWidth = measured
+        ? this.querySelector("[data-measure-label]")
+            ?.getAttribute("data-measure-label")
+            ?.includes("long")
+          ? 160
+          : 62
+        : this.hasAttribute("data-more-measure")
+          ? 36
+          : this.classList.contains("platform-account-rail")
+            ? width
+            : 0;
+      return {
+        width: measuredWidth,
+        height: 32,
+        left: 0,
+        right: measuredWidth,
+        top: 0,
+        bottom: 32,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      };
+    },
+  );
+  const accounts = ["a_very_long_account_identity", "two", "three"].map(
+    (handle, i) => ({
+      platform: "x",
+      handle,
+      externalUserId: String(i),
+      fetchEnabled: i === 0,
+    }),
+  );
+  render(<PlatformLinks variant="accounts" accounts={accounts} />);
+  expect(screen.getAllByRole("link")).toHaveLength(3);
+  width = 190;
+  fireEvent(window, new Event("resize"));
+  expect(screen.getAllByRole("link")).toHaveLength(1);
+  expect(
+    screen.getByRole("link", {
+      name: /打开 X @a_very_long_account_identity.*采集已开启/,
+    }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "查看全部 X 账号（3）" }).textContent,
+  ).toBe("+2");
+  width = 320;
+  fireEvent(window, new Event("resize"));
+  expect(screen.getAllByRole("link")).toHaveLength(3);
+});
+test("same-platform accounts retain independent links and states, with keyboard-accessible overflow", () => {
+  render(
+    <PlatformLinks
+      variant="accounts"
+      accounts={Array.from({ length: 10 }, (_, i) => ({
+        platform: "x",
+        handle: `artist_${i}`,
+        externalUserId: `${i}`,
+        fetchEnabled: i % 2 === 0,
+      }))}
+    />,
+  );
+  expect(
+    screen.getByRole("link", { name: /打开 X @artist_0.*采集已开启/ }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("link", { name: /打开 X @artist_1.*采集已关闭/ }),
+  ).toBeTruthy();
+  const more = screen.getByRole("button", { name: /查看全部 X 账号/ });
+  fireEvent.click(more);
+  const dialog = screen.getByRole("dialog", { name: "X 账号" });
+  expect(within(dialog).getAllByRole("link")).toHaveLength(10);
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(more);
+});
+test("icon presentation expands multiple accounts instead of choosing the first", () => {
+  render(
+    <PlatformLinks
+      accounts={[
+        { platform: "x", handle: "one", externalUserId: "1" },
+        { platform: "x", handle: "two", externalUserId: "2" },
+      ]}
+    />,
+  );
+  expect(screen.queryByRole("link")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "查看全部 X 账号（2）" }));
+  expect(
+    screen.getByRole("link", { name: /打开 X @two/ }).getAttribute("href"),
+  ).toBe("https://x.com/two");
+});
 test("derives platform links from identities and leaves absent accounts disabled", () => {
   const { rerender } = render(
     <PlatformLinks

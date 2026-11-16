@@ -373,7 +373,7 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
           firstSyncMode: "none",
         })
       ).status,
-      409,
+      201,
     );
     assert.equal(
       (
@@ -390,7 +390,25 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
           firstSyncMode: "none",
         })
       ).status,
-      409,
+      201,
+    );
+    const multipleAccounts = await request<
+      { platform: string; externalUserId: string }[]
+    >(source, "GET", `/api/authors/${authorId}/accounts`);
+    assert.equal(multipleAccounts.status, 200);
+    assert.deepEqual(
+      multipleAccounts.data
+        .filter((item) => item.platform === "pixiv")
+        .map((item) => item.externalUserId)
+        .sort(),
+      [pixivId, (BigInt(pixivId) + 1n).toString()].sort(),
+    );
+    assert.deepEqual(
+      multipleAccounts.data
+        .filter((item) => item.platform === "x")
+        .map((item) => item.externalUserId)
+        .sort(),
+      [xIdentity, (BigInt(xIdentity) + 10n).toString()].sort(),
     );
     assert.equal(
       (
@@ -522,7 +540,42 @@ test("author, tag, authorization and multi-platform account lifecycle", async ()
         }),
       ),
     );
-    assert.deepEqual(races.map((result) => result.status).sort(), [201, 409]);
+    assert.deepEqual(races.map((result) => result.status).sort(), [201, 201]);
+    const duplicateIdentity = (BigInt(xIdentity) + 20n).toString();
+    const duplicateRaces = await Promise.all(
+      [1, 2].map(() =>
+        request(source, "POST", `/api/authors/${raceAuthor.data.id}/accounts`, {
+          platform: "x",
+          externalUserId: duplicateIdentity,
+          profileProof: profileProof(
+            raceAuthor.data.id,
+            duplicateIdentity,
+            "duplicate",
+          ),
+          handle: "duplicate",
+          fetchEnabled: false,
+          firstSyncMode: "none",
+        }),
+      ),
+    );
+    assert.deepEqual(
+      duplicateRaces.map((result) => result.status).sort(),
+      [201, 409],
+    );
+    const raceAccounts = await request<{ externalUserId: string }[]>(
+      source,
+      "GET",
+      `/api/authors/${raceAuthor.data.id}/accounts`,
+    );
+    assert.equal(raceAccounts.status, 200);
+    assert.deepEqual(
+      raceAccounts.data.map((item) => item.externalUserId).sort(),
+      [
+        (BigInt(xIdentity) + 1n).toString(),
+        (BigInt(xIdentity) + 2n).toString(),
+        duplicateIdentity,
+      ].sort(),
+    );
 
     const tag = await request<{ id: string; revision: number }>(
       source,

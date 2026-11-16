@@ -162,3 +162,52 @@ test("filter changes clear a previous current-filter refresh error", async () =>
   expect(hook.result.current.error).toBeFalsy();
   cache.clear();
 });
+
+test("same-author source changes get independent review snapshots and explicit refresh retains that source", async () => {
+  const post = vi
+    .spyOn(client, "POST")
+    .mockImplementation((async (
+      _path: unknown,
+      options: { body: { sourceAccountId?: string } },
+    ) => success(options.body.sourceAccountId ?? "all")) as never);
+  const cache = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={cache}>{children}</QueryClientProvider>
+  );
+  const hook = renderHook(
+    ({ account }: { account: string | undefined }) =>
+      useCandidateReviewSession({
+        authorId: "author",
+        ...(account ? { sourceAccountId: account } : {}),
+      }),
+    { initialProps: { account: undefined as string | undefined }, wrapper },
+  );
+  await waitFor(() =>
+    expect(hook.result.current.session?.sessionId).toBe("all"),
+  );
+  hook.rerender({ account: "alternate" });
+  await waitFor(() =>
+    expect(hook.result.current.session?.sessionId).toBe("alternate"),
+  );
+  await act(async () => {
+    await hook.result.current.refresh();
+  });
+  expect(post).toHaveBeenLastCalledWith(
+    "/api/candidates/review-sessions",
+    expect.objectContaining({
+      body: expect.objectContaining({
+        authorId: "author",
+        sourceAccountId: "alternate",
+        replaceSessionId: "alternate",
+      }),
+    }),
+  );
+  hook.rerender({ account: undefined });
+  await waitFor(() =>
+    expect(hook.result.current.session?.sessionId).toBe("all"),
+  );
+  hook.unmount();
+  cache.clear();
+});

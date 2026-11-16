@@ -1,3 +1,5 @@
+import { SourceAccountSummaryDto } from "../authors/authors.dto.js";
+import { SourceFilterQueryDto } from "../source-identity/source-filter.js";
 import { Transform, Type } from "class-transformer";
 import { WorkSeriesImportIntentDto } from "../work-series/work-series.dto.js";
 import {
@@ -82,7 +84,7 @@ export class CandidateReviewPolicyDto {
   classes!: CandidateReviewPolicyClassDto[];
 }
 
-export class CandidateQueryDto {
+export class CandidateQueryDto extends SourceFilterQueryDto {
   @ApiPropertyOptional({ enum: CandidateStatus, enumName: "CandidateStatus" })
   @IsOptional()
   @IsEnum(CandidateStatus)
@@ -206,6 +208,10 @@ export class CandidateDto {
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: String, format: "uuid" }) authorId!: string;
   @ApiProperty({ type: String }) authorName!: string;
+  @ApiProperty({ type: String, format: "uuid", nullable: true })
+  authorExternalAccountId!: string | null;
+  @ApiProperty({ type: SourceAccountSummaryDto, nullable: true })
+  sourceAccount!: SourceAccountSummaryDto | null;
   @ApiProperty({ type: String, nullable: true }) authorHandle!: string | null;
   @ApiProperty({ type: Boolean }) authorAvatarAvailable!: boolean;
   @ApiProperty({ type: String }) platform!: string;

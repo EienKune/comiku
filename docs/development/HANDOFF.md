@@ -399,3 +399,12 @@ Pixiv profile resolution uses the native App API without enumerating works, but 
 - 取消保护同样覆盖尚未达到拖动阈值的按压；正常短点仍可预览。拆合草稿按来源、版本和有序图片内容恢复，选择代际只用于结算；恢复时更新选择快照，成功后清理包含已处理来源的其他草稿，保留不相交草稿。
 - 大量图片的拖动浮层坐标应直接更新 DOM ref，仅落点变化触发 React；缩略图复用稳定 props 的 memo 边界，保持签名 URL 按需读取。草稿和冻结请求是受离开保护的页面会话状态，不额外把来源资料写入 localStorage。
 - 顶部操作栏保留横向滚动时，内部绝对定位提示会触发另一轴的自动滚动，导致按钮位移且提示被裁切。禁用原因复用现有 portal 提示；回归须包含真实 `.workspace-topbar-context`，同时检查悬浮前后坐标、窄屏横向滚动和键盘聚焦。
+
+
+### Multiple author accounts and actual source scopes
+
+- Keep `(platform, externalUserId)` globally unique, including retired accounts. Removing the active-author/platform index must be a forward DROP-only migration; do not rewrite the old uniqueness migration or restore rows it retired. Legacy migration tests must explicitly recreate their predecessor constraint inside an isolated database.
+- Actual source identity comes from the candidate's direct account relation. Author avatar fallback is independent and should use a bounded `take: 1` query. Never infer source identity from the author's first account. Pin captured author ID as well as revisions on late source-fetch writes.
+- Multiple Work source predicates must share the same `candidateSources.some.candidatePost` relation; separate `some` clauses can incorrectly match different posts. Count unique works, retain retired-account history, and distinguish manual/null from unknown/null. Default source fields must stay absent from legacy normalized filter/hash shapes so old sessions remain usable.
+- Prisma Include constants containing `orderBy` arrays should use `satisfies Prisma.AuthorInclude` (or the corresponding model Include); `as const` makes arrays readonly and can invalidate inferred nested payload types.
+- Hidden max-content chip-measurement tracks still affect layout unless their width/height are zero with overflow hidden. Recalculate chip budgets on resize and test at least one visible truncated long account plus keyboard-accessible overflow in card/list and narrow layouts.
