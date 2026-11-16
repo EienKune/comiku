@@ -70,7 +70,7 @@ function Harness({ initialDraft }: { initialDraft: CompositionDraft }) {
     />
   );
 }
-test("split keeps all originals, creates targets from explicit selection, validates titles and returns removed group images to unassigned", () => {
+test("split permits untitled nonempty groups and returns removed group images to unassigned", () => {
   render(<Harness initialDraft={initial("split")} />);
   const dialog = screen.getByRole("dialog", { name: "拆分入库" });
   expect(within(dialog).getAllByRole("checkbox")).toHaveLength(3);
@@ -86,9 +86,12 @@ test("split keeps all originals, creates targets from explicit selection, valida
   );
   fireEvent.click(within(dialog).getByRole("button", { name: "新建作品" }));
   expect(within(dialog).getAllByRole("checkbox")).toHaveLength(3);
-  const titles = within(dialog).getAllByRole("textbox");
-  fireEvent.change(titles[0], { target: { value: "第一作" } });
-  fireEvent.change(titles[1], { target: { value: "第二作" } });
+  expect(
+    within(dialog).getByRole("textbox", { name: "作品 1 名称（可选）" }),
+  ).toBeTruthy();
+  expect(
+    within(dialog).getByRole("textbox", { name: "作品 2 名称（可选）" }),
+  ).toBeTruthy();
   expect(
     (
       within(dialog).getByRole("button", {

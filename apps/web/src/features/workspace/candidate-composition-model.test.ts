@@ -99,7 +99,8 @@ test("split starts with one current draft group, atomically moves images, and gr
     ["a-3"],
     ["a-1", "a-2"],
   ]);
-  expect(compositionProblem(moved)).toMatch(/名称/);
+  expect(compositionProblem(moved)).toBe("");
+  expect(compositionIntent(moved, "key").works[0].title).toBeNull();
   const named = {
     ...moved,
     groups: moved.groups.map((group) => ({
@@ -108,6 +109,27 @@ test("split starts with one current draft group, atomically moves images, and gr
     })),
   };
   expect(compositionProblem(named)).toBe("");
+  expect(
+    compositionProblem({
+      ...named,
+      groups: named.groups.map((group) => ({ ...group, title: "Same" })),
+    }),
+  ).toBe("");
+  expect(
+    compositionProblem({
+      ...named,
+      groups: named.groups.map((group) => ({ ...group, title: " ".repeat(3) })),
+    }),
+  ).toBe("");
+  expect(
+    compositionProblem({
+      ...named,
+      groups: named.groups.map((group) => ({
+        ...group,
+        title: "x".repeat(201),
+      })),
+    }),
+  ).toMatch(/200/);
   expect(
     removeCompositionGroup(named, "work-2").groups.flatMap(
       (group) => group.mediaIds,
