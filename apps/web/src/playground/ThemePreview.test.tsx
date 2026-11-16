@@ -2,7 +2,8 @@ import { StrictMode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ThemePreview } from "./ThemePreview";
-import { themeStorageKey } from "../styles/theme";
+import { themeStorageKey as legacyThemeStorageKey } from "../styles/theme";
+import { previewThemeStorageKey as themeStorageKey } from "../features/site/theme-selection";
 
 afterEach(() => {
   cleanup();
@@ -13,6 +14,10 @@ afterEach(() => {
 });
 
 test("preview persists choices, ignores incomplete color input and restores app styles on exit", () => {
+  localStorage.setItem(
+    legacyThemeStorageKey,
+    JSON.stringify({ brand: "#123456", style: "soft" }),
+  );
   const root = document.documentElement;
   root.style.setProperty("--color-brand", "#123456", "important");
   root.dataset.themeStyle = "soft";
@@ -36,6 +41,10 @@ test("preview persists choices, ignores incomplete color input and restores app 
     "true",
   );
   unmount();
+  expect(JSON.parse(localStorage.getItem(legacyThemeStorageKey)!)).toEqual({
+    brand: "#123456",
+    style: "soft",
+  });
   expect(root.style.getPropertyValue("--color-brand")).toBe("#123456");
   // jsdom drops priority on custom properties; real-browser QA covers restoration.
   expect(root.style.getPropertyValue("--color-on-brand")).toBe("");
@@ -63,4 +72,14 @@ test("blocked storage does not prevent temporary theme switching or reset", () =
   expect(document.documentElement.style.getPropertyValue("--color-brand")).toBe(
     "#33ccbb",
   );
+});
+
+test("previewing an unavailable saved style leaves its stored choice intact", () => {
+  const saved = JSON.stringify({ brand: "#abcdef", style: "removed-pack" });
+  localStorage.setItem(themeStorageKey, saved);
+  const view = render(<ThemePreview />);
+  expect(document.documentElement.dataset.themeStyle).toBe("soft");
+  expect(localStorage.getItem(themeStorageKey)).toBe(saved);
+  view.unmount();
+  expect(localStorage.getItem(themeStorageKey)).toBe(saved);
 });

@@ -95,6 +95,7 @@ export class R2ObjectStorage implements ObjectStorage {
         CacheControl: "private, max-age=30",
         Metadata: { sha256: input.checksum },
       }),
+      { abortSignal: input.signal },
     );
   }
 
@@ -186,10 +187,11 @@ export class R2ObjectStorage implements ObjectStorage {
     };
   }
 
-  async delete(key: string): Promise<void> {
+  async delete(key: string, signal?: AbortSignal): Promise<void> {
     validateObjectKey(key);
     await this.client.send(
       new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
+      { abortSignal: signal },
     );
   }
 }

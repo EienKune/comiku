@@ -61,7 +61,7 @@ test("a system administrator can read collection history in the dedicated page",
             : [],
     response: new Response(),
   })) as never);
-  openPage(["system:manage"]);
+  openPage(["system:manage"], "/settings/system?tab=collection");
   expect(screen.getByRole("heading", { name: "系统管理" })).toBeTruthy();
   expect(await screen.findByText("暂无同步记录。")).toBeTruthy();
   expect(screen.getByRole("heading", { name: "图源接入" })).toBeTruthy();
@@ -76,65 +76,72 @@ function mockManagement() {
   } as never);
   return vi.spyOn(client, "GET").mockImplementation((async (path: string) => ({
     data:
-      path === "/api/archive-exports/settings"
+      path === "/api/site/settings"
         ? {
-            enabled: false,
+            name: "Comiku",
+            themePresetId: "teal",
+            iconVersion: null,
             revision: 0,
-            bandwidthLimitMiB: 0,
-            packageTargetBytes: "2147483648",
-            retentionDays: 7,
           }
-        : path === "/api/archive-exports"
-          ? { items: [], nextCursor: null }
-          : path === "/api/notifications/work-reminders"
-            ? {
-                settings: {
-                  enabled: false,
-                  sendTimes: ["09:00", "18:00"],
-                  note: "",
-                  revision: 0,
-                },
-                channels: [],
-              }
-            : path === "/api/source-fetch/runs"
+        : path === "/api/archive-exports/settings"
+          ? {
+              enabled: false,
+              revision: 0,
+              bandwidthLimitMiB: 0,
+              packageTargetBytes: "2147483648",
+              retentionDays: 7,
+            }
+          : path === "/api/archive-exports"
+            ? { items: [], nextCursor: null }
+            : path === "/api/notifications/work-reminders"
               ? {
-                  items: [],
-                  nextCursor: null,
-                  observedAt: "2026-11-10T00:00:00Z",
-                }
-              : path.endsWith("/configuration")
-                ? {
+                  settings: {
                     enabled: false,
-                    configurationError: null,
-                    connections: [
-                      { key: "bot", name: "测试连接", available: true },
-                    ],
-                    eventTypes: [{ type: "imported", label: "导入作品" }],
-                    channels: [],
+                    sendTimes: ["09:00", "18:00"],
+                    note: "",
+                    revision: 0,
+                  },
+                  channels: [],
+                }
+              : path === "/api/source-fetch/runs"
+                ? {
+                    items: [],
+                    nextCursor: null,
+                    observedAt: "2026-11-10T00:00:00Z",
                   }
-                : path.endsWith("/deliveries")
-                  ? { items: [], nextCursor: null }
-                  : [],
+                : path.endsWith("/configuration")
+                  ? {
+                      enabled: false,
+                      configurationError: null,
+                      connections: [
+                        { key: "bot", name: "测试连接", available: true },
+                      ],
+                      eventTypes: [{ type: "imported", label: "导入作品" }],
+                      channels: [],
+                    }
+                  : path.endsWith("/deliveries")
+                    ? { items: [], nextCursor: null }
+                    : [],
     response: new Response(),
   })) as never);
 }
 
-test("collection is the default tab and never requests notification data", async () => {
+test("site is the default tab in management order and never requests inactive panels", async () => {
   const get = mockManagement();
-  openPage(["system:manage"]);
-  await screen.findByText("暂无同步记录。");
+  openPage(["system:manage", "accounts:manage"]);
+  await screen.findByDisplayValue("Comiku");
+  expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+    "站点设置",
+    "账号管理",
+    "推送通知",
+    "图源采集",
+    "角色生日",
+    "数据导出",
+  ]);
   expect(
-    screen.getByRole("tab", { name: "图源采集" }).getAttribute("aria-selected"),
+    screen.getByRole("tab", { name: "站点设置" }).getAttribute("aria-selected"),
   ).toBe("true");
-  expect(
-    get.mock.calls.every((call) =>
-      [
-        "/api/authors/sources",
-        "/api/source-fetch/platforms",
-        "/api/source-fetch/runs",
-      ].includes(call[0]),
-    ),
-  ).toBe(true);
+  expect(get.mock.calls.map((call) => call[0])).toEqual(["/api/site/settings"]);
 });
 
 test("notification URL opens only its panel and preserves drafts across tabs", async () => {
@@ -160,21 +167,21 @@ test("notification URL opens only its panel and preserves drafts across tabs", a
 test("tab arrows wrap and Home/End activate and focus their panels", async () => {
   mockManagement();
   openPage(["system:manage"]);
-  const collection = screen.getByRole("tab", { name: "图源采集" });
-  const notifications = screen.getByRole("tab", { name: "数据导出" });
-  collection.focus();
-  fireEvent.keyDown(collection, { key: "ArrowLeft" });
-  expect(document.activeElement).toBe(notifications);
-  expect(notifications.getAttribute("aria-selected")).toBe("true");
+  const first = screen.getByRole("tab", { name: "站点设置" });
+  const last = screen.getByRole("tab", { name: "数据导出" });
+  first.focus();
+  fireEvent.keyDown(first, { key: "ArrowLeft" });
+  expect(document.activeElement).toBe(last);
+  expect(last.getAttribute("aria-selected")).toBe("true");
   const panel = screen.getByRole("tabpanel", { name: "数据导出" });
-  expect(panel.getAttribute("aria-labelledby")).toBe(notifications.id);
-  expect(notifications.getAttribute("aria-controls")).toBe(panel.id);
-  fireEvent.keyDown(notifications, { key: "Home" });
-  expect(document.activeElement).toBe(collection);
-  fireEvent.keyDown(collection, { key: "End" });
-  expect(document.activeElement).toBe(notifications);
-  fireEvent.keyDown(notifications, { key: "ArrowRight" });
-  expect(document.activeElement).toBe(collection);
+  expect(panel.getAttribute("aria-labelledby")).toBe(last.id);
+  expect(last.getAttribute("aria-controls")).toBe(panel.id);
+  fireEvent.keyDown(last, { key: "Home" });
+  expect(document.activeElement).toBe(first);
+  fireEvent.keyDown(first, { key: "End" });
+  expect(document.activeElement).toBe(last);
+  fireEvent.keyDown(last, { key: "ArrowRight" });
+  expect(document.activeElement).toBe(first);
   await act(async () => {});
 });
 
@@ -187,7 +194,7 @@ test("direct notification URL does not bypass system permission", () => {
 
 test("collection polling pauses while notifications is active and resumes on return", async () => {
   const get = mockManagement();
-  openPage(["system:manage"]);
+  openPage(["system:manage"], "/settings/system?tab=collection");
   await screen.findByText("暂无同步记录。");
   fireEvent.click(screen.getByRole("tab", { name: "推送通知" }));
   await screen.findByText("暂无群目标。");
@@ -227,38 +234,23 @@ test("connections expose pending verification separately from configuration and 
         response: new Response(),
       }) as never,
   );
-  openPage(["system:manage"]);
+  openPage(["system:manage"], "/settings/system?tab=collection");
   expect(await screen.findByText("待验证")).toBeTruthy();
   expect(screen.getByText("未配置")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /启用|停用/ })).toBeNull();
 });
 
-test("the source tab uses the notification branch URL contract and safely handles unknown tabs", async () => {
-  const get = vi.spyOn(client, "GET").mockImplementation((async (
-    path: string,
-  ) => ({
-    data:
-      path === "/api/source-fetch/runs"
-        ? { items: [], nextCursor: null, observedAt: "2026-11-10T00:00:00Z" }
-        : [],
-    response: new Response(),
-  })) as never);
+test("unknown tabs fall back to the first authorized panel", async () => {
+  const get = mockManagement();
   openPage(["system:manage"], "/settings/system?tab=future&keep=yes");
   expect(
-    screen.getByRole("tab", { name: "图源采集" }).getAttribute("aria-selected"),
+    screen.getByRole("tab", { name: "站点设置" }).getAttribute("aria-selected"),
   ).toBe("true");
   expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(
-    "system-tab-collection",
+    "system-tab-site",
   );
-  await screen.findByText("暂无同步记录。");
-  expect(
-    get.mock.calls.every(
-      (call) =>
-        call[0] === "/api/authors/sources" ||
-        call[0] === "/api/source-fetch/runs" ||
-        call[0] === "/api/source-fetch/platforms",
-    ),
-  ).toBe(true);
+  await screen.findByDisplayValue("Comiku");
+  expect(get.mock.calls.map((call) => call[0])).toEqual(["/api/site/settings"]);
 });
 
 test("an inactive source panel performs no capability reads or history polling, then resumes when enabled", async () => {
@@ -339,7 +331,7 @@ test("account data and audit load only on the authorized active tab and retain f
 test("technical-management permission alone never exposes or fetches account management", async () => {
   const get = mockManagement();
   openPage(["system:manage"], "/settings/system?tab=accounts");
-  await screen.findByText("暂无同步记录。");
+  await screen.findByDisplayValue("Comiku");
   expect(screen.queryByRole("tab", { name: "账号管理" })).toBeNull();
   expect(
     get.mock.calls.some((call) => String(call[0]).startsWith("/api/users")),

@@ -82,9 +82,11 @@ export class LocalObjectStorage implements ObjectStorage {
     const target = this.path(input.key);
     await mkdir(dirname(target), { recursive: true });
     if (input.body instanceof Uint8Array) {
-      await writeFile(target, input.body, { flag: "wx" });
+      await writeFile(target, input.body, { flag: "wx", signal: input.signal });
     } else {
-      await pipeline(input.body, createWriteStream(target, { flags: "wx" }));
+      await pipeline(input.body, createWriteStream(target, { flags: "wx" }), {
+        signal: input.signal,
+      });
     }
     try {
       await writeFile(

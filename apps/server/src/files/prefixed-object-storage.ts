@@ -39,7 +39,7 @@ export class PrefixedObjectStorage implements ObjectStorage {
       expires,
     );
   }
-  async delete(key: string) {
-    return this.storage.delete(this.key(key));
+  async delete(key: string, signal?: AbortSignal) {
+    return this.storage.delete(this.key(key), signal);
   }
 }

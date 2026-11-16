@@ -4,6 +4,16 @@ import { createComikuClient } from "@comiku/api-client";
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: 15000 } },
 });
+export const publicSiteQueryKey = ["site"] as const;
+/** Authentication changes clear account data without detaching the public root observer. */
+export function clearAccountCache() {
+  queryClient.removeQueries({
+    predicate: (query) =>
+      query.queryKey.length !== 1 ||
+      query.queryKey[0] !== publicSiteQueryKey[0],
+  });
+  queryClient.getMutationCache().clear();
+}
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
 if (
   configuredApiBaseUrl &&
@@ -28,7 +38,7 @@ export async function unwrap<T>(result: {
   response: Response;
 }): Promise<T> {
   if (result.response.status === 401) {
-    queryClient.clear();
+    clearAccountCache();
     queryClient.setQueryData(["me"], null);
   }
   if (!result.response.ok || result.data === undefined) {

@@ -6,14 +6,16 @@ import { SourceManagement } from "./SourceManagement";
 import { NotificationManagement } from "./NotificationManagement";
 import { AccountsPage } from "../account/AccountsPage";
 import { ArchiveExportManagement } from "./ArchiveExportManagement";
+import { SiteSettings } from "./SiteSettings";
 import "./system.css";
 
 const tabs = [
+  { value: "site", label: "站点设置", permission: "system:manage" },
+  { value: "accounts", label: "账号管理", permission: "accounts:manage" },
+  { value: "notifications", label: "推送通知", permission: "system:manage" },
   { value: "collection", label: "图源采集", permission: "system:manage" },
   { value: "birthdays", label: "角色生日", permission: "system:manage" },
-  { value: "notifications", label: "推送通知", permission: "system:manage" },
   { value: "exports", label: "数据导出", permission: "system:manage" },
-  { value: "accounts", label: "账号管理", permission: "accounts:manage" },
 ] as const;
 
 export function SystemManagementPage() {
@@ -32,7 +34,7 @@ export function SystemManagementPage() {
   function select(value: string) {
     setParams((current) => {
       const next = new URLSearchParams(current);
-      if (value !== "collection") next.set("tab", value);
+      if (value !== "site") next.set("tab", value);
       else next.delete("tab");
       return next;
     });
@@ -80,6 +82,17 @@ export function SystemManagementPage() {
           </button>
         ))}
       </div>
+      {user.permissions.includes("system:manage") && (
+        <div
+          id="system-panel-site"
+          role="tabpanel"
+          aria-labelledby="system-tab-site"
+          hidden={active !== "site"}
+          tabIndex={0}
+        >
+          <SiteSettings enabled={active === "site"} />
+        </div>
+      )}
       {user.permissions.includes("system:manage") && (
         <div
           id="system-panel-collection"

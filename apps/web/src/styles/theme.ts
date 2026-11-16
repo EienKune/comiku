@@ -1,4 +1,6 @@
-export type ThemeStyle = "soft" | "minimal";
+import { themeRegistry } from "../themes/registry";
+export type ThemeStyle = string;
+export const isThemeStyle = themeRegistry.hasStyle;
 export interface ThemePreference {
   brand: string;
   style: ThemeStyle;
@@ -7,14 +9,7 @@ export const defaultTheme: ThemePreference = {
   brand: "#33ccbb",
   style: "soft",
 };
-export const themePresets = [
-  { name: "青绿", brand: "#33ccbb", style: "soft" },
-  { name: "晴蓝", brand: "#5599ff", style: "soft" },
-  { name: "淡紫", brand: "#a78bfa", style: "soft" },
-  { name: "樱粉", brand: "#ff6699", style: "soft" },
-  { name: "琥珀", brand: "#f6ba4c", style: "soft" },
-  { name: "黑白极简", brand: "#171717", style: "minimal" },
-] satisfies (ThemePreference & { name: string })[];
+export const themePresets = themeRegistry.presets;
 
 export const themeStorageKey = "comiku.playground.theme.v1";
 export const isHexColor = (value: string) => /^#[a-f\d]{6}$/i.test(value);
@@ -28,7 +23,7 @@ export function readTheme(value: string | null): ThemePreference {
       "style" in parsed &&
       typeof parsed.brand === "string" &&
       isHexColor(parsed.brand) &&
-      (parsed.style === "soft" || parsed.style === "minimal")
+      isThemeStyle(parsed.style)
     ) {
       return { brand: parsed.brand.toLowerCase(), style: parsed.style };
     }
@@ -71,16 +66,71 @@ export function brandReadability(brand: string) {
   return { normal: foreground(base), hover: foreground(hover) };
 }
 
-export function applyTheme(theme: ThemePreference) {
-  const root = document.documentElement;
+export function themeReadability(theme: ThemePreference) {
+  const colors = themeRegistry.definition(theme.style)?.actionColors;
+  if (!colors) return brandReadability(theme.brand);
+  return {
+    normal: {
+      color: colors.foreground,
+      contrast: ratio(rgb(colors.background), rgb(colors.foreground)),
+    },
+    hover: {
+      color: colors.hoverForeground,
+      contrast: ratio(rgb(colors.hoverBackground), rgb(colors.hoverForeground)),
+    },
+  };
+}
+const ownedKeys = [
+  ...new Set([
+    "--color-brand",
+    "--color-on-brand",
+    "--color-on-brand-hover",
+    ...themeRegistry.tokenKeys,
+  ]),
+];
+function applyRoot(root: HTMLElement, theme: ThemePreference) {
+  theme = isThemeStyle(theme.style) ? theme : defaultTheme;
   const contrast = brandReadability(theme.brand);
-  root.style.setProperty("--color-brand", theme.brand);
-  root.style.setProperty("--color-on-brand", contrast.normal.color);
-  root.style.setProperty("--color-on-brand-hover", contrast.hover.color);
+  const values: Record<string, string> = {
+    "--color-brand": theme.brand,
+    "--color-on-brand": contrast.normal.color,
+    "--color-on-brand-hover": contrast.hover.color,
+    ...themeRegistry.definition(theme.style)?.tokens,
+  };
+  for (const key of ownedKeys) {
+    if (key in values) root.style.setProperty(key, values[key]);
+    else root.style.removeProperty(key);
+  }
   root.dataset.themeStyle = theme.style;
+}
+export function mountTheme(root: HTMLElement, theme: ThemePreference) {
+  const before = ownedKeys.map((key) => ({
+    key,
+    value: root.style.getPropertyValue(key),
+    priority: root.style.getPropertyPriority(key),
+  }));
+  const previousStyle = root.getAttribute("data-theme-style");
+  const hadStyle = root.hasAttribute("style");
+  applyRoot(root, theme);
+  return () => {
+    for (const { key, value, priority } of before) {
+      if (value) root.style.setProperty(key, value, priority);
+      else root.style.removeProperty(key);
+    }
+    if (previousStyle === null) root.removeAttribute("data-theme-style");
+    else root.setAttribute("data-theme-style", previousStyle);
+    if (!hadStyle && !root.style.length) root.removeAttribute("style");
+  };
+}
+export function applyTheme(
+  theme: ThemePreference,
+  options: { persist?: boolean } = {},
+) {
+  applyRoot(document.documentElement, theme);
   try {
-    localStorage.setItem(themeStorageKey, JSON.stringify(theme));
+    if (options.persist !== false)
+      localStorage.setItem(themeStorageKey, JSON.stringify(theme));
   } catch {
-    /* The active theme remains usable when browser storage is unavailable. */
+    /* The active theme remains usable when storage is unavailable. */
   }
 }

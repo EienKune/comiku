@@ -11,6 +11,7 @@ datasource db {
 }
 
 model User {
+  siteBrandAssets SiteBrandAsset[]
   candidateCompositionReceipts CandidateCompositionReceipt[]
   archiveExportRuns ArchiveExportRun[]
   workSeriesAudits WorkSeriesAudit[]
@@ -159,6 +160,8 @@ enum FileLifecycleStatus {
 }
 
 model FileObject {
+  siteBrandIcons SiteBrandAsset[] @relation("SiteBrandIcon")
+  siteBrandFavicons SiteBrandAsset[] @relation("SiteBrandFavicon")
   archiveExportEntries ArchiveExportEntry[]
   archiveExportPackages ArchiveExportPackage[]
   id                   String                        @id @default(uuid()) @db.Uuid
@@ -2424,4 +2427,31 @@ model WorkReminderNotice {
   @@index([channelId, scopeGeneration, eventId], map: "work_reminder_notice_scope_idx")
   @@index([eventId], map: "work_reminder_notice_event_idx")
   @@map("work_reminder_notices")
+}
+
+model SiteSettings {
+  id String @id @default("global") @db.VarChar(20)
+  name String @default("Comiku") @db.VarChar(128)
+  themePresetId String @default("teal") @map("theme_preset_id") @db.VarChar(32)
+  iconAssetId String? @unique @map("icon_asset_id") @db.Uuid
+  iconAsset SiteBrandAsset? @relation(fields: [iconAssetId], references: [id], onDelete: Restrict)
+  revision Int @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@map("site_settings")
+}
+
+model SiteBrandAsset {
+  id String @id @default(uuid()) @db.Uuid
+  createdById String @map("created_by_id") @db.Uuid
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  iconFileId String @unique @map("icon_file_id") @db.Uuid
+  iconFile FileObject @relation("SiteBrandIcon", fields: [iconFileId], references: [id], onDelete: Restrict)
+  faviconFileId String @unique @map("favicon_file_id") @db.Uuid
+  faviconFile FileObject @relation("SiteBrandFavicon", fields: [faviconFileId], references: [id], onDelete: Restrict)
+  settings SiteSettings?
+  status String @default("preparing") @db.VarChar(16)
+  expiresAt DateTime? @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@index([expiresAt, id])
+  @@map("site_brand_assets")
 }

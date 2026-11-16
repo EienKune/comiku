@@ -35,6 +35,8 @@ API/worker/tools 通过绝对 `COMIKU_ENV_FILE` 加载相同配置，显式容�
 
 前端使用 `app.<主域>`，API 使用 `api.<同一主域>`。Pages 设置根目录构建命令 `pnpm --filter @comiku/web build`、输出 `apps/web/dist`，固定 Node 24.22.1 / pnpm 9.1.2，构建变量 `VITE_API_BASE_URL=https://api.<主域>`。只公开这一类前端配置，不放 R2/X 密钥。仓库的 `apps/web/public/_redirects` 提供 SPA 路由回退。改变 API origin 后重新构建。
 
+调整[主题包装配](themes.md)时，先修改共享清单并运行 `pnpm api:generate`，再从同一提交构建 Pages 前端及 API／worker 镜像，保持可用主题一致。部署镜像已包含共享主题目录。管理员在网页选择已装配的默认外观时，设置即时生效，无需重新构建。
+
 API 仍精确匹配 `APP_ORIGIN`、携带凭据 CORS 和写请求 `X-Comiku-Request`，生产 Cookie 为 Secure、HttpOnly、SameSite=Lax、Path=/api、API host-only；在线 Swagger 关闭。不要使用默认 `pages.dev` 与任意另一主域拼接为正式登录部署。
 
 源站方案采用 Caddy + Cloudflare Origin CA，Cloudflare 设置 **Full (strict)**。证书需覆盖 API 子域；Caddy 2.10.2 固定镜像。Origin CA 不用于浏览器直接访问源站。Caddy 不发布管理端口，不记录包含签名地址或 Cookie 的访问日志。

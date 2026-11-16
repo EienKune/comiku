@@ -18,6 +18,8 @@ import { BirthdayReminderService } from "./birthdays/birthday-reminder.service.j
 import { runBirthdayWorker } from "./birthdays/birthday-worker.js";
 import { WorkRemindersService } from "./work-reminders/work-reminders.service.js";
 import { ImageSimilarityService } from "./image-similarity/image-similarity.service.js";
+import { SiteIconService } from "./site/site-icon.service.js";
+import { runSiteMaintenance } from "./site/site-worker.js";
 import { ArchiveRuntimeService } from "./archive-exports/archive-runtime.service.js";
 import { ARCHIVE_SCOPE } from "./archive-exports/archive-common.js";
 
@@ -147,6 +149,7 @@ async function archiveMaintenanceLoop() {
 try {
   await Promise.all([
     maintenanceLoop(),
+    runSiteMaintenance(app.get(SiteIconService), stopping.signal),
     loop("heavy"),
     loop("analysis"),
     loop("network"),

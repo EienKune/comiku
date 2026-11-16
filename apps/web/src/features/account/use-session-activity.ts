@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { client, queryClient } from "./api";
+import { client, queryClient, clearAccountCache } from "./api";
 type Identity = { id: string; activityIntervalSeconds?: number };
 /** No heartbeat: only trusted input in a visible document may renew the idle deadline. */
 export function installSessionActivity(user: Identity) {
@@ -39,7 +39,7 @@ export function installSessionActivity(user: Identity) {
           queryClient.getQueryData(["me"]) === identity
         ) {
           stop();
-          queryClient.clear();
+          clearAccountCache();
           queryClient.setQueryData(["me"], null);
         }
       })
