@@ -3016,7 +3016,7 @@ function CandidateGridSection({
     );
   }, [cache, group, liveTotal, baseFilter, sessionId]);
   const section = candidateTriageSections.find((item) => item.value === group);
-  const loadedSelection = status !== "imported" &&
+  const loadedSelection = group &&
     user.permissions.includes("candidates:manage") && (
       <div className="workspace-candidate-section-actions">
         <Button
@@ -3096,13 +3096,7 @@ function CandidateGridSection({
       )}
     </>
   );
-  if (!section)
-    return (
-      <>
-        {loadedSelection}
-        <PageState query={query}>{() => content}</PageState>
-      </>
-    );
+  if (!section) return <PageState query={query}>{() => content}</PageState>;
   return (
     <details
       id={`candidate-section-${group}`}
@@ -3405,37 +3399,6 @@ export function CandidatesPage() {
             <SectionHeading title="候选池">
               筛选已抓取的图片组，批量入库为作品。
             </SectionHeading>
-            <div
-              className="candidate-toolbar-actions"
-              role="group"
-              aria-label="候选操作"
-            >
-              <Button
-                variant="secondary"
-                leadingIcon={<RefreshCw size={16} />}
-                title="纳入新候选与最新排序，保留当前选择"
-                loading={review.refreshing}
-                disabled={review.isPending}
-                onClick={() => void review.refresh()}
-              >
-                刷新列表
-              </Button>
-              {user.permissions.includes("candidates:manage") && (
-                <>
-                  <Button
-                    variant="secondary"
-                    leadingIcon={<Upload size={16} />}
-                    onClick={() => setShowUpload((value) => !value)}
-                  >
-                    手动上传
-                  </Button>
-                  <SourceSyncControl onCompleted={invalidateWorkViews} />
-                </>
-              )}
-              <Button variant="secondary" onClick={() => setShowRules(true)}>
-                审核规则
-              </Button>
-            </div>
           </div>
           <Toolbar className="candidate-toolbar">
             <CandidateAuthorFilter
@@ -3494,6 +3457,56 @@ export function CandidatesPage() {
               <option value="30">最近 30 天</option>
             </SelectField>
           </Toolbar>
+          <div className="candidate-list-controls">
+            <nav
+              className="candidate-section-nav"
+              aria-label="候选审核区域"
+              aria-hidden={status !== "pending"}
+              inert={status !== "pending"}
+            >
+              {candidateTriageSections.map((section) => (
+                <button
+                  key={section.value}
+                  type="button"
+                  onClick={() => locateGroup(section.value)}
+                >
+                  {section.title}{" "}
+                  <span>{review.session?.counts[section.value] ?? 0}</span>
+                </button>
+              ))}
+            </nav>
+            <div
+              className="candidate-toolbar-actions"
+              role="group"
+              aria-label="候选操作"
+            >
+              <Button
+                variant="secondary"
+                leadingIcon={<RefreshCw size={16} />}
+                title="纳入新候选与最新排序，保留当前选择"
+                loading={review.refreshing}
+                disabled={review.isPending}
+                onClick={() => void review.refresh()}
+              >
+                刷新列表
+              </Button>
+              {user.permissions.includes("candidates:manage") && (
+                <>
+                  <Button
+                    variant="secondary"
+                    leadingIcon={<Upload size={16} />}
+                    onClick={() => setShowUpload((value) => !value)}
+                  >
+                    手动上传
+                  </Button>
+                  <SourceSyncControl onCompleted={invalidateWorkViews} />
+                </>
+              )}
+              <Button variant="secondary" onClick={() => setShowRules(true)}>
+                审核规则
+              </Button>
+            </div>
+          </div>
         </div>
         {showRules && (
           <CandidateRulesDialog
@@ -3501,20 +3514,7 @@ export function CandidatesPage() {
             onClose={() => setShowRules(false)}
           />
         )}
-        {status === "pending" && (
-          <nav className="candidate-section-nav" aria-label="候选审核区域">
-            {candidateTriageSections.map((section) => (
-              <button
-                key={section.value}
-                type="button"
-                onClick={() => locateGroup(section.value)}
-              >
-                {section.title}{" "}
-                <span>{review.session?.counts[section.value] ?? 0}</span>
-              </button>
-            ))}
-          </nav>
-        )}
+
         {showUpload && (
           <ManualCandidateUpload
             onClose={() => setShowUpload(false)}
