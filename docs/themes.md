@@ -18,6 +18,46 @@ Comiku 的外观由通用主题核心、默认包和可选主题包组成。默�
 
 新增包时注册元信息，创建同名浏览器实现，保持预设与样式定义对应。核心负责变量应用、旧变量清理、预览恢复和存储兼容；页面继续复用原有组件。修改注册清单后运行 `pnpm api:generate` 同步允许值，再执行类型检查、测试和构建。
 
+## 最小自定义示例
+
+以下 `team` 包沿用基础组件，只调整品牌色与一项共享圆角，可作为新主题的起点。
+
+创建 `packages/theme-catalog/src/team.mjs`：
+
+```js
+export const teamThemePack = {
+  id: "team",
+  preview: false,
+  presets: [
+    { id: "team-blue", name: "团队蓝", brand: "#5599ff", style: "team" },
+  ],
+};
+```
+
+创建 `apps/web/src/themes/packs/team/index.ts`：
+
+```ts
+import type { ThemePack } from "../../registry";
+
+export const themePack: ThemePack = {
+  id: "team",
+  definitions: [{ style: "team", tokens: { "--radius-md": "12px" } }],
+};
+```
+
+在 `packages/theme-catalog/src/installed.mjs` 导入并加入清单；此例保留基础包，以团队主题替换 BA 包：
+
+```js
+import { defaultThemePack } from "./default.mjs";
+import { teamThemePack } from "./team.mjs";
+
+export const installedThemePacks = [defaultThemePack, teamThemePack];
+```
+
+重新生成契约、检查并构建后，站点设置、个人外观和 Playground 会出现“团队蓝”。增加同风格配色时，可在 `presets` 中添加不同的 ID、名称与品牌色，复用 `style: "team"`。
+
+需要形状或材质覆盖时，从包入口导入 `runtime.css`，使用 `:root[data-theme-style="team"]` 限定规则；仅用于 Playground 的装饰放入 `preview.css`，同时将元信息的 `preview` 设为 `true`。自定义主按钮配色时，运行样式负责绘制，`actionColors` 提供相同的前景与背景用于对比度预览，参照 BA 包实现。
+
 ## 已保存选择
 
 站点选择的主题不可用时，展示使用默认青绿；有效的名称、图标和 revision 继续保留。个人选择的主题不可用时暂时跟随站点，站点主题也缺失时使用基础主题。

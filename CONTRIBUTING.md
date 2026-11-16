@@ -4,20 +4,23 @@
 
 ## 工程结构
 
-| 路径                    | 用途                                        |
-| ----------------------- | ------------------------------------------- |
-| `apps/web`              | React 页面、共享 UI、Playground 和前端测试  |
-| `apps/server`           | NestJS 业务模块、worker、管理脚本和后端测试 |
-| `apps/server/prisma`    | 唯一 schema 和完整迁移链                    |
-| `packages/api-client`   | 根据 OpenAPI 生成的共享客户端               |
-| `docs/api/openapi.json` | 后端离线导出的受版本管理契约                |
-| `deploy`                | Linux 镜像、Compose、Caddy 和备份配置模板   |
+| 路径                     | 用途                                        |
+| ------------------------ | ------------------------------------------- |
+| `apps/web`               | React 页面、共享 UI、Playground 和前端测试  |
+| `apps/server`            | NestJS 业务模块、worker、管理脚本和后端测试 |
+| `apps/server/prisma`     | 唯一 schema 和完整迁移链                    |
+| `packages/api-client`    | 根据 OpenAPI 生成的共享客户端               |
+| `packages/theme-catalog` | 前后端共用的主题元信息与装配清单            |
+| `docs/api/openapi.json`  | 后端离线导出的受版本管理契约                |
+| `deploy`                 | Linux 镜像、Compose、Caddy 和备份配置模板   |
 
 固定 Node.js 24.22.1 / pnpm 9.1.2。使用根目录 workspace 和唯一锁文件，不全局安装 Nest CLI。版本变更需对齐根配置、`.node-version`、`.nvmrc`、部署镜像和镜像测试断言。
 
 ## 修改与验证
 
 业务规则见 [架构说明](docs/architecture.md)，UI 以 [DESIGN.md](DESIGN.md)、语义 token 和 `/playground` 为准。先核对规则，再修改实现；不要在页面复制角色或状态枚举。权限、流程、版本边界和文件授权必须由后端再次校验。
+
+主题扩展遵循[主题包维护](docs/themes.md)：共享目录保存元信息，浏览器实现、样式和专属测试放在对应主题包内。修改装配清单后重新生成 API 契约，并检查默认装配与仅保留默认包时的构建和历史选择回退。
 
 CI 在 `main`、`dev` 的 Push 和所有 Pull Request 上运行完整检查，包括以功能分支为目标的堆叠 PR。功能分支普通 Push 不额外运行同一套 CI，需要远端校验时创建 PR。小改动先运行受影响测试，送审或发布前完成完整检查。
 
@@ -69,6 +72,6 @@ DTO/控制器变更后执行 `pnpm api:generate`，同时提交 OpenAPI 和共�
 
 ## 版本与发布
 
-版本声明位于根和三个 workspace 的 `package.json` 及 OpenAPI 构造器。更新 API 版本后离线重新生成契约。根配置与各子包声明 `private: true` 仅用于防止意外发布至 npm 公共仓库，不影响源码本身的开源分发。
+版本声明位于根目录、各 workspace 的 `package.json` 及 OpenAPI 构造器。更新 API 版本后离线重新生成契约。根配置与各子包声明 `private: true` 仅用于防止意外发布至 npm 公共仓库，不影响源码本身的开源分发。
 
 公开发布前执行全新安装与空库验证，确认无凭据/真实文件、文档链接有效，并在 CHANGELOG 中明确真实服务和部署验证范围。第三方依赖保留其原许可证；发布预编译 bundle 或容器时，需同时处理所包含依赖、原生库和基础镜像的许可证及对应源码要求。
