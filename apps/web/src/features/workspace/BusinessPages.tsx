@@ -1,3 +1,10 @@
+import { sourceAccountLabel } from "./source-account-label";
+import { SourceAccountFilter } from "./SourceAccountFilter";
+import {
+  parseSourceSelection,
+  sourceQuery,
+  type SourceSelection,
+} from "./source-filter-state";
 import { WorkAlbum } from "./WorkAlbum";
 import { WorkSeriesAssociation } from "./WorkSeriesAssociation";
 import { WorkViewNavigation, type WorkPerspective } from "./WorkViewNavigation";
@@ -2897,10 +2904,13 @@ function CandidateAuthorIdentity({ candidate }: { candidate: Candidate }) {
       />
       <div>
         <h2 title={candidate.authorName}>{candidate.authorName}</h2>
-        <span title={candidate.authorHandle ?? undefined}>
-          {candidate.authorHandle
-            ? `${candidate.platform === "pixiv" ? "p@" : "@"}${candidate.authorHandle}`
-            : candidate.platform}
+        <span
+          title={sourceAccountLabel(
+            candidate.platform,
+            candidate.sourceAccount,
+          )}
+        >
+          {sourceAccountLabel(candidate.platform, candidate.sourceAccount)}
         </span>
         <div className="candidate-author-meta">
           <span>
@@ -3120,6 +3130,8 @@ export function CandidatesPage() {
   const [fetchedRange, setFetchedRange] = useState("all");
   const [authorFilter, setAuthorFilter] =
     useState<CandidateAuthorChoice | null>(null);
+  const [sourceSelection, setSourceSelection] =
+    useState<SourceSelection>("all");
   const refreshCandidates = useCallback(
     () =>
       Promise.all([
@@ -3200,7 +3212,9 @@ export function CandidatesPage() {
     () => ({
       status: status as components["schemas"]["CandidateStatus"],
       ...(language === "all" ? {} : { sourceLanguage: language }),
-      ...(authorFilter ? { authorId: authorFilter.id } : {}),
+      ...(authorFilter
+        ? { authorId: authorFilter.id, ...sourceQuery(sourceSelection) }
+        : {}),
       ...(fetchedRange === "all"
         ? {}
         : {
@@ -3209,7 +3223,7 @@ export function CandidatesPage() {
             ).toISOString(),
           }),
     }),
-    [status, language, authorFilter, fetchedRange],
+    [status, language, authorFilter, fetchedRange, sourceSelection],
   );
   const review = useCandidateReviewSession(baseFilter);
   const runCandidateAction = action.run;
@@ -3393,6 +3407,16 @@ export function CandidatesPage() {
             value={authorFilter}
             onChange={(value) => {
               setAuthorFilter(value);
+              setSourceSelection("all");
+              clearSelection();
+            }}
+          />
+          <SourceAccountFilter
+            authorId={authorFilter?.id}
+            value={sourceSelection}
+            disabled={imageImport.locked || composition.locked}
+            onChange={(value) => {
+              setSourceSelection(value);
               clearSelection();
             }}
           />
@@ -3638,6 +3662,19 @@ export function WorksPage() {
   const [selected, setSelected] = useState<Record<string, number>>({});
   const [search, setSearch] = useState(() => params.get("search") ?? "");
   const [mine, setMine] = useState(() => params.get("mine") === "1");
+  const [authorFilter, setAuthorFilter] =
+    useState<CandidateAuthorChoice | null>(() => {
+      const id = params.get("authorId");
+      return id &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          id,
+        )
+        ? { id, displayName: params.get("authorName") || "已选作者" }
+        : null;
+    });
+  const [sourceSelection, setSourceSelection] = useState<SourceSelection>(() =>
+    authorFilter ? parseSourceSelection(params.get("source")) : "all",
+  );
   const deferredSearch = useDeferredValue(search.trim());
   const action = useAction();
   const runWorkAction = action.run;
@@ -3664,6 +3701,16 @@ export function WorksPage() {
     else saved.delete("language");
     if (mine) saved.set("mine", "1");
     else saved.delete("mine");
+    if (authorFilter) {
+      saved.set("authorId", authorFilter.id);
+      saved.set("authorName", authorFilter.displayName);
+    } else {
+      saved.delete("authorId");
+      saved.delete("authorName");
+    }
+    if (authorFilter && sourceSelection !== "all")
+      saved.set("source", sourceSelection);
+    else saved.delete("source");
     await navigate(`/works?${saved.toString()}`, { replace: true });
     await navigate("/works/series", {
       state: { worksViewQuery: saved.toString() },
@@ -3692,6 +3739,8 @@ export function WorksPage() {
       language,
       view === "read" && mine,
       deferredSearch,
+      authorFilter?.id,
+      sourceSelection,
     ],
     gcTime: 0,
     initialPageParam: null as string | null,
@@ -3715,6 +3764,9 @@ export function WorksPage() {
               ...(language === "all" ? {} : { sourceLanguage: language }),
               ...(view === "read" && mine ? { mine: true } : {}),
               ...(deferredSearch ? { search: deferredSearch } : {}),
+              ...(authorFilter
+                ? { authorId: authorFilter.id, ...sourceQuery(sourceSelection) }
+                : {}),
               cursor: pageParam ?? undefined,
               limit: 24,
             },
@@ -3735,7 +3787,17 @@ export function WorksPage() {
   useEffect(() => {
     setSelected({});
     setSelectionMode(false);
-  }, [view, tab, language, mine, search, deferredSearch, qualificationKey]);
+  }, [
+    view,
+    tab,
+    language,
+    mine,
+    search,
+    deferredSearch,
+    qualificationKey,
+    authorFilter,
+    sourceSelection,
+  ]);
   const claimSelected = useCallback(async () => {
     if (!targetClaimStage || !Object.keys(selected).length) return;
     await runWorkAction(async () => {
@@ -3954,6 +4016,18 @@ export function WorksPage() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
+          <CandidateAuthorFilter
+            value={authorFilter}
+            onChange={(value) => {
+              setAuthorFilter(value);
+              setSourceSelection("all");
+            }}
+          />
+          <SourceAccountFilter
+            authorId={authorFilter?.id}
+            value={sourceSelection}
+            onChange={setSourceSelection}
+          />
           <SelectField
             aria-label="来源语言"
             value={language}
@@ -4015,11 +4089,13 @@ export function WorksPage() {
         >
           {isAlbum ? (
             <WorkAlbum
-              key={`${tab}:${language}:${mine}:${deferredSearch}`}
+              key={`${tab}:${language}:${mine}:${deferredSearch}:${authorFilter?.id}:${sourceSelection}`}
               phase={tab !== "all" ? (tab as WorkPhase) : undefined}
               language={language !== "all" ? language : undefined}
               mine={mine}
               search={deferredSearch}
+              authorId={authorFilter?.id}
+              sourceSelection={sourceSelection}
               toolbar={layoutToolbar}
             />
           ) : (

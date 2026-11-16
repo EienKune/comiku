@@ -58,22 +58,23 @@ test("author cursors bind each platform account state independently", () => {
   }
 });
 
-test("both account filters are applied inside active platform predicates for page and count", () => {
-  for (const query of [
-    { xState: "enabled", pixivState: "disabled" },
-    { xState: "disabled", pixivState: "enabled" },
-  ]) {
-    const plan = authorQuery(Object.assign(new AuthorQueryDto(), query));
-    for (const sql of [plan.page, plan.count]) {
-      assert.equal((sql.text.match(/e\.fetch_enabled = /g) ?? []).length, 2);
-      assert.equal((sql.text.match(/e\.deleted_at IS NULL/g) ?? []).length, 2);
-      assert.deepEqual(sql.values.slice(0, 4), [
-        "x",
-        query.xState === "enabled",
-        "pixiv",
-        query.pixivState === "enabled",
-      ]);
-    }
+test("disabled platform requires an active account and no enabled active account", () => {
+  const plan = authorQuery(
+    Object.assign(new AuthorQueryDto(), {
+      xState: "disabled",
+      pixivState: "enabled",
+    }),
+  );
+  for (const sql of [plan.page, plan.count]) {
+    assert.match(
+      sql.text,
+      /AND EXISTS \(SELECT 1 FROM author_external_accounts/,
+    );
+    assert.match(
+      sql.text,
+      /AND NOT EXISTS \(SELECT 1 FROM author_external_accounts[^)]*fetch_enabled =/,
+    );
+    assert.deepEqual(sql.values.slice(0, 5), ["x", "x", true, "pixiv", true]);
   }
   const linked = authorQuery(
     Object.assign(new AuthorQueryDto(), {

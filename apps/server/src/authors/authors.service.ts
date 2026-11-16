@@ -61,12 +61,14 @@ import type {
   ResolvedXProfileDto,
   ResolvedPixivProfileDto,
   SourceCapabilityDto,
+  SourceAccountSummaryDto,
   TagDto,
   UpdateAuthorDto,
   UpdateExternalAccountDto,
   UpdateSourceAdapterStateDto,
   UpdateTagDto,
 } from "./authors.dto.js";
+import { toSourceAccountSummary } from "./source-account-summary.js";
 import {
   AUTHOR_IMPORT_TEMPLATE,
   parseAuthorImportCsv,
@@ -114,7 +116,7 @@ const authorDetails = {
   tags: { include: { tag: true } },
   externalAccounts: {
     where: { deletedAt: null },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     include: {
       adapterStates: {
         omit: { discoveryCheckpointJson: true },
@@ -122,7 +124,7 @@ const authorDetails = {
       },
     },
   },
-} as const;
+} satisfies Prisma.AuthorInclude;
 type AuthorWithDetails = Prisma.AuthorGetPayload<{
   include: typeof authorDetails;
 }>;
@@ -638,11 +640,6 @@ export class AuthorsService {
     if (!actorId && (input.idempotencyKey || accounts.length))
       throw new ForbiddenException("创建账号关联和恢复标识需要当前操作人");
     if (
-      new Set(accounts.map((account) => normalizePlatform(account.platform)))
-        .size !== accounts.length
-    )
-      throw new BadRequestException("同一作者每个平台只能关联一个有效账号");
-    if (
       input.profileSourcePlatform !== undefined &&
       !["x", "pixiv"].includes(input.profileSourcePlatform)
     )
@@ -669,6 +666,24 @@ export class AuthorsService {
       });
       if (previous) return previous;
     }
+    const identities = accounts.map((account) => {
+      const platform = normalizePlatform(account.platform);
+      return JSON.stringify([
+        platform,
+        this.identity(platform, account.externalUserId, account.handle)
+          .externalUserId,
+      ]);
+    });
+    if (new Set(identities).size !== identities.length)
+      throw new BadRequestException("关联账号的稳定身份不能重复");
+    if (
+      input.profileSourcePlatform !== undefined &&
+      accounts.filter(
+        (account) =>
+          normalizePlatform(account.platform) === input.profileSourcePlatform,
+      ).length > 1
+    )
+      throw new BadRequestException("所选平台存在多个账号，作者资料来源不明确");
     if (legacyTags)
       throw new ConflictException(
         "页面已更新，请刷新后重新选择标签；已保存的作者可通过恢复入口查看",
@@ -955,21 +970,6 @@ export class AuthorsService {
     } as Prisma.InputJsonObject;
   }
 
-  private async ensurePlatformVacant(
-    tx: Prisma.TransactionClient,
-    authorId: string,
-    platform: string,
-  ) {
-    if (
-      await tx.authorExternalAccount.findFirst({
-        where: { authorId, platform, deletedAt: null },
-      })
-    )
-      throw new ConflictException(
-        `该作者已关联 ${platform === "x" ? "X" : "Pixiv"} 账号，请编辑或先解绑`,
-      );
-  }
-
   private async stopAccount(
     tx: Prisma.TransactionClient,
     authorId: string,
@@ -1021,7 +1021,6 @@ export class AuthorsService {
           }))
         )
           throw new NotFoundException("作者不存在");
-        await this.ensurePlatformVacant(tx, authorId, data.platform);
         return this.account(
           await tx.authorExternalAccount.create({
             data,
@@ -1030,6 +1029,34 @@ export class AuthorsService {
         );
       }),
     );
+  }
+
+  async listSourceAccounts(
+    authorId: string,
+  ): Promise<SourceAccountSummaryDto[]> {
+    if (
+      !(await this.db.author.findFirst({
+        where: { id: authorId, deletedAt: null },
+        select: { id: true },
+      }))
+    )
+      throw new NotFoundException("作者不存在");
+    const accounts = await this.db.authorExternalAccount.findMany({
+      where: { authorId },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: {
+        id: true,
+        platform: true,
+        externalUserId: true,
+        handle: true,
+        profileUrl: true,
+        displayNameSnapshot: true,
+        avatarFileObjectId: true,
+        fetchEnabled: true,
+        deletedAt: true,
+      },
+    });
+    return accounts.map(toSourceAccountSummary);
   }
 
   async listAccounts(authorId: string): Promise<ExternalAccountDto[]> {
@@ -1311,7 +1338,6 @@ export class AuthorsService {
           where: { id, authorId },
         });
         if (!current) throw new NotFoundException("平台账号不存在");
-        await this.ensurePlatformVacant(tx, authorId, current.platform);
         const result = await tx.authorExternalAccount.updateMany({
           where: {
             id,
@@ -1644,7 +1670,7 @@ export class AuthorsService {
       include: {
         externalAccounts: {
           where: { deletedAt: null, avatarFileObjectId: { not: null } },
-          orderBy: [{ platform: "asc" }, { createdAt: "asc" }],
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         },
       },
     });

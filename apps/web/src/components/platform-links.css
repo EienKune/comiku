@@ -23,31 +23,13 @@
   align-items: stretch;
 }
 .platform-account-entry {
-  display: block;
+  display: inline-flex;
+  align-items: center;
   position: relative;
   min-width: 0;
-}
-.platform-account-link {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-height: 2.5rem;
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: var(--space-1);
-  background: transparent;
-  font: inherit;
-  text-align: left;
-  text-decoration: none;
-}
-.platform-account-link:disabled {
-  opacity: 1;
-  cursor: default;
+  gap: var(--space-2);
 }
 .platform-account-glyph {
-  position: relative;
   display: grid;
   place-items: center;
   width: 2rem;
@@ -57,80 +39,131 @@
   border-radius: var(--radius-sm);
   background: var(--color-surface);
 }
+.platform-account-rail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.platform-account-link,
+.platform-account-more {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  min-height: 2rem;
+  max-width: var(--platform-account-max, 10rem);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  font: inherit;
+  color: var(--color-text-soft);
+  font-size: var(--text-xs);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.platform-account-link {
+  flex-shrink: 0;
+}
+.platform-account-link:disabled {
+  color: var(--color-text-muted);
+  cursor: default;
+}
 .platform-account-identity {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--color-text-soft);
-  font-size: var(--text-xs);
 }
 .platform-account-entry.is-missing .platform-account-glyph {
   opacity: 0.4;
   color: var(--color-text-muted);
   border-color: transparent;
 }
-.platform-account-entry.is-missing .platform-account-identity {
-  color: var(--color-text-muted);
+.platform-account-more {
+  flex-shrink: 0;
+  cursor: pointer;
+  color: var(--color-text);
 }
 .platform-collection-mark {
   display: grid;
   place-items: center;
-  position: absolute;
-  right: -0.3rem;
-  bottom: -0.25rem;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
   border-radius: var(--radius-pill);
-  border: 1px solid var(--color-border-strong);
-  box-shadow: 0 0 0 2px var(--color-surface);
-}
-.platform-collection-mark svg {
-  stroke-width: 2.5;
 }
 .platform-collection-mark.is-enabled {
   color: var(--color-status-success-text);
   background: var(--color-status-success-bg);
-  border-color: var(--color-status-success-border);
 }
 .platform-collection-mark.is-disabled {
   color: var(--color-text-muted);
   background: var(--color-surface-muted);
 }
-.platform-account-tooltip {
-  display: none;
+.platform-account-measure {
   position: absolute;
-  bottom: calc(100% + var(--space-2));
-  left: 0;
-  z-index: 50;
-  width: max-content;
-  max-width: min(17rem, calc(100vw - 3rem));
-  overflow-wrap: anywhere;
-  padding: var(--space-3);
-  border-radius: var(--radius-sm);
-  background: var(--color-text);
-  color: var(--color-surface);
-  font-size: var(--text-xs);
-  box-shadow: var(--shadow-md);
+  display: flex;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
   pointer-events: none;
+  top: 0;
+  left: 0;
 }
-.platform-account-tooltip > * {
-  display: block;
+.platform-account-measure > span {
+  display: inline-flex;
+  flex-shrink: 0;
 }
-.platform-account-warning {
-  margin-top: var(--space-1);
+.platform-account-popover {
+  position: fixed;
+  z-index: 1000;
+  width: min(24rem, calc(100vw - 24px));
+  max-height: min(28rem, calc(100dvh - 24px));
+  overflow-y: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-md);
 }
-.platform-account-entry:focus-within .platform-account-tooltip,
-.platform-account-entry:hover .platform-account-tooltip {
-  display: block;
+.platform-account-popover header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
 }
-.platform-account-entry:focus-visible,
-.platform-account-link:focus-visible {
+.platform-account-popover ul {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+}
+.platform-account-popover .platform-account-link {
+  max-width: 100%;
+}
+.platform-account-popover p {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+.platform-account-link:focus-visible,
+.platform-account-more:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 @media (hover: hover) and (pointer: fine) {
-  .platform-account-link:not(:disabled):hover {
+  .platform-account-link:not(:disabled):hover,
+  .platform-account-more:hover {
     background: var(--color-surface-soft);
   }
+}
+
+.platform-account-identity[data-measure-label]::before {
+  content: attr(data-measure-label);
 }

@@ -1240,6 +1240,17 @@ test.each([
       authorId: "00000000-0000-4000-8000-000000000020",
       authorName: matched ? "👩🏽‍🎨 合成作者" : "测试作者",
       authorHandle: "test_artist",
+      sourceAccount: {
+        id: "test-account",
+        platform: "x",
+        handle: "test_artist",
+        externalUserId: "123",
+        profileUrl: null,
+        displayNameSnapshot: null,
+        avatarAvailable: false,
+        fetchEnabled: false,
+        deletedAt: null,
+      },
       authorAvatarAvailable: matched,
       platform: "x",
       sourceLanguage: "ja",
@@ -1991,6 +2002,90 @@ test("series perspective is independent, and directory/detail/back navigation re
   expect(
     (screen.getByLabelText("搜索作品或作者") as HTMLInputElement).value,
   ).toBe("新词");
+  view.unmount();
+  cache.clear();
+});
+
+test("author-account scope is shared by work cards and album, and clearing author resets the source", async () => {
+  const authorId = "00000000-0000-4000-8000-000000000020";
+  const accountId = "00000000-0000-4000-8000-000000000021";
+  const user = {
+    id: "source-reader",
+    username: "source",
+    displayName: "图源",
+    roles: ["source"],
+    languageCapabilities: [],
+    isActive: true,
+    mustChangePassword: false,
+    canSkipProofreading: false,
+    revision: 1,
+    permissions: ["works:read", "authors:read"],
+  } as CurrentUser;
+  const calls: { path: string; query?: Record<string, unknown> }[] = [];
+  vi.spyOn(client, "GET").mockImplementation((async (
+    path: string,
+    options?: { params?: { query?: Record<string, unknown> } },
+  ) => {
+    calls.push({ path, query: options?.params?.query });
+    return {
+      data:
+        path === "/api/works/album"
+          ? { items: [], total: 0, workTotal: 0, nextCursor: null }
+          : {
+              items: [],
+              total: 0,
+              nextCursor: null,
+              phaseCounts: [],
+              claimCounts: [],
+            },
+      response: new Response(),
+    };
+  }) as typeof client.GET);
+  const cache = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const view = render(
+    <QueryClientProvider client={cache}>
+      <MemoryRouter
+        initialEntries={[
+          `/works?view=read&authorId=${authorId}&authorName=合成作者&source=account:${accountId}`,
+        ]}
+      >
+        <Routes>
+          <Route element={<WorkspaceTestShell user={user} />}>
+            <Route path="/works" element={<WorksPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await waitFor(() =>
+    expect(
+      calls.filter((c) => c.path === "/api/works").at(-1)?.query,
+    ).toMatchObject({ authorId, sourceAccountId: accountId }),
+  );
+  expect(
+    calls.some((c) => c.path === "/api/authors/{id}/source-accounts"),
+  ).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "相册" }));
+  await waitFor(() =>
+    expect(
+      calls.filter((c) => c.path === "/api/works/album").at(-1)?.query,
+    ).toMatchObject({ authorId, sourceAccountId: accountId }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "清除作者" }));
+  await waitFor(() => {
+    const query = calls
+      .filter((c) => c.path === "/api/works/album")
+      .at(-1)?.query;
+    expect(query).toBeTruthy();
+    expect(query).not.toHaveProperty("authorId");
+    expect(query).not.toHaveProperty("sourceAccountId");
+  });
+  expect(
+    (screen.getByRole("combobox", { name: "来源账号" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
   view.unmount();
   cache.clear();
 });

@@ -34,7 +34,7 @@ test("the forward migration archives duplicate identities, keeps source referenc
         async (tx) => {
           // Transactional DDL affects only this disposable test database and is fully rolled back.
           await tx.$executeRawUnsafe(
-            "DROP INDEX author_external_accounts_active_author_platform_key",
+            "DROP INDEX IF EXISTS author_external_accounts_active_author_platform_key",
           );
           const author = await tx.author.create({
             data: { displayName: "Uniqueness migration fixture" },

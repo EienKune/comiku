@@ -1,3 +1,4 @@
+import { sourceAccountLabel } from "./source-account-label";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
@@ -311,7 +312,19 @@ function SourceRecord({ workId }: { workId: string }) {
               >
                 <div className="work-source-record__origin">
                   <span>
-                    {post.platform.toUpperCase()} · {post.externalPostId}
+                    {post.platform === "manual"
+                      ? "手动上传"
+                      : post.platform === "x"
+                        ? "X"
+                        : "Pixiv"}{" "}
+                    ·{" "}
+                    {post.platform !== "manual" && (
+                      <>
+                        {sourceAccountLabel(post.platform, post.sourceAccount)}{" "}
+                        ·{" "}
+                      </>
+                    )}
+                    {post.externalPostId}
                   </span>
                   {url && (
                     <a href={url} target="_blank" rel="noreferrer">

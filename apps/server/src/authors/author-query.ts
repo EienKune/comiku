@@ -81,11 +81,12 @@ export function authorQuery(query: AuthorQueryDto) {
     state: AuthorAccountFilter | null,
   ) => {
     if (!state) return Prisma.empty;
-    const matching = Prisma.sql`SELECT 1 FROM author_external_accounts e WHERE ${account} AND e.platform = ${platform}
-      ${state === AuthorAccountFilter.enabled || state === AuthorAccountFilter.disabled ? Prisma.sql`AND e.fetch_enabled = ${state === AuthorAccountFilter.enabled}` : Prisma.empty}`;
-    return state === AuthorAccountFilter.unlinked
-      ? Prisma.sql`AND NOT EXISTS (${matching})`
-      : Prisma.sql`AND EXISTS (${matching})`;
+    const matching = Prisma.sql`SELECT 1 FROM author_external_accounts e WHERE ${account} AND e.platform = ${platform}`;
+    if (state === AuthorAccountFilter.unlinked)
+      return Prisma.sql`AND NOT EXISTS (${matching})`;
+    if (state === AuthorAccountFilter.disabled)
+      return Prisma.sql`AND EXISTS (${matching}) AND NOT EXISTS (${matching} AND e.fetch_enabled = ${true})`;
+    return Prisma.sql`AND EXISTS (${matching} ${state === AuthorAccountFilter.enabled ? Prisma.sql`AND e.fetch_enabled = ${true}` : Prisma.empty})`;
   };
   const handleMatch = (pattern: string) =>
     Prisma.sql`EXISTS (SELECT 1 FROM author_external_accounts e WHERE ${account} AND e.platform = 'x' AND lower(e.handle) LIKE ${pattern} ESCAPE chr(92))`;

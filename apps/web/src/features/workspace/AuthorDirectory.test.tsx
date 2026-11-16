@@ -44,7 +44,7 @@ test("changing a filter aborts its old request and a late response cannot replac
   });
   setup();
   await waitFor(() => expect(oldSignal).toBeDefined());
-  await choose("X 采集状态", "已开启");
+  await choose("X 采集状态", "有账号开启");
   await screen.findByText("当前筛选作者");
   expect(oldSignal?.aborted).toBe(true);
   await act(async () => {
@@ -119,8 +119,8 @@ test("author directory sends combined server filters, resets cursor, and preserv
   await screen.findByText(author.displayName);
   fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
   await screen.findByText("第二页作者");
-  await choose("X 采集状态", "已开启");
-  await choose("Pixiv 采集状态", "已关闭");
+  await choose("X 采集状态", "有账号开启");
+  await choose("Pixiv 采集状态", "全部关闭");
   await choose("授权状态", "已授权");
   await waitFor(() =>
     expect(get.mock.calls.at(-1)?.[1]).toMatchObject({
@@ -146,7 +146,7 @@ test("author directory sends combined server filters, resets cursor, and preserv
   expect(screen.getByRole("table")).toBeTruthy();
   expect(
     screen.getByRole("combobox", { name: "X 采集状态" }).textContent,
-  ).toContain("已开启");
+  ).toContain("有账号开启");
   expect(get.mock.calls.length).toBe(calls);
   expect(screen.getByText("已显示 1 / 2 位作者")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
