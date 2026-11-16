@@ -15,6 +15,7 @@ test.each([
   "什亭工作台",
   "阿罗娜",
   "普拉娜",
+  "普拉娜夜间",
   "什亭双人",
   "BA 青蓝白",
   "BA 亮蓝炭灰",
@@ -24,7 +25,9 @@ test.each([
       <ThemePreview />
     </StrictMode>,
   );
-  fireEvent.click(screen.getByRole("button", { name: new RegExp(name) }));
+  fireEvent.click(
+    screen.getByRole("button", { name: new RegExp(`^${name} #`) }),
+  );
   const style = document.documentElement.dataset.themeStyle;
   expect(JSON.parse(localStorage.getItem(themeStorageKey)!)).toMatchObject({
     style,
@@ -38,7 +41,7 @@ test.each([
   ).toBe("");
   render(<ThemePreview />);
   expect(document.documentElement.dataset.themeStyle).toBe(style);
-  fireEvent.click(screen.getByRole("button", { name: /青绿/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^青绿 #/ }));
   expect(
     document.documentElement.style.getPropertyValue("--ba-action-bg"),
   ).toBe("");

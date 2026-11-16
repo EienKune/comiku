@@ -8,6 +8,12 @@ export const baThemePack = {
     { id: "arona", name: "阿罗娜", brand: "#82cbe8", style: "arona" },
     { id: "plana", name: "普拉娜", brand: "#dd79a7", style: "plana" },
     {
+      id: "plana-dark",
+      name: "普拉娜夜间",
+      brand: "#e6a3c4",
+      style: "plana-dark",
+    },
+    {
       id: "shittim-duo",
       name: "什亭双人",
       brand: "#82cbe8",

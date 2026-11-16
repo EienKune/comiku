@@ -1,0 +1,3 @@
+:root:is([data-theme-style="minimal-dark"], [data-theme-style="teal-dark"]) {
+  color-scheme: dark;
+}

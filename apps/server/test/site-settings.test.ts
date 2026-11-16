@@ -56,14 +56,10 @@ test("site names are plain bounded Unicode and existing themes remain available"
     normalizeSiteName("<script>plain text</script>"),
     "<script>plain text</script>",
   );
-  assert.deepEqual(siteThemePresetIds.slice(0, 6), [
-    "teal",
-    "sky",
-    "lavender",
-    "pink",
-    "amber",
-    "minimal",
-  ]);
+  assert.deepEqual(
+    siteThemePresetIds.filter((id) => !id.endsWith("-dark")).slice(0, 6),
+    ["teal", "sky", "lavender", "pink", "amber", "minimal"],
+  );
   assert.equal(new Set(siteThemePresetIds).size, siteThemePresetIds.length);
 });
 

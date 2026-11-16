@@ -23,14 +23,12 @@ test("legacy selection is preserved while absent or corrupt storage follows the 
 });
 
 test("site preset IDs are stable and unknown IDs fall back without changing old values", () => {
-  expect(themePresets.slice(0, 6).map((preset) => preset.id)).toEqual([
-    "teal",
-    "sky",
-    "lavender",
-    "pink",
-    "amber",
-    "minimal",
-  ]);
+  expect(
+    themePresets
+      .filter((preset) => !preset.style.endsWith("-dark"))
+      .slice(0, 6)
+      .map((preset) => preset.id),
+  ).toEqual(["teal", "sky", "lavender", "pink", "amber", "minimal"]);
   expect(new Set(themePresets.map((preset) => preset.id)).size).toBe(
     themePresets.length,
   );

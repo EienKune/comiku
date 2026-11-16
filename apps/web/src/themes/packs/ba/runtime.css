@@ -5,6 +5,7 @@
   [data-theme-style="shittim"],
   [data-theme-style="arona"],
   [data-theme-style="plana"],
+  [data-theme-style="plana-dark"],
   [data-theme-style="shittim-duo"],
   [data-theme-style="ba-cyan"],
   [data-theme-style="ba-azure"]
@@ -26,6 +27,7 @@
     [data-theme-style="shittim"],
     [data-theme-style="arona"],
     [data-theme-style="plana"],
+    [data-theme-style="plana-dark"],
     [data-theme-style="shittim-duo"],
     [data-theme-style="ba-cyan"],
     [data-theme-style="ba-azure"]
@@ -40,6 +42,7 @@
     [data-theme-style="shittim"],
     [data-theme-style="arona"],
     [data-theme-style="plana"],
+    [data-theme-style="plana-dark"],
     [data-theme-style="shittim-duo"],
     [data-theme-style="ba-cyan"],
     [data-theme-style="ba-azure"]
@@ -56,6 +59,7 @@
     [data-theme-style="shittim"],
     [data-theme-style="arona"],
     [data-theme-style="plana"],
+    [data-theme-style="plana-dark"],
     [data-theme-style="shittim-duo"],
     [data-theme-style="ba-cyan"],
     [data-theme-style="ba-azure"]
@@ -82,4 +86,8 @@
 :root[data-theme-style="shittim"] .ui-badge,
 :root[data-theme-style="archive"] .ui-badge {
   border-radius: var(--radius-sm);
+}
+
+:root[data-theme-style="plana-dark"] {
+  color-scheme: dark;
 }

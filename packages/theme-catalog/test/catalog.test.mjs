@@ -7,17 +7,24 @@ import {
   installedThemePacks,
 } from "../src/index.mjs";
 
-test("default-only composition retains six original presets and resolves unavailable IDs", () => {
+test("default-only composition retains original and dark presets and resolves unavailable IDs", () => {
   const catalog = createThemeCatalog([defaultThemePack]);
   assert.deepEqual(catalog.presetIds, [
     "teal",
+    "teal-dark",
     "sky",
     "lavender",
     "pink",
     "amber",
     "minimal",
+    "minimal-dark",
   ]);
-  assert.deepEqual(catalog.styleIds, ["soft", "minimal"]);
+  assert.deepEqual(catalog.styleIds, [
+    "soft",
+    "teal-dark",
+    "minimal",
+    "minimal-dark",
+  ]);
   assert.equal(catalog.resolvePresetId("arona"), "teal");
   assert.equal(catalog.resolvePresetId("minimal"), "minimal");
   assert.equal(

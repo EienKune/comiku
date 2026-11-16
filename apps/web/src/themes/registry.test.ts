@@ -13,7 +13,10 @@ import { presentSite } from "../features/site/site-config";
 const catalog = createThemeCatalog([defaultThemePack]);
 const registry = createThemeRegistry(catalog, [themePack]);
 test("default-only registry is independent of optional style definitions", () => {
-  expect(registry.tokenKeys).toEqual([]);
+  expect(registry.tokenKeys).toContain("--color-canvas");
+  expect(registry.tokenKeys.some((key) => key.startsWith("--ba-"))).toBe(false);
+  expect(registry.hasStyle("minimal-dark")).toBe(true);
+  expect(registry.hasStyle("teal-dark")).toBe(true);
   expect(registry.hasStyle("arona")).toBe(false);
   expect(registry.preset("arona").id).toBe("teal");
   expect(() => createThemeRegistry(catalog, [])).toThrow();

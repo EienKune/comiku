@@ -24,6 +24,7 @@ test.each([
   "shittim",
   "arona",
   "plana",
+  "plana-dark",
   "shittim-duo",
   "ba-cyan",
   "ba-azure",
