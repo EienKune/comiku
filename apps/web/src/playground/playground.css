@@ -368,7 +368,7 @@
   position: absolute;
   z-index: 3;
   border: 1px solid var(--color-surface-glass);
-  background: rgba(255, 255, 255, 0.84);
+  background: var(--color-preview-card, rgba(255, 255, 255, 0.84));
   box-shadow: var(--shadow-md);
   backdrop-filter: blur(18px);
 }
@@ -1677,7 +1677,7 @@
 .translation-marker:hover,
 .translation-marker.is-selected {
   background: var(--color-pink-500);
-  color: var(--color-text);
+  color: var(--color-preview-marker-text, var(--color-text));
   box-shadow:
     0 0 0 4px rgba(220, 113, 143, 0.22),
     0 4px 12px rgba(57, 34, 42, 0.3);
@@ -1685,7 +1685,7 @@
 }
 
 .translation-marker--outside:not(.is-selected) {
-  color: var(--color-text);
+  color: var(--color-preview-marker-text, var(--color-text));
   background: var(--color-violet-500);
 }
 
@@ -1693,7 +1693,7 @@
   display: flex;
   min-width: 0;
   border-left: 1px solid rgba(255, 255, 255, 0.09);
-  background: #fafcfc;
+  background: var(--color-preview-marker-list, #fafcfc);
   color: var(--color-text);
   flex-direction: column;
 }

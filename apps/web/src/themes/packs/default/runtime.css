@@ -1,3 +1,10 @@
 :root:is([data-theme-style="minimal-dark"], [data-theme-style="teal-dark"]) {
   color-scheme: dark;
 }
+
+:root:is([data-theme-style="minimal-dark"], [data-theme-style="teal-dark"])
+  :is(.account-app, .account-dialog)
+  .ui-button--danger:hover:not(:disabled) {
+  background: var(--color-danger-action-hover-bg);
+  color: var(--color-danger-action-hover-text);
+}

@@ -91,3 +91,10 @@
 :root[data-theme-style="plana-dark"] {
   color-scheme: dark;
 }
+
+:root[data-theme-style="plana-dark"]
+  :is(.account-app, .account-dialog)
+  .ui-button--danger:hover:not(:disabled) {
+  background: var(--color-danger-action-hover-bg);
+  color: var(--color-danger-action-hover-text);
+}

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   Body,
   CallHandler,
@@ -74,7 +75,9 @@ export class SiteController {
     @Res({ passthrough: true }) response: Response,
   ) {
     const settings = await this.site.readPublic();
-    const etag = `"site-${settings.revision}"`;
+    const etag = `"site-${createHash("sha256")
+      .update(JSON.stringify(settings))
+      .digest("hex")}"`;
     response.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
     response.setHeader("ETag", etag);
     if (
