@@ -192,7 +192,7 @@ test("author creation atomically binds accounts and actor-scoped retries recover
         },
         source.id,
       ),
-      /每个平台/,
+      /重复/,
     );
     assert.equal(await db.author.count({ where: { displayName: prefix } }), 3);
     // Both accounts are saved, but the explicitly selected trusted Pixiv avatar

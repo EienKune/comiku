@@ -41,6 +41,7 @@ async function fixture() {
     authorization,
     async postWithMedia(count = 3, postedAt = new Date()) {
       const candidate = await f.post({
+        platform: "manual",
         postedAt,
         analysisPredictions: Array.from({ length: count }, () => ({
           label: "positive",

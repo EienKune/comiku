@@ -218,3 +218,93 @@ test("source total budget is checked before loading any complete media records",
   );
   assert.equal(loaded, false);
 });
+
+test("merge checks actual account identity after candidate locks, with only pure manual-null as the unbound exception", async () => {
+  const accountId = randomUUID(),
+    authorId = randomUUID();
+  const bound = {
+    platform: "x",
+    authorExternalAccountId: accountId,
+    authorExternalAccount: { id: accountId, authorId, platform: "x" },
+  };
+  const manual = {
+    platform: "manual",
+    authorExternalAccountId: null,
+    authorExternalAccount: null,
+  };
+  const unknown = {
+    platform: "x",
+    authorExternalAccountId: null,
+    authorExternalAccount: null,
+  };
+  for (const [left, right, accepted] of [
+    [bound, bound, true],
+    [manual, manual, true],
+    [unknown, unknown, false],
+    [manual, unknown, false],
+    [bound, unknown, false],
+    [bound, { ...bound, authorExternalAccountId: randomUUID() }, false],
+    [bound, { ...bound, platform: "pixiv" }, false],
+    [
+      bound,
+      {
+        ...bound,
+        authorExternalAccount: {
+          ...bound.authorExternalAccount,
+          authorId: randomUUID(),
+        },
+      },
+      false,
+    ],
+    [
+      bound,
+      {
+        ...bound,
+        authorExternalAccount: {
+          ...bound.authorExternalAccount,
+          platform: "pixiv",
+        },
+      },
+      false,
+    ],
+  ] as const) {
+    const input = merge();
+    let locked = false;
+    const tx = {
+      $queryRaw: async (sql: { text?: string }) => {
+        if (sql.text?.includes("FOR UPDATE")) locked = true;
+        return [];
+      },
+      candidateCompositionReceipt: { findUnique: async () => null },
+      candidatePost: {
+        findMany: async ({ include }: { include?: unknown }) =>
+          input.candidates.map((item, index) => ({
+            ...item,
+            revision: item.expectedRevision,
+            authorId,
+            status: "pending",
+            author: { deletedAt: null, authorizationStatus: "authorized" },
+            ...(include ? (index ? right : left) : {}),
+          })),
+      },
+      candidateMedia: { count: async () => 0 },
+      workCandidateSource: {
+        count: async () => {
+          assert.equal(locked, true);
+          throw Error("accepted source");
+        },
+      },
+    };
+    const service = new CandidateCompositionsService(
+      {
+        $transaction: async (run: (tx: object) => unknown) => run(tx),
+      } as never,
+      { authorizeImport: async () => undefined } as never,
+    );
+    await assert.rejects(
+      service.compose({ userId: randomUUID(), sessionId: randomUUID() }, input),
+      accepted ? /accepted source/ : /来源账号|来源候选/,
+    );
+    assert.equal(locked, true);
+  }
+});

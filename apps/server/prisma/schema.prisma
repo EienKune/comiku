@@ -314,7 +314,7 @@ model AuthorExternalAccount {
   candidates          CandidatePost[]
 
   @@unique([platform, externalUserId])
-  // Partial active (author_id, platform) uniqueness is enforced in the forward SQL migration.
+  // Multiple active identities per author/platform are allowed; stable identity remains globally unique.
   @@index([authorId, deletedAt])
   @@index([platform, fetchEnabled, deletedAt])
   @@map("author_external_accounts")

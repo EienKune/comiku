@@ -91,6 +91,9 @@ export class CandidateCompositionsService {
           where: { id: { in: ids } },
           include: {
             author: true,
+            authorExternalAccount: {
+              select: { id: true, authorId: true, platform: true },
+            },
             media: { orderBy: [{ orderIndex: "asc" }, { id: "asc" }] },
           },
         });
@@ -107,6 +110,37 @@ export class CandidateCompositionsService {
           )
         )
           throw new ConflictException("候选已更新或已处理，请刷新后重试");
+        if (intent.mode === "merge") {
+          // Only the locked candidate identities establish merge provenance. Unknown
+          // historical NULLs cannot be inferred from the author's current accounts.
+          const first = candidates[0];
+          const manual =
+            first.platform === "manual" &&
+            first.authorExternalAccountId === null;
+          if (
+            candidates.some((candidate) => {
+              if (manual)
+                return (
+                  candidate.platform !== "manual" ||
+                  candidate.authorExternalAccountId !== null
+                );
+              const account = candidate.authorExternalAccount;
+              return (
+                !first.authorExternalAccountId ||
+                candidate.authorExternalAccountId !==
+                  first.authorExternalAccountId ||
+                candidate.platform !== first.platform ||
+                !account ||
+                account.id !== candidate.authorExternalAccountId ||
+                account.authorId !== authorId ||
+                account.platform !== candidate.platform
+              );
+            })
+          )
+            throw new ConflictException(
+              "合并来源候选必须属于同一来源账号；仅同作者的纯手动来源可无账号合并",
+            );
+        }
         if (
           candidates.some(
             (item) =>

@@ -978,6 +978,22 @@ export interface paths {
         patch: operations["updateAuthor"];
         trace?: never;
     };
+    "/api/authors/{id}/source-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAuthorSourceAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/authors/{id}/avatar/url": {
         parameters: {
             query?: never;
@@ -3827,6 +3843,19 @@ export interface components {
         AuthorCreationResultDto: {
             author: components["schemas"]["ManagedAuthorDto"] | null;
         };
+        SourceAccountSummaryDto: {
+            externalUserId: string;
+            /** Format: uuid */
+            id: string;
+            platform: string;
+            handle: string | null;
+            profileUrl: string | null;
+            displayNameSnapshot: string | null;
+            avatarAvailable: boolean;
+            fetchEnabled: boolean;
+            /** Format: date-time */
+            deletedAt: string | null;
+        };
         AuthorEvidenceDto: {
             /** Format: uuid */
             id: string;
@@ -4008,6 +4037,9 @@ export interface components {
             /** Format: uuid */
             authorId: string;
             authorName: string;
+            /** Format: uuid */
+            authorExternalAccountId: string | null;
+            sourceAccount: components["schemas"]["SourceAccountSummaryDto"] | null;
             authorHandle: string | null;
             authorAvatarAvailable: boolean;
             platform: string;
@@ -4038,6 +4070,11 @@ export interface components {
             nextCursor: string | null;
         };
         CreateCandidateReviewSessionDto: {
+            /** @enum {string} */
+            sourcePlatform?: "x" | "pixiv" | "manual";
+            /** Format: uuid */
+            sourceAccountId?: string;
+            sourceUnbound?: boolean;
             status?: components["schemas"]["CandidateStatus"];
             /** Format: uuid */
             authorId?: string;
@@ -4558,6 +4595,7 @@ export interface components {
             available: boolean;
         };
         WorkCandidateSourceDto: {
+            sourceAccount: components["schemas"]["SourceAccountSummaryDto"] | null;
             mappingKnown: boolean;
             /** Format: uuid */
             candidateId: string;
@@ -4569,6 +4607,7 @@ export interface components {
             media: components["schemas"]["WorkSourceMediaDto"][];
         };
         WorkSourceDto: {
+            sourceAccount: components["schemas"]["SourceAccountSummaryDto"] | null;
             /** Format: uuid */
             candidateId: string;
             platform: string;
@@ -11869,6 +11908,90 @@ export interface operations {
             };
         };
     };
+    listAuthorSourceAccounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: unknown;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceAccountSummaryDto"][];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
     getAuthorAvatarUrl: {
         parameters: {
             query?: never;
@@ -13446,6 +13569,9 @@ export interface operations {
     listCandidates: {
         parameters: {
             query?: {
+                sourcePlatform?: string;
+                sourceAccountId?: string;
+                sourceUnbound?: boolean;
                 status?: components["schemas"]["CandidateStatus"];
                 authorId?: string;
                 search?: string;
@@ -15446,6 +15572,9 @@ export interface operations {
     listWorks: {
         parameters: {
             query?: {
+                sourcePlatform?: string;
+                sourceAccountId?: string;
+                sourceUnbound?: boolean;
                 view?: components["schemas"]["WorkView"];
                 /** @description 推荐接取限定到一个具备资格的职责，仅与 recommended 视角组合 */
                 claimStage?: string;
@@ -15542,6 +15671,9 @@ export interface operations {
     listWorkAlbumImages: {
         parameters: {
             query?: {
+                sourcePlatform?: string;
+                sourceAccountId?: string;
+                sourceUnbound?: boolean;
                 view?: components["schemas"]["WorkView"];
                 /** @description 推荐接取限定到一个具备资格的职责，仅与 recommended 视角组合 */
                 claimStage?: string;

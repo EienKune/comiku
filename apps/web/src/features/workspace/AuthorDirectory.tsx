@@ -23,8 +23,8 @@ type Authorization = Author["authorizationStatus"];
 type Tone = NonNullable<ComponentProps<typeof Badge>["tone"]>;
 const collectionLabels: Record<AccountFilter, string> = {
   linked: "已关联",
-  enabled: "已开启",
-  disabled: "已关闭",
+  enabled: "有账号开启",
+  disabled: "全部关闭",
   unlinked: "未关联",
 };
 const tagTones: Tone[] = ["violet", "translation", "info", "warning"];

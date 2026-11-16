@@ -57,6 +57,8 @@ function candidate(
     revision,
     authorId: "author",
     authorName: "合成作者",
+    authorExternalAccountId: null,
+    sourceAccount: null,
     authorHandle: null,
     authorAvatarAvailable: false,
     platform: "fixture",

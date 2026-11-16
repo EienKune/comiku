@@ -2690,6 +2690,7 @@ export class SourceFetchService {
     return {
       id: account.id,
       revision: account.revision,
+      authorId: account.authorId,
       fetchEnabled: true,
       deletedAt: null,
       author: {

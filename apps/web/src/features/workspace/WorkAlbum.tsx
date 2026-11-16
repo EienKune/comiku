@@ -1,3 +1,4 @@
+import { sourceQuery, type SourceSelection } from "./source-filter-state";
 import { groupAlbumImages } from "./work-album-data";
 import { useMemo, useState, type ReactNode } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
@@ -19,15 +20,28 @@ export function WorkAlbum({
   mine,
   search,
   toolbar,
+  authorId,
+  sourceSelection = "all",
 }: {
   phase?: components["schemas"]["WorkPhase"];
   language?: components["schemas"]["SourceLanguage"];
   mine: boolean;
   search: string;
+  authorId?: string;
+  sourceSelection?: SourceSelection;
   toolbar?: (workTotal?: number, imageTotal?: number) => ReactNode;
 }) {
   const query = useInfiniteQuery({
-    queryKey: ["works", "album", phase, language, mine, search],
+    queryKey: [
+      "works",
+      "album",
+      phase,
+      language,
+      mine,
+      search,
+      authorId,
+      sourceSelection,
+    ],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam, signal }) => {
       return unwrap(
@@ -40,6 +54,9 @@ export function WorkAlbum({
               mine: mine || undefined,
               search: search || undefined,
               cursor: pageParam,
+              ...(authorId
+                ? { authorId, ...sourceQuery(sourceSelection) }
+                : {}),
             },
           },
           signal,
@@ -114,7 +131,7 @@ export function WorkAlbum({
       )}
       {current && (
         <ImageLightbox
-          key={`${phase}:${language}:${mine}:${search}`}
+          key={`${phase}:${language}:${mine}:${search}:${authorId}:${sourceSelection}`}
           src={
             isDisplayableImageUrl(original.data?.url)
               ? original.data.url

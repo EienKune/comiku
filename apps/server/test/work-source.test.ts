@@ -119,6 +119,7 @@ test("work source returns all source media with exact adopted page mapping and e
     {
       sources: undefined,
       candidateId: "candidate",
+      sourceAccount: null,
       platform: "synthetic",
       externalPostId: "post",
       sourceUrl: "https://example.test/post",

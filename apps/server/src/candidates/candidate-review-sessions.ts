@@ -1,3 +1,4 @@
+import { assertSourceFilterAccount } from "../source-identity/source-filter.js";
 import {
   candidateTagRules,
   candidateReviewPolicyKey,
@@ -70,6 +71,7 @@ export class CandidateReviewSessions {
       async (tx) => {
         // Serialize idempotency, replacement and the three-session quota across tabs.
         await assertCandidateReader(tx, actorId, true);
+        await assertSourceFilterAccount(tx, filter, filter.authorId);
         const [{ now }] = await tx.$queryRaw<{ now: Date }[]>`
           SELECT clock_timestamp() AS now`;
         const previous = await tx.candidateReviewSession.findUnique({

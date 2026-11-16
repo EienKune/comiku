@@ -3,6 +3,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
 import { Button, SearchField } from "../../components/ui";
 import { client, unwrap } from "../account/api";
+import { authorAccountHint } from "./author-account-hints";
 import "./author-picker.css";
 import "./candidate-author-filter.css";
 export type CandidateAuthorChoice = Pick<
@@ -167,16 +168,7 @@ export function CandidateAuthorFilter({
                 onClick={() => choose(item)}
               >
                 <span>{item.displayName}</span>
-                <small>
-                  {item.externalAccounts
-                    .slice(0, 2)
-                    .map((account) =>
-                      account.platform === "x"
-                        ? `X @${account.handle ?? account.externalUserId}`
-                        : `Pixiv ${account.externalUserId}`,
-                    )
-                    .join(" · ")}
-                </small>
+                <small>{authorAccountHint(item.externalAccounts, term)}</small>
               </button>
             ))}
           </div>
