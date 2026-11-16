@@ -162,7 +162,7 @@ test("debounces input, ignores old results and clears a revoked selection after 
   expect(screen.getByText("", { selector: "output" }).textContent).toBe("");
 });
 
-test("search hint shows the actual matched active account and selection remains author-wide", async () => {
+test("account searches show only the author name and selection remains author-wide", async () => {
   const item = {
     ...author("author", "作者"),
     externalAccounts: [
@@ -190,9 +190,9 @@ test("search hint shows the actual matched active account and selection remains 
     target: { value: "side" },
   });
   const option = await screen.findByRole("option", {
-    name: /作者 X @side · X @main · \+1/,
+    name: "作者",
   });
-  expect(option.textContent).not.toContain("old_side");
+  expect(option.textContent).toBe("作者");
   fireEvent.click(option);
   expect(screen.getByText("author")).toBeTruthy();
 });

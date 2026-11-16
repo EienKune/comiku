@@ -7,7 +7,6 @@ import {
 import type { components } from "@comiku/api-client";
 import { Button, SearchField } from "../../components/ui";
 import { client, unwrap } from "../account/api";
-import { authorAccountHint } from "./author-account-hints";
 import "./author-picker.css";
 
 type Author = components["schemas"]["AuthorDto"];
@@ -173,9 +172,6 @@ export function AuthorPicker({
             onClick={() => choose(author)}
           >
             <span>{author.displayName}</span>
-            {author.externalAccounts.length > 0 && (
-              <small>{authorAccountHint(author.externalAccounts, term)}</small>
-            )}
           </button>
         ))}
       </div>
