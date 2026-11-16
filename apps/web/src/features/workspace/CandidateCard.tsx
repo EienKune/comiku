@@ -119,6 +119,7 @@ export function CandidateCard({
                     className="candidate-retry-chip"
                     leadingIcon={<RotateCcw size={13} />}
                     title="重新提交失败图片的识别；已成功的结果会保留"
+                    disabled={editingDisabled}
                     onClick={onRetryAnalysis}
                   >
                     重试识别

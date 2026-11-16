@@ -51,6 +51,7 @@ import {
 import { MarkerDemo } from "./MarkerDemo";
 import { WorkViewsDemo } from "./WorkViewsDemo";
 import { ImageLightboxDemo } from "./ImageLightboxDemo";
+import { ImageOrderingDemo } from "./ImageOrderingDemo";
 import { ReviewModeDemo } from "./ReviewModeDemo";
 import { ThemePreview } from "./ThemePreview";
 import { InteractionLab } from "./InteractionLab";
@@ -838,6 +839,7 @@ export function DesignSystemPlayground() {
               <WorkViewsDemo />
               <SourceManagementPattern />
               <ImageLightboxDemo />
+              <ImageOrderingDemo />
               <h3>作者平台主页</h3>
               <p>
                 已关联账号可直接打开，未关联显示禁用；每个平台只关联一个账号，图标直接跳转。

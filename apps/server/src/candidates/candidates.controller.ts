@@ -1,3 +1,8 @@
+import { CandidateCompositionsService } from "./composition.service.js";
+import {
+  ComposeCandidatesDto,
+  CandidateCompositionResultDto,
+} from "./composition.dto.js";
 import { ImageReadQueryDto, ImageUrlDto } from "../files/image-url.dto.js";
 import {
   BadRequestException,
@@ -68,7 +73,33 @@ const manualUploadOptions = {
 export class CandidatesController {
   constructor(
     @Inject(CandidatesService) private readonly candidates: CandidatesService,
+    @Inject(CandidateCompositionsService)
+    private readonly compositions: CandidateCompositionsService,
   ) {}
+
+  @Post("compositions")
+  @Access({ permission: "candidates:manage" })
+  @ApiOperation({ operationId: "composeCandidates" })
+  @ApiBody({ type: ComposeCandidatesDto })
+  @ApiCreatedResponse({ type: CandidateCompositionResultDto })
+  compose(
+    @Req() request: AuthRequest,
+    @Body(bodyValidation(ComposeCandidatesDto)) input: ComposeCandidatesDto,
+  ) {
+    return this.compositions.compose(request.actor, input);
+  }
+
+  @Get("compositions/:idempotencyKey")
+  @Access({ permission: "candidates:manage" })
+  @ApiOperation({ operationId: "getCandidateCompositionResult" })
+  @ApiParam({ name: "idempotencyKey", format: "uuid" })
+  @ApiOkResponse({ type: CandidateCompositionResultDto })
+  compositionResult(
+    @Req() request: AuthRequest,
+    @Param("idempotencyKey", ParseUUIDPipe) idempotencyKey: string,
+  ) {
+    return this.compositions.result(request.actor, idempotencyKey);
+  }
 
   @Get()
   @Access({ permission: "candidates:read" })

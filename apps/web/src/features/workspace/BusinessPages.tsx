@@ -16,6 +16,12 @@ import {
 import { CandidateImageEditor } from "./CandidateImageEditor";
 import { CandidateImportConfirmation } from "./CandidateImportConfirmation";
 import { useCandidateImageImport } from "./use-candidate-image-import";
+import { CandidateCompositionEditor } from "./CandidateCompositionEditor";
+import { CandidateCompositionConfirmation } from "./CandidateCompositionConfirmation";
+import { CandidateCompositionAction } from "./CandidateCompositionAction";
+import { useCandidateComposition } from "./use-candidate-composition";
+import { compositionEligibility } from "./candidate-composition-model";
+import type { CandidateImportEntry } from "./candidate-import-state";
 import { CandidateInspectionScope } from "./CandidateInspectionScope";
 import { WorkSourceRecord } from "./WorkSourceRecord";
 import { AuthorArchiveControl } from "./AuthorArchiveControl";
@@ -3044,7 +3050,21 @@ function CandidateGridSection({
                   ? candidateImageSelectionSummary(imageDrafts[candidate.id])
                   : undefined
               }
-            />
+            >
+              {candidate.status === "imported" && (
+                <div className="candidate-imported-works">
+                  {candidate.works?.length ? (
+                    candidate.works.map((work) => (
+                      <Link key={work.id} to={`/works/${work.id}`}>
+                        {work.title?.trim() || `作品 #${work.workNumber}`}
+                      </Link>
+                    ))
+                  ) : candidate.workId ? (
+                    <Link to={`/works/${candidate.workId}`}>查看作品</Link>
+                  ) : null}
+                </div>
+              )}
+            </CandidateCard>
           ))}
         </div>
       ) : !query.isPending ? (
@@ -3100,16 +3120,30 @@ export function CandidatesPage() {
   const [fetchedRange, setFetchedRange] = useState("all");
   const [authorFilter, setAuthorFilter] =
     useState<CandidateAuthorChoice | null>(null);
-  const imageImport = useCandidateImageImport(
+  const refreshCandidates = useCallback(
+    () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["candidates"] }),
+        invalidateWorkViews(),
+      ]),
+    [],
+  );
+  const compositionSettler = useRef<
+    (sources: readonly CandidateImportEntry[]) => void
+  >(() => {});
+  const composition = useCandidateComposition(
     useCallback(
-      () =>
-        Promise.all([
-          queryClient.invalidateQueries({ queryKey: ["candidates"] }),
-          invalidateWorkViews(),
-        ]),
+      (sources: readonly CandidateImportEntry[]) =>
+        compositionSettler.current(sources),
       [],
     ),
+    refreshCandidates,
   );
+  const imageImport = useCandidateImageImport(
+    refreshCandidates,
+    composition.locked,
+  );
+  compositionSettler.current = imageImport.settleComposition;
   const {
     selected,
     toggle,
@@ -3181,6 +3215,7 @@ export function CandidatesPage() {
   const runCandidateAction = action.run;
   const setCandidateSuccess = action.setSuccess;
   async function retryAnalysis(candidate: Candidate) {
+    if (imageImport.locked) return;
     await action.run(async () => {
       await unwrap(
         await client.POST("/api/candidates/{id}/analysis-retry", {
@@ -3229,6 +3264,22 @@ export function CandidatesPage() {
     ],
   );
   const selectedCount = selected.size;
+  const compositionLockedReason = candidateBusy ? "请先确认本次操作结果" : "";
+  const mergeReason =
+    compositionLockedReason ||
+    compositionEligibility(imageImport.state, "merge");
+  const splitReason =
+    compositionLockedReason ||
+    compositionEligibility(imageImport.state, "split");
+  const openComposition = composition.open;
+  const openMerge = useCallback(
+    () => openComposition("merge", imageImport.state),
+    [openComposition, imageImport.state],
+  );
+  const openSplit = useCallback(
+    () => openComposition("split", imageImport.state),
+    [openComposition, imageImport.state],
+  );
   const topbarRegistration = useMemo(
     () =>
       selectedCount
@@ -3247,7 +3298,9 @@ export function CandidatesPage() {
                   </Button>
                 </div>
                 <div className="candidate-batch-operations">
-                  {status === "pending" || imageImport.uncertain ? (
+                  {status === "pending" ||
+                  imageImport.uncertain ||
+                  composition.uncertain ? (
                     <>
                       <Button
                         size="sm"
@@ -3257,10 +3310,30 @@ export function CandidatesPage() {
                       >
                         忽略所选（{selectedCount}）
                       </Button>
+                      <CandidateCompositionAction
+                        reason={mergeReason}
+                        label="合并入库"
+                        onClick={openMerge}
+                      />
+                      <CandidateCompositionAction
+                        reason={splitReason}
+                        label="拆分入库"
+                        onClick={openSplit}
+                      />
+                      {composition.uncertain && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={composition.reopen}
+                        >
+                          查看本次拆合入库
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         loading={imageImport.busy}
-                        disabled={action.busy}
+                        disabled={action.busy || composition.locked}
                         onClick={openConfirmation}
                       >
                         {imageImport.uncertain
@@ -3296,13 +3369,22 @@ export function CandidatesPage() {
       imageImport.uncertain,
       clearSelection,
       openConfirmation,
+      mergeReason,
+      splitReason,
+      openMerge,
+      openSplit,
+      composition.uncertain,
+      composition.locked,
+      composition.reopen,
     ],
   );
   useTopbarActions(topbarRegistration);
   return (
     <PermissionGate permission="candidates:read">
       <CandidateInspectionScope>
-        <CandidateDraftLeaveGuard dirty={imageImport.dirty} />
+        <CandidateDraftLeaveGuard
+          dirty={imageImport.dirty || composition.dirty}
+        />
         <SectionHeading title="候选池">
           筛选已抓取的图片组，批量入库为作品。
         </SectionHeading>
@@ -3419,6 +3501,27 @@ export function CandidatesPage() {
           error={imageImport.error || review.error || action.error}
           success={imageImport.success || action.success}
         />
+        {composition.visible &&
+          composition.draft &&
+          (composition.phase === "editing" ? (
+            <CandidateCompositionEditor
+              draft={composition.draft}
+              onChange={composition.update}
+              onReview={composition.review}
+              onClose={composition.close}
+            />
+          ) : (
+            <CandidateCompositionConfirmation
+              draft={composition.draft}
+              phase={composition.phase!}
+              result={composition.result}
+              error={composition.error}
+              onConfirm={() => void composition.submit()}
+              onLookup={() => void composition.lookup()}
+              onEdit={composition.edit}
+              onClose={composition.close}
+            />
+          ))}
         {imageImport.confirmation && (
           <CandidateImportConfirmation
             {...imageImport.confirmation}

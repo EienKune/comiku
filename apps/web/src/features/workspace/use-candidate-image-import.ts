@@ -16,6 +16,7 @@ import {
   settleCandidateSelection,
 } from "./candidate-selection";
 import { candidateImageDraftChanged } from "./candidate-image-drafts";
+import { settleCompositionSources } from "./candidate-composition-model";
 import type {
   CandidateImportPhase,
   CandidateImportResult,
@@ -28,7 +29,10 @@ type Confirmation = {
   results?: CandidateImportResult[];
   error?: string;
 };
-export function useCandidateImageImport(onComplete: () => Promise<unknown>) {
+export function useCandidateImageImport(
+  onComplete: () => Promise<unknown>,
+  externalLocked = false,
+) {
   const [state, setState] = useState(emptyCandidateImportState),
     [confirmation, setConfirmation] = useState<Confirmation | null>(null),
     [confirmationVisible, setConfirmationVisible] = useState(false);
@@ -43,7 +47,7 @@ export function useCandidateImageImport(onComplete: () => Promise<unknown>) {
   complete.current = onComplete;
   const uncertain = confirmation?.phase === "uncertain",
     busy = confirmation?.phase === "submitting",
-    locked = busy || uncertain;
+    locked = busy || uncertain || externalLocked;
   const selected = useMemo(
     () =>
       new Map(
@@ -150,7 +154,7 @@ export function useCandidateImageImport(onComplete: () => Promise<unknown>) {
     }
   }
   function openConfirmation() {
-    if (running.current) return;
+    if (running.current || externalLocked) return;
     if (uncertain) {
       setConfirmationVisible(true);
       return;
@@ -172,6 +176,7 @@ export function useCandidateImageImport(onComplete: () => Promise<unknown>) {
   }
   async function submit() {
     if (
+      externalLocked ||
       running.current ||
       !confirmation ||
       !["review", "uncertain"].includes(confirmation.phase)
@@ -290,6 +295,12 @@ export function useCandidateImageImport(onComplete: () => Promise<unknown>) {
     },
     [],
   );
+  const settleComposition = useCallback(
+    (sources: readonly CandidateImportEntry[]) => {
+      setState((current) => settleCompositionSources(current, sources));
+    },
+    [],
+  );
   const operations = useRef({
     toggle,
     toggleLoaded,
@@ -353,5 +364,6 @@ export function useCandidateImageImport(onComplete: () => Promise<unknown>) {
       locked || Object.values(state.drafts).some(candidateImageDraftChanged),
     ...actions,
     settleOther,
+    settleComposition,
   };
 }

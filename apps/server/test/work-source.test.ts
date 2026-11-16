@@ -4,9 +4,10 @@ import test from "node:test";
 import { NotFoundException } from "@nestjs/common";
 import { WorksService } from "../src/works/works.service.js";
 
-function fixture(unknownLegacyPage = false) {
+function fixture(unknownLegacyPage = false, mismatchedOriginal = false) {
   const media = ["media-a", "media-b", "media-c"].map((id, orderIndex) => ({
     id,
+    fileObjectId: `file-${id}`,
     orderIndex,
     width: 100,
     height: 200,
@@ -24,14 +25,48 @@ function fixture(unknownLegacyPage = false) {
     externalPostUrl: "https://example.test/post",
     text: "later source description",
     rawJson: { private: "must-not-leak" },
-    media,
+    media: media.map((item) => ({
+      ...item,
+      workImage:
+        item.id === "media-b"
+          ? {
+              id: "page-one",
+              originalFileObjectId: mismatchedOriginal
+                ? "different-file"
+                : "file-media-b",
+              workId: "work",
+              orderIndex: 0,
+              work: { id: "work", workNumber: 1, title: null },
+            }
+          : item.id === "media-c"
+            ? {
+                id: "page-other",
+                originalFileObjectId: "file-media-c",
+                workId: "other",
+                orderIndex: 0,
+                work: { id: "other", workNumber: 2, title: "Other" },
+              }
+            : null,
+    })),
   };
   const db = {
     work: {
       findUnique: async ({ where }: { where: { id: string } }) =>
         where.id === "work"
           ? {
+              sourceCandidatePostId: "candidate",
+              id: "work",
+              workNumber: 1,
+              title: null,
               sourceText: "imported description",
+              sources: [
+                {
+                  orderIndex: 0,
+                  mappingKnown: !unknownLegacyPage && !mismatchedOriginal,
+                  sourceText: "imported description",
+                  candidatePost: source,
+                },
+              ],
               sourceCandidatePost: source,
               images: [
                 {
@@ -56,9 +91,13 @@ function fixture(unknownLegacyPage = false) {
       findFirst: async ({
         where,
       }: {
-        where: { id: string; candidatePost: { work: { id: string } } };
+        where: {
+          id: string;
+          candidatePost: { workSources: { some: { workId: string } } };
+        };
       }) =>
-        where.id === "media-a" && where.candidatePost?.work?.id === "work"
+        where.id === "media-a" &&
+        where.candidatePost?.workSources?.some?.workId === "work"
           ? { fileObjectId: "file-a" }
           : null,
     },
@@ -74,49 +113,60 @@ function fixture(unknownLegacyPage = false) {
 
 test("work source returns all source media with exact adopted page mapping and explicit availability", async () => {
   const source = await fixture().source("work");
-  assert.deepEqual(source, {
-    candidateId: "candidate",
-    platform: "synthetic",
-    externalPostId: "post",
-    sourceUrl: "https://example.test/post",
-    sourceText: "later source description",
-    importedSourceText: "imported description",
-    media: [
-      {
-        id: "media-a",
-        orderIndex: 0,
-        width: 100,
-        height: 200,
-        mediaType: "photo",
-        adopted: false,
-        workImageId: null,
-        workOrderIndex: null,
-        available: true,
-      },
-      {
-        id: "media-b",
-        orderIndex: 1,
-        width: 100,
-        height: 200,
-        mediaType: "photo",
-        adopted: true,
-        workImageId: "page-one",
-        workOrderIndex: 0,
-        available: true,
-      },
-      {
-        id: "media-c",
-        orderIndex: 2,
-        width: 100,
-        height: 200,
-        mediaType: "photo",
-        adopted: false,
-        workImageId: null,
-        workOrderIndex: null,
-        available: false,
-      },
-    ],
-  });
+  assert.equal(source.sources.length, 1);
+  assert.deepEqual(
+    { ...source, sources: undefined },
+    {
+      sources: undefined,
+      candidateId: "candidate",
+      platform: "synthetic",
+      externalPostId: "post",
+      sourceUrl: "https://example.test/post",
+      sourceText: "later source description",
+      importedSourceText: "imported description",
+      media: [
+        {
+          id: "media-a",
+          orderIndex: 0,
+          width: 100,
+          height: 200,
+          mediaType: "photo",
+          disposition: "unadopted",
+          adoptedByWork: null,
+          adopted: false,
+          workImageId: null,
+          workOrderIndex: null,
+          available: true,
+        },
+        {
+          id: "media-b",
+          orderIndex: 1,
+          width: 100,
+          height: 200,
+          mediaType: "photo",
+          disposition: "this_work",
+          adoptedByWork: { id: "work", workNumber: 1, title: null },
+          adopted: true,
+          workImageId: "page-one",
+          workOrderIndex: 0,
+          available: true,
+        },
+        {
+          id: "media-c",
+          orderIndex: 2,
+          width: 100,
+          height: 200,
+          mediaType: "photo",
+          disposition: "other_work",
+          adoptedByWork: { id: "other", workNumber: 2, title: "Other" },
+          adopted: null,
+          workImageId: null,
+          workOrderIndex: null,
+          available: false,
+        },
+      ],
+    },
+  );
 });
 
 test("legacy missing page provenance remains unknown rather than falsely unadopted", async () => {
@@ -145,4 +195,12 @@ test("source image URL is bound to the work's source candidate including exclude
     NotFoundException,
   );
   await assert.rejects(service.source("missing-work"), NotFoundException);
+});
+
+test("a legacy provenance pointer to a different original stays unknown", async () => {
+  const source = await fixture(false, true).source("work");
+  assert.equal(source.media[1].disposition, "unknown");
+  assert.equal(source.media[1].adopted, null);
+  assert.equal(source.media[1].adoptedByWork, null);
+  assert.equal(source.media[1].workImageId, null);
 });

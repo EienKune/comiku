@@ -185,7 +185,15 @@ export class CandidateClassificationTagDto implements ImageAnalysisLabelPresenta
   tone!: ImageAnalysisLabelPresentation["tone"];
 }
 
+export class CandidateWorkDto {
+  @ApiProperty({ type: String, format: "uuid" }) id!: string;
+  @ApiProperty({ type: Number }) workNumber!: number;
+  @ApiProperty({ type: String, nullable: true }) title!: string | null;
+}
+
 export class CandidateDto {
+  @ApiProperty({ type: CandidateWorkDto, isArray: true })
+  works!: CandidateWorkDto[];
   @ApiPropertyOptional({ type: Boolean }) canRetryAnalysis?: boolean;
   @ApiPropertyOptional({ type: CandidateClassificationTagDto, isArray: true })
   classificationTags?: CandidateClassificationTagDto[];

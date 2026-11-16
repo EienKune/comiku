@@ -1,3 +1,4 @@
+import { CandidateCompositionsService } from "./composition.service.js";
 import { Module } from "@nestjs/common";
 import { DatabaseModule } from "../database/database.module.js";
 import { FilesModule } from "../files/files.module.js";
@@ -9,7 +10,7 @@ import { WorkSeriesModule } from "../work-series/work-series.module.js";
 @Module({
   imports: [DatabaseModule, FilesModule, ImageAnalysisModule, WorkSeriesModule],
   controllers: [CandidatesController],
-  providers: [CandidatesService],
+  providers: [CandidatesService, CandidateCompositionsService],
   exports: [CandidatesService],
 })
 export class CandidatesModule {}

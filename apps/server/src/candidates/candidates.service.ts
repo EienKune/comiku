@@ -83,7 +83,10 @@ const details = {
     select: { platform: true, handle: true, avatarFileObjectId: true },
   },
   media: { orderBy: { orderIndex: "asc" } },
-  work: { select: { id: true } },
+  workSources: {
+    select: { work: { select: { id: true, workNumber: true, title: true } } },
+    orderBy: { work: { workNumber: "asc" } },
+  },
   hashtags: { orderBy: { normalizedValue: "asc" } },
   sourceObservations: {
     select: { adapterKey: true },
@@ -295,7 +298,11 @@ export class CandidatesService {
       postedAt: candidate.postedAt.toISOString(),
       fetchedAt: candidate.fetchedAt.toISOString(),
       reviewedAt: candidate.reviewedAt?.toISOString() ?? null,
-      workId: candidate.work?.id ?? null,
+      works: candidate.workSources.map((source) => source.work),
+      workId:
+        candidate.workSources.length === 1
+          ? candidate.workSources[0].work.id
+          : null,
     };
   }
 
@@ -1254,10 +1261,10 @@ export class CandidatesService {
     )
       throw new ConflictException("请选择不重复的有效图片");
     return this.db.$transaction(async (tx) => {
-      if (seriesIntent) {
-        if (!actor || actor.userId !== actorId)
-          throw new ForbiddenException("系列入库需要有效登录会话");
-        await this.series!.authorizeImport(tx, actor);
+      if (actor || seriesIntent) {
+        if (!actor || actor.userId !== actorId || !this.series)
+          throw new ForbiddenException("入库需要有效登录会话");
+        await this.series.authorizeImport(tx, actor);
       }
 
       const observed = await tx.candidatePost.findUnique({
@@ -1282,11 +1289,15 @@ export class CandidatesService {
         include: {
           media: { orderBy: { orderIndex: "asc" } },
           author: true,
-          work: {
+          workSources: {
             include: {
-              images: {
-                select: { sourceCandidateMediaId: true },
-                orderBy: { orderIndex: "asc" },
+              work: {
+                include: {
+                  images: {
+                    select: { sourceCandidateMediaId: true },
+                    orderBy: { orderIndex: "asc" },
+                  },
+                },
               },
             },
           },
@@ -1299,10 +1310,17 @@ export class CandidatesService {
       const mediaIds = item.mediaIds ?? candidate.media.map(({ id }) => id);
       if (mediaIds.some((id) => !mediaById.has(id)))
         throw new ConflictException("所选图片不属于该候选，请刷新后重试");
-      if (candidate.status === "imported" && candidate.work) {
+      if (candidate.status === "imported" && candidate.workSources.length) {
+        const source = candidate.workSources[0];
+        const work = source.work;
+        if (
+          candidate.workSources.length !== 1 ||
+          work.candidateCompositionId !== null
+        )
+          throw new ConflictException("候选已通过拆合入库，请查看全部已有作品");
         if (
           !sameSeriesImportIntent(
-            candidate.work.candidateImportSeriesIntent,
+            work.candidateImportSeriesIntent,
             seriesIntent,
           )
         )
@@ -1310,15 +1328,15 @@ export class CandidatesService {
             "候选已按其他系列意图入库，请查看已有作品",
           );
 
-        if (candidate.work.candidateImportRevision === null) {
+        if (source.importedRevision === null) {
           if (item.mediaIds !== undefined)
             throw new ConflictException(
               "历史入库请求无法确认图片选择，请查看已有作品",
             );
         } else if (
-          candidate.work.candidateImportRevision !== item.expectedRevision ||
-          candidate.work.images.length !== mediaIds.length ||
-          candidate.work.images.some(
+          source.importedRevision !== item.expectedRevision ||
+          work.images.length !== mediaIds.length ||
+          work.images.some(
             (image, index) => image.sourceCandidateMediaId !== mediaIds[index],
           )
         ) {
@@ -1330,7 +1348,7 @@ export class CandidatesService {
           id: item.id,
           outcome: CandidateActionOutcome.unchanged,
           message: null,
-          workId: candidate.work.id,
+          workId: work.id,
         };
       }
       if (
@@ -1346,6 +1364,22 @@ export class CandidatesService {
         throw new ConflictException("作者当前授权无效，无法入库");
       if (!candidate.media.length)
         throw new ConflictException("候选没有可入库图片");
+      const fileIds = [
+        ...new Set(mediaIds.map((id) => mediaById.get(id)!.fileObjectId)),
+      ].sort();
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM file_objects WHERE id IN (${Prisma.join(fileIds.map((id) => Prisma.sql`${id}::uuid`))}) ORDER BY id FOR SHARE`,
+      );
+      if (
+        (await tx.fileObject.count({
+          where: {
+            id: { in: fileIds },
+            lifecycleStatus: "active",
+            deletedAt: null,
+          },
+        })) !== fileIds.length
+      )
+        throw new ConflictException("所选原图当前不可用，请刷新后重试");
       const changed = await tx.candidatePost.updateMany({
         where: {
           id: item.id,
@@ -1365,7 +1399,15 @@ export class CandidatesService {
         data: {
           authorId: candidate.authorId,
           sourceCandidatePostId: candidate.id,
-          candidateImportRevision: item.expectedRevision,
+          sources: {
+            create: {
+              candidatePostId: candidate.id,
+              orderIndex: 0,
+              importedRevision: item.expectedRevision,
+              sourceText: candidate.text,
+              mappingKnown: true,
+            },
+          },
           candidateImportSeriesIntent: seriesIntent ?? Prisma.DbNull,
           sourcePostUrl: candidate.externalPostUrl,
           title: null,

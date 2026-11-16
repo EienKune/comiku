@@ -54,9 +54,9 @@ test("the forward migration backfills exact source post, order and file only, pr
           await tx.$executeRaw`INSERT INTO works SELECT * FROM public.works WHERE id=${imported.workId}::uuid`;
           await tx.$executeRaw`INSERT INTO work_images SELECT * FROM public.work_images WHERE work_id=${imported.workId}::uuid`;
           await tx.$executeRaw`INSERT INTO candidate_media SELECT * FROM public.candidate_media WHERE candidate_post_id=${candidate.id}::uuid`;
-          await tx.$executeRawUnsafe(
-            "ALTER TABLE works DROP COLUMN candidate_import_revision",
-          );
+          // The current schema has already moved this receipt to the source join;
+          // the isolated predecessor intentionally has no revision column.
+
           await tx.$executeRawUnsafe(
             "ALTER TABLE work_images DROP COLUMN source_candidate_media_id",
           );

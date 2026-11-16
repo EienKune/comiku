@@ -11,6 +11,7 @@ datasource db {
 }
 
 model User {
+  candidateCompositionReceipts CandidateCompositionReceipt[]
   archiveExportRuns ArchiveExportRun[]
   workSeriesAudits WorkSeriesAudit[]
   workSeriesMutationReceipts WorkSeriesMutationReceipt[]
@@ -708,7 +709,8 @@ model CandidatePost {
   reviewedAt              DateTime?              @map("reviewed_at") @db.Timestamptz(3)
   revision                Int                    @default(0)
   media                   CandidateMedia[]
-  work                    Work?
+  primaryForWorks         Work[]
+  workSources             WorkCandidateSource[]
   actionLogs              CandidateActionLog[]
   uploadItem              CandidateUploadItem?
   hashtags                CandidateHashtag[]
@@ -721,6 +723,34 @@ model CandidatePost {
   @@index([authorId, status, fetchedAt])
   @@index([authorExternalAccountId, fetchedAt])
   @@map("candidate_posts")
+}
+
+model WorkCandidateSource {
+  workId String @map("work_id") @db.Uuid
+  work Work @relation(fields: [workId], references: [id], onDelete: Cascade)
+  candidatePostId String @map("candidate_post_id") @db.Uuid
+  candidatePost CandidatePost @relation(fields: [candidatePostId], references: [id], onDelete: Restrict)
+  orderIndex Int @map("order_index")
+  importedRevision Int? @map("imported_revision")
+  sourceText String? @map("source_text") @db.Text
+  mappingKnown Boolean @default(false) @map("mapping_known")
+  @@id([workId, candidatePostId])
+  @@unique([workId, orderIndex])
+  @@index([candidatePostId, workId])
+  @@map("work_candidate_sources")
+}
+
+model CandidateCompositionReceipt {
+  id String @id @default(uuid()) @db.Uuid
+  actorId String @map("actor_id") @db.Uuid
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  idempotencyKey String @map("idempotency_key") @db.Uuid
+  payloadHash String @map("payload_hash") @db.Char(64)
+  result Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  works Work[]
+  @@unique([actorId, idempotencyKey])
+  @@map("candidate_composition_receipts")
 }
 
 model CandidateReviewSession {
@@ -883,9 +913,11 @@ model Work {
   authorId                          String                      @map("author_id") @db.Uuid
   author                            Author                      @relation(fields: [authorId], references: [id], onDelete: Restrict)
   uploadPreviews TypesetUploadPreview[]
-  sourceCandidatePostId             String                      @unique @map("source_candidate_post_id") @db.Uuid
+  sourceCandidatePostId             String                      @map("source_candidate_post_id") @db.Uuid
   sourceCandidatePost               CandidatePost               @relation(fields: [sourceCandidatePostId], references: [id], onDelete: Restrict)
-  candidateImportRevision           Int?                        @map("candidate_import_revision")
+  candidateCompositionId           String?                     @map("candidate_composition_id") @db.Uuid
+  candidateComposition             CandidateCompositionReceipt? @relation(fields: [candidateCompositionId], references: [id], onDelete: Restrict)
+  sources                          WorkCandidateSource[]
   sourcePostUrl                     String?                     @map("source_post_url") @db.VarChar(2048)
   title                             String?                     @db.VarChar(200)
   sourceLanguage                    SourceLanguage              @default(ja) @map("source_language")
@@ -922,6 +954,8 @@ model Work {
   createdAt                         DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                         DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  @@index([sourceCandidatePostId])
+  @@index([candidateCompositionId])
   @@index([workflowStatus, reviewStatus, priority, importedAt])
   @@index([reviewStatus, updatedAt])
   @@index([authorId, importedAt])

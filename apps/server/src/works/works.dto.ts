@@ -48,7 +48,17 @@ export enum WorkView {
   publish = "publish",
 }
 
+export class SourceAdoptedWorkDto {
+  @ApiProperty({ type: String, format: "uuid" }) id!: string;
+  @ApiProperty({ type: Number }) workNumber!: number;
+  @ApiProperty({ type: String, nullable: true }) title!: string | null;
+}
+
 export class WorkSourceMediaDto {
+  @ApiProperty({ enum: ["this_work", "other_work", "unadopted", "unknown"] })
+  disposition!: "this_work" | "other_work" | "unadopted" | "unknown";
+  @ApiProperty({ type: SourceAdoptedWorkDto, nullable: true })
+  adoptedByWork!: SourceAdoptedWorkDto | null;
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: Number }) orderIndex!: number;
   @ApiProperty({ type: Number, nullable: true }) width!: number | null;
@@ -61,7 +71,8 @@ export class WorkSourceMediaDto {
   @ApiProperty({ type: Boolean }) available!: boolean;
 }
 
-export class WorkSourceDto {
+export class WorkCandidateSourceDto {
+  @ApiProperty({ type: Boolean }) mappingKnown!: boolean;
   @ApiProperty({ type: String, format: "uuid" }) candidateId!: string;
   @ApiProperty({ type: String }) platform!: string;
   @ApiProperty({ type: String }) externalPostId!: string;
@@ -71,6 +82,13 @@ export class WorkSourceDto {
     string | null;
   @ApiProperty({ type: WorkSourceMediaDto, isArray: true })
   media!: WorkSourceMediaDto[];
+}
+
+export class WorkSourceDto extends OmitType(WorkCandidateSourceDto, [
+  "mappingKnown",
+] as const) {
+  @ApiProperty({ type: WorkCandidateSourceDto, isArray: true })
+  sources!: WorkCandidateSourceDto[];
 }
 
 export class WorkQueryDto {
