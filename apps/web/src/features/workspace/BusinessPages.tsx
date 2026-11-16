@@ -43,6 +43,7 @@ import { CandidateCard } from "./CandidateCard";
 import { CandidateDiscardDialog } from "./CandidateDiscardDialog";
 import { CandidateRulesDialog } from "./CandidateRulesDialog";
 import "./candidates.css";
+import "./candidate-toolbar.css";
 import {
   useCandidateReviewSession,
   type CandidateBaseFilter,
@@ -3015,7 +3016,7 @@ function CandidateGridSection({
     );
   }, [cache, group, liveTotal, baseFilter, sessionId]);
   const section = candidateTriageSections.find((item) => item.value === group);
-  const loadedSelection = status !== "imported" &&
+  const loadedSelection = group &&
     user.permissions.includes("candidates:manage") && (
       <div className="workspace-candidate-section-actions">
         <Button
@@ -3095,13 +3096,7 @@ function CandidateGridSection({
       )}
     </>
   );
-  if (!section)
-    return (
-      <>
-        {loadedSelection}
-        <PageState query={query}>{() => content}</PageState>
-      </>
-    );
+  if (!section) return <PageState query={query}>{() => content}</PageState>;
   return (
     <details
       id={`candidate-section-${group}`}
@@ -3399,117 +3394,127 @@ export function CandidatesPage() {
         <CandidateDraftLeaveGuard
           dirty={imageImport.dirty || composition.dirty}
         />
-        <SectionHeading title="候选池">
-          筛选已抓取的图片组，批量入库为作品。
-        </SectionHeading>
-        <Toolbar className="candidate-toolbar">
-          <CandidateAuthorFilter
-            value={authorFilter}
-            onChange={(value) => {
-              setAuthorFilter(value);
-              setSourceSelection("all");
-              clearSelection();
-            }}
-          />
-          <SourceAccountFilter
-            authorId={authorFilter?.id}
-            value={sourceSelection}
-            disabled={imageImport.locked || composition.locked}
-            onChange={(value) => {
-              setSourceSelection(value);
-              clearSelection();
-            }}
-          />
-          <SelectField
-            aria-label="候选状态"
-            value={status}
-            onValueChange={(value) => {
-              setStatus(value);
-              clearSelection();
-            }}
-          >
-            <option value="pending">待处理</option>
-            <option value="imported">已入库</option>
-            <option value="discarded">已忽略</option>
-          </SelectField>
-          <SelectField
-            aria-label="来源语言"
-            value={language}
-            onValueChange={(value) => {
-              setLanguage(value as SourceLanguage | "all");
-              clearSelection();
-            }}
-          >
-            <option value="all">全部语言</option>
-            <option value="ja">日语</option>
-            <option value="ko">韩语</option>
-            <option value="en">英语</option>
-          </SelectField>
-          <SelectField
-            aria-label="抓取时间"
-            value={fetchedRange}
-            onValueChange={(value) => {
-              setFetchedRange(value);
-              clearSelection();
-            }}
-          >
-            <option value="all">全部时间</option>
-            <option value="1">最近 24 小时</option>
-            <option value="7">最近 7 天</option>
-            <option value="30">最近 30 天</option>
-          </SelectField>
-          <div
-            className="candidate-toolbar-actions"
-            role="group"
-            aria-label="候选操作"
-          >
-            <Button
-              variant="secondary"
-              leadingIcon={<RefreshCw size={16} />}
-              title="纳入新候选与最新排序，保留当前选择"
-              loading={review.refreshing}
-              disabled={review.isPending}
-              onClick={() => void review.refresh()}
-            >
-              刷新列表
-            </Button>
-            {user.permissions.includes("candidates:manage") && (
-              <>
-                <Button
-                  variant="secondary"
-                  leadingIcon={<Upload size={16} />}
-                  onClick={() => setShowUpload((value) => !value)}
-                >
-                  手动上传
-                </Button>
-                <SourceSyncControl onCompleted={invalidateWorkViews} />
-              </>
-            )}
-            <Button variant="secondary" onClick={() => setShowRules(true)}>
-              审核规则
-            </Button>
+        <div className="candidate-page-controls">
+          <div className="candidate-page-heading">
+            <SectionHeading title="候选池">
+              筛选已抓取的图片组，批量入库为作品。
+            </SectionHeading>
           </div>
-        </Toolbar>
+          <Toolbar className="candidate-toolbar">
+            <CandidateAuthorFilter
+              value={authorFilter}
+              onChange={(value) => {
+                setAuthorFilter(value);
+                setSourceSelection("all");
+                clearSelection();
+              }}
+            />
+            <SourceAccountFilter
+              authorId={authorFilter?.id}
+              value={sourceSelection}
+              disabled={imageImport.locked || composition.locked}
+              onChange={(value) => {
+                setSourceSelection(value);
+                clearSelection();
+              }}
+            />
+            <SelectField
+              aria-label="候选状态"
+              value={status}
+              onValueChange={(value) => {
+                setStatus(value);
+                clearSelection();
+              }}
+            >
+              <option value="pending">待处理</option>
+              <option value="imported">已入库</option>
+              <option value="discarded">已忽略</option>
+            </SelectField>
+            <SelectField
+              aria-label="来源语言"
+              value={language}
+              onValueChange={(value) => {
+                setLanguage(value as SourceLanguage | "all");
+                clearSelection();
+              }}
+            >
+              <option value="all">全部语言</option>
+              <option value="ja">日语</option>
+              <option value="ko">韩语</option>
+              <option value="en">英语</option>
+            </SelectField>
+            <SelectField
+              aria-label="抓取时间"
+              value={fetchedRange}
+              onValueChange={(value) => {
+                setFetchedRange(value);
+                clearSelection();
+              }}
+            >
+              <option value="all">全部时间</option>
+              <option value="1">最近 24 小时</option>
+              <option value="7">最近 7 天</option>
+              <option value="30">最近 30 天</option>
+            </SelectField>
+          </Toolbar>
+          <div className="candidate-list-controls">
+            <nav
+              className="candidate-section-nav"
+              aria-label="候选审核区域"
+              aria-hidden={status !== "pending"}
+              inert={status !== "pending"}
+            >
+              {candidateTriageSections.map((section) => (
+                <button
+                  key={section.value}
+                  type="button"
+                  onClick={() => locateGroup(section.value)}
+                >
+                  {section.title}{" "}
+                  <span>{review.session?.counts[section.value] ?? 0}</span>
+                </button>
+              ))}
+            </nav>
+            <div
+              className="candidate-toolbar-actions"
+              role="group"
+              aria-label="候选操作"
+            >
+              <Button
+                variant="secondary"
+                leadingIcon={<RefreshCw size={16} />}
+                title="纳入新候选与最新排序，保留当前选择"
+                loading={review.refreshing}
+                disabled={review.isPending}
+                onClick={() => void review.refresh()}
+              >
+                刷新列表
+              </Button>
+              {user.permissions.includes("candidates:manage") && (
+                <>
+                  <Button
+                    variant="secondary"
+                    leadingIcon={<Upload size={16} />}
+                    onClick={() => setShowUpload((value) => !value)}
+                  >
+                    手动上传
+                  </Button>
+                  <SourceSyncControl onCompleted={invalidateWorkViews} />
+                </>
+              )}
+              <Button variant="secondary" onClick={() => setShowRules(true)}>
+                审核规则
+              </Button>
+            </div>
+          </div>
+        </div>
         {showRules && (
           <CandidateRulesDialog
             canManage={user.permissions.includes("authors:admin")}
             onClose={() => setShowRules(false)}
           />
         )}
-        {status === "pending" && (
-          <nav className="candidate-section-nav" aria-label="候选审核区域">
-            {candidateTriageSections.map((section) => (
-              <button
-                key={section.value}
-                type="button"
-                onClick={() => locateGroup(section.value)}
-              >
-                {section.title}{" "}
-                <span>{review.session?.counts[section.value] ?? 0}</span>
-              </button>
-            ))}
-          </nav>
-        )}
+
         {showUpload && (
           <ManualCandidateUpload
             onClose={() => setShowUpload(false)}
