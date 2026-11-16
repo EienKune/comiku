@@ -910,6 +910,10 @@
   margin-top: var(--space-5);
 }
 
+.pattern-block.ui-surface {
+  padding: var(--space-6);
+}
+
 .pattern-block + .pattern-block {
   margin-top: var(--space-10);
 }
@@ -2337,6 +2341,10 @@
 }
 
 @media (max-width: 620px) {
+  .pattern-block.ui-surface {
+    padding: var(--space-4);
+  }
+
   .mobile-topbar {
     padding: 0 var(--space-4);
   }
