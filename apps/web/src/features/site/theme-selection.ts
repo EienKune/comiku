@@ -2,7 +2,6 @@ import {
   defaultTheme,
   isHexColor,
   isThemeStyle,
-  readTheme,
   themePresets,
   themeStorageKey,
   applyTheme,
@@ -20,7 +19,8 @@ function valid(value: unknown): value is ThemePreference {
     typeof value.brand === "string" &&
     isHexColor(value.brand) &&
     "style" in value &&
-    isThemeStyle(value.style)
+    typeof value.style === "string" &&
+    /^[a-z][a-z0-9-]{0,63}$/.test(value.style)
   );
 }
 export function readThemeSelection(
@@ -31,13 +31,23 @@ export function readThemeSelection(
     const parsed = JSON.parse(v2 ?? "null");
     if (parsed?.mode === "site") return { mode: "site" };
     if (parsed?.mode === "custom" && valid(parsed.theme))
-      return { mode: "custom", theme: readTheme(JSON.stringify(parsed.theme)) };
+      return {
+        mode: "custom",
+        theme: {
+          brand: parsed.theme.brand.toLowerCase(),
+          style: parsed.theme.style,
+        },
+      };
   } catch {
     /* Try the legacy value. */
   }
   try {
-    if (valid(JSON.parse(v1 ?? "null")))
-      return { mode: "custom", theme: readTheme(v1) };
+    const parsed: unknown = JSON.parse(v1 ?? "null");
+    if (valid(parsed))
+      return {
+        mode: "custom",
+        theme: { brand: parsed.brand.toLowerCase(), style: parsed.style },
+      };
   } catch {
     /* Follow the site. */
   }
@@ -64,7 +74,11 @@ export function persistThemeSelection(selection: ThemeSelection) {
 export const resolveTheme = (
   selection: ThemeSelection,
   site: ThemePreference,
-) => (selection.mode === "custom" ? selection.theme : site);
+  hasStyle: (style: unknown) => boolean = isThemeStyle,
+) =>
+  selection.mode === "custom" && hasStyle(selection.theme.style)
+    ? selection.theme
+    : site;
 export function siteTheme(id: string): ThemePreference {
   const preset = themePresets.find((p) => p.id === id) ?? defaultTheme;
   return { brand: preset.brand, style: preset.style };

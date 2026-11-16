@@ -5762,7 +5762,7 @@ export interface components {
             fileName: string;
         };
         /** @enum {string} */
-        SiteThemePresetId: "teal" | "sky" | "lavender" | "pink" | "amber" | "minimal" | "schale" | "archive" | "shittim" | "arona" | "plana" | "shittim-duo" | "ba-cyan" | "ba-azure";
+        SiteThemePresetId: "teal" | "teal-dark" | "sky" | "lavender" | "pink" | "amber" | "minimal" | "minimal-dark" | "schale" | "archive" | "shittim" | "arona" | "plana" | "plana-dark" | "shittim-duo" | "ba-cyan" | "ba-azure";
         SiteSettingsDto: {
             name: string;
             themePresetId: components["schemas"]["SiteThemePresetId"];
@@ -5771,7 +5771,8 @@ export interface components {
         };
         UpdateSiteSettingsDto: {
             name: string;
-            themePresetId: components["schemas"]["SiteThemePresetId"];
+            /** @description 省略时保留已保存的主题选择 */
+            themePresetId?: components["schemas"]["SiteThemePresetId"];
             expectedRevision: number;
             /** @enum {string} */
             iconAction: "keep" | "remove" | "adopt";

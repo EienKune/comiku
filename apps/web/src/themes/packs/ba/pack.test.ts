@@ -1,4 +1,4 @@
-import { baThemeStyles, themeProfileTokens } from "./theme-profiles";
+import { baThemeStyles, themeProfileTokens } from "./tokens";
 import { afterEach, expect, test } from "vitest";
 import {
   applyTheme,
@@ -6,11 +6,11 @@ import {
   mountTheme,
   readTheme,
   themeReadability,
-} from "./theme";
+} from "../../../styles/theme";
 import {
   readThemeSelection,
   siteTheme,
-} from "../features/site/theme-selection";
+} from "../../../features/site/theme-selection";
 
 afterEach(() => {
   document.documentElement.removeAttribute("style");
@@ -24,6 +24,7 @@ test.each([
   "shittim",
   "arona",
   "plana",
+  "plana-dark",
   "shittim-duo",
   "ba-cyan",
   "ba-azure",

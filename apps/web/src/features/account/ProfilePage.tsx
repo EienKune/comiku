@@ -52,7 +52,7 @@ function SettingsFrame({
       ? "profile"
       : "appearance";
   return (
-    <>
+    <div className="account-content-boundary">
       <SectionHeading title={showNavigation ? "个人设置" : "设置密码"} />
       {showNavigation && (
         <nav className="account-settings-tabs" aria-label="个人设置分类">
@@ -82,7 +82,7 @@ function SettingsFrame({
       <Surface className="account-card account-settings-page">
         {children}
       </Surface>
-    </>
+    </div>
   );
 }
 

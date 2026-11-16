@@ -26,9 +26,14 @@ export class UpdateSiteSettingsDto {
   @IsString()
   @MaxLength(128)
   name!: string;
-  @ApiProperty({ enum: siteThemePresetIds, enumName: "SiteThemePresetId" })
+  @ApiPropertyOptional({
+    enum: siteThemePresetIds,
+    enumName: "SiteThemePresetId",
+    description: "省略时保留已保存的主题选择",
+  })
+  @IsOptional()
   @IsIn(siteThemePresetIds)
-  themePresetId!: SiteThemePresetId;
+  themePresetId?: SiteThemePresetId;
   @ApiProperty({ type: Number })
   @IsInt()
   @Min(0)

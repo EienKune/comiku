@@ -24,6 +24,7 @@ import {
   type ThemeStyle,
 } from "../styles/theme";
 import "./theme-preview.css";
+import "virtual:comiku-theme-previews";
 import { previewThemeStorageKey } from "../features/site/theme-selection";
 import { SitePreviewContext } from "../features/site/site-context";
 
@@ -42,17 +43,18 @@ export function ThemePreview() {
   const [draft, setDraft] = useState(theme.brand);
   const contrast = themeReadability(theme);
   function choose(next: ThemePreference) {
-    setTheme({ brand: next.brand, style: next.style });
+    const selected = { brand: next.brand, style: next.style };
+    setTheme(selected);
     setDraft(next.brand);
+    try {
+      localStorage.setItem(previewThemeStorageKey, JSON.stringify(selected));
+    } catch {
+      /* Preview remains usable when storage is blocked. */
+    }
   }
   useLayoutEffect(() => {
     const release = preview?.acquire();
     const restore = mountTheme(document.documentElement, theme);
-    try {
-      localStorage.setItem(previewThemeStorageKey, JSON.stringify(theme));
-    } catch {
-      /* Preview remains usable when storage is blocked. */
-    }
     return () => {
       restore();
       release?.();

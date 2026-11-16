@@ -35756,16 +35756,19 @@
         "type": "string",
         "enum": [
           "teal",
+          "teal-dark",
           "sky",
           "lavender",
           "pink",
           "amber",
           "minimal",
+          "minimal-dark",
           "schale",
           "archive",
           "shittim",
           "arona",
           "plana",
+          "plana-dark",
           "shittim-duo",
           "ba-cyan",
           "ba-azure"
@@ -35807,6 +35810,7 @@
             "maxLength": 128
           },
           "themePresetId": {
+            "description": "省略时保留已保存的主题选择",
             "allOf": [
               {
                 "$ref": "#/components/schemas/SiteThemePresetId"
@@ -35831,7 +35835,6 @@
         },
         "required": [
           "name",
-          "themePresetId",
           "expectedRevision",
           "iconAction"
         ]

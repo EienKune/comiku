@@ -7,11 +7,9 @@ import { AccountLayout } from "./features/account/AccountApp";
 import { LoginPage } from "./features/account/LoginPage";
 import { RegisterPage } from "./features/account/RegisterPage";
 import { WorkspaceRoutes } from "./features/account/WorkspaceRoutes";
-import { DesignSystemPlayground } from "./playground/DesignSystemPlayground";
 import { SiteProvider } from "./features/site/SiteProvider";
 import "./styles/tokens.css";
 import "./styles/global.css";
-import "./styles/ba-themes.css";
 import "./features/workspace/workspace.css";
 
 const router = createBrowserRouter([
@@ -27,7 +25,10 @@ const router = createBrowserRouter([
   },
   {
     path: "/playground",
-    element: <DesignSystemPlayground />,
+    lazy: async () => ({
+      Component: (await import("./playground/DesignSystemPlayground"))
+        .DesignSystemPlayground,
+    }),
   },
 ]);
 

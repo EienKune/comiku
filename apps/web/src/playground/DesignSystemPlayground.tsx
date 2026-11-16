@@ -451,8 +451,10 @@ export function DesignSystemPlayground() {
             </div>
 
             <div className="hero__visual" aria-hidden="true">
-              <div className="hero-orbit hero-orbit--one" />
-              <div className="hero-orbit hero-orbit--two" />
+              <div className="hero-orbits">
+                <div className="hero-orbit hero-orbit--one" />
+                <div className="hero-orbit hero-orbit--two" />
+              </div>
               <div className="hero-card hero-card--status">
                 <span className="hero-card__icon hero-card__icon--mint">
                   <CheckCircle2 size={20} />

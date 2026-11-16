@@ -1,21 +1,7 @@
+import { themeCatalog } from "@comiku/theme-catalog";
 import { BadRequestException } from "@nestjs/common";
 
-export const siteThemePresetIds = [
-  "teal",
-  "sky",
-  "lavender",
-  "pink",
-  "amber",
-  "minimal",
-  "schale",
-  "archive",
-  "shittim",
-  "arona",
-  "plana",
-  "shittim-duo",
-  "ba-cyan",
-  "ba-azure",
-] as const;
+export const siteThemePresetIds = themeCatalog.presetIds;
 export type SiteThemePresetId = (typeof siteThemePresetIds)[number];
 export function normalizeSiteName(value: string): string {
   const name = value.trim();

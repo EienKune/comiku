@@ -1,13 +1,6 @@
-import {
-  baThemeStyles,
-  isBAThemeStyle,
-  themeProfileTokens,
-  type BAThemeStyle,
-} from "./theme-profiles";
-export type ThemeStyle = "soft" | "minimal" | BAThemeStyle;
-export function isThemeStyle(value: unknown): value is ThemeStyle {
-  return value === "soft" || value === "minimal" || isBAThemeStyle(value);
-}
+import { themeRegistry } from "../themes/registry";
+export type ThemeStyle = string;
+export const isThemeStyle = themeRegistry.hasStyle;
 export interface ThemePreference {
   brand: string;
   style: ThemeStyle;
@@ -16,27 +9,7 @@ export const defaultTheme: ThemePreference = {
   brand: "#33ccbb",
   style: "soft",
 };
-export const themePresets = [
-  { id: "teal", name: "青绿", brand: "#33ccbb", style: "soft" },
-  { id: "sky", name: "晴蓝", brand: "#5599ff", style: "soft" },
-  { id: "lavender", name: "淡紫", brand: "#a78bfa", style: "soft" },
-  { id: "pink", name: "樱粉", brand: "#ff6699", style: "soft" },
-  { id: "amber", name: "琥珀", brand: "#f6ba4c", style: "soft" },
-  { id: "minimal", name: "黑白极简", brand: "#171717", style: "minimal" },
-  { id: "schale", name: "夏莱终端", brand: "#128afa", style: "schale" },
-  { id: "archive", name: "古书馆图册", brand: "#263473", style: "archive" },
-  { id: "shittim", name: "什亭工作台", brand: "#2b95f0", style: "shittim" },
-  { id: "arona", name: "阿罗娜", brand: "#82cbe8", style: "arona" },
-  { id: "plana", name: "普拉娜", brand: "#dd79a7", style: "plana" },
-  {
-    id: "shittim-duo",
-    name: "什亭双人",
-    brand: "#82cbe8",
-    style: "shittim-duo",
-  },
-  { id: "ba-cyan", name: "BA 青蓝白", brand: "#00d7fb", style: "ba-cyan" },
-  { id: "ba-azure", name: "BA 亮蓝炭灰", brand: "#128afa", style: "ba-azure" },
-] satisfies (ThemePreference & { name: string; id: string })[];
+export const themePresets = themeRegistry.presets;
 
 export const themeStorageKey = "comiku.playground.theme.v1";
 export const isHexColor = (value: string) => /^#[a-f\d]{6}$/i.test(value);
@@ -94,22 +67,16 @@ export function brandReadability(brand: string) {
 }
 
 export function themeReadability(theme: ThemePreference) {
-  if (!isBAThemeStyle(theme.style)) return brandReadability(theme.brand);
-  const tokens = themeProfileTokens[theme.style];
+  const colors = themeRegistry.definition(theme.style)?.actionColors;
+  if (!colors) return brandReadability(theme.brand);
   return {
     normal: {
-      color: tokens["--ba-action-text"],
-      contrast: ratio(
-        rgb(tokens["--ba-action-bg"]),
-        rgb(tokens["--ba-action-text"]),
-      ),
+      color: colors.foreground,
+      contrast: ratio(rgb(colors.background), rgb(colors.foreground)),
     },
     hover: {
-      color: tokens["--ba-action-text-hover"],
-      contrast: ratio(
-        rgb(tokens["--ba-action-hover"]),
-        rgb(tokens["--ba-action-text-hover"]),
-      ),
+      color: colors.hoverForeground,
+      contrast: ratio(rgb(colors.hoverBackground), rgb(colors.hoverForeground)),
     },
   };
 }
@@ -118,16 +85,17 @@ const ownedKeys = [
     "--color-brand",
     "--color-on-brand",
     "--color-on-brand-hover",
-    ...baThemeStyles.flatMap((style) => Object.keys(themeProfileTokens[style])),
+    ...themeRegistry.tokenKeys,
   ]),
 ];
 function applyRoot(root: HTMLElement, theme: ThemePreference) {
+  theme = isThemeStyle(theme.style) ? theme : defaultTheme;
   const contrast = brandReadability(theme.brand);
   const values: Record<string, string> = {
     "--color-brand": theme.brand,
     "--color-on-brand": contrast.normal.color,
     "--color-on-brand-hover": contrast.hover.color,
-    ...(isBAThemeStyle(theme.style) ? themeProfileTokens[theme.style] : {}),
+    ...themeRegistry.definition(theme.style)?.tokens,
   };
   for (const key of ownedKeys) {
     if (key in values) root.style.setProperty(key, values[key]);
