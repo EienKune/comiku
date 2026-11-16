@@ -111,7 +111,7 @@ test("author suggestions can reach later pages and discard aborted old searches"
   ).toBe(true);
 });
 
-test("matched secondary account is shown first without adding an implicit source filter", async () => {
+test("secondary account searches show only the author name and do not add an implicit source filter", async () => {
   const item = {
     ...author("one"),
     externalAccounts: [
@@ -128,8 +128,15 @@ test("matched secondary account is shown first without adding an implicit source
   fireEvent.focus(input);
   fireEvent.change(input, { target: { value: "side" } });
   const option = await screen.findByRole("option", {
-    name: /作者 one X @side · X @main · \+1/,
+    name: "作者 one",
   });
+  expect(option.textContent).toBe("作者 one");
+  expect(client.GET).toHaveBeenLastCalledWith(
+    "/api/authors",
+    expect.objectContaining({
+      params: { query: { search: "side", limit: 50 } },
+    }),
+  );
   fireEvent.click(option);
   expect(change).toHaveBeenCalledExactlyOnceWith({
     id: "one",

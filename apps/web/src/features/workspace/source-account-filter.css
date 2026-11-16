@@ -17,3 +17,32 @@
     flex: 1;
   }
 }
+
+.source-account-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.source-account-option__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.source-account-option__icon.is-x {
+  color: var(--color-platform-x);
+}
+.source-account-option__icon.is-pixiv {
+  color: var(--color-platform-pixiv);
+}
+.source-account-option__identity {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-account-filter .ui-field__select > button > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+}

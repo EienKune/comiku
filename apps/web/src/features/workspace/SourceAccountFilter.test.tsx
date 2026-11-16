@@ -63,7 +63,7 @@ test("source accounts are fetched only when the selected author's filter is open
   const change = mount("author-a");
   expect(get).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("combobox", { name: "来源账号" }));
-  fireEvent.click(await screen.findByRole("option", { name: "@alt" }));
+  fireEvent.click(await screen.findByRole("option", { name: "X @alt" }));
   expect(change).toHaveBeenCalledWith("account:alt");
   expect(get).toHaveBeenCalledWith(
     "/api/authors/{id}/source-accounts",
@@ -71,10 +71,10 @@ test("source accounts are fetched only when the selected author's filter is open
   );
   fireEvent.click(screen.getByRole("combobox", { name: "来源账号" }));
   expect(
-    screen.getByRole("option", { name: "Pixiv · 3（已停用）" }),
+    screen.getByRole("option", { name: "Pixiv 3（已停用）" }),
   ).toBeTruthy();
-  expect(screen.getByRole("option", { name: "来源账号未知" })).toBeTruthy();
-  expect(screen.getByRole("option", { name: "手动上传" })).toBeTruthy();
+  expect(screen.queryByRole("option", { name: "来源账号未知" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "手动上传" })).toBeNull();
 });
 test("no author or a frozen action disables source filtering without a request", async () => {
   const get = vi.spyOn(client, "GET").mockResolvedValue(ok([]));
@@ -101,7 +101,7 @@ test("keyboard opening uses the same lazy query and reports errors without chang
   expect(change).not.toHaveBeenCalled();
 });
 
-test("platform scope remains available for one or zero accounts and restored platform filters retain a label", async () => {
+test("only configured accounts are selectable, without platform headings or synthetic scopes", async () => {
   vi.spyOn(client, "GET").mockResolvedValue(
     ok([
       {
@@ -115,9 +115,15 @@ test("platform scope remains available for one or zero accounts and restored pla
   );
   const change = mount("single-account-author");
   fireEvent.click(screen.getByRole("combobox", { name: "来源账号" }));
-  await screen.findByRole("option", { name: "@only" });
-  fireEvent.click(screen.getByRole("option", { name: "全部 X 账号" }));
-  expect(change).toHaveBeenCalledWith("platform:x");
-  fireEvent.click(screen.getByRole("combobox", { name: "来源账号" }));
-  expect(screen.getByRole("option", { name: "全部 Pixiv 账号" })).toBeTruthy();
+  const option = await screen.findByRole("option", { name: "X @only" });
+  expect(option.querySelector("svg")).toBeTruthy();
+  expect(screen.getAllByRole("option")).toHaveLength(2);
+  expect(
+    screen.queryByText("X", { selector: ".ui-select-menu__group" }),
+  ).toBeNull();
+  expect(screen.queryByText("Pixiv")).toBeNull();
+  expect(screen.queryByRole("option", { name: "全部 X 账号" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "全部 Pixiv 账号" })).toBeNull();
+  fireEvent.click(option);
+  expect(change).toHaveBeenCalledWith("account:one");
 });

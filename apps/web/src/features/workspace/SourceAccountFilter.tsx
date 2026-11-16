@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
 import { SelectField, Button } from "../../components/ui";
+import { PlatformIcon, type Platform } from "../../components/PlatformIcon";
 import { client, unwrap } from "../account/api";
 import type { SourceSelection } from "./source-filter-state";
 import "./source-account-filter.css";
@@ -37,7 +38,6 @@ export function SourceAccountFilter({
       ),
   });
   const data = accounts.data ?? [];
-  const historical = data.filter((a) => a.deletedAt);
   const accountId = value.startsWith("account:") ? value.slice(8) : null;
   const unknownSelection = accountId && !data.some((a) => a.id === accountId);
   function request() {
@@ -68,35 +68,31 @@ export function SourceAccountFilter({
             {accounts.isSuccess ? "账号已变更，请重新选择" : "指定账号"}
           </option>
         )}
-        {(["x", "pixiv"] as const).map((platform) => {
-          const active = data.filter(
-            (a) => a.platform === platform && !a.deletedAt,
-          );
-          return (
-            <optgroup key={platform} label={platform === "x" ? "X" : "Pixiv"}>
-              <option value={`platform:${platform}`}>
-                {platform === "x" ? "全部 X 账号" : "全部 Pixiv 账号"}
-              </option>
-              {active.map((account) => (
-                <option key={account.id} value={`account:${account.id}`}>
+        {data
+          .filter(
+            (account) =>
+              account.platform === "x" || account.platform === "pixiv",
+          )
+          .map((account) => (
+            <option key={account.id} value={`account:${account.id}`}>
+              <span className="source-account-option">
+                <span
+                  className={`source-account-option__icon is-${account.platform}`}
+                  role="img"
+                  aria-label={account.platform === "x" ? "X" : "Pixiv"}
+                >
+                  <PlatformIcon
+                    platform={account.platform as Platform}
+                    size={16}
+                  />
+                </span>
+                <span className="source-account-option__identity">
                   {identity(account)}
-                </option>
-              ))}
-            </optgroup>
-          );
-        })}
-        {historical.length > 0 && (
-          <optgroup label="历史账号">
-            {historical.map((account) => (
-              <option
-                key={account.id}
-                value={`account:${account.id}`}
-              >{`${account.platform === "x" ? "X" : "Pixiv"} · ${identity(account)}（已停用）`}</option>
-            ))}
-          </optgroup>
-        )}
-        <option value="manual">手动上传</option>
-        <option value="unbound">来源账号未知</option>
+                  {account.deletedAt ? "（已停用）" : ""}
+                </span>
+              </span>
+            </option>
+          ))}
         {requestedAuthor === authorId && accounts.isPending && (
           <option value="loading" disabled>
             读取账号中…
