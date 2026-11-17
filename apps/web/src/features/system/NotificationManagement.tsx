@@ -639,7 +639,7 @@ export function NotificationManagement({
                 连接配置不可用：{data.configurationError}
               </p>
             )}
-            <header className="notification-heading notification-section-heading">
+            <header className="notification-heading notification-section-heading notification-roster-heading">
               <h3>
                 接收群{" "}
                 <span className="notification-boundary">
@@ -647,8 +647,8 @@ export function NotificationManagement({
                 </span>
               </h3>
               <TextField
-                label="搜索接收群"
-                placeholder="群名称或群号"
+                aria-label="搜索接收群"
+                placeholder="搜索群名称或群号"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />

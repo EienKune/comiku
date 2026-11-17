@@ -292,8 +292,19 @@ export class WorkRemindersService {
       WorkReminderPreviewInputDto,
       "digestEnabled" | "overdueEnabled" | "mentionsEnabled"
     > = {},
+    actorId?: string,
   ) {
-    const settings = await this.ensureSettings();
+    const [settings, actor] = await Promise.all([
+      this.ensureSettings(),
+      actorId
+        ? this.db.user.findUnique({
+            where: { id: actorId },
+            select: { username: true, displayName: true, qqNumber: true },
+          })
+        : null,
+    ]);
+    const mentionsEnabled = scope.mentionsEnabled ?? true;
+    const mentionLabel = actor?.qqNumber ?? actor?.username ?? "示例成员";
     const snapshot: WorkDigestSnapshot = {
       kind: "work_digest",
       formatVersion: 2,
@@ -318,26 +329,31 @@ export class WorkRemindersService {
         {
           participantId: "example-overdue",
           round: 1,
-          userId: "example-user-two",
+          userId: actorId ?? "example-user",
           workId: "example-work-two",
           workNumber: 43,
           title: "另一部示例作品",
-          displayName: "另一位成员",
+          displayName: actor?.displayName ?? "示例成员",
           stage: "translate",
           kind: "overdue",
-          qqNumber: scope.mentionsEnabled ? "10001000" : null,
+          // The synthetic fallback only lets the shared formatter produce an at
+          // segment for an unbound account; preview flattening never exposes it.
+          qqNumber: mentionsEnabled ? (actor?.qqNumber ?? "10000") : null,
           userRevision: 0,
           sourceKey: "example",
         },
       ],
     };
-    // The renderer owns structured mentions. Preview them by synthetic display name,
-    // never by exposing a real contact or changing the persisted message format.
+    // Keep actual segment order and text. Only renderer-produced mentions become
+    // the authenticated caller's own preview label; delivery rendering is unchanged.
     const previewText = (rendered: ReturnType<typeof renderWorkReminder>) =>
-      rendered.text +
-      (rendered.messageSegments.some((segment) => segment.type === "at")
-        ? "\n@另一位成员"
-        : "");
+      rendered.messageSegments
+        .map((segment) =>
+          segment.type === "text"
+            ? segment.data.text.replace(/\/works\/example-work-two$/, "/works")
+            : `@${mentionLabel}`,
+        )
+        .join("\n");
     if (kind === "ready") {
       const rendered = renderWorkReady(
         {
@@ -347,12 +363,8 @@ export class WorkRemindersService {
           observedAt: snapshot.observedAt,
           items: [{ ...snapshot.items[0]!, kind: "ready", stage: "proofread" }],
         },
-        scope.mentionsEnabled ?? false,
+        mentionsEnabled,
         this.environment?.appOrigin,
-      );
-      rendered.text = rendered.text.replace(
-        /\/works\/example-work-two$/,
-        "/works",
       );
       return { text: previewText(rendered) };
     }
@@ -369,7 +381,7 @@ export class WorkRemindersService {
         renderWorkReminder(
           snapshot,
           note ?? settings.note,
-          scope.mentionsEnabled ?? false,
+          mentionsEnabled,
           this.environment?.appOrigin,
         ),
       ),

@@ -262,6 +262,35 @@ test(
     });
 
     await t.test(
+      "personalized previews read the caller's current binding without registering a delivery",
+      async () => {
+        const beforePreview = await db.notificationDelivery.count();
+        const unbound = await reminders.preview("", "digest", {}, actor.id);
+        assert.ok(unbound.text.includes(`@${actor.username}`));
+        const qqNumber = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+        await db.user.update({ where: { id: actor.id }, data: { qqNumber } });
+        try {
+          const bound = await reminders.preview("", "ready", {}, actor.id);
+          assert.ok(bound.text.includes(`@${qqNumber}`));
+          assert.ok(!bound.text.includes(`@${actor.username}`));
+          const off = await reminders.preview(
+            "",
+            "digest",
+            { mentionsEnabled: false },
+            actor.id,
+          );
+          assert.ok(!off.text.includes(qqNumber));
+          assert.equal(await db.notificationDelivery.count(), beforePreview);
+        } finally {
+          await db.user.update({
+            where: { id: actor.id },
+            data: { qqNumber: null },
+          });
+        }
+      },
+    );
+
+    await t.test(
       "staggered workers capture one message per ready task before the daily slot without duplicate notices",
       async () => {
         function pausedWorker() {
