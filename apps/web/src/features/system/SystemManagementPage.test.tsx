@@ -66,7 +66,7 @@ test("a system administrator can read collection history in the dedicated page",
   expect(await screen.findByText("暂无同步记录。")).toBeTruthy();
   expect(screen.getByRole("heading", { name: "图源接入" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "同步记录" })).toBeTruthy();
-  expect(screen.queryByRole("heading", { name: "推送通知" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "通知推送" })).toBeNull();
 });
 
 function mockManagement() {
@@ -133,7 +133,7 @@ test("site is the default tab in management order and never requests inactive pa
   expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
     "站点设置",
     "账号管理",
-    "推送通知",
+    "通知推送",
     "图源采集",
     "角色生日",
     "数据导出",
@@ -158,7 +158,7 @@ test("notification URL opens only its panel and preserves drafts across tabs", a
   ).toBe(false);
   fireEvent.click(screen.getByRole("tab", { name: "图源采集" }));
   expect(screen.queryByRole("textbox", { name: "名称" })).toBeNull();
-  fireEvent.click(screen.getByRole("tab", { name: "推送通知" }));
+  fireEvent.click(screen.getByRole("tab", { name: "通知推送" }));
   expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
     "未保存草稿",
   );
@@ -196,7 +196,7 @@ test("collection polling pauses while notifications is active and resumes on ret
   const get = mockManagement();
   openPage(["system:manage"], "/settings/system?tab=collection");
   await screen.findByText("暂无同步记录。");
-  fireEvent.click(screen.getByRole("tab", { name: "推送通知" }));
+  fireEvent.click(screen.getByRole("tab", { name: "通知推送" }));
   await screen.findByText("暂无群目标。");
   const count = () =>
     get.mock.calls.filter((call) => call[0] === "/api/source-fetch/runs")

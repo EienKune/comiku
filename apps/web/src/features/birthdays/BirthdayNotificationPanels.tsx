@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import type { components } from "@comiku/api-client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -103,7 +104,13 @@ export function BirthdaySubscriptions({
   );
 }
 
-export function BirthdayTemplate({ enabled }: { enabled: boolean }) {
+export function BirthdayTemplate({
+  enabled,
+  previewHost,
+}: {
+  enabled: boolean;
+  previewHost?: HTMLElement | null;
+}) {
   const cache = useQueryClient();
   const query = useBirthdayQuery("template", enabled, async (signal) =>
     unwrap(await client.GET("/api/birthdays/template", { signal })),
@@ -138,17 +145,12 @@ export function BirthdayTemplate({ enabled }: { enabled: boolean }) {
     setPreview("");
     setPreviewBusy(false);
   }, [query.data?.note, query.data?.revision, stopPreview]);
-  const dirty = Boolean(
-    draft &&
-    (draft.note !== query.data?.note ||
-      draft.revision !== query.data?.revision),
-  );
-  function invalidatePreview() {
+  const invalidatePreview = useCallback(() => {
     epoch.current++;
     controller.current?.abort();
     setPreview("");
     setPreviewBusy(false);
-  }
+  }, []);
   async function save() {
     if (!current) return;
     if (Array.from(current.note).length > 120) {
@@ -181,8 +183,8 @@ export function BirthdayTemplate({ enabled }: { enabled: boolean }) {
       setBusy(false);
     }
   }
-  async function loadPreview() {
-    if (!active || dirty) return;
+  const loadPreview = useCallback(async () => {
+    if (!active || !current) return;
     invalidatePreview();
     const ticket = epoch.current;
     const abort = new AbortController();
@@ -191,10 +193,11 @@ export function BirthdayTemplate({ enabled }: { enabled: boolean }) {
     setError("");
     try {
       const result = await unwrap(
-        await client.GET("/api/birthdays/preview", {
+        await client.POST("/api/birthdays/preview", {
           signal: abort.signal,
-          params: {
-            query: { offsetDays: offset === "7" ? 7 : offset === "1" ? 1 : 0 },
+          body: {
+            offsetDays: offset === "7" ? 7 : offset === "1" ? 1 : 0,
+            note: current.note,
           },
         }),
       );
@@ -205,10 +208,47 @@ export function BirthdayTemplate({ enabled }: { enabled: boolean }) {
     } finally {
       if (ticket === epoch.current) setPreviewBusy(false);
     }
-  }
+  }, [active, current, offset, invalidatePreview]);
+  useEffect(() => {
+    if (!active || !current) return;
+    const timer = setTimeout(() => void loadPreview(), 200);
+    return () => clearTimeout(timer);
+  }, [active, current, loadPreview]);
+  const previewContent = (
+    <>
+      {" "}
+      <SelectField
+        label="预览日期"
+        value={offset}
+        onValueChange={(value) => {
+          invalidatePreview();
+          setOffset(value);
+        }}
+      >
+        <option value="0">生日当天</option>
+        <option value="1">提前 1 天</option>
+        <option value="7">提前 7 天</option>
+      </SelectField>
+      <Button
+        type="button"
+        variant="secondary"
+        loading={previewBusy}
+        disabled={!active || busy}
+        onClick={() => void loadPreview()}
+      >
+        预览生日消息
+      </Button>
+      <pre className="birthday-message-preview">
+        {preview || (previewBusy ? "正在生成预览…" : "选择日期预览生日消息。")}
+      </pre>
+    </>
+  );
   return (
-    <section className="birthday-notification-panel" aria-label="生日消息模板">
-      <h3>角色生日</h3>
+    <section
+      className="birthday-notification-panel"
+      aria-label="生日消息提示语设置"
+    >
+      <h3>生日提示语</h3>
       <ErrorToast message={error} onDismiss={() => setError("")} />
       {query.isError && (
         <p role="alert">
@@ -242,31 +282,9 @@ export function BirthdayTemplate({ enabled }: { enabled: boolean }) {
               disabled={!enabled || Array.from(current.note).length > 120}
               onClick={() => void save()}
             >
-              保存生日模板
-            </Button>
-            <SelectField
-              label="预览日期"
-              value={offset}
-              onValueChange={(value) => {
-                invalidatePreview();
-                setOffset(value);
-              }}
-            >
-              <option value="0">生日当天</option>
-              <option value="1">提前 1 天</option>
-              <option value="7">提前 7 天</option>
-            </SelectField>
-            <Button
-              type="button"
-              variant="secondary"
-              loading={previewBusy}
-              disabled={!active || dirty || busy}
-              onClick={() => void loadPreview()}
-            >
-              预览生日消息
+              保存生日提示语
             </Button>
           </div>
-          {dirty && <p className="birthday-muted">保存提示语后可预览。</p>}
           {conflict && (
             <div>
               <Button
@@ -298,7 +316,9 @@ export function BirthdayTemplate({ enabled }: { enabled: boolean }) {
             </div>
           )}
           {success && <p role="status">{success}</p>}
-          {preview && <pre className="birthday-message-preview">{preview}</pre>}
+          {previewHost
+            ? createPortal(previewContent, previewHost)
+            : previewContent}
         </>
       )}
     </section>

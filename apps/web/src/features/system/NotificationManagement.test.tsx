@@ -1,6 +1,12 @@
+vi.mock("./use-work-reminder-configuration", () => ({
+  useWorkReminderConfiguration: () => ({}),
+}));
 vi.mock("./WorkReminderPanels", () => ({
   WorkReminderSubscriptions: () => null,
   WorkReminderTemplate: () => null,
+}));
+vi.mock("../birthdays/use-birthday-query", () => ({
+  useBirthdayQuery: () => ({}),
 }));
 // Independent birthday panel contracts are exercised in BirthdaysIntegration.test.tsx.
 vi.mock("../birthdays/BirthdayNotificationPanels", () => ({
@@ -24,11 +30,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { client } from "../account/api";
 import { NotificationManagement } from "./NotificationManagement";
-import {
-  SavedSample,
-  TemplateEditor,
-  type Template,
-} from "./NotificationTemplateEditor";
+import { SavedSample, type Template } from "./NotificationTemplateEditor";
 
 const channel = {
   id: "c1",
@@ -151,7 +153,7 @@ test.each([true, false])(
     fireEvent.change(screen.getByLabelText("群号"), {
       target: { value: "456" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
     await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
     expect((edit as HTMLButtonElement).disabled).toBe(true);
     expect((add as HTMLButtonElement).disabled).toBe(true);
@@ -192,7 +194,7 @@ test("loads read-only configuration and maintains disabled channels without send
 
 test("shows unavailable connection and keeps edit accessible while disabling test", async () => {
   setup(true, false);
-  expect(await screen.findByText("测试连接（不可用）")).toBeTruthy();
+  expect(await screen.findByText("测试连接")).toBeTruthy();
   expect(
     (screen.getByRole("button", { name: "发送样例" }) as HTMLButtonElement)
       .disabled,
@@ -211,7 +213,7 @@ test("preserves draft and reports CAS conflicts when saving without sending", as
   fireEvent.change(screen.getByLabelText("名称"), {
     target: { value: "我的草稿" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
   expect(await screen.findByText(/配置已被其他管理员修改/)).toBeTruthy();
   expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
     "我的草稿",
@@ -237,27 +239,35 @@ test.each([false, true])(
       response: new Response(),
     } as never);
     fireEvent.click(await screen.findByRole("button", { name: "编辑 合成群" }));
-    fireEvent.change(screen.getByLabelText("名称"), {
+    const dialogElement = screen.getByRole("dialog");
+    const editor = within(
+      dialogElement.querySelector(".notification-group-pane")!,
+    );
+    const footer = within(dialogElement.querySelector("footer")!);
+    const events = within(editor.getByRole("region", { name: "作品通知" }));
+    fireEvent.change(editor.getByLabelText("名称"), {
       target: { value: "我的群草稿" },
     });
-    fireEvent.change(screen.getByLabelText("群号"), {
+    fireEvent.change(editor.getByLabelText("群号"), {
       target: { value: "456" },
     });
-    fireEvent.click(screen.getByLabelText("启用此群通知"));
-    fireEvent.click(screen.getByLabelText("包含作者、标题和操作昵称"));
-    fireEvent.click(screen.getByLabelText("导入作品"));
-    fireEvent.click(screen.getByLabelText("阶段提交"));
-    fireEvent.click(screen.getByLabelText("阶段提交：指定职责"));
-    fireEvent.click(screen.getByLabelText("阶段提交：校对"));
+    fireEvent.click(editor.getByLabelText("启用此群通知"));
+    fireEvent.click(editor.getByLabelText("包含作者、标题和操作昵称"));
+    fireEvent.click(editor.getByLabelText("导入作品"));
+    fireEvent.click(editor.getByLabelText("阶段提交"));
+    fireEvent.click(events.getByRole("button", { name: /制作进度/ }));
+    fireEvent.click(events.getByRole("button", { name: /适用环节/ }));
+    fireEvent.click(editor.getByLabelText("阶段提交：翻译"));
+    fireEvent.click(editor.getByLabelText("阶段提交：嵌字"));
     if (adopted) {
       fireEvent.click(
-        screen.getByRole("button", { name: "预览并切换事件模板" }),
+        editor.getByRole("button", { name: "预览并切换事件模板" }),
       );
-      await screen.findByText("群草稿预览");
-      fireEvent.click(screen.getByRole("button", { name: "确认使用事件模板" }));
+      await editor.findByText("群草稿预览");
+      fireEvent.click(editor.getByRole("button", { name: "确认使用事件模板" }));
     }
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText(/配置已被其他管理员修改/);
+    fireEvent.click(footer.getByRole("button", { name: "保存群设置" }));
+    await editor.findByText(/配置已被其他管理员修改/);
     const initial = (await get.mock.results[0].value) as { data: object };
     get.mockResolvedValue({
       data: {
@@ -279,18 +289,28 @@ test.each([false, true])(
       },
       response: new Response(),
     } as never);
-    fireEvent.click(screen.getByRole("button", { name: "刷新配置" }));
-    await screen.findByRole("button", { name: "编辑 服务器群名" });
-    if (adopted) await confirmAdoption();
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(
+      within(screen.getByText("刷新配置").closest("header")!).getByRole(
+        "button",
+        { name: "刷新配置" },
+      ),
+    );
+    const serverGroup = await within(
+      document.querySelector(".notification-channels")!,
+    ).findByText("服务器群名", { selector: "strong" });
+    await within(serverGroup.closest("article")!).findByRole("button", {
+      name: "编辑 服务器群名",
+    });
+    if (adopted) await confirmAdoption(editor);
+    fireEvent.click(footer.getByRole("button", { name: "保存群设置" }));
     await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
     expect(patch.mock.calls[1][1]).toEqual(
       expect.objectContaining({
         body: expect.objectContaining({ expectedRevision: 3 }),
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "比较当前版本" }));
-    const comparison = await screen.findByRole("region", {
+    fireEvent.click(editor.getByRole("button", { name: "比较当前版本" }));
+    const comparison = await editor.findByRole("region", {
       name: "当前群配置",
     });
     expect(within(comparison).getByText("当前服务器版本 4")).toBeTruthy();
@@ -302,41 +322,41 @@ test.each([false, true])(
       within(comparison).getByText(/包含作者、标题和操作昵称/),
     ).toBeTruthy();
     if (!adopted) {
-      fireEvent.click(screen.getByRole("button", { name: "预览内容" }));
-      await screen.findByText("群草稿预览");
+      fireEvent.click(editor.getByRole("button", { name: "预览内容" }));
+      await editor.findByText("群草稿预览");
       fireEvent.click(
-        screen.getByRole("button", { name: "预览并切换事件模板" }),
+        editor.getByRole("button", { name: "预览并切换事件模板" }),
       );
-      await screen.findByRole("button", { name: "确认使用事件模板" });
+      await editor.findByRole("button", { name: "确认使用事件模板" });
     }
     fireEvent.click(
-      screen.getByRole("button", { name: "保留草稿并以当前版本重试" }),
+      editor.getByRole("button", { name: "保留草稿并以当前版本重试" }),
     );
-    expect(screen.queryByText("群草稿预览")).toBeNull();
+    expect(editor.queryByText("群草稿预览")).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "确认使用事件模板" }),
+      editor.queryByRole("button", { name: "确认使用事件模板" }),
     ).toBeNull();
-    expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
+    expect((editor.getByLabelText("名称") as HTMLInputElement).value).toBe(
       "我的群草稿",
     );
-    expect((screen.getByLabelText("群号") as HTMLInputElement).value).toBe(
+    expect((editor.getByLabelText("群号") as HTMLInputElement).value).toBe(
       "456",
     );
     expect(
-      (screen.getByLabelText("阶段提交：校对") as HTMLInputElement).checked,
+      (editor.getByLabelText("阶段提交：校对") as HTMLInputElement).checked,
     ).toBe(true);
     patch.mockResolvedValueOnce({
       data: channel,
       response: new Response(),
     } as never);
     if (adopted) {
-      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+      fireEvent.click(footer.getByRole("button", { name: "保存群设置" }));
       expect(patch).toHaveBeenCalledTimes(2);
-      await screen.findByText(/重新预览并确认/);
-      await confirmAdoption();
+      await editor.findByText(/重新预览并确认/);
+      await confirmAdoption(editor);
     }
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("配置已保存");
+    fireEvent.click(footer.getByRole("button", { name: "保存群设置" }));
+    await editor.findByText("配置已保存");
     expect(patch.mock.calls[2][1]).toEqual(
       expect.objectContaining({
         body: {
@@ -374,7 +394,7 @@ test("group comparison without manual refresh updates the audience warning witho
     target: { value: "仅修改我的群名" },
   });
   expect(screen.queryByText(/包括仍符合新条件的消息/)).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
   await screen.findByText(/配置已被其他管理员修改/);
   const initial = (await get.mock.results[0].value) as { data: object };
   get.mockResolvedValue({
@@ -391,7 +411,7 @@ test("group comparison without manual refresh updates the audience warning witho
   expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
     "仅修改我的群名",
   );
-  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
   await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
   expect(patch.mock.calls[1][1]).toEqual(
     expect.objectContaining({
@@ -407,7 +427,7 @@ test("group comparison without manual refresh updates the audience warning witho
     data: channel,
     response: new Response(),
   } as never);
-  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
   await screen.findByText("配置已保存");
   expect(patch.mock.calls[2][1]).toEqual(
     expect.objectContaining({
@@ -421,46 +441,6 @@ test("group comparison without manual refresh updates the audience warning witho
   expect(get).toHaveBeenCalledTimes(4); // Initial load, two comparisons, successful-save invalidation.
 });
 
-test("explicit template Edit opens a modal without page scrolling and refresh retains input focus", async () => {
-  const scroll = vi.fn();
-  const previous = Object.getOwnPropertyDescriptor(
-    HTMLElement.prototype,
-    "scrollIntoView",
-  );
-  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-    configurable: true,
-    value: scroll,
-  });
-  try {
-    const { get } = setup();
-    fireEvent.click(await screen.findByRole("tab", { name: "消息模板" }));
-    const opener = screen.getByRole("button", { name: "编辑模板 阶段提交" });
-    opener.focus();
-    fireEvent.click(opener);
-    expect(screen.getByRole("dialog", { name: "阶段提交模板" })).toBeTruthy();
-    expect(document.activeElement).toBe(
-      screen.getByRole("heading", { name: "阶段提交模板" }),
-    );
-    const input = screen.getByLabelText("事件提示语");
-    input.focus();
-    fireEvent.change(input, { target: { value: "保留输入焦点" } });
-    fireEvent.click(screen.getByRole("button", { name: "刷新配置" }));
-    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
-    expect(document.activeElement).toBe(input);
-    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
-    expect(document.activeElement).toBe(opener);
-    fireEvent.click(opener);
-    expect(
-      (screen.getByLabelText("事件提示语") as HTMLInputElement).value,
-    ).toBe("保留输入焦点");
-    expect(scroll).not.toHaveBeenCalled();
-  } finally {
-    if (previous)
-      Object.defineProperty(HTMLElement.prototype, "scrollIntoView", previous);
-    else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
-  }
-});
-
 test("synthetic sample history uses the notification test product label", async () => {
   const { get } = setup();
   await screen.findByRole("button", { name: "编辑 合成群" });
@@ -471,7 +451,7 @@ test("synthetic sample history uses the notification test product label", async 
     },
     response: new Response(),
   } as never);
-  fireEvent.click(screen.getByRole("tab", { name: "投递记录" }));
+  fireEvent.click(screen.getByRole("tab", { name: "发送记录" }));
   expect(await screen.findByText("通知测试")).toBeTruthy();
   expect(screen.queryByText("notification.test")).toBeNull();
 });
@@ -479,7 +459,7 @@ test("synthetic sample history uses the notification test product label", async 
 test("requires duplicate confirmation and reuses idempotency key after uncertain retry", async () => {
   const { post } = setup();
   post.mockRejectedValueOnce(new TypeError("network"));
-  fireEvent.click(await screen.findByRole("tab", { name: "投递记录" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "发送记录" }));
   await screen.findByText("结果未知");
   const retry = screen.getByRole("button", {
     name: "补发",
@@ -518,13 +498,11 @@ test("previews synthetic content only on explicit action and invalidates stale c
 
 test("shows configuration summary without claiming QQ online and labels delivery events", async () => {
   setup();
-  fireEvent.click(await screen.findByText("连接配置"));
-  expect(screen.getByText("配置可用")).toBeTruthy();
+  expect(await screen.findByText("测试连接")).toBeTruthy();
   expect(screen.queryByText(/在线/)).toBeNull();
-  expect(screen.getByRole("heading", { name: "接收群" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab", { name: "投递记录" }));
+  expect(screen.getByRole("heading", { name: /接收群/ })).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: "发送记录" }));
   expect((await screen.findAllByText("导入作品")).length).toBeGreaterThan(0);
-  expect(screen.getByText(/核心作品事件/)).toBeTruthy();
   expect(screen.queryByText(/尚未接入/)).toBeNull();
 });
 
@@ -576,6 +554,20 @@ test("cached inactive notification queries ignore invalidation and resume when a
 
 test("new group starts disabled with no subscriptions and saves only real content settings", async () => {
   const { post } = setup();
+  post.mockResolvedValue({
+    data: {
+      ...channel,
+      id: "new",
+      name: "新群",
+      groupId: "456",
+      enabled: false,
+      receiverMode: "templates",
+      eventTypes: [],
+      subscriptionRules: [],
+      revision: 0,
+    },
+    response: new Response(),
+  } as never);
   fireEvent.click(await screen.findByRole("button", { name: "新增群目标" }));
   expect(
     (screen.getByLabelText("启用此群通知") as HTMLInputElement).checked,
@@ -583,13 +575,13 @@ test("new group starts disabled with no subscriptions and saves only real conten
   expect((screen.getByLabelText("导入作品") as HTMLInputElement).checked).toBe(
     false,
   );
-  expect(screen.getByText("使用公共事件模板")).toBeTruthy();
+  expect(screen.queryByText("使用公共事件模板")).toBeNull();
   expect(screen.queryByRole("textbox", { name: /模板/ })).toBeNull();
   fireEvent.change(screen.getByLabelText("名称"), {
     target: { value: "新群" },
   });
   fireEvent.change(screen.getByLabelText("群号"), { target: { value: "456" } });
-  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
   await screen.findByText("配置已保存");
   expect(post).toHaveBeenCalledWith("/api/notifications/channels", {
     body: {
@@ -640,7 +632,7 @@ test("a save completed after deactivation does not refetch hidden configuration"
     target: { value: "新群" },
   });
   fireEvent.change(screen.getByLabelText("群号"), { target: { value: "456" } });
-  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
   await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
   view.rerender(panel(false));
   await act(async () => {
@@ -649,63 +641,25 @@ test("a save completed after deactivation does not refetch hidden configuration"
   expect(get).toHaveBeenCalledTimes(1);
 });
 
-test("tabs gate record reads and retain group and template drafts", async () => {
+test("tabs gate record reads and retain the closed group draft", async () => {
   const { get } = setup();
   fireEvent.click(await screen.findByRole("button", { name: "新增群目标" }));
   fireEvent.change(screen.getByLabelText("名称"), {
     target: { value: "保留群草稿" },
   });
-  expect(get).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole("tab", { name: "消息模板" }));
-  fireEvent.click(screen.getByRole("button", { name: "编辑模板 导入作品" }));
-  fireEvent.change(screen.getByLabelText("事件提示语"), {
-    target: { value: "保留模板草稿" },
-  });
-  fireEvent.click(screen.getByRole("tab", { name: "推送设置" }));
+  fireEvent.click(screen.getByRole("button", { name: "关闭群设置" }));
+  fireEvent.click(screen.getByRole("tab", { name: "全局规则" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "接收群" }));
+  fireEvent.click(screen.getByRole("button", { name: "新增群目标" }));
   expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
     "保留群草稿",
   );
-  fireEvent.click(screen.getByRole("tab", { name: "消息模板" }));
-  expect((screen.getByLabelText("事件提示语") as HTMLInputElement).value).toBe(
-    "保留模板草稿",
-  );
+  fireEvent.click(screen.getByRole("button", { name: "关闭群设置" }));
   expect(get).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole("tab", { name: "投递记录" }));
+  fireEvent.click(screen.getByRole("tab", { name: "发送记录" }));
   await screen.findByText("结果未知");
   expect(get).toHaveBeenCalledTimes(2);
-});
-
-test("template fields are independent and conflicts preserve Unicode draft", async () => {
-  const { post } = setup();
-  const patch = vi.spyOn(client, "PATCH").mockResolvedValue({
-    response: new Response(null, { status: 409 }),
-  } as never);
-  fireEvent.click(await screen.findByRole("tab", { name: "消息模板" }));
-  fireEvent.click(screen.getByRole("button", { name: "编辑模板 导入作品" }));
-  fireEvent.click(screen.getByLabelText("作品标题"));
-  fireEvent.change(screen.getByLabelText("事件提示语"), {
-    target: { value: "😀".repeat(120) },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "保存模板" }));
-  await screen.findByText(/草稿已保留/);
-  expect(patch).toHaveBeenCalledWith(
-    "/api/notifications/templates/{eventType}",
-    expect.objectContaining({
-      body: expect.objectContaining({
-        expectedRevision: 0,
-        titleEnabled: true,
-        authorEnabled: false,
-        actorEnabled: false,
-        note: "😀".repeat(120),
-      }),
-    }),
-  );
-  expect((screen.getByLabelText("事件提示语") as HTMLInputElement).value).toBe(
-    "😀".repeat(120),
-  );
-  expect(
-    post.mock.calls.every((call) => call[0] === "/api/notifications/preview"),
-  ).toBe(true);
 });
 
 test("stage rules save real selected stages and warn about every old unsent message", async () => {
@@ -715,10 +669,13 @@ test("stage rules save real selected stages and warn about every old unsent mess
     target: { value: "制作群" },
   });
   fireEvent.change(screen.getByLabelText("群号"), { target: { value: "456" } });
+  fireEvent.click(screen.getByRole("button", { name: "作品通知" }));
   fireEvent.click(screen.getByLabelText("阶段提交"));
-  fireEvent.click(screen.getByLabelText("阶段提交：指定职责"));
-  fireEvent.click(screen.getByLabelText("阶段提交：翻译"));
-  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  fireEvent.click(screen.getByRole("button", { name: /制作进度/ }));
+  fireEvent.click(screen.getByRole("button", { name: /适用环节/ }));
+  fireEvent.click(screen.getByLabelText("阶段提交：校对"));
+  fireEvent.click(screen.getByLabelText("阶段提交：嵌字"));
+  fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
   await waitFor(() =>
     expect(post).toHaveBeenCalledWith(
       "/api/notifications/channels",
@@ -746,7 +703,7 @@ test("legacy adoption requires preview and explicit confirmation", async () => {
   fireEvent.click(screen.getByRole("button", { name: "预览并切换事件模板" }));
   expect(await screen.findByText("模板合成正文")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "确认使用事件模板" }));
-  expect(screen.getByText("使用公共事件模板")).toBeTruthy();
+  expect(screen.queryByText("使用公共事件模板")).toBeNull();
   expect(post).toHaveBeenCalledTimes(1);
 });
 
@@ -803,38 +760,6 @@ test("saved template sample pins preview revision and requires a new preview aft
     (screen.getByRole("button", { name: "确认排队" }) as HTMLButtonElement)
       .disabled,
   ).toBe(true);
-});
-
-test("template sample selects stage and missing metadata without saving and clears stale preview", async () => {
-  const { post } = setup();
-  post.mockResolvedValue({
-    data: { text: "缺少资料样例" },
-    response: new Response(),
-  } as never);
-  fireEvent.click(await screen.findByRole("tab", { name: "消息模板" }));
-  fireEvent.click(screen.getByRole("button", { name: "编辑模板 阶段提交" }));
-  fireEvent.click(screen.getByLabelText("作者"));
-  fireEvent.click(screen.getByLabelText("样例资料"));
-  fireEvent.click(await screen.findByRole("option", { name: "缺少资料" }));
-  // Native SelectField is custom; choose through its accessible options.
-  fireEvent.click(screen.getByLabelText("样例职责"));
-  fireEvent.click(await screen.findByRole("option", { name: "嵌字" }));
-  await screen.findByText("缺少资料样例");
-  expect(post).toHaveBeenCalledWith(
-    "/api/notifications/preview",
-    expect.objectContaining({
-      body: expect.objectContaining({
-        stage: "typeset",
-        template: expect.objectContaining({
-          authorEnabled: true,
-          titleEnabled: false,
-          actorEnabled: false,
-        }),
-      }),
-    }),
-  );
-  fireEvent.click(screen.getByLabelText("作者"));
-  expect(screen.queryByText("缺少资料样例")).toBeNull();
 });
 
 const sampleTemplate: Template = {
@@ -927,54 +852,6 @@ test("adoption preview is invalidated by edits and stale async results", async (
   });
   expect(screen.queryByText("迟到采用正文")).toBeNull();
   expect(screen.queryByRole("button", { name: "确认使用事件模板" })).toBeNull();
-});
-
-test("template conflict offers explicit current version comparison and preserves editable fields", async () => {
-  const patch = vi
-    .spyOn(client, "PATCH")
-    .mockResolvedValueOnce({
-      response: new Response(null, { status: 409 }),
-    } as never)
-    .mockResolvedValue({
-      data: { ...sampleTemplate, revision: 3, note: "我的修改" },
-      response: new Response(),
-    } as never);
-  vi.spyOn(client, "GET").mockResolvedValue({
-    data: { templates: [{ ...sampleTemplate, revision: 2, note: "他人修改" }] },
-    response: new Response(),
-  } as never);
-  const editor = (revision: number) => (
-    <TemplateEditor
-      templates={[
-        { ...sampleTemplate, revision, note: revision ? "他人修改" : "" },
-      ]}
-      events={[{ type: "imported", label: "已导入" }]}
-      onUpdated={() => {}}
-    />
-  );
-  const view = render(editor(0));
-  fireEvent.click(screen.getByRole("button", { name: "编辑模板 已导入" }));
-  fireEvent.change(screen.getByLabelText("事件提示语"), {
-    target: { value: "我的修改" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "保存模板" }));
-  await screen.findByText(/草稿已保留/);
-  view.rerender(editor(2));
-  expect((screen.getByLabelText("事件提示语") as HTMLInputElement).value).toBe(
-    "我的修改",
-  );
-  fireEvent.click(screen.getByRole("button", { name: "比较当前版本" }));
-  await screen.findByText(/他人修改/);
-  fireEvent.click(
-    screen.getByRole("button", { name: "保留草稿并以当前版本重试" }),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "保存模板" }));
-  await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
-  expect(patch.mock.calls[1][1]).toEqual(
-    expect.objectContaining({
-      body: expect.objectContaining({ expectedRevision: 2, note: "我的修改" }),
-    }),
-  );
 });
 
 test("saved sample can choose each subscribed stage without offering unsubscribed stages", async () => {
@@ -1096,10 +973,12 @@ test("refreshed templates invalidate adoption consent and pending adoption previ
   );
 });
 
-async function confirmAdoption() {
-  fireEvent.click(screen.getByRole("button", { name: "预览并切换事件模板" }));
+async function confirmAdoption(
+  scope: Pick<typeof screen, "getByRole" | "findByRole"> = screen,
+) {
+  fireEvent.click(scope.getByRole("button", { name: "预览并切换事件模板" }));
   fireEvent.click(
-    await screen.findByRole("button", { name: "确认使用事件模板" }),
+    await scope.findByRole("button", { name: "确认使用事件模板" }),
   );
 }
 
@@ -1136,7 +1015,7 @@ test("adoption PATCH sends the exact previewed revisions for every selected temp
   fireEvent.click(screen.getByRole("button", { name: "编辑 合成群" }));
   fireEvent.click(screen.getByLabelText("阶段提交"));
   await confirmAdoption();
-  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
   await screen.findByText("配置已保存");
   expect(patch).toHaveBeenCalledWith(
     "/api/notifications/channels/{id}",
@@ -1168,9 +1047,12 @@ test("an unseen server template update rejects adoption, keeps fields and rules 
   fireEvent.change(screen.getByLabelText("名称"), {
     target: { value: "保留采用草稿" },
   });
+  fireEvent.click(screen.getByRole("button", { name: "作品通知" }));
   fireEvent.click(screen.getByLabelText("阶段提交"));
-  fireEvent.click(screen.getByLabelText("阶段提交：指定职责"));
-  fireEvent.click(screen.getByLabelText("阶段提交：校对"));
+  fireEvent.click(screen.getByRole("button", { name: /制作进度/ }));
+  fireEvent.click(screen.getByRole("button", { name: /适用环节/ }));
+  fireEvent.click(screen.getByLabelText("阶段提交：翻译"));
+  fireEvent.click(screen.getByLabelText("阶段提交：嵌字"));
   await confirmAdoption();
   const initial = (await get.mock.results[0].value) as {
     data: { templates: Template[] };
@@ -1186,7 +1068,7 @@ test("an unseen server template update rejects adoption, keeps fields and rules 
     },
     response: new Response(),
   } as never);
-  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
   await screen.findByText(/事件模板已变更/);
   await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
   expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
@@ -1195,10 +1077,10 @@ test("an unseen server template update rejects adoption, keeps fields and rules 
   expect(
     (screen.getByLabelText("阶段提交：校对") as HTMLInputElement).checked,
   ).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
   expect(patch).toHaveBeenCalledTimes(1);
   await confirmAdoption();
-  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
   await screen.findByText("配置已保存");
   expect(patch.mock.calls[1][1]).toEqual(
     expect.objectContaining({
@@ -1256,11 +1138,11 @@ test.each(["template refresh", "field edit", "rule edit"])(
     } else {
       fireEvent.click(screen.getByLabelText("阶段提交"));
     }
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
     expect(patch).not.toHaveBeenCalled();
     await screen.findByText(/重新预览并确认/);
     await confirmAdoption();
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
     await screen.findByText("配置已保存");
   },
 );
@@ -1282,7 +1164,7 @@ test("history identifies the frozen destination even when the current management
     },
     response: new Response(),
   } as never);
-  fireEvent.click(screen.getByRole("tab", { name: "投递记录" }));
+  fireEvent.click(screen.getByRole("tab", { name: "发送记录" }));
   expect(await screen.findByText(/当前管理名称：新管理名称/)).toBeTruthy();
   expect(screen.getByText(/原投递目标：QQ 群 111222/)).toBeTruthy();
   expect(screen.getByText(/连接标识：retired-bot/)).toBeTruthy();
@@ -1297,7 +1179,7 @@ test("disabled adoption with no selected events sends an explicit empty revision
   fireEvent.click(screen.getByLabelText("启用此群通知"));
   fireEvent.click(screen.getByLabelText("导入作品"));
   await confirmAdoption();
-  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
   await screen.findByText("配置已保存");
   expect(patch.mock.calls[0][1]).toEqual(
     expect.objectContaining({
@@ -1350,7 +1232,7 @@ test.each([false, true])(
       target: { value: "保留现代表单" },
     });
     if (adopted) await confirmAdoption();
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
     await screen.findByText(/配置已被其他管理员修改/);
     const initial = (await get.mock.results[0].value) as { data: object };
     get.mockResolvedValue({
@@ -1365,7 +1247,7 @@ test.each([false, true])(
     fireEvent.click(
       screen.getByRole("button", { name: "保留草稿并以当前版本重试" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
     await screen.findByText("配置已保存");
     expect(patch.mock.calls[1][1]).toEqual(
       expect.objectContaining({
@@ -1404,7 +1286,7 @@ test.each(["history", "outer panel"])(
       target: { value: "隐藏期间保留草稿" },
     });
     await confirmAdoption();
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
     await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
     const initial = (await get.mock.results[0].value) as {
       data: { templates: Template[] };
@@ -1423,7 +1305,7 @@ test.each(["history", "outer panel"])(
       response: new Response(),
     })) as never);
     if (hiddenBy === "history") {
-      fireEvent.click(screen.getByRole("tab", { name: "投递记录" }));
+      fireEvent.click(screen.getByRole("tab", { name: "发送记录" }));
       await screen.findByText(/原投递目标/);
     } else {
       setActive(false);
@@ -1441,7 +1323,7 @@ test.each(["history", "outer panel"])(
     await screen.findByText(/事件模板已变更/);
     expect(configurationReads()).toBe(hiddenBy === "history" ? 2 : 1);
     if (hiddenBy === "history")
-      fireEvent.click(screen.getByRole("tab", { name: "推送设置" }));
+      fireEvent.click(screen.getByRole("tab", { name: "接收群" }));
     else setActive(true);
     await waitFor(() => expect(configurationReads()).toBe(2));
     await waitFor(() =>
@@ -1453,7 +1335,7 @@ test.each(["history", "outer panel"])(
     expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
       "隐藏期间保留草稿",
     );
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
     expect(patch).toHaveBeenCalledTimes(1);
     await confirmAdoption();
     expect(post).toHaveBeenLastCalledWith(
@@ -1464,7 +1346,7 @@ test.each(["history", "outer panel"])(
         }),
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
     await screen.findByText("配置已保存");
     expect(patch.mock.calls[1][1]).toEqual(
       expect.objectContaining({
@@ -1509,7 +1391,7 @@ test("running status tab keeps drafts, gates configuration and supports four-tab
         response: new Response(),
       }) as never,
   );
-  fireEvent.keyDown(screen.getByRole("tab", { name: "推送设置" }), {
+  fireEvent.keyDown(screen.getByRole("tab", { name: "接收群" }), {
     key: "End",
   });
   await screen.findByText("通知已关闭");
@@ -1557,7 +1439,7 @@ test.each([
       },
       response: new Response(),
     } as never);
-    fireEvent.click(screen.getByRole("tab", { name: "投递记录" }));
+    fireEvent.click(screen.getByRole("tab", { name: "发送记录" }));
     expect(await screen.findByText(label, { selector: "strong" })).toBeTruthy();
     fireEvent.click(screen.getByRole("combobox", { name: "事件类型" }));
     fireEvent.click(screen.getByRole("option", { name: label }));

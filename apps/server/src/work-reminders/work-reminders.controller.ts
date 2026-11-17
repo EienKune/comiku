@@ -77,13 +77,20 @@ export class WorkRemindersController {
   @Post("preview")
   @HttpCode(200)
   @Access({ permission: "system:manage" })
+  @Header("Cache-Control", "private, no-store")
   @ApiOperation({ operationId: "previewWorkReminder" })
   @ApiBody({ type: WorkReminderPreviewInputDto })
   @ApiOkResponse({ type: WorkReminderPreviewDto })
   preview(
+    @Req() req: AuthRequest,
     @Body(bodyValidation(WorkReminderPreviewInputDto))
     input: WorkReminderPreviewInputDto,
   ): Promise<WorkReminderPreviewDto> {
-    return this.reminders.preview(input.note, input.kind);
+    return this.reminders.preview(
+      input.note,
+      input.kind,
+      input,
+      req.actor.userId,
+    );
   }
 }

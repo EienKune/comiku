@@ -1,7 +1,8 @@
+import { NotificationGroupActions } from "./NotificationGroupActions";
 import type { components } from "@comiku/api-client";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, TextField } from "../../components/ui";
+import { Button, SelectField, TextField } from "../../components/ui";
 import { client, unwrap } from "../account/api";
 import { Feedback } from "../account/forms";
 import "./work-reminders.css";
@@ -9,27 +10,13 @@ import "./work-reminders.css";
 type Settings = components["schemas"]["WorkReminderSettingsDto"];
 type Subscription = components["schemas"]["WorkReminderSubscriptionDto"];
 type Channel = components["schemas"]["WorkReminderChannelDto"];
-type Configuration = components["schemas"]["WorkReminderManagementDto"];
-const key = ["work-reminders"];
-function useConfiguration(
-  enabled: boolean,
-  panel: "subscriptions" | "template",
-) {
-  const cache = useQueryClient();
-  useEffect(() => {
-    if (!enabled) void cache.cancelQueries({ queryKey: [...key, panel] });
-  }, [enabled, cache, panel]);
-  return useQuery({
-    queryKey: [...key, panel],
-    enabled,
-    queryFn: async ({ signal }): Promise<Configuration> =>
-      unwrap(await client.GET("/api/notifications/work-reminders", { signal })),
-    refetchOnWindowFocus: false,
-  });
-}
+import {
+  useWorkReminderConfiguration,
+  workReminderKey as key,
+} from "./use-work-reminder-configuration";
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "请求失败，请重试。";
-function WorkReminderPreview({
+export function WorkReminderPreview({
   note,
   enabled,
   panel,
@@ -74,9 +61,22 @@ function WorkReminderPreview({
   );
 }
 
-export function WorkReminderSubscriptions({ enabled }: { enabled: boolean }) {
-  const query = useConfiguration(enabled, "subscriptions");
+export function WorkReminderSubscriptions({
+  enabled,
+  mode = "all",
+  selectedId,
+  onGlobal,
+  onPreviewChange,
+}: {
+  enabled: boolean;
+  mode?: "all" | "global" | "channel";
+  selectedId?: string;
+  onGlobal?: () => void;
+  onPreviewChange?: (subscription: Subscription) => void;
+}) {
+  const query = useWorkReminderConfiguration(enabled, "subscriptions");
   const cache = useQueryClient();
+  const [previewKind, setPreviewKind] = useState<"digest" | "ready">("digest");
   const [draft, setDraft] = useState<Settings | null>(null);
   const [comparison, setComparison] = useState<Settings | null>(null);
   const [error, setError] = useState("");
@@ -132,26 +132,185 @@ export function WorkReminderSubscriptions({ enabled }: { enabled: boolean }) {
     <section
       className="work-reminder-panel"
       aria-label="工作提醒设置"
-      id="work-reminder-settings"
+      id={mode === "channel" ? undefined : "work-reminder-settings"}
       tabIndex={-1}
     >
-      <header className="notification-heading notification-section-heading">
-        <h3>工作提醒</h3>
-        {settings && (
-          <label className="notification-check">
-            <input
-              type="checkbox"
-              aria-label="启用工作提醒"
-              disabled={!enabled || busy}
-              checked={settings.enabled}
-              onChange={(event) =>
-                setDraft({ ...settings, enabled: event.target.checked })
-              }
-            />
-            全局启用
-          </label>
-        )}
-      </header>
+      {mode !== "channel" && (
+        <>
+          <header className="notification-heading notification-section-heading">
+            <h3>工作提醒</h3>
+            {settings && (
+              <label className="notification-check">
+                <input
+                  type="checkbox"
+                  aria-label="启用工作提醒"
+                  disabled={!enabled || busy}
+                  checked={settings.enabled}
+                  onChange={(event) =>
+                    setDraft({ ...settings, enabled: event.target.checked })
+                  }
+                />
+                全局启用
+              </label>
+            )}
+          </header>
+          {settings && (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void save();
+              }}
+            >
+              <fieldset disabled={!enabled || busy}>
+                <div className="work-reminder-global-layout">
+                  <div>
+                    <div className="work-reminder-times">
+                      {settings.sendTimes.map((time, index) => (
+                        <TextField
+                          key={index}
+                          label={`北京时间 ${index + 1}`}
+                          type="time"
+                          required
+                          value={time}
+                          onChange={(event) =>
+                            setDraft({
+                              ...settings,
+                              sendTimes: settings.sendTimes.map(
+                                (value, position) =>
+                                  position === index
+                                    ? event.target.value
+                                    : value,
+                              ),
+                            })
+                          }
+                          action={
+                            index === 2 ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                onClick={() =>
+                                  setDraft({
+                                    ...settings,
+                                    sendTimes: settings.sendTimes.slice(0, 2),
+                                  })
+                                }
+                              >
+                                移除
+                              </Button>
+                            ) : undefined
+                          }
+                        />
+                      ))}
+                      {settings.sendTimes.length < 3 && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() =>
+                            setDraft({
+                              ...settings,
+                              sendTimes: [...settings.sendTimes, "12:00"],
+                            })
+                          }
+                        >
+                          添加时段
+                        </Button>
+                      )}
+                    </div>
+                    <dl className="notification-trigger-rules">
+                      <div>
+                        <dt>任务交接</dt>
+                        <dd>预认领任务具备制作条件后，单独提醒。</dd>
+                      </div>
+                      <div>
+                        <dt>未交稿提醒</dt>
+                        <dd>
+                          累计可制作 72 小时后，纳入每日摘要，每轮提醒一次。
+                        </dd>
+                      </div>
+                    </dl>
+                    <TextField
+                      label="工作摘要提示语"
+                      maxLength={120}
+                      value={settings.note}
+                      onChange={(event) =>
+                        setDraft({ ...settings, note: event.target.value })
+                      }
+                    />
+
+                    <div className="notification-actions">
+                      <Button type="submit" loading={busy}>
+                        保存工作提醒
+                      </Button>
+                      {draft && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() => {
+                            setDraft(null);
+                            setComparison(null);
+                            setError("");
+                          }}
+                        >
+                          放弃草稿
+                        </Button>
+                      )}
+                    </div>
+                    {comparison && (
+                      <div className="work-reminder-comparison">
+                        <p>
+                          当前设置：{comparison.enabled ? "开启" : "关闭"} ·{" "}
+                          {comparison.sendTimes.join("、")} ·{" "}
+                          {comparison.note || "无提示语"}
+                        </p>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={() => {
+                            setDraft({
+                              ...settings,
+                              revision: comparison.revision,
+                            });
+                            setComparison(null);
+                            setError("");
+                          }}
+                        >
+                          保留草稿并以当前版本重试
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                  <aside>
+                    {" "}
+                    <section
+                      className="work-reminder-preview"
+                      aria-label="工作消息预览"
+                    >
+                      <h3>消息预览</h3>
+                      <SelectField
+                        label="预览消息"
+                        value={previewKind}
+                        onValueChange={(value) =>
+                          setPreviewKind(value as "digest" | "ready")
+                        }
+                      >
+                        <option value="digest">工作摘要</option>
+                        <option value="ready">任务交接提醒</option>
+                      </SelectField>
+                      <WorkReminderPreview
+                        kind={previewKind}
+                        note={previewKind === "digest" ? settings.note : ""}
+                        enabled={enabled}
+                        panel="subscriptions"
+                      />
+                    </section>
+                  </aside>
+                </div>
+              </fieldset>
+            </form>
+          )}
+          <Feedback error={error} success={success} />
+        </>
+      )}
       {query.isError && (
         <p role="alert">
           工作提醒读取失败。
@@ -164,149 +323,50 @@ export function WorkReminderSubscriptions({ enabled }: { enabled: boolean }) {
           </Button>
         </p>
       )}
-      {settings && (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void save();
-          }}
-        >
-          <fieldset disabled={!enabled || busy}>
-            <div className="work-reminder-times">
-              {settings.sendTimes.map((time, index) => (
-                <TextField
-                  key={index}
-                  label={`北京时间 ${index + 1}`}
-                  type="time"
-                  required
-                  value={time}
-                  onChange={(event) =>
-                    setDraft({
-                      ...settings,
-                      sendTimes: settings.sendTimes.map((value, position) =>
-                        position === index ? event.target.value : value,
-                      ),
-                    })
+      {mode !== "global" && (
+        <>
+          <div className="work-reminder-channels">
+            {query.data?.channels.map((channel) => (
+              <div
+                key={channel.id}
+                hidden={mode === "channel" && channel.id !== selectedId}
+              >
+                <ChannelReminder
+                  key={channel.id}
+                  channel={channel}
+                  enabled={
+                    enabled && (mode !== "channel" || channel.id === selectedId)
                   }
-                  action={
-                    index === 2 ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        onClick={() =>
-                          setDraft({
-                            ...settings,
-                            sendTimes: settings.sendTimes.slice(0, 2),
-                          })
-                        }
-                      >
-                        移除
-                      </Button>
-                    ) : undefined
+                  onSaved={() => cache.invalidateQueries({ queryKey: key })}
+                  onPreviewChange={
+                    channel.id === selectedId ? onPreviewChange : undefined
+                  }
+                  persistentActions={mode === "channel"}
+                  onCompare={async () =>
+                    (await compareConfiguration())?.channels.find(
+                      (item) => item.id === channel.id,
+                    )
                   }
                 />
-              ))}
-              {settings.sendTimes.length < 3 && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() =>
-                    setDraft({
-                      ...settings,
-                      sendTimes: [...settings.sendTimes, "12:00"],
-                    })
-                  }
-                >
-                  添加时段
-                </Button>
-              )}
-            </div>
-            <p className="notification-boundary">
-              每日摘要按北京时间发送；提前认领的任务具备制作条件后，独立发送任务交接提醒，通常一分钟内处理。累计可制作
-              72 小时仍未交稿的明细纳入每日摘要，每轮提醒一次。
-            </p>
-            <TextField
-              label="工作摘要提示语"
-              maxLength={120}
-              value={settings.note}
-              onChange={(event) =>
-                setDraft({ ...settings, note: event.target.value })
-              }
-            />
-            <details className="work-reminder-preview" open>
-              <summary>消息预览</summary>
-              <WorkReminderPreview
-                kind="digest"
-                note={settings.note}
-                enabled={enabled}
-                panel="subscriptions"
-              />
-              <WorkReminderPreview
-                kind="ready"
-                note=""
-                enabled={enabled}
-                panel="subscriptions"
-              />
-            </details>
-            <div className="notification-actions">
-              <Button type="submit" loading={busy}>
-                保存工作提醒
-              </Button>
-              {draft && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => {
-                    setDraft(null);
-                    setComparison(null);
-                    setError("");
-                  }}
-                >
-                  放弃草稿
-                </Button>
-              )}
-            </div>
-            {comparison && (
-              <div className="work-reminder-comparison">
-                <p>
-                  当前设置：{comparison.enabled ? "开启" : "关闭"} ·{" "}
-                  {comparison.sendTimes.join("、")} ·{" "}
-                  {comparison.note || "无提示语"}
-                </p>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => {
-                    setDraft({ ...settings, revision: comparison.revision });
-                    setComparison(null);
-                    setError("");
-                  }}
-                >
-                  保留草稿并以当前版本重试
-                </Button>
               </div>
-            )}
-          </fieldset>
-        </form>
+            ))}
+          </div>
+          {query.data?.channels.length === 0 && (
+            <p className="notification-boundary">先在上方添加接收群。</p>
+          )}
+        </>
       )}
-      <Feedback error={error} success={success} />
-      <div className="work-reminder-channels">
-        {query.data?.channels.map((channel) => (
-          <ChannelReminder
-            key={channel.id}
-            channel={channel}
-            enabled={enabled}
-            onSaved={() => cache.invalidateQueries({ queryKey: key })}
-            onCompare={async () =>
-              (await compareConfiguration())?.channels.find(
-                (item) => item.id === channel.id,
-              )
-            }
-          />
-        ))}
-      </div>
-      {query.data?.channels.length === 0 && (
-        <p className="notification-boundary">先在上方添加接收群。</p>
+      {mode === "channel" && query.data && (
+        <div className="notification-inherited-rule">
+          <span>
+            {query.data.settings.enabled
+              ? `定时时刻：${query.data.settings.sendTimes.join("、")}`
+              : "全局工作提醒已关闭"}
+          </span>
+          <Button type="button" variant="ghost" onClick={onGlobal}>
+            全局规则
+          </Button>
+        </div>
       )}
     </section>
   );
@@ -317,30 +377,42 @@ function ChannelReminder({
   enabled,
   onSaved,
   onCompare,
+  onPreviewChange,
+  persistentActions = false,
 }: {
   channel: Channel;
   enabled: boolean;
   onSaved: () => Promise<unknown>;
   onCompare: () => Promise<Channel | undefined>;
+  onPreviewChange?: (subscription: Subscription) => void;
+  persistentActions?: boolean;
 }) {
+  const formId = useId();
   const [draft, setDraft] = useState<Subscription | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [comparison, setComparison] = useState<Channel | null>(null);
   const current = draft ?? channel.subscription;
+  useEffect(() => {
+    if (enabled) onPreviewChange?.(current);
+  }, [current, enabled, onPreviewChange]);
   const [baseChannelRevision, setBaseChannelRevision] = useState(
     channel.revision,
   );
   return (
     <form
+      id={formId}
       className="work-reminder-channel"
       aria-label={`${channel.name}的工作提醒`}
       onSubmit={async (event) => {
         event.preventDefault();
         if (!enabled || busy) return;
+        if (!draft) setBaseChannelRevision(channel.revision);
         setDraft(current);
         setBusy(true);
         setError("");
+        setSuccess("");
         setComparison(null);
         try {
           const { revision, ...input } = current;
@@ -365,6 +437,7 @@ function ChannelReminder({
           await unwrap(response);
           await onSaved();
           setDraft(null);
+          setSuccess("工作提醒已保存。");
         } catch (caught) {
           setError(errorMessage(caught));
         } finally {
@@ -401,27 +474,28 @@ function ChannelReminder({
             {label}
           </label>
         ))}
-        {draft && (
-          <>
-            <Button type="submit" size="sm" loading={busy}>
-              保存群提醒
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setDraft(null);
-                setComparison(null);
-                setError("");
-              }}
-            >
-              放弃草稿
-            </Button>
-          </>
-        )}
+        <NotificationGroupActions
+          active={enabled && (persistentActions || !!draft)}
+          disabled={busy}
+        >
+          <Button type="submit" form={formId} size="sm" loading={busy}>
+            保存工作提醒
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setDraft(null);
+              setComparison(null);
+              setError("");
+            }}
+          >
+            放弃草稿
+          </Button>
+        </NotificationGroupActions>
       </fieldset>
-      <Feedback error={error} />
+      <Feedback error={error} success={success} />
       {comparison && (
         <div className="work-reminder-comparison">
           <p>
@@ -455,57 +529,5 @@ function ChannelReminder({
         </div>
       )}
     </form>
-  );
-}
-
-export function WorkReminderTemplate({
-  enabled,
-  onEdit,
-}: {
-  enabled: boolean;
-  onEdit: () => void;
-}) {
-  const query = useConfiguration(enabled, "template");
-  return (
-    <section className="work-reminder-panel" aria-label="工作提醒模板">
-      <h3>工作提醒</h3>
-      {query.isError && (
-        <p role="alert">
-          工作提醒读取失败。
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={!enabled}
-            onClick={() => void query.refetch()}
-          >
-            重试
-          </Button>
-        </p>
-      )}
-      {query.data && (
-        <>
-          <WorkReminderPreview
-            kind="digest"
-            note={query.data.settings.note}
-            enabled={enabled}
-            panel="template"
-          />
-          <WorkReminderPreview
-            kind="ready"
-            note=""
-            enabled={enabled}
-            panel="template"
-          />
-        </>
-      )}
-      <Button
-        type="button"
-        variant="secondary"
-        disabled={!enabled}
-        onClick={onEdit}
-      >
-        编辑工作提醒
-      </Button>
-    </section>
   );
 }

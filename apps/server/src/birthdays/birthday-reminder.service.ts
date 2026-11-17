@@ -283,7 +283,7 @@ export class BirthdayReminderService {
       return;
     await this.db.$executeRaw`
       UPDATE notification_deliveries SET status = 'cancelled', error_code = 'birthday_expired', revision = revision + 1, updated_at = NOW()
-      WHERE id IN (
+      WHERE status IN ('pending', 'retry_wait') AND id IN (
         SELECT d.id FROM notification_deliveries d
         JOIN birthday_reminder_occurrences o ON o.event_id = d.event_id
         WHERE d.status IN ('pending', 'retry_wait') AND o.valid_before <= ${now}

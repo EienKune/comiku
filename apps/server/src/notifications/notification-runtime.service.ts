@@ -12,7 +12,7 @@ import {
 import { ENVIRONMENT, type Environment } from "../config/environment.js";
 import { PrismaService } from "../database/prisma.service.js";
 import type { BackgroundJob, Prisma } from "../generated/prisma/client.js";
-import { JobDeferred, JobsService, retryDelay } from "../jobs/jobs.service.js";
+import { JobDeferred, JobsService } from "../jobs/jobs.service.js";
 import { NotificationConnectionRegistry } from "./notification-connections.js";
 import { OneBotHttpAdapter } from "./onebot-http.adapter.js";
 import { renderNotificationMessage } from "./notification-events.js";
@@ -41,6 +41,10 @@ import {
   workReminderMessagePolicy,
 } from "../work-reminders/work-reminder-notification-policy.js";
 import { notificationMessageTextValid } from "./notification-message-segments.js";
+import {
+  NOTIFICATION_MAX_ATTEMPTS,
+  notificationRetryDelay,
+} from "./notification-retry-policy.js";
 import { safeNotificationSendDiagnostics } from "./notification-diagnostics.js";
 
 @Injectable()
@@ -558,7 +562,7 @@ export class NotificationRuntimeService implements OnModuleInit {
           : channel.nextSendAt;
       if (limitedUntil && limitedUntil > now)
         return { deferred: new JobDeferred(limitedUntil, "capacity") };
-      if (row.attempts >= 3) {
+      if (row.attempts >= NOTIFICATION_MAX_ATTEMPTS) {
         await tx.notificationDelivery.update({
           where: { id: row.id },
           data: {
@@ -628,11 +632,21 @@ export class NotificationRuntimeService implements OnModuleInit {
         sendBoundaryCrossed: true,
       };
     }
+    // The ledger accepts safe retries only with affirmative unsent evidence,
+    // even if an adapter accidentally returns a contradictory classification.
+    if (result.status === "retryable" && result.sendBoundaryCrossed)
+      result = {
+        status: "unknown",
+        errorCode: "notification_send_unconfirmed",
+        sendBoundaryCrossed: true,
+        diagnostics: result.diagnostics,
+      };
     const retryAt = new Date(
-      Date.now() + retryDelay(preparation.attempt.number),
+      Date.now() + notificationRetryDelay(preparation.attempt.number),
     );
     const safeRetry =
-      result.status === "retryable" && preparation.attempt.number < 3;
+      result.status === "retryable" &&
+      preparation.attempt.number < NOTIFICATION_MAX_ATTEMPTS;
     const settled = await this.db.$transaction(async (tx) => {
       if (!(await this.lockJob(tx, job))) return false;
       const changed = await tx.notificationDelivery.updateMany({

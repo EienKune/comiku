@@ -32,6 +32,7 @@ import {
   BirthdayChannelDto,
   BirthdayManagementDto,
   BirthdayPreviewDto,
+  BirthdayPreviewInputDto,
   BirthdaySettingsDto,
   BirthdaySettingsInputDto,
   BirthdaySubscriptionInputDto,
@@ -156,5 +157,17 @@ export class BirthdaysController {
     if (offset !== undefined && !/^(0|1|7)$/.test(offset))
       throw new BadRequestException("提醒日期无效");
     return this.reminders.preview(Number(offset ?? 0));
+  }
+  @Post("preview")
+  @HttpCode(200)
+  @Access({ permission: "system:manage" })
+  @ApiOperation({ operationId: "previewBirthdayReminderDraft" })
+  @ApiBody({ type: BirthdayPreviewInputDto })
+  @ApiOkResponse({ type: BirthdayPreviewDto })
+  previewDraft(
+    @Body(bodyValidation(BirthdayPreviewInputDto))
+    input: BirthdayPreviewInputDto,
+  ): Promise<BirthdayPreviewDto> {
+    return this.reminders.preview(input.offsetDays ?? 0, input.note);
   }
 }

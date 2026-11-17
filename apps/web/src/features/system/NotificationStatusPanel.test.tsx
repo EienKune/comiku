@@ -71,6 +71,9 @@ function setup(active = true, snapshot = status) {
     </QueryClientProvider>
   );
   const view = render(component(active));
+  const advanced = document.querySelector("details")!;
+  advanced.open = true;
+  fireEvent(advanced, new Event("toggle"));
   return {
     get,
     queryClient,
@@ -95,6 +98,33 @@ test("shows maintenance evidence, bounded metrics and safe linked receipts", asy
   expect(screen.getByText("导入作品")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /重放|重置|补发/ })).toBeNull();
 });
+
+test.each([false, true])(
+  "pending status reads abort only without another active observer (shared=%s)",
+  async (shared) => {
+    let signal: AbortSignal | undefined;
+    vi.spyOn(client, "GET").mockImplementation(((
+      _path: unknown,
+      options: { signal: AbortSignal },
+    ) => {
+      signal = options.signal;
+      return new Promise(() => {});
+    }) as never);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const panel = (enabled: boolean) => (
+      <QueryClientProvider client={cache}>
+        <NotificationStatusPanel enabled={enabled} />
+        {shared && <NotificationStatusPanel enabled />}
+      </QueryClientProvider>
+    );
+    const view = render(panel(true));
+    await waitFor(() => expect(signal).toBeTruthy());
+    view.rerender(panel(false));
+    await waitFor(() => expect(signal!.aborted).toBe(!shared));
+  },
+);
 
 test("filters and pages receipts using the selected state and server cursor", async () => {
   const { get } = setup();

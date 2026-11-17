@@ -49,6 +49,7 @@ import {
 import type {
   WorkReminderSettingsInputDto,
   WorkReminderSubscriptionInputDto,
+  WorkReminderPreviewInputDto,
 } from "./work-reminders.dto.js";
 
 const asJson = (value: unknown) =>
@@ -284,8 +285,26 @@ export class WorkRemindersService {
       return this.channelDto(channel, scope);
     });
   }
-  async preview(note?: string, kind: "digest" | "ready" = "digest") {
-    const settings = await this.ensureSettings();
+  async preview(
+    note?: string,
+    kind: "digest" | "ready" = "digest",
+    scope: Pick<
+      WorkReminderPreviewInputDto,
+      "digestEnabled" | "overdueEnabled" | "mentionsEnabled"
+    > = {},
+    actorId?: string,
+  ) {
+    const [settings, actor] = await Promise.all([
+      this.ensureSettings(),
+      actorId
+        ? this.db.user.findUnique({
+            where: { id: actorId },
+            select: { username: true, displayName: true, qqNumber: true },
+          })
+        : null,
+    ]);
+    const mentionsEnabled = scope.mentionsEnabled ?? true;
+    const mentionLabel = actor?.qqNumber ?? actor?.username ?? "示例成员";
     const snapshot: WorkDigestSnapshot = {
       kind: "work_digest",
       formatVersion: 2,
@@ -310,42 +329,62 @@ export class WorkRemindersService {
         {
           participantId: "example-overdue",
           round: 1,
-          userId: "example-user-two",
+          userId: actorId ?? "example-user",
           workId: "example-work-two",
           workNumber: 43,
           title: "另一部示例作品",
-          displayName: "另一位成员",
+          displayName: actor?.displayName ?? "示例成员",
           stage: "translate",
           kind: "overdue",
-          qqNumber: null,
+          // The synthetic fallback only lets the shared formatter produce an at
+          // segment for an unbound account; preview flattening never exposes it.
+          qqNumber: mentionsEnabled ? (actor?.qqNumber ?? "10000") : null,
           userRevision: 0,
           sourceKey: "example",
         },
       ],
     };
-    if (kind === "ready")
-      return {
-        text: renderWorkReady(
-          {
-            kind: "work_ready",
-            dueAt: snapshot.dueAt,
-            validBefore: snapshot.validBefore,
-            observedAt: snapshot.observedAt,
-            items: [
-              { ...snapshot.items[0]!, kind: "ready", stage: "proofread" },
-            ],
-          },
-          false,
-          this.environment?.appOrigin,
-        ).text.replace(/\/works\/example-work-two$/, "/works"),
-      };
-    return {
-      text: renderWorkReminder(
-        snapshot,
-        note ?? settings.note,
-        false,
+    // Keep actual segment order and text. Only renderer-produced mentions become
+    // the authenticated caller's own preview label; delivery rendering is unchanged.
+    const previewText = (rendered: ReturnType<typeof renderWorkReminder>) =>
+      rendered.messageSegments
+        .map((segment) =>
+          segment.type === "text"
+            ? segment.data.text.replace(/\/works\/example-work-two$/, "/works")
+            : `@${mentionLabel}`,
+        )
+        .join("\n");
+    if (kind === "ready") {
+      const rendered = renderWorkReady(
+        {
+          kind: "work_ready",
+          dueAt: snapshot.dueAt,
+          validBefore: snapshot.validBefore,
+          observedAt: snapshot.observedAt,
+          items: [{ ...snapshot.items[0]!, kind: "ready", stage: "proofread" }],
+        },
+        mentionsEnabled,
         this.environment?.appOrigin,
-      ).text,
+      );
+      return { text: previewText(rendered) };
+    }
+    if (scope.digestEnabled === false && scope.overdueEnabled === false)
+      return { text: "本群未开启定时提醒内容。" };
+    if (scope.digestEnabled === false)
+      Object.assign(snapshot.counts, emptyDigest);
+    if (scope.overdueEnabled === false) {
+      snapshot.counts.overdue = 0;
+      snapshot.items = [];
+    }
+    return {
+      text: previewText(
+        renderWorkReminder(
+          snapshot,
+          note ?? settings.note,
+          mentionsEnabled,
+          this.environment?.appOrigin,
+        ),
+      ),
     };
   }
   /** Bounded projection/registration only. Notification runtime owns the send boundary. */

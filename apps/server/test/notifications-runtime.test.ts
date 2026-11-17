@@ -245,6 +245,13 @@ test("only committed non-accepted sends log numeric protocol diagnostics without
       diagnostics: { httpStatus: 600, retcode: Number.MAX_SAFE_INTEGER },
       expected: {},
     },
+    {
+      status: "retryable",
+      boundary: true,
+      commit: true,
+      diagnostics: {},
+      expected: {},
+    },
     { status: "accepted", commit: true, diagnostics: {}, expected: {} },
     { status: "unknown", commit: false, diagnostics: {}, expected: {} },
   ] as const) {
@@ -321,7 +328,10 @@ test("only committed non-accepted sends log numeric protocol diagnostics without
           ({
             status: fixture.status,
             errorCode: "notification_receipt_unconfirmed",
-            sendBoundaryCrossed: true,
+            sendBoundaryCrossed:
+              "boundary" in fixture
+                ? fixture.boundary
+                : fixture.status !== "retryable",
             diagnostics: fixture.diagnostics,
           }) as NotificationSendResult,
       } as unknown as OneBotHttpAdapter,
@@ -333,7 +343,11 @@ test("only committed non-accepted sends log numeric protocol diagnostics without
       { id: "job-id", resourceId: row.id, leaseId: "lease-id" } as never,
       new AbortController().signal,
     );
-    if (fixture.status === "retryable" && fixture.commit)
+    if (
+      fixture.status === "retryable" &&
+      fixture.commit &&
+      !("boundary" in fixture && fixture.boundary)
+    )
       await assert.rejects(execution, JobDeferred);
     else await execution;
     if (fixture.status === "accepted" || !fixture.commit) {
@@ -352,11 +366,170 @@ test("only committed non-accepted sends log numeric protocol diagnostics without
       eventId: row.eventId,
       eventType: "imported",
       attemptNumber: 1,
-      status: fixture.status,
-      errorCode: "notification_receipt_unconfirmed",
+      status:
+        "boundary" in fixture && fixture.boundary ? "unknown" : fixture.status,
+      errorCode:
+        "boundary" in fixture && fixture.boundary
+          ? "notification_send_unconfirmed"
+          : "notification_receipt_unconfirmed",
       ...fixture.expected,
     });
     assert.doesNotMatch(warning, /PRIVATE_MESSAGE|98765432100123456789/);
     assert.doesNotMatch(warning, /wording|response|token|url|qq/i);
   }
+});
+
+test("confirmed-unsent delivery survives startup beyond three attempts and restarts with durable wake times", async (t) => {
+  t.mock.method(console, "warn", () => {});
+  const channel = {
+    id: "channel",
+    enabled: true,
+    audienceGeneration: 1,
+    groupId: "123",
+    connectionKey: "fixture",
+    connectionFingerprint: "a".repeat(64),
+    rateWindowAt: null,
+    nextSendAt: null,
+  };
+  const row = {
+    id: "delivery",
+    channelId: channel.id,
+    eventId: "event",
+    status: "pending",
+    attempts: 0,
+    revision: 0,
+    nextAttemptAt: null as Date | null,
+    audienceGeneration: 1,
+    groupId: "123",
+    connectionKey: channel.connectionKey,
+    connectionFingerprint: channel.connectionFingerprint,
+    text: "frozen",
+    messageSegments: null,
+    channel,
+    event: {
+      id: "event",
+      type: "imported",
+      resourceKind: "work",
+      resourceId: "work",
+      aggregateVersion: 1,
+      ordinal: 0,
+      snapshot: {},
+    },
+  };
+  const attempts: { id: string; number: number; status?: string }[] = [];
+  type RowChange = {
+    status?: string;
+    nextAttemptAt?: Date | null;
+    attempts?: { increment: number };
+    revision?: { increment: number };
+  };
+  const apply = (data: RowChange) => {
+    const { attempts: attemptChange, revision, ...fields } = data;
+    if (attemptChange) row.attempts += attemptChange.increment;
+    if (revision) row.revision += revision.increment;
+    Object.assign(row, fields);
+    return row;
+  };
+  const tx = {
+    $queryRaw: async () => [],
+    backgroundJob: { count: async () => 1 },
+    notificationDelivery: {
+      findUnique: async () => row,
+      findUniqueOrThrow: async () => row,
+      findFirst: async () => null,
+      update: async ({ data }: { data: RowChange }) => apply(data),
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: { status: string; attempts: number };
+        data: RowChange;
+      }) => {
+        if (where.status !== row.status || where.attempts !== row.attempts)
+          return { count: 0 };
+        apply(data);
+        return { count: 1 };
+      },
+    },
+    notificationEvent: { findFirst: async () => null },
+    notificationChannel: { update: async () => channel },
+    notificationAttempt: {
+      create: async ({ data }: { data: { number: number } }) => {
+        const attempt = { ...data, id: `attempt-${data.number}` };
+        attempts.push(attempt);
+        return attempt;
+      },
+      update: async ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: { status: string };
+      }) =>
+        Object.assign(
+          attempts.find((a) => a.id === where.id)!,
+          data,
+        ),
+    },
+  };
+  let sends = 0;
+  for (const [index, delay] of [
+    5000,
+    15000,
+    30000,
+    60000,
+    120000,
+    300000,
+    600000,
+    900000,
+    null,
+  ].entries()) {
+    // New runtime each time; all retry state belongs to the durable delivery, not process memory.
+    let handler!: JobHandler;
+    const runtime = new NotificationRuntimeService(
+      {
+        $transaction: (run: (client: typeof tx) => Promise<unknown>) => run(tx),
+      } as never,
+      {
+        register: (_kind: string, run: JobHandler) => {
+          handler = run;
+        },
+      } as never,
+      {
+        enabled: true,
+        get: () => ({ fingerprint: channel.connectionFingerprint }),
+      } as never,
+      {
+        send: async () => {
+          sends++;
+          return {
+            status: "retryable",
+            errorCode: "notification_provider_not_ready",
+            sendBoundaryCrossed: false,
+          };
+        },
+      } as never,
+      { appOrigin: "https://example.test" } as Environment,
+    );
+    runtime.onModuleInit();
+    row.nextAttemptAt = null;
+    const started = Date.now();
+    const execution = handler(
+      { id: "job", resourceId: row.id, leaseId: "lease" } as never,
+      new AbortController().signal,
+    );
+    if (delay != null) {
+      await assert.rejects(execution, JobDeferred);
+      assert.equal(row.status, "retry_wait");
+      assert.ok(row.nextAttemptAt!.getTime() >= started + delay);
+      assert.ok(row.nextAttemptAt!.getTime() <= Date.now() + delay);
+    } else {
+      await execution;
+      assert.equal(row.status, "failed");
+    }
+    assert.equal(row.attempts, index + 1);
+  }
+  assert.equal(sends, 9);
+  assert.equal(attempts.length, 9);
+  assert.ok(attempts.every((a) => a.status === "retryable"));
 });

@@ -43,18 +43,31 @@ export function BirthdaySettings({ enabled = true }: { enabled?: boolean }) {
         {query.data && (
           <p>
             {query.data.personCount} 位角色
-            {query.data.dataUpdatedAt && (
-              <>
+            {query.data.lastCheckedAt && (
+              <span>
                 {" "}
-                · 更新于{" "}
-                {new Date(query.data.dataUpdatedAt).toLocaleString("zh-CN", {
-                  timeZone: "Asia/Shanghai",
-                })}
-              </>
+                · 主源最近检查{" "}
+                <time dateTime={query.data.lastCheckedAt}>
+                  {new Date(query.data.lastCheckedAt).toLocaleString("zh-CN", {
+                    timeZone: "Asia/Shanghai",
+                  })}
+                </time>
+              </span>
+            )}
+            {query.data.dataUpdatedAt && (
+              <span>
+                {" "}
+                · 资料变更{" "}
+                <time dateTime={query.data.dataUpdatedAt}>
+                  {new Date(query.data.dataUpdatedAt).toLocaleString("zh-CN", {
+                    timeZone: "Asia/Shanghai",
+                  })}
+                </time>
+              </span>
             )}
           </p>
         )}
-        <p className="birthday-muted">每天 06:00 同步 · Asia/Shanghai</p>
+        <p className="birthday-muted">主源每天 06:00 检查 · Asia/Shanghai</p>
         {syncNote && <p role="status">{syncNote}</p>}
       </Surface>
       {query.isPending && <p role="status">正在读取生日设置…</p>}
