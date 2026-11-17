@@ -1492,17 +1492,23 @@
   position: relative;
   width: min(100%, 29rem);
   aspect-ratio: 3 / 4;
+  cursor: crosshair;
+  touch-action: none;
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+.marker-artboard-content {
+  position: absolute;
+  inset: 0;
   overflow: hidden;
   border-radius: 0.3rem;
   background: #f7f6f0;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
-  cursor: crosshair;
-  touch-action: none;
   transform-origin: center;
-  transition: transform var(--duration-normal) var(--ease-out);
+  will-change: transform;
 }
 
-.marker-artboard::after {
+.marker-artboard-content::after {
   position: absolute;
   inset: 0;
   z-index: 3;
@@ -1662,7 +1668,7 @@
   color: var(--color-on-brand);
   font-size: 0.625rem;
   font-weight: var(--font-weight-control);
-  transform: translate(-50%, -50%) scale(var(--translation-marker-scale, 1));
+  transform: translate(-50%, -50%);
   transition:
     transform var(--duration-fast),
     background var(--duration-fast),
@@ -1676,8 +1682,7 @@
   box-shadow:
     0 0 0 2px rgba(220, 113, 143, 0.22),
     0 4px 12px rgba(57, 34, 42, 0.3);
-  transform: translate(-50%, -50%)
-    scale(calc(var(--translation-marker-scale, 1) * 1.12));
+  transform: translate(-50%, -50%) scale(1.12);
 }
 
 .translation-marker--outside:not(.is-selected) {
@@ -2637,7 +2642,7 @@
 }
 .playground-shell[data-motion="reduced"] .translation-marker:hover,
 .playground-shell[data-motion="reduced"] .translation-marker.is-selected {
-  transform: translate(-50%, -50%) scale(var(--translation-marker-scale, 1));
+  transform: translate(-50%, -50%);
 }
 @media (prefers-reduced-motion: reduce) {
   .sidebar-nav button:hover > svg:first-child,
@@ -2646,7 +2651,7 @@
   }
   .translation-marker:hover,
   .translation-marker.is-selected {
-    transform: translate(-50%, -50%) scale(var(--translation-marker-scale, 1));
+    transform: translate(-50%, -50%);
   }
 }
 @media (forced-colors: active) {

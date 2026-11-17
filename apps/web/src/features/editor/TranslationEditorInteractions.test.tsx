@@ -563,6 +563,33 @@ test("dictionary lookup preserves the page, draft, scroll and insertion selectio
   expect(list.scrollTop).toBe(37);
 });
 
+test("image-only zoom retains marker coordinates and projects the fixed-size marker outside the scaled surface", async () => {
+  const f = await fixture();
+  fireEvent.click(screen.getByRole("button", { name: "添加框内" }));
+  f.point();
+  await screen.findByRole("button", { name: "标记 1" });
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("button", { name: "标记 1" })
+        .classList.contains("is-local"),
+    ).toBe(false),
+  );
+  const entry = f.head.images[0].entries[0];
+  const coordinates = { x: entry.markerX, y: entry.markerY };
+  fireEvent.wheel(f.canvas, { deltaY: -10000, clientX: 40, clientY: 60 });
+  const marker = screen.getByRole("button", { name: "标记 1" });
+  expect(f.img.style.transform).toBe("scale(3)");
+  expect(marker.parentElement?.style.transform).toBe("");
+  expect(parseFloat(marker.style.left)).toBeCloseTo(
+    (0.5 + (coordinates.x - 0.5) * 3) * 100,
+  );
+  expect(parseFloat(marker.style.top)).toBeCloseTo(
+    (0.5 + (coordinates.y - 0.5) * 3) * 100,
+  );
+  expect({ x: entry.markerX, y: entry.markerY }).toEqual(coordinates);
+});
+
 test("preview wheel zooms directly, keeps pointer anchor and limits, and retains Alt compatibility", async () => {
   const f = await fixture();
   const ordinary = new WheelEvent("wheel", {
@@ -574,7 +601,7 @@ test("preview wheel zooms directly, keeps pointer anchor and limits, and retains
   });
   fireEvent(f.canvas, ordinary);
   expect(ordinary.defaultPrevented).toBe(true);
-  expect(f.img.parentElement?.style.transform).toBe(`scale(${Math.exp(0.2)})`);
+  expect(f.img.style.transform).toBe(`scale(${Math.exp(0.2)})`);
   expect(f.img.parentElement?.parentElement?.style.transform).toBe(
     `translate(${50 * (1 - Math.exp(0.2))}px, 0px)`,
   );
@@ -589,14 +616,14 @@ test("preview wheel zooms directly, keeps pointer anchor and limits, and retains
   });
   fireEvent(f.canvas, alt);
   expect(alt.defaultPrevented).toBe(true);
-  expect(f.img.parentElement?.style.transform).toBe(`scale(${Math.exp(0.2)})`);
+  expect(f.img.style.transform).toBe(`scale(${Math.exp(0.2)})`);
   expect(f.img.parentElement?.parentElement?.style.transform).toBe(
     `translate(${50 * (1 - Math.exp(0.2))}px, 0px)`,
   );
   fireEvent.wheel(f.canvas, { altKey: true, deltaY: -10000 });
-  expect(f.img.parentElement?.style.transform).toBe("scale(3)");
+  expect(f.img.style.transform).toBe("scale(3)");
   fireEvent.wheel(f.canvas, { altKey: true, deltaY: 10000 });
-  expect(f.img.parentElement?.style.transform).toBe("scale(0.4)");
+  expect(f.img.style.transform).toBe("scale(0.4)");
   const outside = new WheelEvent("wheel", {
     bubbles: true,
     cancelable: true,
@@ -605,7 +632,7 @@ test("preview wheel zooms directly, keeps pointer anchor and limits, and retains
   });
   fireEvent(screen.getByText("译文条目"), outside);
   expect(outside.defaultPrevented).toBe(false);
-  expect(f.img.parentElement?.style.transform).toBe("scale(0.4)");
+  expect(f.img.style.transform).toBe("scale(0.4)");
 });
 
 test("rapid preview wheel events accumulate without losing steps before React renders", async () => {
@@ -614,7 +641,7 @@ test("rapid preview wheel events accumulate without losing steps before React re
     for (let i = 0; i < 5; i++)
       fireEvent.wheel(f.canvas, { deltaY: -10, clientX: 150, clientY: 150 });
   });
-  const transform = f.img.parentElement!.style.transform;
+  const transform = f.img.style.transform;
   expect(Number(transform.match(/scale\(([^)]+)\)/)![1])).toBeCloseTo(
     Math.exp(0.1),
     10,
@@ -643,7 +670,7 @@ test("wheel leaves browser gestures, page controls and active drags alone", asyn
     });
     fireEvent(f.canvas, event);
     expect(event.defaultPrevented).toBe(false);
-    expect(f.img.parentElement?.style.transform).toBe("scale(1)");
+    expect(f.img.style.transform).toBe("scale(1)");
   }
   const input = screen.getByRole("spinbutton", { name: "跳转页码，共 2 页" });
   const event = new WheelEvent("wheel", {
@@ -653,7 +680,7 @@ test("wheel leaves browser gestures, page controls and active drags alone", asyn
   });
   fireEvent(input, event);
   expect(event.defaultPrevented).toBe(false);
-  expect(f.img.parentElement?.style.transform).toBe("scale(1)");
+  expect(f.img.style.transform).toBe("scale(1)");
 });
 
 test.each(["shortcut", "button"])(

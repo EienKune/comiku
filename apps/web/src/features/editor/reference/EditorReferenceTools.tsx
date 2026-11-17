@@ -5,7 +5,7 @@ import { ReferenceDictionaryDialog } from "./ReferenceDictionaryDialog";
 import type { searchReferenceDictionary } from "./reference-dictionary-api";
 import "./reference-tools.css";
 
-const symbols = ["☆", "★", "♡", "♥", "♪", "…"] as const;
+const symbols = Array.from("…～♡♠「」『』（）○●※☆★□◇♪♬·〆");
 
 export function EditorReferenceTools({
   insert,

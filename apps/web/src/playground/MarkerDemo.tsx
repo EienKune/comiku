@@ -5,7 +5,6 @@ import {
   useState,
   type MouseEvent,
   type PointerEvent,
-  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import {
@@ -207,7 +206,17 @@ export function MarkerDemo() {
   function addMarker(event: MouseEvent<HTMLDivElement>) {
     if (toolMode !== "add") return;
 
-    const bounds = event.currentTarget.getBoundingClientRect();
+    const bounds = artboardRef.current?.getBoundingClientRect();
+    if (
+      !bounds ||
+      !bounds.width ||
+      !bounds.height ||
+      event.clientX < bounds.left ||
+      event.clientX > bounds.right ||
+      event.clientY < bounds.top ||
+      event.clientY > bounds.bottom
+    )
+      return;
     const marker: Marker = {
       id: crypto.randomUUID(),
       x: Math.max(
@@ -442,23 +451,23 @@ export function MarkerDemo() {
           onPointerCancel={stopDragging}
         >
           <div
-            ref={artboardRef}
             className="marker-artboard"
-            style={
-              {
-                transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom / 100})`,
-                "--translation-marker-scale": 100 / zoom,
-              } as CSSProperties
-            }
+            style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0)` }}
             onClick={addMarker}
           >
-            <div className="marker-artboard__panel marker-artboard__panel--one" />
-            <div className="marker-artboard__panel marker-artboard__panel--two" />
-            <div className="marker-artboard__panel marker-artboard__panel--three" />
-            <div className="marker-artboard__bubble marker-artboard__bubble--one" />
-            <div className="marker-artboard__bubble marker-artboard__bubble--two" />
-            <div className="marker-artboard__character marker-artboard__character--one" />
-            <div className="marker-artboard__character marker-artboard__character--two" />
+            <div
+              ref={artboardRef}
+              className="marker-artboard-content"
+              style={{ transform: `scale(${zoom / 100})` }}
+            >
+              <div className="marker-artboard__panel marker-artboard__panel--one" />
+              <div className="marker-artboard__panel marker-artboard__panel--two" />
+              <div className="marker-artboard__panel marker-artboard__panel--three" />
+              <div className="marker-artboard__bubble marker-artboard__bubble--one" />
+              <div className="marker-artboard__bubble marker-artboard__bubble--two" />
+              <div className="marker-artboard__character marker-artboard__character--one" />
+              <div className="marker-artboard__character marker-artboard__character--two" />
+            </div>
 
             {markers.map((marker, index) => (
               <MarkerTooltip
@@ -468,7 +477,10 @@ export function MarkerDemo() {
                 <button
                   type="button"
                   className={`translation-marker translation-marker--${marker.positionType} ${marker.id === selectedId ? "is-selected" : ""}`}
-                  style={{ left: `${marker.x}%`, top: `${marker.y}%` }}
+                  style={{
+                    left: `${50 + (marker.x - 50) * (zoom / 100)}%`,
+                    top: `${50 + (marker.y - 50) * (zoom / 100)}%`,
+                  }}
                   aria-label={`选择第 ${index + 1} 条${markerTypeLabel[marker.positionType]}翻译`}
                   onPointerDown={(event) => startMarkerDrag(event, marker)}
                   onClick={(event) => {
