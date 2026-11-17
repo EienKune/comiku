@@ -49,6 +49,7 @@ import {
 import type {
   WorkReminderSettingsInputDto,
   WorkReminderSubscriptionInputDto,
+  WorkReminderPreviewInputDto,
 } from "./work-reminders.dto.js";
 
 const asJson = (value: unknown) =>
@@ -284,7 +285,14 @@ export class WorkRemindersService {
       return this.channelDto(channel, scope);
     });
   }
-  async preview(note?: string, kind: "digest" | "ready" = "digest") {
+  async preview(
+    note?: string,
+    kind: "digest" | "ready" = "digest",
+    scope: Pick<
+      WorkReminderPreviewInputDto,
+      "digestEnabled" | "overdueEnabled" | "mentionsEnabled"
+    > = {},
+  ) {
     const settings = await this.ensureSettings();
     const snapshot: WorkDigestSnapshot = {
       kind: "work_digest",
@@ -317,35 +325,54 @@ export class WorkRemindersService {
           displayName: "另一位成员",
           stage: "translate",
           kind: "overdue",
-          qqNumber: null,
+          qqNumber: scope.mentionsEnabled ? "10001000" : null,
           userRevision: 0,
           sourceKey: "example",
         },
       ],
     };
-    if (kind === "ready")
-      return {
-        text: renderWorkReady(
-          {
-            kind: "work_ready",
-            dueAt: snapshot.dueAt,
-            validBefore: snapshot.validBefore,
-            observedAt: snapshot.observedAt,
-            items: [
-              { ...snapshot.items[0]!, kind: "ready", stage: "proofread" },
-            ],
-          },
-          false,
-          this.environment?.appOrigin,
-        ).text.replace(/\/works\/example-work-two$/, "/works"),
-      };
-    return {
-      text: renderWorkReminder(
-        snapshot,
-        note ?? settings.note,
-        false,
+    // The renderer owns structured mentions. Preview them by synthetic display name,
+    // never by exposing a real contact or changing the persisted message format.
+    const previewText = (rendered: ReturnType<typeof renderWorkReminder>) =>
+      rendered.text +
+      (rendered.messageSegments.some((segment) => segment.type === "at")
+        ? "\n@另一位成员"
+        : "");
+    if (kind === "ready") {
+      const rendered = renderWorkReady(
+        {
+          kind: "work_ready",
+          dueAt: snapshot.dueAt,
+          validBefore: snapshot.validBefore,
+          observedAt: snapshot.observedAt,
+          items: [{ ...snapshot.items[0]!, kind: "ready", stage: "proofread" }],
+        },
+        scope.mentionsEnabled ?? false,
         this.environment?.appOrigin,
-      ).text,
+      );
+      rendered.text = rendered.text.replace(
+        /\/works\/example-work-two$/,
+        "/works",
+      );
+      return { text: previewText(rendered) };
+    }
+    if (scope.digestEnabled === false && scope.overdueEnabled === false)
+      return { text: "本群未开启定时提醒内容。" };
+    if (scope.digestEnabled === false)
+      Object.assign(snapshot.counts, emptyDigest);
+    if (scope.overdueEnabled === false) {
+      snapshot.counts.overdue = 0;
+      snapshot.items = [];
+    }
+    return {
+      text: previewText(
+        renderWorkReminder(
+          snapshot,
+          note ?? settings.note,
+          scope.mentionsEnabled ?? false,
+          this.environment?.appOrigin,
+        ),
+      ),
     };
   }
   /** Bounded projection/registration only. Notification runtime owns the send boundary. */

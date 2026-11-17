@@ -22474,6 +22474,111 @@
         "tags": [
           "birthdays"
         ]
+      },
+      "post": {
+        "operationId": "previewBirthdayReminderDraft",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BirthdayPreviewInputDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BirthdayPreviewDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "birthdays"
+        ]
       }
     },
     "/api/image-similarity/candidates/{candidateId}/media/{mediaId}/search": {
@@ -35102,6 +35207,15 @@
           },
           "note": {
             "type": "string"
+          },
+          "digestEnabled": {
+            "type": "boolean"
+          },
+          "overdueEnabled": {
+            "type": "boolean"
+          },
+          "mentionsEnabled": {
+            "type": "boolean"
           }
         }
       },
@@ -35401,6 +35515,23 @@
         "required": [
           "text"
         ]
+      },
+      "BirthdayPreviewInputDto": {
+        "type": "object",
+        "properties": {
+          "offsetDays": {
+            "type": "number",
+            "enum": [
+              0,
+              1,
+              7
+            ]
+          },
+          "note": {
+            "type": "string",
+            "description": "At most 120 Unicode code points"
+          }
+        }
       },
       "ImageSimilarityCoverageDto": {
         "type": "object",

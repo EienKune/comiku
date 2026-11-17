@@ -5,14 +5,20 @@ import { BirthdaySettingsConflict } from "./BirthdaySettingsConflict";
 import { useBirthdaySettingsEditor } from "./use-birthday-settings-editor";
 import "./birthdays.css";
 
-export function BirthdayReminderSettings({ enabled }: { enabled: boolean }) {
+export function BirthdayReminderSettings({
+  enabled,
+  showSubscriptions = true,
+}: {
+  enabled: boolean;
+  showSubscriptions?: boolean;
+}) {
   const editor = useBirthdaySettingsEditor("reminders", enabled);
   const { current, query } = editor;
   return (
     <section className="birthday-notification-panel" aria-label="生日提醒设置">
       <ErrorToast message={editor.error} onDismiss={editor.dismissError} />
       <header className="notification-heading notification-section-heading">
-        <h3>角色生日</h3>
+        <h3>生日提醒</h3>
         {current && (
           <label className="notification-check">
             <input
@@ -121,7 +127,9 @@ export function BirthdayReminderSettings({ enabled }: { enabled: boolean }) {
           </fieldset>
         </form>
       )}
-      <BirthdaySubscriptions enabled={enabled} showHeading={false} />
+      {showSubscriptions && (
+        <BirthdaySubscriptions enabled={enabled} showHeading={false} />
+      )}
     </section>
   );
 }

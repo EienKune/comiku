@@ -10,10 +10,8 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { client } from "../account/api";
-import {
-  WorkReminderSubscriptions,
-  WorkReminderTemplate,
-} from "./WorkReminderPanels";
+import { WorkReminderSubscriptions } from "./WorkReminderPanels";
+import { useWorkReminderConfiguration } from "./use-work-reminder-configuration";
 
 function configuration(revision = 1) {
   return {
@@ -63,8 +61,11 @@ function setup() {
     );
   const wrap = (enabled: boolean, template = false) => (
     <QueryClientProvider client={cache}>
-      <WorkReminderSubscriptions enabled={enabled && !template} />
-      <WorkReminderTemplate enabled={enabled && template} onEdit={() => {}} />
+      <WorkReminderSubscriptions
+        enabled={enabled}
+        mode={template ? "channel" : "all"}
+        selectedId="group1"
+      />
     </QueryClientProvider>
   );
   return { cache, get, patch, post, wrap };
@@ -73,6 +74,37 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
+
+test.each([false, true])(
+  "pending work reads abort only after their final active observer hides (shared=%s)",
+  async (shared) => {
+    let signal: AbortSignal | undefined;
+    vi.spyOn(client, "GET").mockImplementation(((
+      _path: unknown,
+      options: { signal: AbortSignal },
+    ) => {
+      signal = options.signal;
+      return new Promise(() => {});
+    }) as never);
+    const cache = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    function Reader({ enabled }: { enabled: boolean }) {
+      useWorkReminderConfiguration(enabled, "subscriptions");
+      return null;
+    }
+    const panel = (enabled: boolean) => (
+      <QueryClientProvider client={cache}>
+        <Reader enabled={enabled} />
+        {shared && <Reader enabled />}
+      </QueryClientProvider>
+    );
+    const view = render(panel(true));
+    await waitFor(() => expect(signal).toBeTruthy());
+    view.rerender(panel(false));
+    await waitFor(() => expect(signal!.aborted).toBe(!shared));
+  },
+);
 
 test("hidden panels do not read; tab changes cannot cancel the other panel request", async () => {
   const { get, wrap } = setup();
@@ -85,12 +117,13 @@ test("hidden panels do not read; tab changes cannot cancel the other panel reque
     false,
   );
   view.rerender(wrap(true, true));
-  await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
-  expect((get.mock.calls[1][1] as { signal: AbortSignal }).signal.aborted).toBe(
+  await screen.findByRole("form", { name: "合成群的工作提醒" });
+  expect(get).toHaveBeenCalledTimes(1);
+  expect((get.mock.calls[0][1] as { signal: AbortSignal }).signal.aborted).toBe(
     false,
   );
   view.rerender(wrap(false));
-  expect(get).toHaveBeenCalledTimes(2);
+  expect(get).toHaveBeenCalledTimes(1);
 });
 
 test("one settings editor saves times and note together with automatic server-rendered preview", async () => {
@@ -102,8 +135,10 @@ test("one settings editor saves times and note together with automatic server-re
     target: { value: "10:00" },
   });
   await screen.findByText(/新提示/, { selector: "pre" });
+  fireEvent.click(screen.getByRole("combobox", { name: "预览消息" }));
+  fireEvent.click(screen.getByRole("option", { name: "任务交接提醒" }));
   await screen.findByText(/可以开始校对/, { selector: "pre" });
-  expect(screen.getByText(/独立发送任务交接提醒/)).toBeTruthy();
+  expect(screen.getByText(/预认领任务具备制作条件后/)).toBeTruthy();
   const previewBodies = post.mock.calls.map(
     (call) => (call[1] as { body: { kind: string; note?: string } }).body,
   );
@@ -182,7 +217,7 @@ test("group CAS keeps draft and compares both channel and subscription revisions
   patch.mockResolvedValueOnce({
     response: new Response(null, { status: 409 }),
   } as never);
-  fireEvent.click(within(form).getByRole("button", { name: "保存群提醒" }));
+  fireEvent.click(within(form).getByRole("button", { name: "保存工作提醒" }));
   const adopt = await within(form).findByRole("button", {
     name: "保留草稿并以当前版本重试",
   });
@@ -200,7 +235,7 @@ test("group CAS keeps draft and compares both channel and subscription revisions
     },
   });
   fireEvent.click(adopt);
-  fireEvent.click(within(form).getByRole("button", { name: "保存群提醒" }));
+  fireEvent.click(within(form).getByRole("button", { name: "保存工作提醒" }));
   await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
   expect(patch.mock.calls[1][1]).toMatchObject({
     body: {
@@ -211,19 +246,13 @@ test("group CAS keeps draft and compares both channel and subscription revisions
   });
 });
 
-test("template is a read-only preview and ordinary save failures never offer stale revision adoption", async () => {
+test("ordinary group save failures preserve drafts without offering stale revision adoption", async () => {
   const { patch, wrap } = setup();
-  const view = render(wrap(true, true));
-  const panel = screen.getByRole("region", { name: "工作提醒模板" });
-  await within(panel).findByText(/原提示/, { selector: "pre" });
-  await within(panel).findByText(/可以开始校对/, { selector: "pre" });
-  expect(within(panel).queryByText(/合并发送/)).toBeNull();
-  expect(within(panel).queryByRole("textbox")).toBeNull();
-  view.rerender(wrap(true));
+  render(wrap(true));
   const form = await screen.findByRole("form", { name: "合成群的工作提醒" });
   patch.mockRejectedValueOnce(new Error("网络断开"));
   fireEvent.click(within(form).getByLabelText("任务交接提醒"));
-  fireEvent.click(within(form).getByRole("button", { name: "保存群提醒" }));
+  fireEvent.click(within(form).getByRole("button", { name: "保存工作提醒" }));
   await within(form).findByText("网络断开");
   expect(within(form).queryByRole("button", { name: /当前版本/ })).toBeNull();
   expect(
@@ -231,30 +260,22 @@ test("template is a read-only preview and ordinary save failures never offer sta
   ).toBe(true);
 });
 
-test("hidden preview requests cancel both kinds without cancelling the newly active panel", async () => {
+test("preview switches display one server-rendered kind and cancel inactive requests", async () => {
   const { post, wrap } = setup();
-  const requests: {
-    body: { kind: string; note?: string };
-    signal: AbortSignal;
-  }[] = [];
+  const requests: { body: { kind: string }; signal: AbortSignal }[] = [];
   post.mockImplementation((_path, options) => {
     requests.push(options as (typeof requests)[number]);
     return new Promise(() => {});
   });
   const view = render(wrap(true));
+  await waitFor(() => expect(requests).toHaveLength(1));
+  expect(requests[0].body.kind).toBe("digest");
+  fireEvent.click(screen.getByRole("combobox", { name: "预览消息" }));
+  fireEvent.click(screen.getByRole("option", { name: "任务交接提醒" }));
   await waitFor(() => expect(requests).toHaveLength(2));
-  expect(requests.map((request) => request.body.kind).sort()).toEqual([
-    "digest",
-    "ready",
-  ]);
-  view.rerender(wrap(true, true));
-  await waitFor(() => expect(requests).toHaveLength(4));
-  expect(requests.slice(0, 2).every((request) => request.signal.aborted)).toBe(
-    true,
-  );
-  expect(requests.slice(2).every((request) => !request.signal.aborted)).toBe(
-    true,
-  );
+  expect(requests[0].signal.aborted).toBe(true);
+  expect(requests[1].body.kind).toBe("ready");
+  expect(requests[1].signal.aborted).toBe(false);
   view.rerender(wrap(false));
   await waitFor(() =>
     expect(requests.every((request) => request.signal.aborted)).toBe(true),

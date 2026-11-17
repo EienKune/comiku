@@ -12,7 +12,7 @@ import "./system.css";
 const tabs = [
   { value: "site", label: "站点设置", permission: "system:manage" },
   { value: "accounts", label: "账号管理", permission: "accounts:manage" },
-  { value: "notifications", label: "推送通知", permission: "system:manage" },
+  { value: "notifications", label: "通知推送", permission: "system:manage" },
   { value: "collection", label: "图源采集", permission: "system:manage" },
   { value: "birthdays", label: "角色生日", permission: "system:manage" },
   { value: "exports", label: "数据导出", permission: "system:manage" },

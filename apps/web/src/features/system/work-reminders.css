@@ -61,3 +61,97 @@
 #work-reminder-settings {
   scroll-margin-top: 8rem;
 }
+.notification-global-layout .work-reminder-panel,
+.notification-group-pane .work-reminder-panel {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.work-reminder-global-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(250px, 320px);
+  align-items: start;
+  gap: var(--space-5);
+}
+.notification-birthday-global-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(250px, 320px);
+  align-items: start;
+  gap: var(--space-5);
+}
+.notification-birthday-global-layout > aside {
+  border-left: 1px solid var(--color-border);
+  padding-left: var(--space-5);
+  min-width: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+.notification-birthday-global-layout > aside > h3 {
+  margin: 0;
+}
+.notification-birthday-global-layout
+  > div
+  > .birthday-notification-panel:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.notification-trigger-rules {
+  margin: var(--space-4) 0;
+  display: grid;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+.notification-trigger-rules > div {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: var(--space-3);
+}
+.notification-trigger-rules dt {
+  color: var(--color-text-muted);
+}
+.notification-trigger-rules dd {
+  margin: 0;
+}
+.work-reminder-global-layout > aside {
+  border-left: 1px solid var(--color-border);
+  padding-left: var(--space-5);
+  min-width: 0;
+}
+.work-reminder-global-layout .work-reminder-preview {
+  margin-top: 0;
+}
+.notification-group-pane .work-reminder-options {
+  display: grid;
+  gap: var(--space-2);
+}
+.notification-group-pane .work-reminder-channel {
+  border-top: 0;
+  padding-top: 0;
+}
+.notification-group-pane .work-reminder-channel > div:first-child {
+  display: none;
+}
+.notification-group-pane .work-reminder-channels {
+  margin-top: 0;
+}
+@media (max-width: 900px) {
+  .notification-birthday-global-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .notification-birthday-global-layout > aside {
+    border-left: 0;
+    padding-left: 0;
+    border-top: 1px solid var(--color-border);
+    padding-top: var(--space-4);
+  }
+  .work-reminder-global-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .work-reminder-global-layout > aside {
+    border-left: 0;
+    padding-left: 0;
+    border-top: 1px solid var(--color-border);
+    padding-top: var(--space-4);
+  }
+}

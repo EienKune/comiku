@@ -6,7 +6,6 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
@@ -130,63 +129,55 @@ function openPage(url = "/settings/system?tab=notifications") {
   return { cache, get, ...view };
 }
 
-test("birthday panels retain scoped drafts and stop reads outside their visible notification panel", async () => {
+test("birthday panels retain separate schedule and note drafts and stop hidden reads", async () => {
   const { cache, get } = openPage();
-  await screen.findByLabelText("已有目标的生日提醒");
+  fireEvent.click(await screen.findByRole("tab", { name: "全局规则" }));
+  fireEvent.click(screen.getByRole("button", { name: "生日提醒" }));
   fireEvent.change(await screen.findByLabelText("提醒时刻"), {
     target: { value: "10:15" },
   });
-  expect(
-    get.mock.calls.some((call) => call[0] === "/api/birthdays/template"),
-  ).toBe(false);
+  fireEvent.change(await screen.findByLabelText("生日提示语"), {
+    target: { value: "未保存生日祝福" },
+  });
+  fireEvent.click(screen.getByRole("tab", { name: "接收群" }));
   fireEvent.click(screen.getByRole("button", { name: "新增群目标" }));
   fireEvent.change(screen.getByLabelText("名称"), {
     target: { value: "原通知未保存草稿" },
   });
+  fireEvent.click(screen.getByRole("button", { name: "关闭群设置" }));
   fireEvent.click(screen.getByRole("tab", { name: "角色生日" }));
   fireEvent.click(await screen.findByLabelText("启用工作台生日"));
-  expect(
-    within(screen.getByRole("tabpanel", { name: "角色生日" })).queryByLabelText(
-      "提醒时刻",
-    ),
-  ).toBeNull();
-  fireEvent.click(screen.getByRole("tab", { name: "推送通知" }));
-  expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
-    "原通知未保存草稿",
-  );
-  expect((screen.getByLabelText("提醒时刻") as HTMLInputElement).value).toBe(
-    "10:15",
-  );
-  fireEvent.click(screen.getByRole("tab", { name: "消息模板" }));
-  fireEvent.change(await screen.findByLabelText("生日提示语"), {
-    target: { value: "未保存生日祝福" },
-  });
   const settingsReads = get.mock.calls.filter(
     (call) => call[0] === "/api/birthdays/settings",
   ).length;
+  fireEvent.click(screen.getByRole("tab", { name: "通知推送" }));
   await act(async () => {
     await cache.invalidateQueries({ queryKey: ["birthdays", "settings"] });
   });
   expect(
     get.mock.calls.filter((call) => call[0] === "/api/birthdays/settings"),
   ).toHaveLength(settingsReads);
+  fireEvent.click(screen.getByRole("button", { name: "新增群目标" }));
+  expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
+    "原通知未保存草稿",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "关闭群设置" }));
+  fireEvent.click(screen.getByRole("tab", { name: "全局规则" }));
+  expect((screen.getByLabelText("提醒时刻") as HTMLInputElement).value).toBe(
+    "10:15",
+  );
+  expect((screen.getByLabelText("生日提示语") as HTMLInputElement).value).toBe(
+    "未保存生日祝福",
+  );
   fireEvent.click(screen.getByRole("tab", { name: "角色生日" }));
   expect(
     (screen.getByLabelText("启用工作台生日") as HTMLInputElement).checked,
   ).toBe(false);
-  fireEvent.click(screen.getByRole("tab", { name: "推送通知" }));
-  expect((screen.getByLabelText("生日提示语") as HTMLInputElement).value).toBe(
-    "未保存生日祝福",
-  );
-  fireEvent.click(screen.getByRole("tab", { name: "推送设置" }));
-  expect((screen.getByLabelText("提醒时刻") as HTMLInputElement).value).toBe(
-    "10:15",
-  );
 });
 
 test("birthday delivery history reads the true resource kind and frozen digest metadata", async () => {
   openPage();
-  fireEvent.click(screen.getByRole("tab", { name: "投递记录" }));
+  fireEvent.click(screen.getByRole("tab", { name: "发送记录" }));
   expect(
     await screen.findByText("2026-11-18 · 3 位角色 · 提前 7 天"),
   ).toBeTruthy();
