@@ -533,6 +533,30 @@ header.notification-section-heading > h3 {
   min-width: 0;
   max-width: 100%;
 }
+.notification-management
+  .notification-channel
+  > .notification-actions:has(.notification-editor) {
+  grid-column: 1 / -1;
+  grid-row: auto;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+.notification-channel
+  > .notification-actions:has(.notification-editor)
+  > .notification-sample {
+  display: contents;
+}
+.notification-actions:has(.notification-editor)
+  > .notification-sample
+  > .notification-disabled-tooltip {
+  justify-self: start;
+}
+.notification-actions:has(.notification-editor)
+  > .notification-sample
+  > .notification-editor {
+  grid-column: 1 / -1;
+}
 .notification-editor fieldset {
   min-width: 0;
 }
