@@ -1,4 +1,4 @@
-import { ApiProperty } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -7,6 +7,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsOptional,
   IsString,
   Matches,
   Min,
@@ -99,6 +100,19 @@ export class BirthdaySubscriptionInputDto {
 }
 export class BirthdayPreviewDto {
   @ApiProperty({ type: String }) text!: string;
+}
+export class BirthdayPreviewInputDto {
+  @ApiPropertyOptional({ type: Number, enum: [0, 1, 7] })
+  @IsOptional()
+  @IsIn([0, 1, 7])
+  offsetDays?: number;
+  @ApiPropertyOptional({
+    type: String,
+    description: "At most 120 Unicode code points",
+  })
+  @IsOptional()
+  @IsString()
+  note?: string;
 }
 export class BirthdaySyncDto {
   @ApiProperty({ type: Boolean }) queued!: boolean;

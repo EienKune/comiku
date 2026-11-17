@@ -97,14 +97,18 @@ export class OneBotHttpAdapter {
     if (signal?.aborted) controller.abort();
     const timer = setTimeout(abort, this.timeoutMs);
     let boundary = false;
+    let checkingReadiness = true;
     let httpStatus: number | undefined;
     let retcode: unknown;
     const fail = (
       status: NotificationSendResult["status"],
       errorCode: string,
     ): NotificationSendResult => ({
-      status,
-      errorCode,
+      status: checkingReadiness && status === "unknown" ? "retryable" : status,
+      errorCode:
+        checkingReadiness && status === "unknown"
+          ? "notification_provider_not_ready"
+          : errorCode,
       sendBoundaryCrossed: boundary,
       ...(httpStatus !== undefined && {
         diagnostics: safeNotificationSendDiagnostics({ httpStatus, retcode }),
@@ -166,155 +170,190 @@ export class OneBotHttpAdapter {
             : new HttpAgent(options);
         this.agents.set(connection.fingerprint, agent);
       }
-      return await new Promise<NotificationSendResult>((resolve) => {
-        let settled = false;
-        const finish = (result: NotificationSendResult) => {
-          if (!settled) {
-            settled = true;
-            resolve(result);
-          }
-        };
-        const request = (
-          endpoint.protocol === "https:" ? httpsRequest : httpRequest
-        )(
-          {
-            protocol: endpoint.protocol,
-            hostname,
-            port: endpoint.port || undefined,
-            path: "/send_group_msg",
-            method: "POST",
-            agent,
-            signal: controller.signal,
-            // Keep hostname/SNI/certificate identity original while replacing resolution with the validated IP.
-            lookup: ((
-              _host: string,
-              options: { all?: boolean },
-              callback: (...args: unknown[]) => void,
-            ) => {
-              if (options.all)
-                callback(null, [{ address: pinned, family: isIP(pinned) }]);
-              else callback(null, pinned, isIP(pinned));
-            }) as never,
-            headers: {
-              "content-type": "application/json",
-              "content-length": Buffer.byteLength(payload),
-              authorization: `Bearer ${connection.token}`,
+      const requestAction = (path: string, body: string) =>
+        new Promise<NotificationSendResult>((resolve) => {
+          let settled = false;
+          const finish = (result: NotificationSendResult) => {
+            if (!settled) {
+              settled = true;
+              resolve(result);
+            }
+          };
+          const request = (
+            endpoint.protocol === "https:" ? httpsRequest : httpRequest
+          )(
+            {
+              protocol: endpoint.protocol,
+              hostname,
+              port: endpoint.port || undefined,
+              path,
+              method: "POST",
+              agent,
+              signal: controller.signal,
+              // Keep hostname/SNI/certificate identity original while replacing resolution with the validated IP.
+              lookup: ((
+                _host: string,
+                options: { all?: boolean },
+                callback: (...args: unknown[]) => void,
+              ) => {
+                if (options.all)
+                  callback(null, [{ address: pinned, family: isIP(pinned) }]);
+                else callback(null, pinned, isIP(pinned));
+              }) as never,
+              headers: {
+                "content-type": "application/json",
+                "content-length": Buffer.byteLength(body),
+                authorization: `Bearer ${connection.token}`,
+              },
             },
-          },
-          (response) => {
-            boundary = true;
-            httpStatus = response.statusCode;
-            const chunks: Buffer[] = [];
-            let size = 0;
-            response.on("data", (chunk: Buffer) => {
-              size += chunk.length;
-              if (size > 65_536) {
-                finish(fail("unknown", "notification_response_too_large"));
-                response.destroy();
-              } else chunks.push(chunk);
-            });
-            response.on("error", () =>
-              finish(fail("unknown", "notification_response_incomplete")),
-            );
-            response.on("aborted", () =>
-              finish(fail("unknown", "notification_response_incomplete")),
-            );
-            response.on("end", () => {
-              if (settled) return;
-              if (response.statusCode === 401 || response.statusCode === 403)
-                return finish(fail("failed", "notification_provider_rejected"));
-              if (response.statusCode !== 200)
-                return finish(fail("unknown", "notification_http_unconfirmed"));
-              try {
-                const body: unknown = JSON.parse(
-                  Buffer.concat(chunks).toString("utf8"),
-                );
-                if (!body || typeof body !== "object")
-                  return finish(
-                    fail("unknown", "notification_receipt_invalid"),
-                  );
-                const reply = body as {
-                  status?: unknown;
-                  retcode?: unknown;
-                  data?: { message_id?: unknown };
-                };
-                retcode = reply.retcode;
-                const messageId = reply.data?.message_id;
-                if (
-                  reply.status === "ok" &&
-                  reply.retcode === 0 &&
-                  ((typeof messageId === "number" &&
-                    Number.isSafeInteger(messageId) &&
-                    messageId !== 0) ||
-                    (typeof messageId === "string" &&
-                      /^-?[1-9]\d{0,19}$/.test(messageId)))
-                ) {
-                  return finish({
-                    status: "accepted",
-                    providerMessageId: String(messageId),
-                    sendBoundaryCrossed: true,
-                  });
-                }
-                if (
-                  reply.status === "failed" &&
-                  [100, 1400, 1401, 1404].includes(reply.retcode as number)
-                )
+            (response) => {
+              if (!checkingReadiness) boundary = true;
+              httpStatus = response.statusCode;
+              const chunks: Buffer[] = [];
+              let size = 0;
+              response.on("data", (chunk: Buffer) => {
+                size += chunk.length;
+                if (size > 65_536) {
+                  finish(fail("unknown", "notification_response_too_large"));
+                  response.destroy();
+                } else chunks.push(chunk);
+              });
+              response.on("error", () =>
+                finish(fail("unknown", "notification_response_incomplete")),
+              );
+              response.on("aborted", () =>
+                finish(fail("unknown", "notification_response_incomplete")),
+              );
+              response.on("end", () => {
+                if (settled) return;
+                if (response.statusCode === 401 || response.statusCode === 403)
                   return finish(
                     fail("failed", "notification_provider_rejected"),
                   );
-                finish(fail("unknown", "notification_receipt_unconfirmed"));
-              } catch {
-                finish(fail("unknown", "notification_receipt_invalid"));
-              }
-            });
-          },
-        );
-        request.on("socket", (socket) => {
-          // Reused sockets are already connected; once connected a lost response cannot prove no send.
-          if (!socket.connecting) boundary = true;
-          else
-            socket.once(
-              endpoint.protocol === "https:" ? "secureConnect" : "connect",
-              () => {
-                boundary = true;
-              },
-            );
+                if (response.statusCode !== 200)
+                  return finish(
+                    fail("unknown", "notification_http_unconfirmed"),
+                  );
+                try {
+                  const body: unknown = JSON.parse(
+                    Buffer.concat(chunks).toString("utf8"),
+                  );
+                  if (!body || typeof body !== "object")
+                    return finish(
+                      fail("unknown", "notification_receipt_invalid"),
+                    );
+                  const reply = body as {
+                    status?: unknown;
+                    retcode?: unknown;
+                    data?: {
+                      message_id?: unknown;
+                      online?: unknown;
+                      good?: unknown;
+                    };
+                  };
+                  retcode = reply.retcode;
+                  if (checkingReadiness) {
+                    if (
+                      reply.status === "ok" &&
+                      reply.retcode === 0 &&
+                      reply.data?.online === true &&
+                      reply.data?.good === true
+                    )
+                      return finish({
+                        status: "accepted",
+                        sendBoundaryCrossed: false,
+                      });
+                    return finish(
+                      fail("retryable", "notification_provider_not_ready"),
+                    );
+                  }
+                  const messageId = reply.data?.message_id;
+                  if (
+                    reply.status === "ok" &&
+                    reply.retcode === 0 &&
+                    ((typeof messageId === "number" &&
+                      Number.isSafeInteger(messageId) &&
+                      messageId !== 0) ||
+                      (typeof messageId === "string" &&
+                        /^-?[1-9]\d{0,19}$/.test(messageId)))
+                  ) {
+                    return finish({
+                      status: "accepted",
+                      providerMessageId: String(messageId),
+                      sendBoundaryCrossed: true,
+                    });
+                  }
+                  if (
+                    reply.status === "failed" &&
+                    [100, 1400, 1401, 1404].includes(reply.retcode as number)
+                  )
+                    return finish(
+                      fail("failed", "notification_provider_rejected"),
+                    );
+                  finish(fail("unknown", "notification_receipt_unconfirmed"));
+                } catch {
+                  finish(fail("unknown", "notification_receipt_invalid"));
+                }
+              });
+            },
+          );
+          request.on("socket", (socket) => {
+            // Reused sockets are already connected; once connected a lost response cannot prove no send.
+            if (!socket.connecting) {
+              if (!checkingReadiness) boundary = true;
+            } else
+              socket.once(
+                endpoint.protocol === "https:" ? "secureConnect" : "connect",
+                () => {
+                  if (!checkingReadiness) boundary = true;
+                },
+              );
+          });
+          request.on("error", (error) => {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (
+              !boundary &&
+              [
+                "ECONNREFUSED",
+                "ENETUNREACH",
+                "EHOSTUNREACH",
+                "ENOTFOUND",
+                "EAI_AGAIN",
+              ].includes(code ?? "")
+            ) {
+              finish(fail("retryable", "notification_connect_failed"));
+            } else if (
+              !boundary &&
+              [
+                "CERT_HAS_EXPIRED",
+                "DEPTH_ZERO_SELF_SIGNED_CERT",
+                "ERR_TLS_CERT_ALTNAME_INVALID",
+                "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+              ].includes(code ?? "")
+            ) {
+              finish(fail("failed", "notification_tls_rejected"));
+            } else
+              finish(
+                fail(
+                  boundary ? "unknown" : "retryable",
+                  boundary
+                    ? "notification_send_unconfirmed"
+                    : "notification_request_not_sent",
+                ),
+              );
+          });
+          request.end(body);
         });
-        request.on("error", (error) => {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (
-            !boundary &&
-            [
-              "ECONNREFUSED",
-              "ENETUNREACH",
-              "EHOSTUNREACH",
-              "ENOTFOUND",
-              "EAI_AGAIN",
-            ].includes(code ?? "")
-          ) {
-            finish(fail("retryable", "notification_connect_failed"));
-          } else if (
-            !boundary &&
-            [
-              "CERT_HAS_EXPIRED",
-              "DEPTH_ZERO_SELF_SIGNED_CERT",
-              "ERR_TLS_CERT_ALTNAME_INVALID",
-              "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-            ].includes(code ?? "")
-          ) {
-            finish(fail("failed", "notification_tls_rejected"));
-          } else
-            finish(
-              fail(
-                boundary ? "unknown" : "retryable",
-                boundary
-                  ? "notification_send_unconfirmed"
-                  : "notification_request_not_sent",
-              ),
-            );
-        });
-        request.end(payload);
-      });
+      // get_status is read-only: even a lost response cannot have sent this notification.
+      // It shares the validated DNS pin, bounded pool and total deadline with the send.
+      const readiness = await requestAction("/get_status", "{}");
+      if (readiness.status !== "accepted") return readiness;
+      if (controller.signal.aborted)
+        return fail("retryable", "notification_request_not_sent");
+      checkingReadiness = false;
+      httpStatus = undefined;
+      retcode = undefined;
+      return await requestAction("/send_group_msg", payload);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (

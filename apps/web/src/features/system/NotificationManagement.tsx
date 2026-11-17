@@ -1,9 +1,7 @@
-import {
-  WorkReminderSubscriptions,
-  WorkReminderTemplate,
-} from "./WorkReminderPanels";
-import { BirthdayTemplate } from "../birthdays/BirthdayNotificationPanels";
-import { BirthdayReminderSettings } from "../birthdays/BirthdayReminderSettings";
+import { NotificationGroupActions } from "./NotificationGroupActions";
+import { WorkReminderSubscriptions } from "./WorkReminderPanels";
+import { NotificationBirthdayRules } from "./NotificationBirthdayRules";
+import { adoptConfirmedChannelMetadata } from "./notification-channel-cache";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
@@ -17,11 +15,17 @@ import {
 import { client, unwrap } from "../account/api";
 import { Feedback } from "../account/forms";
 import "./notifications.css";
+import { NotificationGroupRoster } from "./NotificationGroupRoster";
+import {
+  NotificationGroupDialog,
+  type GroupSection,
+} from "./NotificationGroupDialog";
+import { NotificationEventSettings } from "./NotificationEventSettings";
+import { NotificationGroupPreview } from "./NotificationGroupPreview";
+import { NotificationGroupBirthday } from "./NotificationGroupBirthday";
 import { localDayBoundary } from "./notification-history";
 import { NotificationStatusPanel } from "./NotificationStatusPanel";
 import {
-  TemplateEditor,
-  SavedSample,
   type Template,
   type SubscriptionRule,
   type EventOption,
@@ -37,6 +41,36 @@ type ChannelInput = components["schemas"]["NotificationChannelInputDto"] & {
   subscriptionRules?: SubscriptionRule[];
 };
 type EventType = ChannelInput["eventTypes"][number];
+function channelDraft(channel?: Channel, connectionKey = "") {
+  return channel
+    ? {
+        id: channel.id,
+        expectedRevision: channel.revision,
+        name: channel.name,
+        groupId: channel.groupId,
+        connectionKey: channel.connectionKey,
+        enabled: channel.enabled,
+        eventTypes: [...channel.eventTypes] as EventType[],
+        includeDetails: channel.includeDetails,
+        receiverMode: channel.receiverMode ?? ("legacy" as const),
+        subscriptionRules:
+          channel.subscriptionRules ??
+          channel.eventTypes.map((eventType) => ({
+            eventType: eventType as EventType,
+            stages: null,
+          })),
+      }
+    : {
+        name: "",
+        groupId: "",
+        connectionKey,
+        enabled: false,
+        eventTypes: [] as EventType[],
+        includeDetails: false,
+        receiverMode: "templates" as const,
+        subscriptionRules: [] as SubscriptionRule[],
+      };
+}
 const statusLabels: Record<Delivery["status"], string> = {
   pending: "排队中",
   sending: "发送中",
@@ -66,6 +100,24 @@ export function NotificationManagement({
 }) {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState("groups");
+  const [workPreview, setWorkPreview] = useState<
+    components["schemas"]["WorkReminderSubscriptionDto"] | undefined
+  >();
+  const [groupOpen, setGroupOpen] = useState(false);
+  const [groupSection, setGroupSection] = useState<GroupSection>("events");
+  const [globalSection, setGlobalSection] = useState("work");
+  const [search, setSearch] = useState("");
+  const savedDrafts = useRef(new Map<string, NonNullable<typeof draft>>());
+  function closeGroup() {
+    if (draft) savedDrafts.current.set(draft.id ?? "new", draft);
+    setGroupOpen(false);
+  }
+  function openGlobal(section: string) {
+    closeGroup();
+    setTab("global");
+    setGlobalSection(section);
+  }
+
   const [adopting, setAdopting] = useState(false);
   const [adoptionPreview, setAdoptionPreview] = useState("");
   const [adoptionPreviewIdentity, setAdoptionPreviewIdentity] = useState("");
@@ -190,6 +242,7 @@ export function NotificationManagement({
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
+  const [groupConflict, setGroupConflict] = useState(false);
   const [comparison, setComparison] = useState<
     (Channel & { connectionName: string }) | null
   >(null);
@@ -208,6 +261,9 @@ export function NotificationManagement({
   }
   function edit(channel?: Channel) {
     if (saving) return;
+    if (draft) savedDrafts.current.set(draft.id ?? "new", draft);
+    setGroupOpen(true);
+    setGroupSection(channel ? "events" : "basic");
     previewEpoch.current++;
     setPreview("");
     setAdopting(false);
@@ -220,6 +276,7 @@ export function NotificationManagement({
     setError("");
     setSuccess("");
     setComparison(null);
+    setGroupConflict(false);
     setPreviewType(eventTypes[0]?.type ?? "");
     setDraft(
       channel
@@ -251,6 +308,8 @@ export function NotificationManagement({
             subscriptionRules: [],
           },
     );
+    const retained = savedDrafts.current.get(channel?.id ?? "new");
+    if (retained) setDraft(retained);
   }
   async function save() {
     if (!draft) return;
@@ -285,6 +344,7 @@ export function NotificationManagement({
           })
         : await client.POST("/api/notifications/channels", { body: input });
       if (result.response.status === 409) {
+        setGroupConflict(true);
         setComparison(null);
         setConfirmedAdoptionIdentity("");
         setAdoptionRevisions(null);
@@ -310,9 +370,16 @@ export function NotificationManagement({
           "配置已被其他管理员修改。草稿已保留，请比较当前版本后核对。",
         );
       }
-      await unwrap(result);
-      setDraft(null);
+      const saved = await unwrap(result);
+      await adoptConfirmedChannelMetadata(queryClient, saved);
+      const nextDraft = channelDraft(saved as Channel);
+      setDraft(nextDraft);
+      setAdoptionRequired(false);
+      setGroupConflict(false);
+      savedDrafts.current.delete(id ?? "new");
+      setComparison(null);
       setSuccess("配置已保存");
+      void queryClient.invalidateQueries({ queryKey: ["work-reminders"] });
       void queryClient.invalidateQueries({
         queryKey: ["birthdays", "subscriptions"],
       });
@@ -492,8 +559,8 @@ export function NotificationManagement({
   return (
     <Surface className="notification-management">
       <header className="notification-heading">
-        <h2>推送通知</h2>
-        {(tab === "groups" || tab === "templates") && (
+        <h2>通知推送</h2>
+        {(tab === "groups" || tab === "global") && (
           <div className="notification-actions">
             <Button
               variant="ghost"
@@ -512,9 +579,9 @@ export function NotificationManagement({
         aria-label="推送通知分类"
       >
         {[
-          ["groups", "推送设置"],
-          ["templates", "消息模板"],
-          ["history", "投递记录"],
+          ["groups", "接收群"],
+          ["global", "全局规则"],
+          ["history", "发送记录"],
           ["status", "运行状态"],
         ].map(([value, label]) => (
           <button
@@ -572,501 +639,452 @@ export function NotificationManagement({
                 连接配置不可用：{data.configurationError}
               </p>
             )}
-            <p className="notification-boundary">
-              核心作品事件启用后异步补账推送，通知失败不影响作品操作；启用前历史不自动补推。
-            </p>
-            <details
-              className="notification-connections"
-              aria-labelledby="notification-connections-heading"
-            >
-              <summary id="notification-connections-heading">连接配置</summary>
-              {data.connections.map((connection) => (
-                <div key={connection.key} className="notification-connection">
-                  <strong>{connection.name}</strong>
-                  <Badge tone={connection.available ? "neutral" : "warning"}>
-                    {connection.available ? "配置可用" : "配置不可用"}
-                  </Badge>
-                </div>
-              ))}
-              {data.connections.length === 0 && <p>暂无连接配置。</p>}
-              <p className="notification-boundary">
-                连接状态仅反映服务端配置，不代表 QQ 登录状态。
-              </p>
-            </details>
             <header className="notification-heading notification-section-heading">
-              <h3>接收群</h3>
+              <h3>
+                接收群{" "}
+                <span className="notification-boundary">
+                  {data.channels.length}
+                </span>
+              </h3>
+              <TextField
+                label="搜索接收群"
+                placeholder="群名称或群号"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
               <Button size="sm" disabled={saving} onClick={() => edit()}>
                 新增群目标
               </Button>
             </header>
-            <div className="notification-channels">
-              {data.channels.map((channel) => (
-                <article key={channel.id} className="notification-channel">
-                  <div>
-                    <strong>{channel.name}</strong>
-                    <span>QQ 群 {channel.groupId}</span>
-                    <span>
-                      {data.connections.find(
-                        (connection) =>
-                          connection.key === channel.connectionKey,
-                      )?.name ?? "连接已缺失"}
-                      {data.connections.some(
-                        (connection) =>
-                          connection.key === channel.connectionKey &&
-                          !connection.available,
-                      ) && "（不可用）"}
-                    </span>
-                  </div>
-                  <span className="notification-boundary">
-                    {channel.eventTypes
-                      .map(
-                        (type) =>
-                          eventTypes.find((e) => e.type === type)?.label ??
-                          type,
-                      )
-                      .join(" · ") || "未订阅事件"}
-                  </span>
-                  <Badge tone={channel.enabled ? "success" : "neutral"}>
-                    {channel.enabled ? "已启用" : "已停用"}
-                  </Badge>
-                  <div className="notification-actions">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      aria-label={`编辑 ${channel.name}`}
-                      disabled={saving}
-                      onClick={() => edit(channel)}
-                    >
-                      编辑
-                    </Button>
-                    <SavedSample
-                      channel={channel as Channel}
-                      templates={templates}
-                      events={eventTypes}
-                      unavailableReason={
-                        !data.enabled
-                          ? "通知服务已关闭"
-                          : !channel.enabled
-                            ? "此群已停用"
-                            : !data.connections.some(
-                                  (c) =>
-                                    c.key === channel.connectionKey &&
-                                    c.available,
-                                )
-                              ? "连接配置不可用"
-                              : channel.eventTypes.length === 0
-                                ? "此群尚未订阅事件"
-                                : ""
-                      }
-                      onUpdated={() =>
-                        void queryClient.invalidateQueries({
-                          queryKey: ["notification-deliveries"],
-                        })
-                      }
-                    />
-                  </div>
-                </article>
-              ))}
-            </div>
+            <NotificationGroupRoster
+              data={data}
+              enabled={enabled && tab === "groups"}
+              search={search}
+              saving={saving}
+              templates={templates}
+              events={eventTypes}
+              onEdit={edit}
+              onUpdated={() =>
+                void queryClient.invalidateQueries({
+                  queryKey: ["notification-deliveries"],
+                })
+              }
+            />
             {data.channels.length === 0 && <p>暂无群目标。</p>}
           </>
         )}
-        <Feedback error={error} success={success} />
+        {!groupOpen && <Feedback error={error} success={success} />}
         {draft && data && (
-          <form
-            className="notification-editor"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void save();
-            }}
+          <NotificationGroupDialog
+            open={enabled && tab === "groups" && groupOpen}
+            title={draft.id ? `编辑接收群 · ${draft.name}` : "新增群目标"}
+            section={groupSection}
+            onSection={setGroupSection}
+            onClose={closeGroup}
+            preview={
+              <NotificationGroupPreview
+                enabled={enabled && tab === "groups" && groupOpen}
+                section={groupSection}
+                eventType={previewType}
+                onEvent={setPreviewType}
+                events={eventTypes}
+                templates={templates}
+                includeDetails={draft.includeDetails}
+                receiverMode={adoptionRequired ? "legacy" : draft.receiverMode}
+                rules={draft.subscriptionRules ?? []}
+                workOptions={workPreview}
+              />
+            }
           >
-            <h3>{draft.id ? "编辑群目标" : "新增群目标"}</h3>
-            <fieldset disabled={saving}>
-              <div className="notification-fields">
-                <TextField
-                  label="名称"
-                  required
-                  maxLength={80}
-                  value={draft.name}
-                  onChange={(event) =>
-                    changeDraft({ name: event.target.value })
-                  }
-                />
-                <TextField
-                  label="群号"
-                  required
-                  inputMode="numeric"
-                  pattern="[1-9][0-9]{0,19}"
-                  maxLength={20}
-                  value={draft.groupId}
-                  onChange={(event) =>
-                    changeDraft({ groupId: event.target.value })
-                  }
-                />
-                <SelectField
-                  label="连接"
-                  value={draft.connectionKey}
-                  required
-                  onValueChange={(value) =>
-                    changeDraft({ connectionKey: value })
-                  }
-                >
-                  {!data.connections.some(
-                    (connection) => connection.key === draft.connectionKey,
-                  ) && (
-                    <option value={draft.connectionKey}>
-                      {draft.connectionKey ? "连接已缺失" : "请选择连接"}
-                    </option>
-                  )}
-                  {data.connections.map((connection) => (
-                    <option key={connection.key} value={connection.key}>
-                      {connection.name}
-                      {connection.available ? "" : "（不可用）"}
-                    </option>
-                  ))}
-                </SelectField>
-              </div>
-              <label className="notification-check">
-                <input
-                  type="checkbox"
-                  checked={draft.enabled}
-                  onChange={(event) =>
-                    changeDraft({ enabled: event.target.checked })
-                  }
-                />
-                启用此群通知
-              </label>
-              <fieldset className="notification-events">
-                <legend>事件</legend>
-                {eventTypes.map((event) => {
-                  const rule = draft.subscriptionRules?.find(
-                    (r) => r.eventType === event.type,
-                  );
-                  return (
-                    <div key={event.type} className="notification-event-rule">
-                      <label className="notification-check">
-                        <input
-                          type="checkbox"
-                          checked={draft.eventTypes.includes(event.type)}
-                          onChange={(change) =>
-                            changeDraft({
-                              eventTypes: change.target.checked
-                                ? [...draft.eventTypes, event.type]
-                                : draft.eventTypes.filter(
-                                    (type) => type !== event.type,
-                                  ),
-                              subscriptionRules: change.target.checked
-                                ? [
-                                    ...(draft.subscriptionRules ?? []),
-                                    { eventType: event.type, stages: null },
-                                  ]
-                                : (draft.subscriptionRules ?? []).filter(
-                                    (r) => r.eventType !== event.type,
-                                  ),
-                            })
-                          }
-                        />
-                        {event.label}
-                      </label>
-                      {rule && event.supportsStages && (
-                        <div className="notification-stage-rules">
-                          <label className="notification-check">
-                            <input
-                              type="checkbox"
-                              aria-label={`${event.label}：指定职责`}
-                              checked={rule.stages !== null}
-                              onChange={(e) =>
-                                changeDraft({
-                                  subscriptionRules:
-                                    draft.subscriptionRules!.map((r) =>
-                                      r.eventType === event.type
-                                        ? {
-                                            ...r,
-                                            stages: e.target.checked
-                                              ? []
-                                              : null,
-                                          }
-                                        : r,
-                                    ),
-                                })
-                              }
-                            />
-                            指定职责
-                          </label>
-                          {rule.stages !== null &&
-                            (event.allowedStages ?? [])
-                              .map(
-                                (stage) =>
-                                  [
-                                    stage,
-                                    {
-                                      translate: "翻译",
-                                      proofread: "校对",
-                                      typeset: "嵌字",
-                                      publish: "发布",
-                                    }[stage],
-                                  ] as const,
-                              )
-                              .map(([stage, label]) => (
-                                <label
-                                  key={stage}
-                                  className="notification-check"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    aria-label={`${event.label}：${label}`}
-                                    checked={rule.stages!.includes(stage)}
-                                    onChange={(e) =>
-                                      changeDraft({
-                                        subscriptionRules:
-                                          draft.subscriptionRules!.map((r) =>
-                                            r.eventType === event.type
-                                              ? {
-                                                  ...r,
-                                                  stages: e.target.checked
-                                                    ? [...r.stages!, stage]
-                                                    : r.stages!.filter(
-                                                        (s) => s !== stage,
-                                                      ),
-                                                }
-                                              : r,
-                                          ),
-                                      })
-                                    }
-                                  />
-                                  {label}
-                                </label>
-                              ))}
-                        </div>
-                      )}
+            <div hidden={groupSection !== "basic" && groupSection !== "events"}>
+              <form
+                id="notification-group-general"
+                className="notification-editor"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void save();
+                }}
+              >
+                {groupSection === "basic" && <h3>基本信息</h3>}
+                <fieldset disabled={saving}>
+                  <div hidden={groupSection !== "basic"}>
+                    <div className="notification-fields">
+                      <TextField
+                        label="名称"
+                        required
+                        maxLength={80}
+                        value={draft.name}
+                        onChange={(event) =>
+                          changeDraft({ name: event.target.value })
+                        }
+                      />
+                      <TextField
+                        label="群号"
+                        required
+                        inputMode="numeric"
+                        pattern="[1-9][0-9]{0,19}"
+                        maxLength={20}
+                        value={draft.groupId}
+                        onChange={(event) =>
+                          changeDraft({ groupId: event.target.value })
+                        }
+                      />
+                      <SelectField
+                        label="连接"
+                        value={draft.connectionKey}
+                        required
+                        onValueChange={(value) =>
+                          changeDraft({ connectionKey: value })
+                        }
+                      >
+                        {!data.connections.some(
+                          (connection) =>
+                            connection.key === draft.connectionKey,
+                        ) && (
+                          <option value={draft.connectionKey}>
+                            {draft.connectionKey ? "连接已缺失" : "请选择连接"}
+                          </option>
+                        )}
+                        {data.connections.map((connection) => (
+                          <option key={connection.key} value={connection.key}>
+                            {connection.name}
+                            {connection.available ? "" : "（不可用）"}
+                          </option>
+                        ))}
+                      </SelectField>
                     </div>
-                  );
-                })}
-              </fieldset>
-              {audienceChanged && (
-                <p className="account-notice" role="status">
-                  修改受众或订阅会取消此群旧代全部未发送记录，包括仍符合新条件的消息。
-                </p>
-              )}
-              {draft.receiverMode === "templates" ? (
-                <p className="notification-boundary">使用公共事件模板</p>
-              ) : (
-                <div className="notification-content">
-                  <h4>旧版消息内容</h4>
-                  <p className="notification-boundary">
-                    固定格式包含事件和作品编号；附加信息仅使用事件已留存的内容。
-                  </p>
-                  <label className="notification-check">
-                    <input
-                      type="checkbox"
-                      checked={draft.includeDetails}
-                      onChange={(event) =>
-                        changeDraft({ includeDetails: event.target.checked })
-                      }
-                    />
-                    包含作者、标题和操作昵称
-                  </label>
-                  <div className="notification-preview-controls">
-                    <SelectField
-                      label="预览事件"
-                      value={previewType}
-                      onValueChange={(value) => {
-                        previewEpoch.current++;
-                        setPreview("");
-                        setPreviewType(value as EventType);
-                      }}
-                    >
-                      {eventTypes.map((event) => (
-                        <option key={event.type} value={event.type}>
-                          {event.label}
-                        </option>
-                      ))}
-                    </SelectField>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      loading={previewBusy}
-                      disabled={!previewType}
-                      onClick={() => void showPreview()}
-                    >
-                      预览内容
-                    </Button>
+                    <label className="notification-check">
+                      <input
+                        type="checkbox"
+                        checked={draft.enabled}
+                        onChange={(event) =>
+                          changeDraft({ enabled: event.target.checked })
+                        }
+                      />
+                      启用此群通知
+                    </label>
                   </div>
-                  {preview && (
-                    <pre className="notification-preview">{preview}</pre>
-                  )}
-                </div>
-              )}
-              {(draft.receiverMode === "legacy" || adoptionRequired) && (
-                <div className="notification-content">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    loading={adoptionBusy}
-                    onClick={() => void adoption()}
-                  >
-                    预览并切换事件模板
-                  </Button>
-                  {adopting &&
-                    adoptionPreview &&
-                    adoptionPreviewIdentity === adoptionIdentity && (
-                      <>
-                        <pre className="notification-preview">
-                          {adoptionPreview}
-                        </pre>
+                  <div hidden={groupSection !== "events"}>
+                    <NotificationEventSettings
+                      events={eventTypes}
+                      rules={draft.subscriptionRules ?? []}
+                      onChange={(rules) =>
+                        changeDraft({
+                          eventTypes: rules.map((rule) => rule.eventType),
+                          subscriptionRules: rules,
+                        })
+                      }
+                      onPreview={(event) => setPreviewType(event.type)}
+                    />
+
+                    {audienceChanged && (
+                      <p className="account-notice" role="status">
+                        修改受众或订阅会取消此群旧代全部未发送记录，包括仍符合新条件的消息。
+                      </p>
+                    )}
+                    {draft.receiverMode === "templates" ? null : (
+                      <div className="notification-content">
+                        <h4>旧版消息内容</h4>
                         <p className="notification-boundary">
-                          仅改变后续消息内容，已有待发保留原文。
+                          固定格式包含事件和作品编号；附加信息仅使用事件已留存的内容。
                         </p>
+                        <label className="notification-check">
+                          <input
+                            type="checkbox"
+                            checked={draft.includeDetails}
+                            onChange={(event) =>
+                              changeDraft({
+                                includeDetails: event.target.checked,
+                              })
+                            }
+                          />
+                          包含作者、标题和操作昵称
+                        </label>
+                        <div className="notification-preview-controls">
+                          <SelectField
+                            label="预览事件"
+                            value={previewType}
+                            onValueChange={(value) => {
+                              previewEpoch.current++;
+                              setPreview("");
+                              setPreviewType(value as EventType);
+                            }}
+                          >
+                            {eventTypes.map((event) => (
+                              <option key={event.type} value={event.type}>
+                                {event.label}
+                              </option>
+                            ))}
+                          </SelectField>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            loading={previewBusy}
+                            disabled={!previewType}
+                            onClick={() => void showPreview()}
+                          >
+                            预览内容
+                          </Button>
+                        </div>
+                        {preview && (
+                          <pre className="notification-preview">{preview}</pre>
+                        )}
+                      </div>
+                    )}
+                    {(draft.receiverMode === "legacy" || adoptionRequired) && (
+                      <div className="notification-content">
                         <Button
                           type="button"
-                          onClick={() => {
-                            setDraft((current) =>
-                              current
-                                ? { ...current, receiverMode: "templates" }
-                                : null,
-                            );
-                            setConfirmedAdoptionIdentity(
-                              adoptionPreviewIdentity,
-                            );
-                            setAdopting(false);
-                          }}
+                          variant="secondary"
+                          loading={adoptionBusy}
+                          onClick={() => void adoption()}
                         >
-                          确认使用事件模板
+                          预览并切换事件模板
                         </Button>
-                      </>
+                        {adopting &&
+                          adoptionPreview &&
+                          adoptionPreviewIdentity === adoptionIdentity && (
+                            <>
+                              <pre className="notification-preview">
+                                {adoptionPreview}
+                              </pre>
+                              <p className="notification-boundary">
+                                仅改变后续消息内容，已有待发保留原文。
+                              </p>
+                              <Button
+                                type="button"
+                                onClick={() => {
+                                  setDraft((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          receiverMode: "templates",
+                                        }
+                                      : null,
+                                  );
+                                  setConfirmedAdoptionIdentity(
+                                    adoptionPreviewIdentity,
+                                  );
+                                  setAdopting(false);
+                                }}
+                              >
+                                确认使用事件模板
+                              </Button>
+                            </>
+                          )}
+                      </div>
                     )}
-                </div>
-              )}
-              <div className="notification-actions">
-                <Button type="submit" loading={saving}>
-                  保存
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => {
-                    previewEpoch.current++;
-                    setDraft(null);
-                  }}
-                >
-                  取消
-                </Button>
-              </div>
-              {draft.id && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => void compareCurrent()}
-                >
-                  比较当前版本
-                </Button>
-              )}
-              {comparison && (
-                <section
-                  className="notification-content"
-                  aria-label="当前群配置"
-                >
-                  <strong>当前服务器版本 {comparison.revision}</strong>
-                  <p>
-                    {comparison.name}（QQ 群 {comparison.groupId}）
-                  </p>
-                  <p>
-                    {comparison.connectionName} ·{" "}
-                    {comparison.enabled ? "已启用" : "已停用"}
-                  </p>
-                  <p>
-                    {(
-                      comparison.subscriptionRules ??
-                      comparison.eventTypes.map((eventType) => ({
-                        eventType,
-                        stages: null,
-                      }))
-                    )
-                      .map((rule) => {
-                        const label =
-                          eventTypes.find((e) => e.type === rule.eventType)
-                            ?.label ?? rule.eventType;
-                        return `${label}（${rule.stages === null ? "不限制职责" : rule.stages.map((stage) => ({ translate: "翻译", proofread: "校对", typeset: "嵌字", publish: "发布" })[stage]).join("、")}）`;
-                      })
-                      .join(" · ") || "未订阅事件"}
-                  </p>
-                  <p>
-                    {comparison.receiverMode === "templates"
-                      ? "使用公共事件模板"
-                      : comparison.includeDetails
-                        ? "旧版：包含作者、标题和操作昵称"
-                        : "旧版：仅固定事实"}
-                  </p>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={() => {
-                      previewEpoch.current++;
-                      setPreview("");
-                      setAdopting(false);
-                      setAdoptionPreview("");
-                      setAdoptionPreviewIdentity("");
-                      setAdoptionRevisions(null);
-                      setConfirmedAdoptionIdentity("");
-                      setAdoptionRequired(
-                        (comparison.receiverMode ?? "legacy") === "legacy",
-                      );
-                      setDraft((current) =>
-                        current
-                          ? {
-                              ...current,
-                              expectedRevision: comparison.revision,
-                              ...(comparison.receiverMode === "templates"
-                                ? { receiverMode: "templates" as const }
-                                : {}),
-                            }
-                          : null,
-                      );
-                      setComparison(null);
-                      setError("");
-                      setSuccess(
-                        "已采用当前版本号，草稿字段保留。请核对后保存。",
-                      );
-                    }}
+                  </div>
+                  <Feedback error={error} success={success} />
+                  <NotificationGroupActions
+                    active={
+                      enabled &&
+                      tab === "groups" &&
+                      groupOpen &&
+                      (groupSection === "basic" || groupSection === "events")
+                    }
+                    disabled={saving}
                   >
-                    保留草稿并以当前版本重试
-                  </Button>
-                </section>
-              )}
-            </fieldset>
-          </form>
+                    <Button
+                      type="submit"
+                      form="notification-group-general"
+                      loading={saving}
+                    >
+                      保存群设置
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        previewEpoch.current++;
+                        closeGroup();
+                      }}
+                    >
+                      关闭
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        savedDrafts.current.delete(draft.id ?? "new");
+                        setDraft(
+                          channelDraft(original, data.connections[0]?.key),
+                        );
+                        setGroupOpen(false);
+                        setComparison(null);
+                        setGroupConflict(false);
+                        previewEpoch.current++;
+                        setAdopting(false);
+                        setAdoptionPreview("");
+                        setAdoptionRevisions(null);
+                        setConfirmedAdoptionIdentity("");
+                        setAdoptionRequired(
+                          !!original &&
+                            (original.receiverMode ?? "legacy") === "legacy",
+                        );
+                        setError("");
+                      }}
+                    >
+                      放弃草稿
+                    </Button>
+                  </NotificationGroupActions>
+                  {draft.id && groupConflict && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => void compareCurrent()}
+                    >
+                      比较当前版本
+                    </Button>
+                  )}
+                  {comparison && (
+                    <section
+                      className="notification-content"
+                      aria-label="当前群配置"
+                    >
+                      <strong>当前服务器版本 {comparison.revision}</strong>
+                      <p>
+                        {comparison.name}（QQ 群 {comparison.groupId}）
+                      </p>
+                      <p>
+                        {comparison.connectionName} ·{" "}
+                        {comparison.enabled ? "已启用" : "已停用"}
+                      </p>
+                      <p>
+                        {(
+                          comparison.subscriptionRules ??
+                          comparison.eventTypes.map((eventType) => ({
+                            eventType,
+                            stages: null,
+                          }))
+                        )
+                          .map((rule) => {
+                            const label =
+                              eventTypes.find((e) => e.type === rule.eventType)
+                                ?.label ?? rule.eventType;
+                            return `${label}（${rule.stages === null ? "不限制职责" : rule.stages.map((stage) => ({ translate: "翻译", proofread: "校对", typeset: "嵌字", publish: "发布" })[stage]).join("、")}）`;
+                          })
+                          .join(" · ") || "未订阅事件"}
+                      </p>
+                      <p>
+                        {comparison.receiverMode === "templates"
+                          ? "使用公共事件模板"
+                          : comparison.includeDetails
+                            ? "旧版：包含作者、标题和操作昵称"
+                            : "旧版：仅固定事实"}
+                      </p>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => {
+                          previewEpoch.current++;
+                          setPreview("");
+                          setAdopting(false);
+                          setAdoptionPreview("");
+                          setAdoptionPreviewIdentity("");
+                          setAdoptionRevisions(null);
+                          setConfirmedAdoptionIdentity("");
+                          setAdoptionRequired(
+                            (comparison.receiverMode ?? "legacy") === "legacy",
+                          );
+                          setDraft((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  expectedRevision: comparison.revision,
+                                  ...(comparison.receiverMode === "templates"
+                                    ? { receiverMode: "templates" as const }
+                                    : {}),
+                                }
+                              : null,
+                          );
+                          setComparison(null);
+                          setGroupConflict(false);
+                          setError("");
+                          setSuccess(
+                            "已采用当前版本号，草稿字段保留。请核对后保存。",
+                          );
+                        }}
+                      >
+                        保留草稿并以当前版本重试
+                      </Button>
+                    </section>
+                  )}
+                </fieldset>
+              </form>
+            </div>
+            <div hidden={groupSection !== "work"}>
+              {!draft.id && <p>保存群设置后可设置工作提醒。</p>}
+              <WorkReminderSubscriptions
+                enabled={
+                  enabled &&
+                  tab === "groups" &&
+                  groupOpen &&
+                  groupSection === "work"
+                }
+                mode="channel"
+                selectedId={draft.id}
+                onPreviewChange={setWorkPreview}
+                onGlobal={() => openGlobal("work")}
+              />
+            </div>
+            <div hidden={groupSection !== "birthday"}>
+              {!draft.id && <p>保存群设置后可设置生日提醒。</p>}
+              <NotificationGroupBirthday
+                enabled={
+                  enabled &&
+                  tab === "groups" &&
+                  groupOpen &&
+                  groupSection === "birthday"
+                }
+                selectedId={draft.id}
+                onGlobal={() => openGlobal("birthday")}
+              />
+            </div>
+          </NotificationGroupDialog>
         )}
-        <BirthdayReminderSettings enabled={enabled && tab === "groups"} />
-        <WorkReminderSubscriptions enabled={enabled && tab === "groups"} />
       </div>
       <div
         role="tabpanel"
-        id="notification-panel-templates"
-        aria-labelledby="notification-tab-templates"
-        hidden={tab !== "templates"}
+        id="notification-panel-global"
+        aria-labelledby="notification-tab-global"
+        hidden={tab !== "global"}
       >
-        <TemplateEditor
-          enabled={enabled && tab === "templates"}
-          templates={templates}
-          events={eventTypes}
-          onUpdated={() =>
-            void queryClient.invalidateQueries({
-              queryKey: ["notification-configuration"],
-            })
-          }
-        />
-        <BirthdayTemplate enabled={enabled && tab === "templates"} />
-        <WorkReminderTemplate
-          enabled={enabled && tab === "templates"}
-          onEdit={() => {
-            setTab("groups");
-            requestAnimationFrame(() => {
-              const editor = document.getElementById("work-reminder-settings");
-              editor?.focus();
-              editor?.scrollIntoView({ block: "start", behavior: "smooth" });
-            });
-          }}
-        />
+        <div className="notification-global-layout">
+          <nav className="notification-settings-nav" aria-label="全局规则类别">
+            <button
+              type="button"
+              aria-current={globalSection === "work" ? "page" : undefined}
+              onClick={() => setGlobalSection("work")}
+            >
+              工作提醒
+            </button>
+            <button
+              type="button"
+              aria-current={globalSection === "birthday" ? "page" : undefined}
+              onClick={() => setGlobalSection("birthday")}
+            >
+              生日提醒
+            </button>
+          </nav>
+          <div>
+            <div hidden={globalSection !== "work"}>
+              <WorkReminderSubscriptions
+                enabled={
+                  enabled && tab === "global" && globalSection === "work"
+                }
+                mode="global"
+              />
+            </div>
+            <div hidden={globalSection !== "birthday"}>
+              <NotificationBirthdayRules
+                enabled={
+                  enabled && tab === "global" && globalSection === "birthday"
+                }
+              />
+            </div>
+          </div>
+        </div>
       </div>
       <div
         role="tabpanel"
@@ -1375,7 +1393,13 @@ function DeliveryRow({
           <span>当前管理名称：{delivery.channelName}</span>
           <span>连接标识：{delivery.connectionKey}</span>
           <span>尝试 {delivery.attempts} 次</span>
-          {delivery.errorCode && <span>{delivery.errorCode}</span>}
+          {delivery.errorCode && (
+            <span>
+              {delivery.errorCode === "notification_provider_not_ready"
+                ? "机器人尚未就绪，等待自动重试"
+                : delivery.errorCode}
+            </span>
+          )}
           {delivery.providerMessageId && (
             <span>平台回执 {delivery.providerMessageId}</span>
           )}

@@ -285,7 +285,10 @@ test("birthday subscriptions reuse channel targets and send independent revision
   );
 });
 
-test("birthday template preserves draft conflicts and previews only real saved server text", async () => {
+test("birthday note preserves draft conflicts and previews draft text through the server", async () => {
+  const post = vi
+    .spyOn(client, "POST")
+    .mockResolvedValue(reply({ text: "真实生日摘要" }) as never);
   const get = vi
     .spyOn(client, "GET")
     .mockImplementation((async (path: string) =>
@@ -308,8 +311,15 @@ test("birthday template preserves draft conflicts and previews only real saved s
     screen
       .getByRole("button", { name: "预览生日消息" })
       .hasAttribute("disabled"),
-  ).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "保存生日模板" }));
+  ).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "预览生日消息" }));
+  await waitFor(() =>
+    expect(post).toHaveBeenLastCalledWith(
+      "/api/birthdays/preview",
+      expect.objectContaining({ body: { offsetDays: 0, note: "新的祝福" } }),
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "保存生日提示语" }));
   await waitFor(() =>
     expect(patch).toHaveBeenCalledWith("/api/birthdays/template", {
       body: { expectedRevision: 2, note: "新的祝福" },
@@ -326,7 +336,7 @@ test("birthday template preserves draft conflicts and previews only real saved s
     await screen.findByRole("button", { name: "保留提示语并采用当前版本" }),
   );
   patch.mockResolvedValue(reply({ note: "新的祝福", revision: 5 }) as never);
-  fireEvent.click(screen.getByRole("button", { name: "保存生日模板" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存生日提示语" }));
   await waitFor(() =>
     expect(patch).toHaveBeenLastCalledWith("/api/birthdays/template", {
       body: { expectedRevision: 4, note: "新的祝福" },
@@ -361,6 +371,12 @@ test("a preview completed after hiding the panel cannot populate the editor", as
           resolvePreview = resolve;
         })
       : reply({ note: "生日快乐", revision: 1 })) as never);
+  vi.spyOn(client, "POST").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolvePreview = resolve as typeof resolvePreview;
+      }),
+  );
   const view = mount(<BirthdayTemplate enabled />);
   fireEvent.click(await screen.findByRole("button", { name: "预览生日消息" }));
   await waitFor(() => expect(resolvePreview).toBeTruthy());
