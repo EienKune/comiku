@@ -193,7 +193,7 @@ const reviewResolutionLabels: Record<
   keep_pending: "继续等待",
   block: "标记阻塞",
 };
-const eventLabels: Record<string, string> = {
+const eventLabels: Record<WorkEventAction, string> = {
   imported: "导入作品",
   metadata_updated: "更新信息",
   collaboration_mode_updated: "更新协作模式",
@@ -203,7 +203,10 @@ const eventLabels: Record<string, string> = {
   stage_assignment_updated: "更新页码分工",
   stage_contribution_completed: "完成本人分工",
   stage_left: "取消参与",
+  stage_started: "开始制作",
   stage_submitted: "提交阶段",
+  stage_submission_cancelled: "撤回阶段提交",
+  proofreading_skipped: "跳过校对",
   translation_revision_submitted: "提交译文修订",
   translation_imported: "导入 LabelPlus",
   typeset_handoff_started: "开始嵌字交接",
