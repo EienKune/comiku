@@ -239,29 +239,35 @@ test.each([false, true])(
       response: new Response(),
     } as never);
     fireEvent.click(await screen.findByRole("button", { name: "编辑 合成群" }));
-    fireEvent.change(screen.getByLabelText("名称"), {
+    const dialogElement = screen.getByRole("dialog");
+    const editor = within(
+      dialogElement.querySelector(".notification-group-pane")!,
+    );
+    const footer = within(dialogElement.querySelector("footer")!);
+    const events = within(editor.getByRole("region", { name: "作品通知" }));
+    fireEvent.change(editor.getByLabelText("名称"), {
       target: { value: "我的群草稿" },
     });
-    fireEvent.change(screen.getByLabelText("群号"), {
+    fireEvent.change(editor.getByLabelText("群号"), {
       target: { value: "456" },
     });
-    fireEvent.click(screen.getByLabelText("启用此群通知"));
-    fireEvent.click(screen.getByLabelText("包含作者、标题和操作昵称"));
-    fireEvent.click(screen.getByLabelText("导入作品"));
-    fireEvent.click(screen.getByLabelText("阶段提交"));
-    fireEvent.click(screen.getByRole("button", { name: /制作进度/ }));
-    fireEvent.click(screen.getByRole("button", { name: /适用环节/ }));
-    fireEvent.click(screen.getByLabelText("阶段提交：翻译"));
-    fireEvent.click(screen.getByLabelText("阶段提交：嵌字"));
+    fireEvent.click(editor.getByLabelText("启用此群通知"));
+    fireEvent.click(editor.getByLabelText("包含作者、标题和操作昵称"));
+    fireEvent.click(editor.getByLabelText("导入作品"));
+    fireEvent.click(editor.getByLabelText("阶段提交"));
+    fireEvent.click(events.getByRole("button", { name: /制作进度/ }));
+    fireEvent.click(events.getByRole("button", { name: /适用环节/ }));
+    fireEvent.click(editor.getByLabelText("阶段提交：翻译"));
+    fireEvent.click(editor.getByLabelText("阶段提交：嵌字"));
     if (adopted) {
       fireEvent.click(
-        screen.getByRole("button", { name: "预览并切换事件模板" }),
+        editor.getByRole("button", { name: "预览并切换事件模板" }),
       );
-      await screen.findByText("群草稿预览");
-      fireEvent.click(screen.getByRole("button", { name: "确认使用事件模板" }));
+      await editor.findByText("群草稿预览");
+      fireEvent.click(editor.getByRole("button", { name: "确认使用事件模板" }));
     }
-    fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
-    await screen.findByText(/配置已被其他管理员修改/);
+    fireEvent.click(footer.getByRole("button", { name: "保存群设置" }));
+    await editor.findByText(/配置已被其他管理员修改/);
     const initial = (await get.mock.results[0].value) as { data: object };
     get.mockResolvedValue({
       data: {
@@ -283,18 +289,28 @@ test.each([false, true])(
       },
       response: new Response(),
     } as never);
-    fireEvent.click(screen.getByRole("button", { name: "刷新配置" }));
-    await screen.findByRole("button", { name: "编辑 服务器群名" });
-    if (adopted) await confirmAdoption();
-    fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
+    fireEvent.click(
+      within(screen.getByText("刷新配置").closest("header")!).getByRole(
+        "button",
+        { name: "刷新配置" },
+      ),
+    );
+    const serverGroup = await within(
+      document.querySelector(".notification-channels")!,
+    ).findByText("服务器群名", { selector: "strong" });
+    await within(serverGroup.closest("article")!).findByRole("button", {
+      name: "编辑 服务器群名",
+    });
+    if (adopted) await confirmAdoption(editor);
+    fireEvent.click(footer.getByRole("button", { name: "保存群设置" }));
     await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
     expect(patch.mock.calls[1][1]).toEqual(
       expect.objectContaining({
         body: expect.objectContaining({ expectedRevision: 3 }),
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "比较当前版本" }));
-    const comparison = await screen.findByRole("region", {
+    fireEvent.click(editor.getByRole("button", { name: "比较当前版本" }));
+    const comparison = await editor.findByRole("region", {
       name: "当前群配置",
     });
     expect(within(comparison).getByText("当前服务器版本 4")).toBeTruthy();
@@ -306,41 +322,41 @@ test.each([false, true])(
       within(comparison).getByText(/包含作者、标题和操作昵称/),
     ).toBeTruthy();
     if (!adopted) {
-      fireEvent.click(screen.getByRole("button", { name: "预览内容" }));
-      await screen.findByText("群草稿预览");
+      fireEvent.click(editor.getByRole("button", { name: "预览内容" }));
+      await editor.findByText("群草稿预览");
       fireEvent.click(
-        screen.getByRole("button", { name: "预览并切换事件模板" }),
+        editor.getByRole("button", { name: "预览并切换事件模板" }),
       );
-      await screen.findByRole("button", { name: "确认使用事件模板" });
+      await editor.findByRole("button", { name: "确认使用事件模板" });
     }
     fireEvent.click(
-      screen.getByRole("button", { name: "保留草稿并以当前版本重试" }),
+      editor.getByRole("button", { name: "保留草稿并以当前版本重试" }),
     );
-    expect(screen.queryByText("群草稿预览")).toBeNull();
+    expect(editor.queryByText("群草稿预览")).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "确认使用事件模板" }),
+      editor.queryByRole("button", { name: "确认使用事件模板" }),
     ).toBeNull();
-    expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
+    expect((editor.getByLabelText("名称") as HTMLInputElement).value).toBe(
       "我的群草稿",
     );
-    expect((screen.getByLabelText("群号") as HTMLInputElement).value).toBe(
+    expect((editor.getByLabelText("群号") as HTMLInputElement).value).toBe(
       "456",
     );
     expect(
-      (screen.getByLabelText("阶段提交：校对") as HTMLInputElement).checked,
+      (editor.getByLabelText("阶段提交：校对") as HTMLInputElement).checked,
     ).toBe(true);
     patch.mockResolvedValueOnce({
       data: channel,
       response: new Response(),
     } as never);
     if (adopted) {
-      fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
+      fireEvent.click(footer.getByRole("button", { name: "保存群设置" }));
       expect(patch).toHaveBeenCalledTimes(2);
-      await screen.findByText(/重新预览并确认/);
-      await confirmAdoption();
+      await editor.findByText(/重新预览并确认/);
+      await confirmAdoption(editor);
     }
-    fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
-    await screen.findByText("配置已保存");
+    fireEvent.click(footer.getByRole("button", { name: "保存群设置" }));
+    await editor.findByText("配置已保存");
     expect(patch.mock.calls[2][1]).toEqual(
       expect.objectContaining({
         body: {
@@ -957,10 +973,12 @@ test("refreshed templates invalidate adoption consent and pending adoption previ
   );
 });
 
-async function confirmAdoption() {
-  fireEvent.click(screen.getByRole("button", { name: "预览并切换事件模板" }));
+async function confirmAdoption(
+  scope: Pick<typeof screen, "getByRole" | "findByRole"> = screen,
+) {
+  fireEvent.click(scope.getByRole("button", { name: "预览并切换事件模板" }));
   fireEvent.click(
-    await screen.findByRole("button", { name: "确认使用事件模板" }),
+    await scope.findByRole("button", { name: "确认使用事件模板" }),
   );
 }
 

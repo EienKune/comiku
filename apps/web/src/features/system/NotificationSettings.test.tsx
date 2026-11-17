@@ -168,6 +168,27 @@ function mount(inheritedOffsets = [0, 1]) {
   };
 }
 
+function openGroupControls(name: string) {
+  const roster = within(document.querySelector(".notification-channels")!);
+  const row = roster
+    .getByText(name, { selector: "strong" })
+    .closest("article")!;
+  fireEvent.click(within(row).getByRole("button", { name: `编辑 ${name}` }));
+  const element = screen.getByRole("dialog");
+  const dialog = within(element);
+  return {
+    ...dialog,
+    navigation: within(dialog.getByRole("navigation", { name: "群设置类别" })),
+    footer: within(element.querySelector("footer")!),
+    close: () =>
+      fireEvent.click(
+        within(element.querySelector("header")!).getByRole("button", {
+          name: "关闭群设置",
+        }),
+      ),
+  };
+}
+
 test("four navigation entries, compact saved summaries and focusable disabled sample reason", async () => {
   mount();
   expect(await screen.findAllByText("作品 1 类 · 工作 2 项")).toHaveLength(2);
@@ -242,31 +263,32 @@ test("all 24 grouped capabilities retain selected stages under presets and guard
 
 test("group categories retain independent drafts across close and another group and save only the chosen scope", async () => {
   const { patch, get, cache } = mount();
-  fireEvent.click(await screen.findByRole("button", { name: "编辑 合成群一" }));
-  fireEvent.click(screen.getByRole("button", { name: "基本信息" }));
-  fireEvent.change(screen.getByLabelText("名称"), {
+  await screen.findByText("合成群一", { selector: "strong" });
+  let group = openGroupControls("合成群一");
+  fireEvent.click(group.navigation.getByRole("button", { name: "基本信息" }));
+  fireEvent.change(group.getByLabelText("名称"), {
     target: { value: "群一草稿" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "工作提醒" }));
+  fireEvent.click(group.navigation.getByRole("button", { name: "工作提醒" }));
   fireEvent.click(
     within(
-      await screen.findByRole("form", { name: "合成群一的工作提醒" }),
+      await group.findByRole("form", { name: "合成群一的工作提醒" }),
     ).getByLabelText("72 小时未交稿"),
   );
-  fireEvent.click(screen.getByRole("button", { name: "生日提醒" }));
-  fireEvent.click(await screen.findByLabelText("合成群一接收生日提醒"));
-  fireEvent.click(screen.getByRole("button", { name: "关闭群设置" }));
-  fireEvent.click(screen.getByRole("button", { name: "编辑 合成群二" }));
-  fireEvent.click(screen.getByRole("button", { name: "关闭群设置" }));
-  fireEvent.click(screen.getByRole("button", { name: "编辑 合成群一" }));
-  expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
+  fireEvent.click(group.navigation.getByRole("button", { name: "生日提醒" }));
+  fireEvent.click(await group.findByLabelText("合成群一接收生日提醒"));
+  group.close();
+  group = openGroupControls("合成群二");
+  group.close();
+  group = openGroupControls("合成群一");
+  expect((group.getByLabelText("名称") as HTMLInputElement).value).toBe(
     "群一草稿",
   );
-  fireEvent.click(screen.getByRole("button", { name: "生日提醒" }));
+  fireEvent.click(group.navigation.getByRole("button", { name: "生日提醒" }));
   expect(
-    (screen.getByLabelText("合成群一接收生日提醒") as HTMLInputElement).checked,
+    (group.getByLabelText("合成群一接收生日提醒") as HTMLInputElement).checked,
   ).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "保存生日订阅" }));
+  fireEvent.click(group.footer.getByRole("button", { name: "保存生日订阅" }));
   await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
   expect(patch).toHaveBeenLastCalledWith(
     "/api/birthdays/subscriptions/{id}",
@@ -278,15 +300,15 @@ test("group categories retain independent drafts across close and another group 
       },
     }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "工作提醒" }));
+  fireEvent.click(group.navigation.getByRole("button", { name: "工作提醒" }));
   expect(
     (
       within(
-        screen.getByRole("form", { name: "合成群一的工作提醒" }),
+        group.getByRole("form", { name: "合成群一的工作提醒" }),
       ).getByLabelText("72 小时未交稿") as HTMLInputElement
     ).checked,
   ).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "保存工作提醒" }));
+  fireEvent.click(group.footer.getByRole("button", { name: "保存工作提醒" }));
   await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
   expect(patch).toHaveBeenLastCalledWith(
     "/api/notifications/work-reminders/subscriptions/{id}",
@@ -298,8 +320,13 @@ test("group categories retain independent drafts across close and another group 
       }),
     }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "关闭群设置" }));
-  fireEvent.click(screen.getByRole("tab", { name: "发送记录" }));
+  group.close();
+  fireEvent.click(
+    within(screen.getByRole("tablist", { name: "推送通知分类" })).getByRole(
+      "tab",
+      { name: "发送记录" },
+    ),
+  );
   await screen.findByText("暂无投递记录。");
   const before = get.mock.calls.length;
   await act(async () => {
@@ -467,39 +494,40 @@ test.each(["work", "birthday"] as const)(
 
 test("discarding one group's general draft preserves every work and birthday scope draft", async () => {
   const { patch } = mount();
-  fireEvent.click(await screen.findByRole("button", { name: "编辑 合成群一" }));
-  fireEvent.click(screen.getByRole("button", { name: "工作提醒" }));
+  await screen.findByText("合成群一", { selector: "strong" });
+  let group = openGroupControls("合成群一");
+  fireEvent.click(group.navigation.getByRole("button", { name: "工作提醒" }));
   fireEvent.click(
     within(
-      await screen.findByRole("form", { name: "合成群一的工作提醒" }),
+      await group.findByRole("form", { name: "合成群一的工作提醒" }),
     ).getByLabelText("72 小时未交稿"),
   );
-  fireEvent.click(screen.getByRole("button", { name: "关闭群设置" }));
-  fireEvent.click(screen.getByRole("button", { name: "编辑 合成群二" }));
-  fireEvent.click(screen.getByRole("button", { name: "生日提醒" }));
-  fireEvent.click(await screen.findByLabelText("合成群二接收生日提醒"));
-  fireEvent.click(screen.getByRole("button", { name: "基本信息" }));
-  fireEvent.change(screen.getByLabelText("名称"), {
+  group.close();
+  group = openGroupControls("合成群二");
+  fireEvent.click(group.navigation.getByRole("button", { name: "生日提醒" }));
+  fireEvent.click(await group.findByLabelText("合成群二接收生日提醒"));
+  fireEvent.click(group.navigation.getByRole("button", { name: "基本信息" }));
+  fireEvent.change(group.getByLabelText("名称"), {
     target: { value: "丢弃的名称" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "放弃草稿" }));
-  fireEvent.click(screen.getByRole("button", { name: "编辑 合成群一" }));
-  fireEvent.click(screen.getByRole("button", { name: "工作提醒" }));
+  fireEvent.click(group.footer.getByRole("button", { name: "放弃草稿" }));
+  group = openGroupControls("合成群一");
+  fireEvent.click(group.navigation.getByRole("button", { name: "工作提醒" }));
   expect(
     (
       within(
-        await screen.findByRole("form", { name: "合成群一的工作提醒" }),
+        await group.findByRole("form", { name: "合成群一的工作提醒" }),
       ).getByLabelText("72 小时未交稿") as HTMLInputElement
     ).checked,
   ).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "关闭群设置" }));
-  fireEvent.click(screen.getByRole("button", { name: "编辑 合成群二" }));
-  expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
+  group.close();
+  group = openGroupControls("合成群二");
+  expect((group.getByLabelText("名称") as HTMLInputElement).value).toBe(
     "合成群二",
   );
-  fireEvent.click(screen.getByRole("button", { name: "生日提醒" }));
+  fireEvent.click(group.navigation.getByRole("button", { name: "生日提醒" }));
   expect(
-    (screen.getByLabelText("合成群二接收生日提醒") as HTMLInputElement).checked,
+    (group.getByLabelText("合成群二接收生日提醒") as HTMLInputElement).checked,
   ).toBe(true);
   expect(patch).not.toHaveBeenCalled();
 });
