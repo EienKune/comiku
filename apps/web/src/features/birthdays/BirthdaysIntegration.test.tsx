@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
@@ -130,48 +131,83 @@ function openPage(url = "/settings/system?tab=notifications") {
 }
 
 test("birthday panels retain separate schedule and note drafts and stop hidden reads", async () => {
-  const { cache, get } = openPage();
-  fireEvent.click(await screen.findByRole("tab", { name: "全局规则" }));
-  fireEvent.click(screen.getByRole("button", { name: "生日提醒" }));
-  fireEvent.change(await screen.findByLabelText("提醒时刻"), {
+  const { cache, get, container } = openPage();
+  const systemTabs = () =>
+    within(container.querySelector('[role="tablist"][aria-label="系统管理"]')!);
+  const notificationTabs = () =>
+    within(
+      container.querySelector('[role="tablist"][aria-label="推送通知分类"]')!,
+    );
+  const rules = () =>
+    within(container.querySelector("#notification-panel-global")!);
+  const birthdays = () =>
+    within(container.querySelector("#system-panel-birthdays")!);
+  const openGroupDraft = () => {
+    const roster = container.querySelector("#notification-panel-groups")!;
+    fireEvent.click(
+      within(roster.querySelector("header")!).getByRole("button", {
+        name: "新增群目标",
+      }),
+    );
+    const dialog = container.querySelector<HTMLDialogElement>("dialog[open]")!;
+    return {
+      fields: within(dialog),
+      close: () =>
+        fireEvent.click(
+          within(dialog.querySelector("header")!).getByRole("button", {
+            name: "关闭群设置",
+          }),
+        ),
+    };
+  };
+  fireEvent.click(
+    await notificationTabs().findByRole("tab", { name: "全局规则" }),
+  );
+  fireEvent.click(
+    within(container.querySelector('[aria-label="全局规则类别"]')!).getByRole(
+      "button",
+      { name: "生日提醒" },
+    ),
+  );
+  fireEvent.change(await rules().findByLabelText("提醒时刻"), {
     target: { value: "10:15" },
   });
-  fireEvent.change(await screen.findByLabelText("生日提示语"), {
+  fireEvent.change(await rules().findByLabelText("生日提示语"), {
     target: { value: "未保存生日祝福" },
   });
-  fireEvent.click(screen.getByRole("tab", { name: "接收群" }));
-  fireEvent.click(screen.getByRole("button", { name: "新增群目标" }));
-  fireEvent.change(screen.getByLabelText("名称"), {
+  fireEvent.click(notificationTabs().getByRole("tab", { name: "接收群" }));
+  let group = openGroupDraft();
+  fireEvent.change(group.fields.getByLabelText("名称"), {
     target: { value: "原通知未保存草稿" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "关闭群设置" }));
-  fireEvent.click(screen.getByRole("tab", { name: "角色生日" }));
-  fireEvent.click(await screen.findByLabelText("启用工作台生日"));
+  group.close();
+  fireEvent.click(systemTabs().getByRole("tab", { name: "角色生日" }));
+  fireEvent.click(await birthdays().findByLabelText("启用工作台生日"));
   const settingsReads = get.mock.calls.filter(
     (call) => call[0] === "/api/birthdays/settings",
   ).length;
-  fireEvent.click(screen.getByRole("tab", { name: "通知推送" }));
+  fireEvent.click(systemTabs().getByRole("tab", { name: "通知推送" }));
   await act(async () => {
     await cache.invalidateQueries({ queryKey: ["birthdays", "settings"] });
   });
   expect(
     get.mock.calls.filter((call) => call[0] === "/api/birthdays/settings"),
   ).toHaveLength(settingsReads);
-  fireEvent.click(screen.getByRole("button", { name: "新增群目标" }));
-  expect((screen.getByLabelText("名称") as HTMLInputElement).value).toBe(
+  group = openGroupDraft();
+  expect((group.fields.getByLabelText("名称") as HTMLInputElement).value).toBe(
     "原通知未保存草稿",
   );
-  fireEvent.click(screen.getByRole("button", { name: "关闭群设置" }));
-  fireEvent.click(screen.getByRole("tab", { name: "全局规则" }));
-  expect((screen.getByLabelText("提醒时刻") as HTMLInputElement).value).toBe(
+  group.close();
+  fireEvent.click(notificationTabs().getByRole("tab", { name: "全局规则" }));
+  expect((rules().getByLabelText("提醒时刻") as HTMLInputElement).value).toBe(
     "10:15",
   );
-  expect((screen.getByLabelText("生日提示语") as HTMLInputElement).value).toBe(
+  expect((rules().getByLabelText("生日提示语") as HTMLInputElement).value).toBe(
     "未保存生日祝福",
   );
-  fireEvent.click(screen.getByRole("tab", { name: "角色生日" }));
+  fireEvent.click(systemTabs().getByRole("tab", { name: "角色生日" }));
   expect(
-    (screen.getByLabelText("启用工作台生日") as HTMLInputElement).checked,
+    (birthdays().getByLabelText("启用工作台生日") as HTMLInputElement).checked,
   ).toBe(false);
 });
 
