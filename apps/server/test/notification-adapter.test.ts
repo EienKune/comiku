@@ -36,8 +36,22 @@ const registry = (endpoint: string) =>
 async function withServer(
   handler: RequestListener,
   run: (endpoint: string) => Promise<void>,
+  readinessHandler?: RequestListener,
 ) {
-  const server = createServer(handler);
+  const server = createServer((req, res) => {
+    if (req.url === "/get_status") {
+      assert.equal(req.headers.authorization, `Bearer ${secret}`);
+      if (readinessHandler) readinessHandler(req, res);
+      else
+        res.end(
+          JSON.stringify({
+            status: "ok",
+            retcode: 0,
+            data: { online: true, good: true },
+          }),
+        );
+    } else handler(req, res);
+  });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -418,6 +432,7 @@ test("full digests reject mismatched frozen text and oversized escaped payloads 
 test("async, malformed, missing receipt, redirects, and 5xx become unknown without leaks", async () => {
   for (const fixture of [
     { code: 200, body: JSON.stringify({ status: "async", retcode: 1 }) },
+    { code: 200, body: JSON.stringify({ status: "failed", retcode: 200 }) },
     {
       code: 200,
       body: JSON.stringify({
@@ -800,4 +815,140 @@ test("HTTPS retains certificate verification while pinning DNS and never sends H
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test("readiness is checked before send and offline/startup responses never cross the send boundary", async () => {
+  for (const status of [
+    { status: "ok", retcode: 0, data: { online: false, good: true } },
+    { status: "ok", retcode: 0, data: { online: true, good: false } },
+    { status: "failed", retcode: 200 },
+    { status: "ok", retcode: 0, data: { online: "true", good: true } },
+    { status: "async", retcode: 1 },
+    null,
+  ]) {
+    let sends = 0,
+      checks = 0;
+    await withServer(
+      (_req, res) => {
+        sends++;
+        res.end("{}");
+      },
+      async (endpoint) => {
+        const adapter = new OneBotHttpAdapter();
+        try {
+          const result = await adapter.send(
+            registry(endpoint).get("test")!,
+            "123",
+            "text",
+          );
+          assert.equal(result.status, "retryable");
+          assert.equal(result.errorCode, "notification_provider_not_ready");
+          assert.equal(result.sendBoundaryCrossed, false);
+          assert.equal(sends, 0);
+          assert.equal(checks, 1);
+        } finally {
+          adapter.close();
+        }
+      },
+      (_req, res) => {
+        checks++;
+        res.end(JSON.stringify(status));
+      },
+    );
+  }
+});
+
+test("a lost readiness reply is safely unsent and never produces a late send", async () => {
+  let sends = 0;
+  await withServer(
+    (_req, res) => {
+      sends++;
+      res.end("{}");
+    },
+    async (endpoint) => {
+      const adapter = new OneBotHttpAdapter({ timeoutMs: 30 });
+      try {
+        const result = await adapter.send(
+          registry(endpoint).get("test")!,
+          "123",
+          "text",
+        );
+        assert.equal(result.status, "retryable");
+        assert.equal(result.sendBoundaryCrossed, false);
+        assert.equal(sends, 0);
+      } finally {
+        adapter.close();
+      }
+    },
+    () => {},
+  );
+});
+
+test("synthetic startup becomes ready before a single message request is made", async () => {
+  let checks = 0,
+    sends = 0;
+  await withServer(
+    (_req, res) => {
+      sends++;
+      res.end(
+        JSON.stringify({ status: "ok", retcode: 0, data: { message_id: 123 } }),
+      );
+    },
+    async (endpoint) => {
+      const adapter = new OneBotHttpAdapter();
+      try {
+        const connection = registry(endpoint).get("test")!;
+        for (const expected of ["retryable", "retryable", "accepted"]) {
+          assert.equal(
+            (await adapter.send(connection, "123", "frozen")).status,
+            expected,
+          );
+        }
+        assert.equal(checks, 3);
+        assert.equal(sends, 1);
+      } finally {
+        adapter.close();
+      }
+    },
+    (_req, res) => {
+      checks++;
+      res.end(
+        JSON.stringify({
+          status: "ok",
+          retcode: 0,
+          data: { online: checks >= 3, good: checks >= 3 },
+        }),
+      );
+    },
+  );
+});
+
+test("readiness authentication failure stays permanent and cannot reach message endpoint", async () => {
+  let sends = 0;
+  await withServer(
+    (_req, res) => {
+      sends++;
+      res.end("{}");
+    },
+    async (endpoint) => {
+      const adapter = new OneBotHttpAdapter();
+      try {
+        const result = await adapter.send(
+          registry(endpoint).get("test")!,
+          "123",
+          "text",
+        );
+        assert.equal(result.status, "failed");
+        assert.equal(result.sendBoundaryCrossed, false);
+        assert.equal(result.errorCode, "notification_provider_rejected");
+        assert.equal(sends, 0);
+      } finally {
+        adapter.close();
+      }
+    },
+    (_req, res) => {
+      res.statusCode = 401;
+      res.end(secret);
+    },
+  );
 });
