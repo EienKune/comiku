@@ -253,6 +253,61 @@ test("settings retain draft across background reads and submit revision fence; s
   expect(screen.queryByText(/private upstream/)).toBeNull();
 });
 
+test("management distinguishes primary source checks from unchanged catalog content without adding workbench diagnostics", async () => {
+  const lastCheckedAt = "2026-11-16T22:00:22.091Z";
+  const dataUpdatedAt = "2026-11-11T12:10:34.223Z";
+  vi.spyOn(client, "GET").mockImplementation((async (path: string) =>
+    reply(
+      path === "/api/birthdays/summary"
+        ? summary
+        : {
+            available: true,
+            settings,
+            personCount: 152,
+            lastCheckedAt,
+            dataUpdatedAt,
+          },
+    )) as never);
+  const post = vi.spyOn(client, "POST");
+  const view = mount(
+    <>
+      <BirthdaySettings />
+      <BirthdayStrip />
+    </>,
+  );
+  const checked = await screen.findByText(/主源最近检查/);
+  expect(checked.textContent).toContain("2026/11/17 06:00:22");
+  expect(checked.querySelector("time")?.getAttribute("datetime")).toBe(
+    lastCheckedAt,
+  );
+  const changed = screen.getByText(/资料变更/);
+  expect(changed.textContent).toContain("2026/11/11 20:10:34");
+  expect(changed.querySelector("time")?.getAttribute("datetime")).toBe(
+    dataUpdatedAt,
+  );
+  expect(screen.getByText("主源每天 06:00 检查 · Asia/Shanghai")).toBeTruthy();
+  const strip = within(await screen.findByLabelText("角色生日"));
+  expect(strip.queryByText(/最近检查|资料变更|同步失败|主源/)).toBeNull();
+  expect(view.container.querySelectorAll("time")).toHaveLength(2);
+  expect(post).not.toHaveBeenCalled();
+});
+
+test("a missing source check is not inferred from the catalog creation date", async () => {
+  vi.spyOn(client, "GET").mockResolvedValue(
+    reply({
+      available: true,
+      settings,
+      personCount: 152,
+      lastCheckedAt: null,
+      dataUpdatedAt: "2026-11-11T12:10:34.223Z",
+    }) as never,
+  );
+  mount(<BirthdaySettings />);
+  await screen.findByText(/资料变更/);
+  expect(screen.queryByText(/主源最近检查/)).toBeNull();
+  expect(screen.queryByText(/Invalid Date/)).toBeNull();
+});
+
 test("birthday subscriptions reuse channel targets and send independent revision fences", async () => {
   vi.spyOn(client, "GET").mockResolvedValue(
     reply([
@@ -285,7 +340,10 @@ test("birthday subscriptions reuse channel targets and send independent revision
   );
 });
 
-test("birthday template preserves draft conflicts and previews only real saved server text", async () => {
+test("birthday note preserves draft conflicts and previews draft text through the server", async () => {
+  const post = vi
+    .spyOn(client, "POST")
+    .mockResolvedValue(reply({ text: "真实生日摘要" }) as never);
   const get = vi
     .spyOn(client, "GET")
     .mockImplementation((async (path: string) =>
@@ -308,8 +366,15 @@ test("birthday template preserves draft conflicts and previews only real saved s
     screen
       .getByRole("button", { name: "预览生日消息" })
       .hasAttribute("disabled"),
-  ).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "保存生日模板" }));
+  ).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "预览生日消息" }));
+  await waitFor(() =>
+    expect(post).toHaveBeenLastCalledWith(
+      "/api/birthdays/preview",
+      expect.objectContaining({ body: { offsetDays: 0, note: "新的祝福" } }),
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "保存生日提示语" }));
   await waitFor(() =>
     expect(patch).toHaveBeenCalledWith("/api/birthdays/template", {
       body: { expectedRevision: 2, note: "新的祝福" },
@@ -326,7 +391,7 @@ test("birthday template preserves draft conflicts and previews only real saved s
     await screen.findByRole("button", { name: "保留提示语并采用当前版本" }),
   );
   patch.mockResolvedValue(reply({ note: "新的祝福", revision: 5 }) as never);
-  fireEvent.click(screen.getByRole("button", { name: "保存生日模板" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存生日提示语" }));
   await waitFor(() =>
     expect(patch).toHaveBeenLastCalledWith("/api/birthdays/template", {
       body: { expectedRevision: 4, note: "新的祝福" },
@@ -361,6 +426,12 @@ test("a preview completed after hiding the panel cannot populate the editor", as
           resolvePreview = resolve;
         })
       : reply({ note: "生日快乐", revision: 1 })) as never);
+  vi.spyOn(client, "POST").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolvePreview = resolve as typeof resolvePreview;
+      }),
+  );
   const view = mount(<BirthdayTemplate enabled />);
   fireEvent.click(await screen.findByRole("button", { name: "预览生日消息" }));
   await waitFor(() => expect(resolvePreview).toBeTruthy());

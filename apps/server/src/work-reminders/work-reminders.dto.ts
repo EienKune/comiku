@@ -82,6 +82,18 @@ export class WorkReminderPreviewInputDto {
   @IsOptional()
   @IsString()
   note?: string;
+  @ApiPropertyOptional({ type: Boolean })
+  @IsOptional()
+  @IsBoolean()
+  digestEnabled?: boolean;
+  @ApiPropertyOptional({ type: Boolean })
+  @IsOptional()
+  @IsBoolean()
+  overdueEnabled?: boolean;
+  @ApiPropertyOptional({ type: Boolean })
+  @IsOptional()
+  @IsBoolean()
+  mentionsEnabled?: boolean;
 }
 export class WorkReminderPreviewDto {
   @ApiProperty({ type: String }) text!: string;
