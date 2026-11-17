@@ -564,10 +564,7 @@
   position: relative;
   max-width: 100%;
   max-height: 100%;
-  box-shadow: var(--shadow-editor-image);
   pointer-events: auto;
-  transform-origin: center;
-  will-change: transform;
 }
 
 .translation-image-frame > img {
@@ -576,8 +573,11 @@
   height: auto;
   max-width: 100cqw;
   max-height: 100cqh;
+  box-shadow: var(--shadow-editor-image);
   object-fit: contain;
   pointer-events: none;
+  transform-origin: center;
+  will-change: transform;
 }
 
 .translation-editor-main .translation-canvas .translation-marker {
@@ -595,7 +595,7 @@
   font-size: 0.625rem;
   font-weight: var(--font-weight-control);
   place-items: center;
-  transform: translate(-50%, -50%) scale(var(--translation-marker-scale));
+  transform: translate(-50%, -50%);
   transform-origin: center;
 }
 

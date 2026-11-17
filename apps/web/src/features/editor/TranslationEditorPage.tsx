@@ -2379,19 +2379,12 @@ export function TranslationEditorPage() {
               className="translation-image-layer"
               style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
             >
-              <div
-                className="translation-image-frame"
-                style={
-                  {
-                    transform: `scale(${zoom})`,
-                    "--translation-marker-scale": 1 / zoom,
-                  } as React.CSSProperties
-                }
-              >
+              <div className="translation-image-frame">
                 <img
                   ref={imageRef}
                   src={imageUrl.data!.url}
                   alt={`第 ${pageIndex + 1} 页`}
+                  style={{ transform: `scale(${zoom})` }}
                   draggable={false}
                 />
                 {currentEntries.map((entry, index) => (
@@ -2403,8 +2396,8 @@ export function TranslationEditorPage() {
                       type="button"
                       className={`translation-marker is-${entry.markerPositionType}${selectedEntryId === entry.id ? " is-selected" : ""}${entry.localOnly ? " is-local" : ""}`}
                       style={{
-                        left: `${entry.markerX * 100}%`,
-                        top: `${entry.markerY * 100}%`,
+                        left: `${(0.5 + (entry.markerX - 0.5) * zoom) * 100}%`,
+                        top: `${(0.5 + (entry.markerY - 0.5) * zoom) * 100}%`,
                       }}
                       aria-label={`标记 ${index + 1}`}
                       onPointerDown={(event) =>
