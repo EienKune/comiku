@@ -1,0 +1,2 @@
+# Optional offline XLSX preparation only. Never install in application images.
+openpyxl==3.1.5

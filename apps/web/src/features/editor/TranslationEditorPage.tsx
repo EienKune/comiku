@@ -63,6 +63,8 @@ import {
   type TranslationImage,
 } from "./draft-storage";
 import { useAltWheelZoom } from "./use-alt-wheel-zoom";
+import { EditorReferenceTools } from "./reference/EditorReferenceTools";
+import { useSymbolInsertion } from "./reference/use-symbol-insertion";
 import "./translation-editor.css";
 
 type MarkerPosition = components["schemas"]["MarkerPositionType"];
@@ -304,6 +306,15 @@ export function TranslationEditorPage() {
   );
   const writableRef = useRef(writable);
   writableRef.current = writable;
+  const referenceScope = `${workId}:${currentImage?.id ?? ""}:${editor.data?.editorEpoch ?? 0}`;
+  const symbolInsertion = useSymbolInsertion({
+    scope: referenceScope,
+    writable,
+    selectedEntryId,
+    entries: currentEntries,
+    onUpdate: (entryId, translatedText) =>
+      updateEntry(entryId, { translatedText }),
+  });
   useAltWheelZoom({
     canvas: canvasRef,
     image: imageRef,
@@ -2194,6 +2205,11 @@ export function TranslationEditorPage() {
               导出 LabelPlus
             </Button>
           )}
+          <EditorReferenceTools
+            key={referenceScope}
+            insert={symbolInsertion.insert}
+            status={symbolInsertion.status}
+          />
         </div>
         <div className="translation-zoom-group">
           <IconButton
@@ -2463,12 +2479,16 @@ export function TranslationEditorPage() {
                   <label>
                     <span>译文</span>
                     <textarea
+                      {...symbolInsertion.bindTextarea(entry.id)}
                       value={entry.translatedText}
                       disabled={!writable || entry.localOnly}
                       placeholder={
                         entry.localOnly ? "标记同步后即可输入" : "输入对应译文"
                       }
-                      onFocus={() => selectEntry(entry.id)}
+                      onFocus={(event) => {
+                        selectEntry(entry.id);
+                        symbolInsertion.bindTextarea(entry.id).onFocus?.(event);
+                      }}
                       onChange={(event) =>
                         updateEntry(entry.id, {
                           translatedText: event.target.value,

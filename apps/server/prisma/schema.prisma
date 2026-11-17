@@ -10,6 +10,40 @@ datasource db {
   provider = "postgresql"
 }
 
+model OnomatopoeiaSource {
+  id              String               @id @default(uuid()) @db.Uuid
+  key             String               @unique @db.VarChar(64)
+  name            String               @db.VarChar(160)
+  version         String               @db.VarChar(160)
+  fileSha256      String               @map("file_sha256") @db.VarChar(64)
+  importerVersion String               @map("importer_version") @db.VarChar(160)
+  revision        Int                  @default(1)
+  sourceUrl       String?              @map("source_url") @db.Text
+  attribution     String?              @db.Text
+  license         String?              @db.Text
+  importedAt      DateTime             @default(now()) @map("imported_at") @db.Timestamptz(3)
+  entries         OnomatopoeiaEntry[]
+
+  @@map("onomatopoeia_sources")
+}
+
+model OnomatopoeiaEntry {
+  id            String             @id @default(uuid()) @db.Uuid
+  sourceId      String             @map("source_id") @db.Uuid
+  source        OnomatopoeiaSource  @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  sourceRef     String             @map("source_ref") @db.VarChar(160)
+  original      String             @db.VarChar(256)
+  searchKey     String             @map("search_key") @db.Text
+  explanationZh String?            @map("explanation_zh") @db.Text
+  explanationJa String?            @map("explanation_ja") @db.Text
+  translationZh String?            @map("translation_zh") @db.Text
+  notes         String?            @db.Text
+
+  @@unique([sourceId, sourceRef])
+  @@index([searchKey])
+  @@map("onomatopoeia_entries")
+}
+
 model User {
   siteBrandAssets SiteBrandAsset[]
   candidateCompositionReceipts CandidateCompositionReceipt[]
