@@ -92,7 +92,30 @@ async function fixture() {
     response(
       path === "/api/works/{workId}/translations"
         ? head
-        : { url: "/api/local-files/interactions", expiresInSeconds: 300 },
+        : path === "/api/reference-dictionary"
+          ? {
+              entries: [
+                {
+                  id: "synthetic",
+                  original: "カチッ",
+                  explanationZh: "合成中文释义",
+                  explanationJa: null,
+                  translationZh: "合成建议",
+                  notes: null,
+                  sourceRef: "example:1",
+                  source: {
+                    key: "synthetic",
+                    name: "合成参考",
+                    version: "1",
+                    sourceUrl: null,
+                    attribution: null,
+                    license: null,
+                  },
+                },
+              ],
+              nextOffset: null,
+            }
+          : { url: "/api/local-files/interactions", expiresInSeconds: 300 },
     ),
   );
   const post = vi
@@ -250,6 +273,74 @@ test("defaults to pan, preserves marker selection and removes ordering controls"
   fireEvent.click(screen.getByRole("button", { name: "移动画布" }));
   fireEvent.click(screen.getByRole("button", { name: "标记 1" }));
   await waitFor(() => expect(document.activeElement?.tagName).toBe("TEXTAREA"));
+});
+
+test("reference symbols update the selected translation draft and use the existing save protocol", async () => {
+  const f = await fixture();
+  fireEvent.click(screen.getByRole("button", { name: "添加框内" }));
+  f.point();
+  const area = (await screen.findByPlaceholderText(
+    "输入对应译文",
+  )) as HTMLTextAreaElement;
+  fireEvent.change(area, { target: { value: "甲乙丙" } });
+  area.focus();
+  area.setSelectionRange(1, 2);
+  fireEvent.select(area);
+  fireEvent.click(screen.getByRole("button", { name: "符号" }));
+  expect(area.value).toBe("甲乙丙");
+  fireEvent.click(screen.getByRole("button", { name: "插入或复制 ☆" }));
+  expect(area.value).toBe("甲☆丙");
+  const entry = f.head.images[0].entries[0];
+  const patch = vi.spyOn(client, "PATCH").mockResolvedValue({
+    data: { ...entry, translatedText: "甲☆丙", revision: 1 },
+    response: new Response(null, { status: 200 }),
+  } as never);
+  fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+  await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+  expect(patch.mock.calls[0][1]).toMatchObject({
+    body: {
+      translatedText: "甲☆丙",
+      expectedRevision: 0,
+      expectedEditorEpoch: 0,
+    },
+  });
+});
+
+test("dictionary lookup preserves the page, draft, scroll and insertion selection without adopting a suggestion", async () => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.removeAttribute("open");
+  };
+  const f = await fixture();
+  fireEvent.click(screen.getByRole("button", { name: "添加框内" }));
+  f.point();
+  const area = (await screen.findByPlaceholderText(
+    "输入对应译文",
+  )) as HTMLTextAreaElement;
+  fireEvent.change(area, { target: { value: "甲乙丙" } });
+  area.focus();
+  area.setSelectionRange(1, 2);
+  fireEvent.select(area);
+  const list = area.closest(".translation-entry-list")!;
+  list.scrollTop = 37;
+  const opener = screen.getByRole("button", { name: "拟声词" });
+  opener.focus();
+  fireEvent.click(opener);
+  fireEvent.change(screen.getByRole("searchbox"), {
+    target: { value: "カチッ" },
+  });
+  await screen.findByText("合成建议");
+  expect(area.value).toBe("甲乙丙");
+  expect(list.scrollTop).toBe(37);
+  expect(screen.getByAltText("第 1 页")).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  expect(document.activeElement).toBe(opener);
+  fireEvent.click(screen.getByRole("button", { name: "符号" }));
+  fireEvent.click(screen.getByRole("button", { name: "插入或复制 ☆" }));
+  expect(area.value).toBe("甲☆丙");
+  expect(list.scrollTop).toBe(37);
 });
 
 test("Alt wheel consumes only canvas zoom and keeps the pointer anchor and limits", async () => {

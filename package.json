@@ -35,6 +35,7 @@
     "api:check": "pnpm openapi:check && pnpm --filter @comiku/api-client check",
     "dev:worker": "pnpm --filter @comiku/server dev:worker",
     "images:backfill": "pnpm --filter @comiku/server images:backfill",
+    "dictionary:import": "pnpm --filter @comiku/server dictionary:import",
     "ops:status": "pnpm --filter @comiku/server ops:status",
     "deploy:check": "pnpm --filter @comiku/server deploy:check",
     "test:production": "node scripts/test-production-images.mjs",

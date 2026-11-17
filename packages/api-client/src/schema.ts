@@ -2994,6 +2994,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/reference-dictionary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["searchReferenceDictionary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -5830,6 +5846,29 @@ export interface components {
         SiteIconUploadDto: {
             assetId: string;
             expiresAt: string;
+        };
+        ReferenceDictionarySourceDto: {
+            key: string;
+            name: string;
+            version: string;
+            sourceUrl: string | null;
+            attribution: string | null;
+            license: string | null;
+        };
+        ReferenceDictionaryEntryDto: {
+            /** Format: uuid */
+            id: string;
+            original: string;
+            explanationZh: string | null;
+            explanationJa: string | null;
+            translationZh: string | null;
+            notes: string | null;
+            sourceRef: string;
+            source: components["schemas"]["ReferenceDictionarySourceDto"];
+        };
+        ReferenceDictionaryPageDto: {
+            entries: components["schemas"]["ReferenceDictionaryEntryDto"][];
+            nextOffset: number | null;
         };
         ErrorDto: {
             statusCode: number;
@@ -24266,6 +24305,91 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    searchReferenceDictionary: {
+        parameters: {
+            query?: {
+                offset?: number;
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceDictionaryPageDto"];
+                };
             };
             /** @description 请求字段无效 */
             400: {
