@@ -49,6 +49,7 @@ import {
   TextField,
 } from "../components/ui";
 import { MarkerDemo } from "./MarkerDemo";
+import { EditorReferenceDemo } from "./EditorReferenceDemo";
 import { WorkViewsDemo } from "./WorkViewsDemo";
 import { ImageLightboxDemo } from "./ImageLightboxDemo";
 import { ImageOrderingDemo } from "./ImageOrderingDemo";
@@ -1253,6 +1254,7 @@ export function DesignSystemPlayground() {
               </div>
               <MarkerDemo />
             </Surface>
+            <EditorReferenceDemo />
           </PlaygroundSection>
 
           <PlaygroundSection

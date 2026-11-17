@@ -24,6 +24,7 @@ import { WorkSeriesModule } from "./work-series/work-series.module.js";
 import { ImageSimilarityModule } from "./image-similarity/image-similarity.module.js";
 import { ArchiveExportsModule } from "./archive-exports/archive-exports.module.js";
 import { SiteModule } from "./site/site.module.js";
+import { ReferenceDictionaryModule } from "./reference-dictionary/reference-dictionary.module.js";
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { SiteModule } from "./site/site.module.js";
     ImageSimilarityModule,
     ArchiveExportsModule,
     SiteModule,
+    ReferenceDictionaryModule,
   ],
   controllers: [HealthController],
 })

@@ -1,0 +1,147 @@
+.editor-reference-dialog {
+  box-sizing: border-box;
+  width: min(42rem, calc(100vw - var(--space-6)));
+  max-height: calc(100dvh - var(--space-6));
+  padding: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-md);
+}
+.editor-reference-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.editor-reference-dialog::backdrop {
+  background: rgb(8 15 18 / 55%);
+}
+.editor-reference-dialog > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+}
+.editor-reference-dialog > header,
+.editor-reference-dialog > .ui-field,
+.editor-reference-copy-status {
+  flex-shrink: 0;
+}
+.editor-reference-dialog h2,
+.editor-reference-dialog h3,
+.editor-reference-dialog p {
+  margin: 0;
+}
+.editor-reference-dialog h2 {
+  font-size: var(--text-xl);
+}
+.editor-reference-results {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.editor-reference-entry {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
+}
+.editor-reference-entry h3 {
+  font-size: var(--text-lg);
+}
+.editor-reference-entry p {
+  white-space: pre-wrap;
+}
+.editor-reference-label,
+.editor-reference-entry footer,
+.editor-reference-notes {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+.editor-reference-entry footer {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.editor-reference-copy-status:empty {
+  display: none;
+}
+.editor-reference-tools {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.editor-symbol-panel {
+  position: fixed;
+  z-index: 15;
+  inset: auto var(--space-4) var(--space-4) auto;
+  max-width: calc(100vw - var(--space-8));
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-md);
+}
+.editor-symbol-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.editor-symbol-buttons {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.editor-symbol-buttons button {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  font-size: var(--text-xl);
+}
+.editor-symbol-panel p {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+}
+.editor-reference-demo {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+  padding: var(--space-5);
+}
+.editor-reference-demo > header {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+.editor-reference-demo h3 {
+  margin: 0;
+}
+.editor-reference-demo textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 6rem;
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  resize: vertical;
+}
+@media (max-width: 480px) {
+  .editor-reference-dialog {
+    padding: var(--space-3);
+  }
+  .editor-symbol-panel {
+    inset-inline: var(--space-3);
+    max-width: none;
+  }
+}

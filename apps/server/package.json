@@ -24,6 +24,7 @@
     "dev:worker": "pnpm db:generate && tsx watch src/worker.ts",
     "start:worker": "node dist/worker.js",
     "images:backfill": "pnpm db:generate && tsx scripts/backfill-thumbnails.ts",
+    "dictionary:import": "pnpm db:generate && tsx scripts/import-reference-dictionary.ts",
     "build:ops": "tsc -p tsconfig.ops.json",
     "ops:status": "pnpm db:generate && tsx src/ops/status.ts",
     "backup": "tsx scripts/backup.ts",
