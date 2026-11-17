@@ -154,18 +154,6 @@ export function WorkReminderSubscriptions({
               </label>
             )}
           </header>
-          {query.isError && (
-            <p role="alert">
-              工作提醒读取失败。
-              <Button
-                variant="ghost"
-                onClick={() => void query.refetch()}
-                disabled={!enabled}
-              >
-                重试
-              </Button>
-            </p>
-          )}
           {settings && (
             <form
               onSubmit={(event) => {
@@ -323,6 +311,18 @@ export function WorkReminderSubscriptions({
           <Feedback error={error} success={success} />
         </>
       )}
+      {query.isError && (
+        <p role="alert">
+          工作提醒读取失败。
+          <Button
+            variant="ghost"
+            onClick={() => void query.refetch()}
+            disabled={!enabled}
+          >
+            重试
+          </Button>
+        </p>
+      )}
       {mode !== "global" && (
         <>
           <div className="work-reminder-channels">
@@ -408,6 +408,7 @@ function ChannelReminder({
       onSubmit={async (event) => {
         event.preventDefault();
         if (!enabled || busy) return;
+        if (!draft) setBaseChannelRevision(channel.revision);
         setDraft(current);
         setBusy(true);
         setError("");

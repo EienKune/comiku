@@ -260,6 +260,55 @@ test("ordinary group save failures preserve drafts without offering stale revisi
   ).toBe(true);
 });
 
+test("group work reminder reads expose an error and an explicit retry", async () => {
+  const { get, patch, wrap } = setup();
+  get.mockRejectedValueOnce(new Error("合成读取失败"));
+  render(wrap(true, true));
+  const panel = screen.getByRole("region", { name: "工作提醒设置" });
+  const alert = await within(panel).findByRole("alert");
+  expect(alert.textContent).toContain("工作提醒读取失败");
+  expect(within(panel).queryByRole("form")).toBeNull();
+  fireEvent.click(within(alert).getByRole("button", { name: "重试" }));
+  await within(panel).findByRole("form", { name: "合成群的工作提醒" });
+  expect(within(panel).queryByRole("alert")).toBeNull();
+  expect(get).toHaveBeenCalledTimes(2);
+  expect(patch).not.toHaveBeenCalled();
+});
+
+test.each(["http", "network"])(
+  "a clean group save retains its latest channel revision after a %s failure",
+  async (failure) => {
+    const { cache, patch, wrap } = setup();
+    render(wrap(true, true));
+    const form = await screen.findByRole("form", { name: "合成群的工作提醒" });
+    const updated = configuration();
+    updated.channels[0].revision = 4;
+    cache.setQueryData(["work-reminders", "subscriptions"], updated);
+    await waitFor(() =>
+      expect(
+        cache.getQueryData<typeof updated>(["work-reminders", "subscriptions"])
+          ?.channels[0].revision,
+      ).toBe(4),
+    );
+    if (failure === "http")
+      patch.mockResolvedValueOnce({
+        error: { message: "合成保存失败" },
+        response: new Response(null, { status: 500 }),
+      } as never);
+    else patch.mockRejectedValueOnce(new Error("合成网络断开"));
+    fireEvent.click(within(form).getByRole("button", { name: "保存工作提醒" }));
+    await within(form).findByRole("alert");
+    expect(patch.mock.calls[0][1]).toMatchObject({
+      body: { expectedChannelRevision: 4, expectedRevision: 1 },
+    });
+    fireEvent.click(within(form).getByRole("button", { name: "保存工作提醒" }));
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+    expect(patch.mock.calls[1][1]).toMatchObject({
+      body: { expectedChannelRevision: 4, expectedRevision: 1 },
+    });
+  },
+);
+
 test("preview switches display one server-rendered kind and cancel inactive requests", async () => {
   const { post, wrap } = setup();
   const requests: { body: { kind: string }; signal: AbortSignal }[] = [];
