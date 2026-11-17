@@ -5,6 +5,7 @@ import {
   useState,
   type MouseEvent,
   type PointerEvent,
+  type CSSProperties,
 } from "react";
 import {
   Check,
@@ -17,7 +18,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { Badge, Button, IconButton } from "../components/ui";
-import { useAltWheelZoom } from "../features/editor/use-alt-wheel-zoom";
+import { useCanvasWheelZoom } from "../features/editor/use-canvas-wheel-zoom";
+import "../components/marker-hit-area.css";
 import { MarkerTooltip } from "../components/MarkerTooltip";
 
 type MarkerPositionType = "inside" | "outside";
@@ -107,7 +109,7 @@ export function MarkerDemo() {
     return () => window.clearTimeout(timer);
   }, [markers]);
 
-  useAltWheelZoom({
+  useCanvasWheelZoom({
     canvas: stageRef,
     image: artboardRef,
     zoom: zoom / 100,
@@ -385,9 +387,12 @@ export function MarkerDemo() {
           <div
             ref={artboardRef}
             className="marker-artboard"
-            style={{
-              transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom / 100})`,
-            }}
+            style={
+              {
+                transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom / 100})`,
+                "--translation-marker-scale": 100 / zoom,
+              } as CSSProperties
+            }
             onClick={addMarker}
           >
             <div className="marker-artboard__panel marker-artboard__panel--one" />
