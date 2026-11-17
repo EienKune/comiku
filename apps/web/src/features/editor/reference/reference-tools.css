@@ -74,6 +74,9 @@
   align-items: center;
   flex-wrap: wrap;
 }
+.translation-editor-toolbar:has(.editor-symbol-panel) {
+  z-index: 5;
+}
 .editor-symbol-panel {
   position: fixed;
   z-index: 15;
