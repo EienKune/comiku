@@ -1,6 +1,6 @@
 .notification-management {
   display: grid;
-  gap: var(--space-5);
+  gap: var(--space-3);
   min-width: 0;
   padding: var(--space-5);
 }
@@ -516,7 +516,7 @@ header.notification-section-heading > h3 {
 .notification-sample .notification-editor {
   flex-basis: 100%;
 }
-.notification-tabs {
+.notification-management > .notification-tabs {
   margin-bottom: 0;
 }
 .notification-connections summary {
