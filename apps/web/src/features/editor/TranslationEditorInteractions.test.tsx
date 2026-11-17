@@ -1,6 +1,7 @@
 import { afterEach, expect, test, vi } from "vitest";
 import {
   cleanup,
+  act,
   fireEvent,
   render,
   screen,
@@ -20,7 +21,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function fixture() {
+async function fixture(canEdit = true) {
   vi.stubGlobal("PointerEvent", MouseEvent);
   const user: CurrentUser = {
     id: "00000000-0000-4000-8000-000000000001",
@@ -45,7 +46,7 @@ async function fixture() {
     openReviewCase: null,
     workRevision: 0,
     editorEpoch: 0,
-    canEdit: true,
+    canEdit,
     editStages: ["translate"],
     canExportLabelPlus: true,
     joinableStage: null,
@@ -219,14 +220,14 @@ async function fixture() {
     bottom: 300,
   } as DOMRect);
   const canvas = screen.getByLabelText(
-    "图片标记画布，Alt 加滚轮缩放，Ctrl 加 Z 撤销连续新标点",
+    "图片标记画布，滚轮缩放，Ctrl 加 Z 撤销连续新标点",
   );
   canvas.setPointerCapture = vi.fn();
   await waitFor(() =>
     expect(
       (screen.getByRole("button", { name: "添加框内" }) as HTMLButtonElement)
         .disabled,
-    ).toBe(false),
+    ).toBe(!canEdit),
   );
   const point = () =>
     fireEvent.pointerDown(canvas, { clientX: 40, clientY: 60, pointerId: 1 });
@@ -273,6 +274,225 @@ test("defaults to pan, preserves marker selection and removes ordering controls"
   fireEvent.click(screen.getByRole("button", { name: "移动画布" }));
   fireEvent.click(screen.getByRole("button", { name: "标记 1" }));
   await waitFor(() => expect(document.activeElement?.tagName).toBe("TEXTAREA"));
+});
+
+test("number shortcuts select the four tools without performing a server mutation", async () => {
+  const f = await fixture();
+  f.canvas.focus();
+  for (const [key, label] of [
+    ["2", "添加框内"],
+    ["3", "添加框外"],
+    ["4", "移动标记"],
+    ["1", "移动画布"],
+  ]) {
+    const event = new KeyboardEvent("keydown", {
+      key,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(f.canvas, event);
+    const button = screen.getByRole("button", { name: label });
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.getAttribute("aria-keyshortcuts")).toBe(key);
+    expect(button.title).toContain(key);
+    expect(button.querySelector("kbd")?.textContent).toBe(key);
+    expect(button.querySelector("kbd")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(event.defaultPrevented).toBe(true);
+  }
+  expect(
+    f
+      .createCalls()
+      .filter(([path]) => path === "/api/work-images/{imageId}/markers"),
+  ).toHaveLength(0);
+  const button = screen.getByRole("button", { name: "添加框内" });
+  fireEvent.click(button.querySelector("kbd")!);
+  expect(button.getAttribute("aria-pressed")).toBe("true");
+  button.focus();
+  fireEvent.keyDown(button, { key: "3" });
+  expect(
+    screen
+      .getByRole("button", { name: "添加框外" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+});
+
+test("shortcuts from a focused marker retain a stable focus for the next shortcut", async () => {
+  const f = await fixture();
+  fireEvent.click(screen.getByRole("button", { name: "添加框内" }));
+  f.point();
+  await screen.findByRole("button", { name: "标记 1" });
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("button", { name: "标记 1" })
+        .classList.contains("is-local"),
+    ).toBe(false),
+  );
+  const marker = screen.getByRole("button", { name: "标记 1" });
+  marker.focus();
+  fireEvent.keyDown(marker, { key: "4" });
+  expect(
+    screen
+      .getByRole("button", { name: "移动标记" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  expect(document.activeElement).toBe(f.canvas);
+  fireEvent.keyDown(document.activeElement!, { key: "1" });
+  expect(
+    screen
+      .getByRole("button", { name: "移动画布" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+});
+
+test("tool shortcuts leave typing and page-number input alone", async () => {
+  const f = await fixture();
+  fireEvent.click(screen.getByRole("button", { name: "添加框内" }));
+  f.point();
+  const area = await screen.findByPlaceholderText("输入对应译文");
+  area.focus();
+  fireEvent.keyDown(area, { key: "4" });
+  const page = screen.getByRole("spinbutton", { name: "跳转页码，共 2 页" });
+  page.focus();
+  const event = new KeyboardEvent("keydown", {
+    key: "1",
+    bubbles: true,
+    cancelable: true,
+  });
+  fireEvent(page, event);
+  expect(event.defaultPrevented).toBe(false);
+  expect(
+    screen
+      .getByRole("button", { name: "添加框内" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+});
+
+test("modified, repeated, composing, consumed and out-of-editor keys do not switch tools", async () => {
+  const f = await fixture();
+  f.canvas.focus();
+  for (const flags of [
+    { ctrlKey: true },
+    { altKey: true },
+    { metaKey: true },
+    { shiftKey: true },
+    { repeat: true },
+    { isComposing: true },
+    { keyCode: 229 },
+  ]) {
+    const event = new KeyboardEvent("keydown", {
+      key: "2",
+      bubbles: true,
+      cancelable: true,
+      ...flags,
+    });
+    fireEvent(f.canvas, event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(
+      screen
+        .getByRole("button", { name: "移动画布" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+  }
+  f.canvas.addEventListener("keydown", (event) => event.preventDefault(), {
+    once: true,
+  });
+  fireEvent.keyDown(f.canvas, { key: "2" });
+  fireEvent.keyDown(window, { key: "2" });
+  expect(
+    screen
+      .getByRole("button", { name: "移动画布" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  fireEvent.keyDown(f.canvas, { key: "2" });
+  expect(
+    screen
+      .getByRole("button", { name: "添加框内" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+});
+
+test("readonly tool restrictions cannot be bypassed by shortcuts", async () => {
+  const f = await fixture(false);
+  f.canvas.focus();
+  for (const key of ["2", "3", "4"]) {
+    const event = new KeyboardEvent("keydown", {
+      key,
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(f.canvas, event);
+    expect(event.defaultPrevented).toBe(false);
+  }
+  expect(
+    screen
+      .getByRole("button", { name: "移动画布" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+});
+
+test("shortcuts wait until a pointer drag finishes", async () => {
+  const f = await fixture();
+  f.canvas.focus();
+  f.point();
+  fireEvent.keyDown(f.canvas, { key: "2" });
+  expect(
+    screen
+      .getByRole("button", { name: "移动画布" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  fireEvent.pointerUp(f.canvas);
+  fireEvent.keyDown(f.canvas, { key: "2" });
+  expect(
+    screen
+      .getByRole("button", { name: "添加框内" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+});
+
+test("tool shortcuts are suspended for native and custom modal dialogs", async () => {
+  const f = await fixture();
+  f.canvas.focus();
+  for (const dialog of [
+    document.createElement("dialog"),
+    document.createElement("section"),
+  ]) {
+    if (dialog.tagName === "DIALOG") dialog.setAttribute("open", "");
+    else {
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+    }
+    document.body.append(dialog);
+    fireEvent.keyDown(f.canvas, { key: "2" });
+    expect(
+      screen
+        .getByRole("button", { name: "移动画布" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    dialog.remove();
+  }
+  fireEvent.keyDown(f.canvas, { key: "2" });
+  expect(
+    screen
+      .getByRole("button", { name: "添加框内" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+});
+
+test("keyboard tool changes end continuous marker undo like pointer tool changes", async () => {
+  const f = await fixture();
+  fireEvent.click(screen.getByRole("button", { name: "添加框内" }));
+  f.point();
+  await screen.findByRole("button", { name: "标记 1" });
+  f.canvas.focus();
+  fireEvent.keyDown(f.canvas, { key: "1" });
+  fireEvent.keyDown(f.canvas, { key: "2" });
+  await act(async () => {
+    f.undo();
+  });
+  expect(f.head.images[0].entries).toHaveLength(1);
 });
 
 test("reference symbols update the selected translation draft and use the existing save protocol", async () => {
@@ -343,7 +563,7 @@ test("dictionary lookup preserves the page, draft, scroll and insertion selectio
   expect(list.scrollTop).toBe(37);
 });
 
-test("Alt wheel consumes only canvas zoom and keeps the pointer anchor and limits", async () => {
+test("preview wheel zooms directly, keeps pointer anchor and limits, and retains Alt compatibility", async () => {
   const f = await fixture();
   const ordinary = new WheelEvent("wheel", {
     bubbles: true,
@@ -353,7 +573,12 @@ test("Alt wheel consumes only canvas zoom and keeps the pointer anchor and limit
     clientY: 150,
   });
   fireEvent(f.canvas, ordinary);
-  expect(ordinary.defaultPrevented).toBe(false);
+  expect(ordinary.defaultPrevented).toBe(true);
+  expect(f.img.parentElement?.style.transform).toBe(`scale(${Math.exp(0.2)})`);
+  expect(f.img.parentElement?.parentElement?.style.transform).toBe(
+    `translate(${50 * (1 - Math.exp(0.2))}px, 0px)`,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "重置视图" }));
   const alt = new WheelEvent("wheel", {
     bubbles: true,
     cancelable: true,
@@ -381,6 +606,54 @@ test("Alt wheel consumes only canvas zoom and keeps the pointer anchor and limit
   fireEvent(screen.getByText("译文条目"), outside);
   expect(outside.defaultPrevented).toBe(false);
   expect(f.img.parentElement?.style.transform).toBe("scale(0.4)");
+});
+
+test("rapid preview wheel events accumulate without losing steps before React renders", async () => {
+  const f = await fixture();
+  await act(async () => {
+    for (let i = 0; i < 5; i++)
+      fireEvent.wheel(f.canvas, { deltaY: -10, clientX: 150, clientY: 150 });
+  });
+  const transform = f.img.parentElement!.style.transform;
+  expect(Number(transform.match(/scale\(([^)]+)\)/)![1])).toBeCloseTo(
+    Math.exp(0.1),
+    10,
+  );
+  const offset = f.img.parentElement!.parentElement!.style.transform;
+  expect(Number(offset.match(/translate\(([^p]+)px/)![1])).toBeCloseTo(
+    50 * (1 - Math.exp(0.1)),
+    10,
+  );
+});
+
+test("wheel leaves browser gestures, page controls and active drags alone", async () => {
+  const f = await fixture();
+  for (const flags of [
+    { ctrlKey: true },
+    { metaKey: true },
+    { shiftKey: true },
+    { deltaY: 0, deltaX: 100 },
+    { buttons: 1 },
+  ]) {
+    const event = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaY: -120,
+      ...flags,
+    });
+    fireEvent(f.canvas, event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(f.img.parentElement?.style.transform).toBe("scale(1)");
+  }
+  const input = screen.getByRole("spinbutton", { name: "跳转页码，共 2 页" });
+  const event = new WheelEvent("wheel", {
+    bubbles: true,
+    cancelable: true,
+    deltaY: -120,
+  });
+  fireEvent(input, event);
+  expect(event.defaultPrevented).toBe(false);
+  expect(f.img.parentElement?.style.transform).toBe("scale(1)");
 });
 
 test.each(["shortcut", "button"])(

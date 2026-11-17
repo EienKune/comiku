@@ -1,0 +1,13 @@
+/* The visible dot stays small; its transparent pointer target remains generous. */
+.translation-marker::after {
+  position: absolute;
+  inset: -0.5rem;
+  border-radius: 50%;
+  content: "";
+}
+
+@media (pointer: coarse) {
+  .translation-marker::after {
+    inset: -0.875rem;
+  }
+}

@@ -392,6 +392,84 @@ test("works todo tab uses server totals, keeps pagination and hides redundant pa
     await screen.findByRole("checkbox", { name: "只看我参与的" }),
   ).toBeTruthy();
 });
+test("work timelines translate started, cancelled submission and skipped proofreading events", async () => {
+  const user: CurrentUser = {
+    id: crypto.randomUUID(),
+    username: "reader",
+    displayName: "查看者",
+    roles: [],
+    languageCapabilities: [],
+    isActive: true,
+    mustChangePassword: false,
+    revision: 0,
+    canSkipProofreading: false,
+    permissions: ["works:read"],
+  };
+  const actions = [
+    "stage_started",
+    "stage_submission_cancelled",
+    "proofreading_skipped",
+  ] as const;
+  const work = {
+    id: crypto.randomUUID(),
+    workNumber: 12,
+    authorId: crypto.randomUUID(),
+    authorName: "合成作者",
+    title: "事件展示测试",
+    sourcePostUrl: null,
+    sourceText: null,
+    sourceLanguage: "ja",
+    collaborationMode: "single",
+    workflowStatus: "pending_translate",
+    reviewStatus: "normal",
+    priority: 0,
+    revision: 0,
+    editorEpoch: 0,
+    translationAttentionStage: null,
+    translationAttentionVersionNumber: null,
+    imageCount: 0,
+    coverImageId: null,
+    participantCount: 0,
+    assignedStages: [],
+    importedAt: "2026-11-17T00:00:00Z",
+    publishedAt: null,
+    updatedAt: "2026-11-17T00:00:00Z",
+    images: [],
+    participants: [],
+    openReviewCaseId: null,
+    events: actions.map((action) => ({
+      id: crypto.randomUUID(),
+      action,
+      actorName: "合成成员",
+      stage: "translate",
+      createdAt: "2026-11-17T00:00:00Z",
+    })),
+  };
+  vi.spyOn(client, "GET").mockResolvedValue({
+    data: work,
+    response: new Response(null, { status: 200 }),
+  } as never);
+  render(
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      <MemoryRouter initialEntries={[`/works/${work.id}`]}>
+        <Routes>
+          <Route element={<Outlet context={user} />}>
+            <Route path="/works/:id" element={<WorkDetailPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  await screen.findByText("事件记录");
+  for (const label of ["开始制作", "撤回阶段提交", "跳过校对"])
+    expect(screen.getByText(label)).toBeTruthy();
+  for (const action of actions) expect(screen.queryByText(action)).toBeNull();
+});
+
 test("lets the current participant cancel an active assignment", async () => {
   const user: CurrentUser = {
     canSkipProofreading: false,

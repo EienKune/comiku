@@ -1414,15 +1414,9 @@
   white-space: nowrap;
 }
 
-.marker-demo__tools button:hover {
+.marker-demo__tools button:hover:not(.is-active) {
   background: rgba(255, 255, 255, 0.07);
   color: #f4f8f7;
-}
-
-.marker-demo__tools button.is-active {
-  border-color: color-mix(in srgb, var(--color-brand-400) 48%, transparent);
-  background: color-mix(in srgb, var(--color-brand-500) 17%, transparent);
-  color: #9df0e6;
 }
 
 .marker-demo__zoom {
@@ -1657,17 +1651,18 @@
   position: absolute;
   z-index: 5;
   display: grid;
-  width: 1.8rem;
-  height: 1.8rem;
-  border: 2px solid white;
-  border-radius: 50% 50% 50% 18%;
+  width: 1.125rem;
+  height: 1.125rem;
+  padding: 0;
+  border: 1px solid white;
+  border-radius: 50%;
   background: var(--color-brand-500);
   box-shadow: 0 3px 9px rgba(24, 62, 58, 0.3);
   place-items: center;
   color: var(--color-on-brand);
-  font-size: var(--text-xs);
+  font-size: 0.625rem;
   font-weight: var(--font-weight-control);
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--translation-marker-scale, 1));
   transition:
     transform var(--duration-fast),
     background var(--duration-fast),
@@ -1679,9 +1674,10 @@
   background: var(--color-pink-500);
   color: var(--color-preview-marker-text, var(--color-text));
   box-shadow:
-    0 0 0 4px rgba(220, 113, 143, 0.22),
+    0 0 0 2px rgba(220, 113, 143, 0.22),
     0 4px 12px rgba(57, 34, 42, 0.3);
-  transform: translate(-50%, -50%) scale(1.12);
+  transform: translate(-50%, -50%)
+    scale(calc(var(--translation-marker-scale, 1) * 1.12));
 }
 
 .translation-marker--outside:not(.is-selected) {
@@ -1785,7 +1781,7 @@
   color: var(--color-text-muted);
 }
 
-.translation-editor {
+.marker-demo .translation-editor {
   margin: var(--space-2) var(--space-4) var(--space-4);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -1797,7 +1793,7 @@
     box-shadow var(--duration-normal);
 }
 
-.translation-editor:has(textarea:focus-visible) {
+.marker-demo .translation-editor:has(textarea:focus-visible) {
   border-color: var(--color-focus);
   box-shadow: var(--shadow-focus);
 }
@@ -1849,7 +1845,7 @@
   gap: var(--space-1);
 }
 
-.translation-editor textarea {
+.marker-demo .translation-editor textarea {
   width: 100%;
   resize: vertical;
   border: 0;
@@ -1859,7 +1855,7 @@
   line-height: 1.7;
 }
 
-.translation-editor textarea::placeholder {
+.marker-demo .translation-editor textarea::placeholder {
   color: var(--color-text-muted);
 }
 
@@ -2641,7 +2637,7 @@
 }
 .playground-shell[data-motion="reduced"] .translation-marker:hover,
 .playground-shell[data-motion="reduced"] .translation-marker.is-selected {
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--translation-marker-scale, 1));
 }
 @media (prefers-reduced-motion: reduce) {
   .sidebar-nav button:hover > svg:first-child,
@@ -2650,11 +2646,11 @@
   }
   .translation-marker:hover,
   .translation-marker.is-selected {
-    transform: translate(-50%, -50%);
+    transform: translate(-50%, -50%) scale(var(--translation-marker-scale, 1));
   }
 }
 @media (forced-colors: active) {
-  .translation-editor:has(textarea:focus-visible) {
+  .marker-demo .translation-editor:has(textarea:focus-visible) {
     outline: 2px solid Highlight;
   }
   .candidate-card.is-selected,
