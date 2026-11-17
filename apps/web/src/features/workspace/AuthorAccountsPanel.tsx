@@ -68,6 +68,7 @@ export function AuthorAccountsPanel({
         "authors",
         "author-accounts",
         "author-archived-accounts",
+        "author-source-accounts",
         "author-avatar",
         "candidate-author-avatar",
         "candidates",
@@ -83,9 +84,6 @@ export function AuthorAccountsPanel({
   return (
     <Surface className="workspace-panel">
       <h2>平台账号</h2>
-      <p className="workspace-muted">
-        每位作者最多关联一个 X 和一个 Pixiv 账号。
-      </p>
       <Feedback
         error={
           action.error ||
@@ -150,7 +148,7 @@ export function AuthorAccountsPanel({
                       disabled={action.busy}
                       onClick={() => setRemoving(managed)}
                     >
-                      解绑账号
+                      停用账号
                     </Button>
                   </div>
                 )}
@@ -169,17 +167,14 @@ export function AuthorAccountsPanel({
                 key={platform}
                 size="sm"
                 variant="secondary"
-                disabled={
-                  accounts.isPending ||
-                  visible.some((account) => account.platform === platform)
-                }
+                disabled={accounts.isPending || action.busy}
                 onClick={() => setEditor({ platform })}
               >
                 关联 {platform === "x" ? "X" : "Pixiv"}
               </Button>
             ))}
           </div>
-          <OptionalSection label="已解绑账号" defaultOpen={false}>
+          <OptionalSection label="已停用账号" defaultOpen={false}>
             {history.error ? (
               <p className="account-error">
                 历史账号读取失败，请重试。
@@ -194,9 +189,6 @@ export function AuthorAccountsPanel({
             ) : (history.data ?? []).length ? (
               <ul className="workspace-account-list">
                 {history.data!.map((account) => {
-                  const occupied = visible.some(
-                    (current) => current.platform === account.platform,
-                  );
                   return (
                     <li key={account.id}>
                       <div>
@@ -205,7 +197,7 @@ export function AuthorAccountsPanel({
                             ? `X · @${account.handle ?? account.externalUserId}`
                             : `Pixiv · ${account.externalUserId}`}
                         </strong>
-                        <small>已解绑；原有候选及作品来源保留</small>
+                        <small>已停用；原有候选及作品来源保留</small>
                         {account.notes && (
                           <p className="workspace-management-note">
                             {account.notes}
@@ -215,8 +207,7 @@ export function AuthorAccountsPanel({
                       <Button
                         size="sm"
                         variant="secondary"
-                        disabled={occupied || action.busy}
-                        title={occupied ? "请先解绑当前同平台账号" : undefined}
+                        disabled={action.busy}
                         onClick={() =>
                           void action.run(async () => {
                             await unwrap(
@@ -244,7 +235,7 @@ export function AuthorAccountsPanel({
                 })}
               </ul>
             ) : (
-              <p className="workspace-muted">没有已解绑账号。</p>
+              <p className="workspace-muted">没有已停用账号。</p>
             )}
           </OptionalSection>
         </>
@@ -273,7 +264,7 @@ export function AuthorAccountsPanel({
           onRemoved={async () => {
             await refresh();
             setRemoving(null);
-            action.setSuccess("账号已解绑，历史来源已保留");
+            action.setSuccess("账号已停用，历史来源已保留");
           }}
         />
       )}
@@ -613,7 +604,7 @@ function UnbindDialog({
   return (
     <dialog
       ref={dialog}
-      aria-label="确认解绑账号"
+      aria-label="确认停用账号"
       className="workspace-business-dialog"
       onCancel={(event) => {
         if (action.busy) event.preventDefault();
@@ -622,14 +613,14 @@ function UnbindDialog({
     >
       <header>
         <h2>
-          解绑{" "}
+          停用{" "}
           {account.platform === "x"
             ? `X @${account.handle ?? account.externalUserId}`
             : `Pixiv ${account.externalUserId}`}
         </h2>
       </header>
       <p>
-        解绑会停止该账号抓取。已有候选、作品及来源记录保留，可在“已解绑账号”中恢复关联。
+        停用会停止该账号抓取。已有候选、作品及来源记录保留，可在“已停用账号”中恢复关联。
       </p>
       <Feedback error={action.error} success={action.success} />
       <div className="workspace-dialog-actions">
@@ -650,7 +641,7 @@ function UnbindDialog({
             })
           }
         >
-          确认解绑
+          确认停用
         </Button>
       </div>
     </dialog>

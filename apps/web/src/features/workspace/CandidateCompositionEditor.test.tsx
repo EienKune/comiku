@@ -47,6 +47,8 @@ function initial(mode: "merge" | "split") {
         {
           id,
           authorId: "author",
+          platform: "x",
+          authorExternalAccountId: "account-a",
           authorName: "作者",
           revision: 1,
           postedAt: "2026-01-01",

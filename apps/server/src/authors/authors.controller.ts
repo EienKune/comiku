@@ -56,6 +56,7 @@ import {
   ResolveXProfileDto,
   RevisionDto,
   SourceCapabilityDto,
+  SourceAccountSummaryDto,
   TagDto,
   UpdateAuthorDto,
   UpdateExternalAccountDto,
@@ -258,6 +259,15 @@ export class AuthorsController {
   @ApiOkResponse({ type: AuthorDto })
   get(@Param("id", ParseUUIDPipe) id: string) {
     return this.authors.get(id);
+  }
+
+  @Get(":id/source-accounts")
+  @Access({ permission: "authors:read" })
+  @ApiOperation({ operationId: "listAuthorSourceAccounts" })
+  @ApiParam({ name: "id", format: "uuid" })
+  @ApiOkResponse({ type: SourceAccountSummaryDto, isArray: true })
+  sourceAccounts(@Param("id", ParseUUIDPipe) id: string) {
+    return this.authors.listSourceAccounts(id);
   }
 
   @Get(":id/avatar/url")

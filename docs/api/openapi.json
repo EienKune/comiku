@@ -7854,6 +7854,115 @@
         ]
       }
     },
+    "/api/authors/{id}/source-accounts": {
+      "get": {
+        "operationId": "listAuthorSourceAccounts",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SourceAccountSummaryDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "authors"
+        ]
+      }
+    },
     "/api/authors/{id}/avatar/url": {
       "get": {
         "operationId": "getAuthorAvatarUrl",
@@ -10014,6 +10123,31 @@
       "get": {
         "operationId": "listCandidates",
         "parameters": [
+          {
+            "required": false,
+            "name": "sourcePlatform",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "required": false,
+            "name": "sourceAccountId",
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "required": false,
+            "name": "sourceUnbound",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
           {
             "required": false,
             "name": "status",
@@ -12742,6 +12876,31 @@
         "parameters": [
           {
             "required": false,
+            "name": "sourcePlatform",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "required": false,
+            "name": "sourceAccountId",
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "required": false,
+            "name": "sourceUnbound",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "required": false,
             "name": "view",
             "in": "query",
             "schema": {
@@ -12962,6 +13121,31 @@
       "get": {
         "operationId": "listWorkAlbumImages",
         "parameters": [
+          {
+            "required": false,
+            "name": "sourcePlatform",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "required": false,
+            "name": "sourceAccountId",
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "required": false,
+            "name": "sourceUnbound",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
           {
             "required": false,
             "name": "view",
@@ -27643,6 +27827,55 @@
           "author"
         ]
       },
+      "SourceAccountSummaryDto": {
+        "type": "object",
+        "properties": {
+          "externalUserId": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "profileUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "displayNameSnapshot": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarAvailable": {
+            "type": "boolean"
+          },
+          "fetchEnabled": {
+            "type": "boolean"
+          },
+          "deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "externalUserId",
+          "id",
+          "platform",
+          "handle",
+          "profileUrl",
+          "displayNameSnapshot",
+          "avatarAvailable",
+          "fetchEnabled",
+          "deletedAt"
+        ]
+      },
       "AuthorEvidenceDto": {
         "type": "object",
         "properties": {
@@ -28437,6 +28670,20 @@
           "authorName": {
             "type": "string"
           },
+          "authorExternalAccountId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "sourceAccount": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceAccountSummaryDto"
+              }
+            ]
+          },
           "authorHandle": {
             "type": "string",
             "nullable": true
@@ -28532,6 +28779,8 @@
           "id",
           "authorId",
           "authorName",
+          "authorExternalAccountId",
+          "sourceAccount",
           "authorHandle",
           "authorAvatarAvailable",
           "platform",
@@ -28582,6 +28831,21 @@
       "CreateCandidateReviewSessionDto": {
         "type": "object",
         "properties": {
+          "sourcePlatform": {
+            "type": "string",
+            "enum": [
+              "x",
+              "pixiv",
+              "manual"
+            ]
+          },
+          "sourceAccountId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceUnbound": {
+            "type": "boolean"
+          },
           "status": {
             "allOf": [
               {
@@ -30690,6 +30954,15 @@
       "WorkCandidateSourceDto": {
         "type": "object",
         "properties": {
+          "sourceAccount": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceAccountSummaryDto"
+              }
+            ]
+          },
           "mappingKnown": {
             "type": "boolean"
           },
@@ -30723,6 +30996,7 @@
           }
         },
         "required": [
+          "sourceAccount",
           "mappingKnown",
           "candidateId",
           "platform",
@@ -30736,6 +31010,15 @@
       "WorkSourceDto": {
         "type": "object",
         "properties": {
+          "sourceAccount": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceAccountSummaryDto"
+              }
+            ]
+          },
           "candidateId": {
             "type": "string",
             "format": "uuid"
@@ -30772,6 +31055,7 @@
           }
         },
         "required": [
+          "sourceAccount",
           "candidateId",
           "platform",
           "externalPostId",

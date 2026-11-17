@@ -420,6 +420,12 @@ export class ExternalAccountSummaryDto {
   @ApiProperty({ type: Boolean }) fetchEnabled!: boolean;
 }
 
+/** Safe identity for direct source selection and attribution, including archived accounts. */
+export class SourceAccountSummaryDto extends ExternalAccountSummaryDto {
+  @ApiProperty({ type: String, format: "date-time", nullable: true })
+  deletedAt!: string | null;
+}
+
 export class SourceAdapterStateDto {
   @ApiProperty({ type: String }) adapterKey!: string;
   @ApiProperty({ type: Boolean }) enabled!: boolean;

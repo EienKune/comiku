@@ -19,6 +19,8 @@ const state = (tokenSuffix = "") =>
           id,
           revision: 2,
           authorId: "author",
+          platform: "x",
+          authorExternalAccountId: "account-a",
           authorName: id,
           postedAt: "2026-01-01",
           status: "pending",

@@ -36,6 +36,26 @@ export function compositionEligibility(
     return "仅待处理帖子可以拆分或合并入库";
   if (new Set(candidates.map((candidate) => candidate.authorId)).size !== 1)
     return "所选帖子作者不同，无法合并";
+  if (mode === "merge") {
+    const manual = candidates.every(
+      (candidate) =>
+        candidate.platform === "manual" &&
+        candidate.authorExternalAccountId === null,
+    );
+    const first = candidates[0];
+    if (
+      !manual &&
+      (!first.authorExternalAccountId ||
+        !["x", "pixiv"].includes(first.platform) ||
+        candidates.some(
+          (candidate) =>
+            candidate.authorExternalAccountId !==
+              first.authorExternalAccountId ||
+            candidate.platform !== first.platform,
+        ))
+    )
+      return "仅支持合并同一来源账号的帖子，请调整选择";
+  }
   if (mode === "split" && candidates[0].media.length < 2)
     return "单图帖子无法拆分入库";
   if (

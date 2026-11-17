@@ -1,3 +1,9 @@
+import { toSourceAccountSummary } from "../authors/source-account-summary.js";
+import {
+  assertSourceFilterAccount,
+  normalizeSourceFilter,
+  sourceCandidateWhere,
+} from "../source-identity/source-filter.js";
 import { lockAccountMembership } from "../users/account-membership-lock.js";
 import { createHash } from "node:crypto";
 import { assertCurrentHandoff } from "../workflow/revision-policy.js";
@@ -176,6 +182,8 @@ export class WorksService {
   private async listScopes(actorId: string, query: WorkQueryDto) {
     if (query.claimStage && query.view !== WorkView.recommended)
       throw new BadRequestException("可接职责只能用于推荐接取视角");
+    const sourceFilter = normalizeSourceFilter(query);
+    await assertSourceFilterAccount(this.db, sourceFilter, query.authorId);
     const limit = query.limit ?? 24;
     const user = await this.db.user.findUnique({
       where: { id: actorId },
@@ -204,6 +212,13 @@ export class WorksService {
           : { not: WorkflowStatus.archived },
       reviewStatus: query.reviewStatus,
       authorId: query.authorId,
+      ...(Object.keys(sourceFilter).length
+        ? {
+            sources: {
+              some: { candidatePost: sourceCandidateWhere(sourceFilter) },
+            },
+          }
+        : {}),
       ...(query.search
         ? {
             OR: [
@@ -317,6 +332,7 @@ export class WorksService {
           authorId: query.authorId ?? null,
           mine: query.mine ?? false,
           unassignedStage: query.unassignedStage ?? null,
+          ...normalizeSourceFilter(query),
         }),
       )
       .digest("hex");
@@ -678,6 +694,19 @@ export class WorksService {
               select: {
                 id: true,
                 platform: true,
+                authorExternalAccount: {
+                  select: {
+                    id: true,
+                    platform: true,
+                    externalUserId: true,
+                    handle: true,
+                    profileUrl: true,
+                    displayNameSnapshot: true,
+                    avatarFileObjectId: true,
+                    fetchEnabled: true,
+                    deletedAt: true,
+                  },
+                },
                 externalPostId: true,
                 externalPostUrl: true,
                 text: true,
@@ -717,6 +746,9 @@ export class WorksService {
       const candidate = source.candidatePost;
       return {
         candidateId: candidate.id,
+        sourceAccount: candidate.authorExternalAccount
+          ? toSourceAccountSummary(candidate.authorExternalAccount)
+          : null,
         platform: candidate.platform,
         externalPostId: candidate.externalPostId,
         sourceUrl: candidate.externalPostUrl,
@@ -766,6 +798,7 @@ export class WorksService {
     if (!primary) throw new ConflictException("作品缺少来源记录，请联系管理员");
     return {
       candidateId: primary.candidateId,
+      sourceAccount: primary.sourceAccount,
       platform: primary.platform,
       externalPostId: primary.externalPostId,
       sourceUrl: primary.sourceUrl,

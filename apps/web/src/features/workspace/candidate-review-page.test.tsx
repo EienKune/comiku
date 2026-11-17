@@ -57,6 +57,8 @@ function candidate(
     revision,
     authorId: "author",
     authorName: "合成作者",
+    authorExternalAccountId: null,
+    sourceAccount: null,
     authorHandle: null,
     authorAvatarAvailable: false,
     platform: "fixture",
@@ -88,7 +90,7 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-test("ignored content supports loaded selection, cancellation and revision-aware bulk restore while imported content is read-only", async () => {
+test("ignored content supports individual selection, cancellation and revision-aware bulk restore without a loaded-selection button while imported content is read-only", async () => {
   const requests: unknown[] = [];
   vi.spyOn(client, "POST").mockImplementation((async (
     path: string,
@@ -149,10 +151,16 @@ test("ignored content supports loaded selection, cancellation and revision-aware
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  expect(screen.getByRole("navigation", { name: "候选审核区域" })).toBeTruthy();
   fireEvent.click(screen.getByRole("combobox", { name: "候选状态" }));
   fireEvent.click(screen.getByRole("option", { name: "已忽略" }));
   await screen.findByText("候选 ignored");
-  fireEvent.click(screen.getByRole("button", { name: /选择当前已加载内容/ }));
+  expect(
+    screen.queryByRole("button", { name: /选择当前已加载内容/ }),
+  ).toBeNull();
+  expect(screen.queryByRole("navigation", { name: "候选审核区域" })).toBeNull();
+  expect(screen.getByRole("group", { name: "候选操作" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("checkbox", { name: /选择 .* 的帖子/ }));
   expect(
     (
       screen.getByRole("checkbox", {
@@ -160,7 +168,7 @@ test("ignored content supports loaded selection, cancellation and revision-aware
       }) as HTMLInputElement
     ).checked,
   ).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: /取消当前已加载选择/ }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /选择 .* 的帖子/ }));
   expect(
     (
       screen.getByRole("checkbox", {
@@ -168,7 +176,7 @@ test("ignored content supports loaded selection, cancellation and revision-aware
       }) as HTMLInputElement
     ).checked,
   ).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: /选择当前已加载内容/ }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /选择 .* 的帖子/ }));
   fireEvent.click(screen.getByRole("button", { name: /恢复所选/ }));
   await waitFor(() =>
     expect(requests).toEqual([

@@ -172,13 +172,6 @@ export function AuthorPicker({
             onClick={() => choose(author)}
           >
             <span>{author.displayName}</span>
-            {author.externalAccounts[0] && (
-              <small>
-                {author.externalAccounts[0].platform === "x"
-                  ? `@${author.externalAccounts[0].handle ?? author.externalAccounts[0].externalUserId}`
-                  : `${author.externalAccounts[0].platform} ${author.externalAccounts[0].externalUserId}`}
-              </small>
-            )}
           </button>
         ))}
       </div>

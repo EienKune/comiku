@@ -504,7 +504,7 @@ test("Pixiv uses the numeric identity and exposes edit, confirmed unbind and res
   expect(
     (screen.getByRole("button", { name: "关联 Pixiv" }) as HTMLButtonElement)
       .disabled,
-  ).toBe(true);
+  ).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "编辑账号" }));
   fireEvent.change(screen.getByLabelText("平台显示昵称（可选）"), {
     target: { value: "新昵称" },
@@ -514,14 +514,14 @@ test("Pixiv uses the numeric identity and exposes edit, confirmed unbind and res
   expect(patch.mock.calls[0][1]).toMatchObject({
     body: { expectedRevision: 2, displayNameSnapshot: "新昵称" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "解绑账号" }));
+  fireEvent.click(screen.getByRole("button", { name: "停用账号" }));
   expect(remove).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "确认解绑" }));
+  fireEvent.click(screen.getByRole("button", { name: "确认停用" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(remove.mock.calls[0][1]).toMatchObject({
     body: { expectedRevision: 3 },
   });
-  fireEvent.click(screen.getByText("已解绑账号"));
+  fireEvent.click(screen.getByText("已停用账号"));
   fireEvent.click(await screen.findByRole("button", { name: "恢复关联" }));
   await waitFor(() => expect(post.mock.calls.at(-1)?.[0]).toContain("restore"));
 });
@@ -1111,4 +1111,80 @@ test("management account notes render as text and save edited or cleared notes",
   expect(patch.mock.calls[0][1]).toMatchObject({
     body: { notes: null, expectedRevision: 2 },
   });
+});
+
+test("same-platform active account does not block history restoration", async () => {
+  const archived = {
+    ...pixiv,
+    id: "archived",
+    externalUserId: "654321",
+    deletedAt: "2026-10-03T00:00:00Z",
+  };
+  vi.spyOn(client, "GET").mockImplementation(async (path) =>
+    success(
+      String(path).endsWith("archived")
+        ? [archived]
+        : path === "/api/authors/sources"
+          ? []
+          : [pixiv],
+    ),
+  );
+  const post = vi
+    .spyOn(client, "POST")
+    .mockResolvedValue(
+      success({ ...archived, deletedAt: null, fetchEnabled: false }),
+    );
+  setup([pixiv]);
+  fireEvent.click(await screen.findByText("已停用账号"));
+  const restore = await screen.findByRole("button", { name: "恢复关联" });
+  expect((restore as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(restore);
+  await waitFor(() =>
+    expect(post).toHaveBeenCalledWith(
+      "/api/authors/{authorId}/accounts/{id}/restore",
+      {
+        params: { path: { authorId: "author", id: "archived" } },
+        body: { expectedRevision: 2 },
+      },
+    ),
+  );
+});
+
+test("adding another Pixiv account preserves the existing account and sends a distinct paused identity", async () => {
+  let live = [pixiv];
+  vi.spyOn(client, "GET").mockImplementation(async (path) =>
+    success(
+      path === "/api/authors/sources" || String(path).endsWith("archived")
+        ? []
+        : live,
+    ),
+  );
+  const second = { ...pixiv, id: "second", externalUserId: "654321" };
+  const post = vi.spyOn(client, "POST").mockImplementation(async () => {
+    live = [pixiv, second];
+    return success(second);
+  });
+  setup([pixiv]);
+  const add = await screen.findByRole("button", { name: "关联 Pixiv" });
+  await waitFor(() => expect((add as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(add);
+  fireEvent.change(screen.getByLabelText("Pixiv 用户 ID"), {
+    target: { value: "654321" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存账号" }));
+  await screen.findByText("Pixiv · 654321");
+  expect(screen.getByText("Pixiv · 123456")).toBeTruthy();
+  expect(screen.getAllByRole("button", { name: "编辑账号" })).toHaveLength(2);
+  expect(post.mock.calls[0]).toEqual([
+    "/api/authors/{authorId}/accounts",
+    {
+      params: { path: { authorId: "author" } },
+      body: expect.objectContaining({
+        platform: "pixiv",
+        externalUserId: "654321",
+        fetchEnabled: false,
+        firstSyncMode: "none",
+      }),
+    },
+  ]);
 });

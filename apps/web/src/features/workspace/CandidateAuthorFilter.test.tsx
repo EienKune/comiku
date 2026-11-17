@@ -110,3 +110,36 @@ test("author suggestions can reach later pages and discard aborted old searches"
     ),
   ).toBe(true);
 });
+
+test("secondary account searches show only the author name and do not add an implicit source filter", async () => {
+  const item = {
+    ...author("one"),
+    externalAccounts: [
+      { platform: "x", handle: "main", externalUserId: "1" },
+      { platform: "pixiv", handle: null, externalUserId: "222" },
+      { platform: "x", handle: "side", externalUserId: "3" },
+    ],
+  };
+  vi.spyOn(client, "GET").mockResolvedValue(
+    ok({ items: [item], total: 1, nextCursor: null }),
+  );
+  const change = mount();
+  const input = screen.getByRole("combobox");
+  fireEvent.focus(input);
+  fireEvent.change(input, { target: { value: "side" } });
+  const option = await screen.findByRole("option", {
+    name: "作者 one",
+  });
+  expect(option.textContent).toBe("作者 one");
+  expect(client.GET).toHaveBeenLastCalledWith(
+    "/api/authors",
+    expect.objectContaining({
+      params: { query: { search: "side", limit: 50 } },
+    }),
+  );
+  fireEvent.click(option);
+  expect(change).toHaveBeenCalledExactlyOnceWith({
+    id: "one",
+    displayName: "作者 one",
+  });
+});

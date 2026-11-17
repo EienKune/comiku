@@ -21,6 +21,8 @@ function post(id: string, postedAt = "2026-01-01", authorId = "author") {
     id,
     authorId,
     authorName: id,
+    platform: "x",
+    authorExternalAccountId: "account-a",
     postedAt,
     revision: 2,
     status: "pending",
@@ -34,6 +36,40 @@ function selected(...posts: ImportCandidate[]) {
     emptyCandidateImportState(),
   );
 }
+
+test("merge requires one actual source account, with an explicit pure-manual exception", () => {
+  const a = post("a"),
+    b = post("b");
+  expect(compositionEligibility(selected(a, b), "merge")).toBe("");
+  for (const changed of [
+    { ...b, authorExternalAccountId: "account-b" },
+    { ...b, platform: "pixiv" },
+    { ...b, authorExternalAccountId: null },
+    { ...b, platform: "manual", authorExternalAccountId: null },
+  ]) {
+    expect(compositionEligibility(selected(a, changed), "merge")).toMatch(
+      /来源账号/,
+    );
+  }
+  expect(
+    compositionEligibility(
+      selected(
+        { ...a, authorExternalAccountId: null },
+        { ...b, authorExternalAccountId: null },
+      ),
+      "merge",
+    ),
+  ).toMatch(/来源账号/);
+  expect(
+    compositionEligibility(
+      selected(
+        { ...a, platform: "manual", authorExternalAccountId: null },
+        { ...b, platform: "manual", authorExternalAccountId: null },
+      ),
+      "merge",
+    ),
+  ).toBe("");
+});
 test("eligibility rejects cross-author/nonpending sources and bounds the full original set", () => {
   expect(compositionEligibility(selected(post("a")), "merge")).toMatch(/至少/);
   expect(

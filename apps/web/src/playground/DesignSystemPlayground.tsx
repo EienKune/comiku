@@ -843,9 +843,7 @@ export function DesignSystemPlayground() {
               <ImageLightboxDemo />
               <ImageOrderingDemo />
               <h3>作者平台主页</h3>
-              <p>
-                已关联账号可直接打开，未关联显示禁用；每个平台只关联一个账号，图标直接跳转。
-              </p>
+              <p>单账号直接打开主页，多账号先展开选择；未关联显示禁用。</p>
               <PlatformLinks
                 accounts={[
                   { platform: "x", handle: "comiku_demo", externalUserId: "1" },
@@ -853,6 +851,29 @@ export function DesignSystemPlayground() {
                 ]}
               />
               <PlatformLinks accounts={[]} />
+              <PlatformLinks
+                variant="accounts"
+                accounts={[
+                  ...Array.from({ length: 6 }, (_, index) => ({
+                    id: `demo-x-${index}`,
+                    platform: "x",
+                    handle:
+                      index === 0
+                        ? "demo_very_long_account_name_for_layout"
+                        : `demo_alt_${index}`,
+                    externalUserId: `${100 + index}`,
+                    fetchEnabled: index % 2 === 0,
+                  })),
+                  {
+                    id: "demo-pixiv",
+                    platform: "pixiv",
+                    handle: null,
+                    externalUserId: "123456",
+                    fetchEnabled: false,
+                  },
+                ]}
+              />
+
               <h3>作者目录账号与采集设置</h3>
               <p>
                 图标后直接展示账号；电源和暂停角标表示采集开关，关闭仍可打开主页。

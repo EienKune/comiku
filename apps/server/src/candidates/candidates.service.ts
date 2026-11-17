@@ -1,3 +1,5 @@
+import { toSourceAccountSummary } from "../authors/source-account-summary.js";
+import { assertSourceFilterAccount } from "../source-identity/source-filter.js";
 import {
   candidateTagRules,
   candidateReviewPolicyKey,
@@ -74,13 +76,24 @@ const details = {
       sourceLanguage: true,
       avatarFileObjectId: true,
       externalAccounts: {
-        where: { deletedAt: null },
-        select: { platform: true, handle: true, avatarFileObjectId: true },
+        where: { deletedAt: null, avatarFileObjectId: { not: null } },
+        select: { avatarFileObjectId: true },
+        take: 1,
       },
     },
   },
   authorExternalAccount: {
-    select: { platform: true, handle: true, avatarFileObjectId: true },
+    select: {
+      id: true,
+      platform: true,
+      externalUserId: true,
+      handle: true,
+      profileUrl: true,
+      displayNameSnapshot: true,
+      avatarFileObjectId: true,
+      fetchEnabled: true,
+      deletedAt: true,
+    },
   },
   media: { orderBy: { orderIndex: "asc" } },
   workSources: {
@@ -251,10 +264,8 @@ export class CandidatesService {
     candidate: CandidateDetails & { _count?: { media: number } },
   ): CandidateDto {
     const analysis = this.analysisSummary(candidate);
-    const account =
-      candidate.authorExternalAccount ??
-      candidate.author.externalAccounts.find((item) => item.platform === "x") ??
-      candidate.author.externalAccounts[0];
+    const account = candidate.authorExternalAccount;
+
     return {
       id: candidate.id,
       canRetryAnalysis: Boolean(
@@ -270,9 +281,14 @@ export class CandidatesService {
       tagRuleMatches: [],
       authorId: candidate.authorId,
       authorName: candidate.author.displayName,
+      authorExternalAccountId: candidate.authorExternalAccountId ?? null,
+      sourceAccount: account ? toSourceAccountSummary(account) : null,
       authorHandle: account?.handle ?? null,
       authorAvatarAvailable: Boolean(
-        candidate.author.avatarFileObjectId || account?.avatarFileObjectId,
+        candidate.author.avatarFileObjectId ||
+        candidate.author.externalAccounts.some(
+          (item) => item.avatarFileObjectId,
+        ),
       ),
       platform: candidate.platform,
       sourceLanguage: candidate.author.sourceLanguage,
@@ -397,6 +413,7 @@ export class CandidatesService {
             )
           : null;
         if (actorId && !session) await assertCandidateReader(tx, actorId);
+        await assertSourceFilterAccount(tx, filter, filter.authorId);
         const cursor = query.cursor
           ? decodeCandidateCursor(query.cursor, binding, session?.cursorSecret)
           : null;

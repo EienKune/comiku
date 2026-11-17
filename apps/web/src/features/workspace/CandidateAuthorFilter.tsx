@@ -167,16 +167,6 @@ export function CandidateAuthorFilter({
                 onClick={() => choose(item)}
               >
                 <span>{item.displayName}</span>
-                <small>
-                  {item.externalAccounts
-                    .slice(0, 2)
-                    .map((account) =>
-                      account.platform === "x"
-                        ? `X @${account.handle ?? account.externalUserId}`
-                        : `Pixiv ${account.externalUserId}`,
-                    )
-                    .join(" · ")}
-                </small>
               </button>
             ))}
           </div>

@@ -161,3 +161,38 @@ test("debounces input, ignores old results and clears a revoked selection after 
   await screen.findByText("所选作者已不再可用于上传，请重新选择");
   expect(screen.getByText("", { selector: "output" }).textContent).toBe("");
 });
+
+test("account searches show only the author name and selection remains author-wide", async () => {
+  const item = {
+    ...author("author", "作者"),
+    externalAccounts: [
+      { platform: "x", handle: "main", externalUserId: "100" },
+      {
+        platform: "x",
+        handle: "old_side",
+        externalUserId: "101",
+        deletedAt: "2026-01-01",
+      },
+      {
+        platform: "x",
+        handle: "side",
+        externalUserId: "102",
+        fetchEnabled: false,
+      },
+      { platform: "pixiv", handle: null, externalUserId: "103" },
+    ],
+  };
+  vi.spyOn(client, "GET").mockResolvedValue(
+    response({ items: [item], total: 1, nextCursor: null }) as never,
+  );
+  mount();
+  fireEvent.change(screen.getByRole("searchbox"), {
+    target: { value: "side" },
+  });
+  const option = await screen.findByRole("option", {
+    name: "作者",
+  });
+  expect(option.textContent).toBe("作者");
+  fireEvent.click(option);
+  expect(screen.getByText("author")).toBeTruthy();
+});
