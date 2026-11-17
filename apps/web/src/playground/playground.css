@@ -1414,15 +1414,9 @@
   white-space: nowrap;
 }
 
-.marker-demo__tools button:hover {
+.marker-demo__tools button:hover:not(.is-active) {
   background: rgba(255, 255, 255, 0.07);
   color: #f4f8f7;
-}
-
-.marker-demo__tools button.is-active {
-  border-color: color-mix(in srgb, var(--color-brand-400) 48%, transparent);
-  background: color-mix(in srgb, var(--color-brand-500) 17%, transparent);
-  color: #9df0e6;
 }
 
 .marker-demo__zoom {

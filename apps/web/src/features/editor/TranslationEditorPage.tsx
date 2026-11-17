@@ -65,6 +65,7 @@ import {
 } from "./draft-storage";
 import { useCanvasWheelZoom } from "./use-canvas-wheel-zoom";
 import "../../components/marker-hit-area.css";
+import "../../components/editor-tool-keycap.css";
 import { EditorReferenceTools } from "./reference/EditorReferenceTools";
 import { useSymbolInsertion } from "./reference/use-symbol-insertion";
 import "./translation-editor.css";
@@ -2184,16 +2185,19 @@ export function TranslationEditorPage() {
             <button
               type="button"
               key={value}
-              className={tool === value ? "is-active" : ""}
+              className={`editor-tool-button${tool === value ? " is-active" : ""}`}
               aria-pressed={tool === value}
               aria-label={label}
               aria-keyshortcuts={shortcut}
-              title={`${label}（${shortcut}）`}
+              title={`${label} · 快捷键 ${shortcut}（画布或工具栏聚焦时）`}
               disabled={!writable && value !== "pan"}
               onClick={() => selectTool(value)}
             >
               <ToolIcon size={16} />
-              <span>{label}</span>
+              <span className="translation-tool-label">{label}</span>
+              <kbd className="editor-tool-keycap" aria-hidden="true">
+                {shortcut}
+              </kbd>
             </button>
           ))}
         </div>
@@ -2216,6 +2220,7 @@ export function TranslationEditorPage() {
                 size="sm"
                 variant="secondary"
                 leadingIcon={<Upload size={15} />}
+                aria-label="导入 LabelPlus"
                 loading={labelPlusOperation === "preview"}
                 disabled={
                   !writable ||
@@ -2227,11 +2232,11 @@ export function TranslationEditorPage() {
                     ? "审核事项解决前不能导入正式版本"
                     : hasUnsaved
                       ? "请先同步当前本地修改"
-                      : undefined
+                      : "导入 LabelPlus"
                 }
                 onClick={() => labelPlusInputRef.current?.click()}
               >
-                导入 LabelPlus
+                <span className="translation-file-label">导入 LabelPlus</span>
               </Button>
             )}
           {editor.data.canExportLabelPlus && (
@@ -2239,12 +2244,13 @@ export function TranslationEditorPage() {
               size="sm"
               variant="secondary"
               leadingIcon={<Download size={15} />}
+              aria-label="导出 LabelPlus"
               loading={labelPlusOperation === "export"}
               disabled={hasUnsaved}
-              title={hasUnsaved ? "请先同步当前本地修改" : undefined}
+              title={hasUnsaved ? "请先同步当前本地修改" : "导出 LabelPlus"}
               onClick={() => void exportLabelPlus()}
             >
-              导出 LabelPlus
+              <span className="translation-file-label">导出 LabelPlus</span>
             </Button>
           )}
           <EditorReferenceTools

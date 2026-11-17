@@ -295,6 +295,10 @@ test("number shortcuts select the four tools without performing a server mutatio
     expect(button.getAttribute("aria-pressed")).toBe("true");
     expect(button.getAttribute("aria-keyshortcuts")).toBe(key);
     expect(button.title).toContain(key);
+    expect(button.querySelector("kbd")?.textContent).toBe(key);
+    expect(button.querySelector("kbd")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
     expect(event.defaultPrevented).toBe(true);
   }
   expect(
@@ -303,6 +307,8 @@ test("number shortcuts select the four tools without performing a server mutatio
       .filter(([path]) => path === "/api/work-images/{imageId}/markers"),
   ).toHaveLength(0);
   const button = screen.getByRole("button", { name: "添加框内" });
+  fireEvent.click(button.querySelector("kbd")!);
+  expect(button.getAttribute("aria-pressed")).toBe("true");
   button.focus();
   fireEvent.keyDown(button, { key: "3" });
   expect(
