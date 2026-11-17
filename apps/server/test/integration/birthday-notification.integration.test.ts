@@ -4,6 +4,7 @@ import "reflect-metadata";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { BirthdayReminderService } from "../../src/birthdays/birthday-reminder.service.js";
 import {
   birthdayAddDays,
@@ -798,6 +799,87 @@ test(
             [primary.key],
             "stale supplemental evidence must not block the fresh primary source",
           );
+        },
+      );
+      await t.test(
+        "expiry rechecks current status after waiting for a concurrent send reservation",
+        async () => {
+          await clearBirthdays();
+          await reset();
+          await reminders.maintain(now);
+          await runtime.maintain();
+          const occurrence =
+            await db.birthdayReminderOccurrence.findFirstOrThrow({
+              where: { catalogId: catalog.id },
+            });
+          const delivery = await db.notificationDelivery.findFirstOrThrow({
+            where: { eventId: occurrence.eventId!, channelId: channel.id },
+          });
+          await db.birthdayReminderOccurrence.update({
+            where: { id: occurrence.id },
+            data: { validBefore: new Date(now.getTime() - 1000) },
+          });
+          for (const status of ["sending", "accepted", "unknown"] as const) {
+            await db.notificationDelivery.update({
+              where: { id: delivery.id },
+              data: { status: "retry_wait", errorCode: null },
+            });
+            let locked!: () => void, release!: () => void;
+            const acquired = new Promise<void>((resolve) => {
+              locked = resolve;
+            });
+            const gate = new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            const reservation = db.$transaction(
+              async (tx) => {
+                await tx.notificationDelivery.update({
+                  where: { id: delivery.id },
+                  data: { status, revision: { increment: 1 } },
+                });
+                locked();
+                await gate;
+              },
+              { timeout: 15000 },
+            );
+            await acquired;
+            const expiration = reminders.maintain(now);
+            let blocked = false;
+            try {
+              for (let i = 0; i < 100; i++) {
+                const [observation] = await db.$queryRaw<
+                  { waiting: boolean }[]
+                >`
+                SELECT EXISTS(SELECT 1 FROM pg_stat_activity
+                  WHERE datname = current_database() AND pid <> pg_backend_pid()
+                  AND wait_event_type = 'Lock' AND cardinality(pg_blocking_pids(pid)) > 0
+                  AND query LIKE '%birthday_expired%') AS waiting`;
+                if (observation?.waiting) {
+                  blocked = true;
+                  break;
+                }
+                await delay(20);
+              }
+              assert.equal(
+                blocked,
+                true,
+                "real expiry UPDATE must wait on the concurrent reservation",
+              );
+            } finally {
+              release();
+              await reservation;
+              await expiration;
+            }
+            const saved = await db.notificationDelivery.findUniqueOrThrow({
+              where: { id: delivery.id },
+            });
+            assert.equal(
+              saved.status,
+              status,
+              "expiry must not overwrite a newer send state",
+            );
+            assert.equal(saved.errorCode, null);
+          }
         },
       );
     } finally {

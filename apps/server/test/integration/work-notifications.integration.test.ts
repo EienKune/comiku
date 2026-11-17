@@ -59,29 +59,22 @@ for (const receiverMode of ["legacy", "templates"] as const) {
       const sent: { group: string; text: string }[] = [];
       let workId = "";
       let channelId = "";
+      // Read-only preflights are transport requests, never message sends.
       let protocolRequests = 0;
+      let readinessRequests = 0;
+      let sendRequests = 0;
       let protocolFailure: unknown = null;
       const botServer = createServer(async (request, response) => {
         protocolRequests++;
         try {
           assert.equal(request.method, "POST");
-          assert.equal(request.url, "/send_group_msg");
           assert.equal(
             request.headers.authorization,
             `Bearer ${canaries.token}`,
           );
           let raw = "";
           for await (const chunk of request) raw += chunk;
-          const payload = JSON.parse(raw) as {
-            group_id: string;
-            auto_escape: boolean;
-            message: { type: string; data: { text: string } }[];
-          };
-          assert.equal(payload.auto_escape, true);
-          assert.equal(payload.message.length, 1);
-          assert.equal(payload.message[0]!.type, "text");
-          assert.equal(typeof payload.message[0]!.data.text, "string");
-          // The real adapter's network request must run outside these locks.
+          // Both readiness and message requests must run outside these locks.
           await db.$transaction(async (tx) => {
             const works = await tx.$queryRaw<
               { id: string }[]
@@ -92,6 +85,30 @@ for (const receiverMode of ["legacy", "templates"] as const) {
             assert.equal(works.length, 1);
             assert.equal(deliveries.length, 1);
           });
+          if (request.url === "/get_status") {
+            readinessRequests++;
+            assert.deepEqual(JSON.parse(raw), {});
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(
+              JSON.stringify({
+                status: "ok",
+                retcode: 0,
+                data: { online: true, good: true },
+              }),
+            );
+            return;
+          }
+          assert.equal(request.url, "/send_group_msg");
+          sendRequests++;
+          const payload = JSON.parse(raw) as {
+            group_id: string;
+            auto_escape: boolean;
+            message: { type: string; data: { text: string } }[];
+          };
+          assert.equal(payload.auto_escape, true);
+          assert.equal(payload.message.length, 1);
+          assert.equal(payload.message[0]!.type, "text");
+          assert.equal(typeof payload.message[0]!.data.text, "string");
           sent.push({
             group: payload.group_id,
             text: payload.message[0]!.data.text,
@@ -774,10 +791,16 @@ for (const receiverMode of ["legacy", "templates"] as const) {
         assert.equal(sent.length, expectedSources.length);
         assert.equal(protocolFailure, null);
         assert.equal(
-          protocolRequests,
+          sendRequests,
           sent.length,
-          "real OneBot HTTP transport must be exercised",
+          "real OneBot HTTP transport must send each frozen message once",
         );
+        assert.equal(
+          readinessRequests,
+          sent.length,
+          "each send must pass its read-only readiness preflight",
+        );
+        assert.equal(protocolRequests, readinessRequests + sendRequests);
         assert.ok(sent.every((message) => message.group === channel.groupId));
         const jobs = await db.backgroundJob.findMany({
           where: { id: { in: deliveries.map((delivery) => delivery.jobId!) } },
@@ -817,7 +840,13 @@ for (const receiverMode of ["legacy", "templates"] as const) {
           await runtime.runNext();
         }
         assert.equal(protocolFailure, null);
-        assert.equal(protocolRequests, expectedSources.length);
+        assert.equal(sendRequests, expectedSources.length);
+        assert.equal(readinessRequests, expectedSources.length);
+        assert.equal(
+          protocolRequests,
+          expectedSources.length * 2,
+          "idle maintenance must not probe or resend",
+        );
         assert.deepEqual(
           {
             events: await db.notificationEvent.count({

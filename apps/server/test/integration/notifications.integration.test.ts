@@ -11,6 +11,7 @@ import { NotificationPublisherService } from "../../src/notifications/notificati
 import { NotificationRuntimeService } from "../../src/notifications/notification-runtime.service.js";
 import { NotificationsService } from "../../src/notifications/notifications.service.js";
 import type { NotificationSendResult } from "../../src/notifications/notifications.contracts.js";
+import type { Prisma } from "../../src/generated/prisma/client.js";
 import type { OneBotHttpAdapter } from "../../src/notifications/onebot-http.adapter.js";
 import {
   assertNotificationHistoryPlan,
@@ -31,7 +32,7 @@ function barrier() {
 
 test(
   "notification PostgreSQL ledger: transaction, routing, lease, recovery and administrator fences",
-  { skip: !url, timeout: 90_000 },
+  { skip: !url, timeout: 180_000 },
   async (t) => {
     const env = parseEnvironment({ NODE_ENV: "test", DATABASE_URL: url });
     const db = new PrismaService(env);
@@ -440,12 +441,72 @@ test(
       );
 
       await t.test(
-        "safe retries stop after three external attempts and permanent failures never hot-loop",
+        "startup lasting beyond the old retry budget recovers through new workers with frozen content",
+        async () => {
+          const event = await publish("startup-recovery");
+          await first.runtime.maintain();
+          const original = await deliveryFor(event.id);
+          for (const delay of [5000, 15000, 30000, 60000]) {
+            await ready(original.id);
+            outcomes.push({
+              status: "retryable",
+              errorCode: "notification_provider_not_ready",
+              sendBoundaryCrossed: false,
+            });
+            const started = Date.now();
+            await worker().runtime.runNext();
+            const waiting = await deliveryFor(event.id);
+            assert.equal(waiting.status, "retry_wait");
+            assert.ok(waiting.nextAttemptAt!.getTime() >= started + delay);
+            const job = await db.backgroundJob.findUniqueOrThrow({
+              where: { id: waiting.jobId! },
+            });
+            assert.equal(job.status, "queued");
+            assert.equal(
+              job.attempts,
+              0,
+              "safe deferrals refund only Jobs budget",
+            );
+            assert.ok(job.availableAt >= waiting.nextAttemptAt!);
+          }
+          await ready(original.id);
+          await worker().runtime.runNext();
+          const accepted = await deliveryFor(event.id);
+          assert.equal(accepted.status, "accepted");
+          assert.equal(accepted.attempts, 5);
+          assert.equal(accepted.text, original.text);
+          assert.equal(accepted.groupId, original.groupId);
+          assert.equal(
+            accepted.audienceGeneration,
+            original.audienceGeneration,
+          );
+          assert.equal(
+            (
+              await db.notificationEvent.findUniqueOrThrow({
+                where: { id: event.id },
+              })
+            ).payloadHash,
+            event.payloadHash,
+          );
+          assert.deepEqual(
+            (
+              await db.notificationAttempt.findMany({
+                where: { deliveryId: original.id },
+                orderBy: { number: "asc" },
+              })
+            ).map((a) => a.status),
+            ["retryable", "retryable", "retryable", "retryable", "accepted"],
+          );
+        },
+      );
+
+      await t.test(
+        "safe retries stop after nine external attempts and permanent failures never hot-loop",
         async () => {
           const event = await publish("retry-budget");
           await first.runtime.maintain();
           const original = await deliveryFor(event.id);
-          for (let i = 0; i < 3; i++) {
+          for (let i = 0; i < 9; i++) {
             await ready(original.id);
             outcomes.push({
               status: "retryable",
@@ -456,7 +517,7 @@ test(
           }
           const failed = await deliveryFor(event.id);
           assert.equal(failed.status, "failed");
-          assert.equal(failed.attempts, 3);
+          assert.equal(failed.attempts, 9);
           const permanentEvent = await publish("permanent-failure");
           await first.runtime.maintain();
           await unthrottle();
@@ -544,6 +605,109 @@ test(
             (await service.resolveDelivery(admin.id, cancelled.id, ack)).id,
             (await service.resolveDelivery(admin.id, cancelled.id, ack)).id,
           );
+        },
+      );
+
+      await t.test(
+        "accepted response settlement loss and lease loss never resend after worker restart",
+        async () => {
+          for (const failure of [
+            "rollback",
+            "commit_reply",
+            "lease",
+          ] as const) {
+            const event = await publish(`settlement-${failure}`);
+            await first.runtime.maintain();
+            await unthrottle();
+            const delivery = await deliveryFor(event.id);
+            let injected = false,
+              calls = 0;
+            const runtimeDb = new Proxy(db, {
+              get(target, key) {
+                if (key !== "$transaction") return Reflect.get(target, key);
+                return async (
+                  run: (tx: Prisma.TransactionClient) => Promise<unknown>,
+                ) => {
+                  const result = await target.$transaction(async (tx) => {
+                    const value = await run(tx);
+                    if (value === true && !injected && failure === "rollback") {
+                      injected = true;
+                      throw new Error("synthetic settlement rollback");
+                    }
+                    return value;
+                  });
+                  if (
+                    result === true &&
+                    !injected &&
+                    failure === "commit_reply"
+                  ) {
+                    injected = true;
+                    throw new Error("synthetic lost commit acknowledgement");
+                  }
+                  return result;
+                };
+              },
+            });
+            const jobs = new JobsService(db);
+            const runtime = new NotificationRuntimeService(
+              runtimeDb,
+              jobs,
+              registry,
+              {
+                send: async () => {
+                  calls++;
+                  if (failure === "lease") {
+                    await db.backgroundJob.update({
+                      where: { id: delivery.jobId! },
+                      data: { leaseId: randomUUID(), leaseUntil: new Date(0) },
+                    });
+                  }
+                  return {
+                    status: "accepted",
+                    providerMessageId: "synthetic-receipt",
+                    sendBoundaryCrossed: true,
+                  };
+                },
+              } as unknown as OneBotHttpAdapter,
+              env,
+            );
+            runtime.onModuleInit();
+            const activate = () =>
+              db.backgroundJob.update({
+                where: { id: delivery.jobId! },
+                data: {
+                  status: "running",
+                  attempts: { increment: 1 },
+                  leaseId: randomUUID(),
+                  leaseUntil: new Date(Date.now() + 60000),
+                },
+              });
+            // Target this fixture's real leased job: another resource's deferred
+            // work may have become eligible during the preceding subtest.
+            await jobs.execute(await activate());
+            const settled = await deliveryFor(event.id);
+            assert.equal(
+              settled.status,
+              failure === "commit_reply" ? "accepted" : "sending",
+            );
+            await ready(delivery.id);
+            const restarted = worker();
+            await restarted.runtime.maintain();
+            await restarted.jobs.execute(await activate());
+            assert.equal(
+              (await deliveryFor(event.id)).status,
+              failure === "commit_reply" ? "accepted" : "unknown",
+            );
+            assert.equal(calls, 1);
+            const count = sent.length;
+            await worker().runtime.maintain();
+            assert.equal((await deliveryFor(event.id)).attempts, 1);
+            assert.equal(
+              sent.length,
+              count,
+              "recovery must not call ordinary transport again",
+            );
+          }
         },
       );
 
