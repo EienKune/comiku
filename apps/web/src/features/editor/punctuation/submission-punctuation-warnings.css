@@ -1,0 +1,61 @@
+.submission-punctuation-warnings {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  font-size: var(--text-sm);
+}
+
+.submission-punctuation-warnings > p {
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0 0;
+  border-radius: var(--radius-md);
+  color: var(--color-status-warning-text);
+  background: var(--color-status-warning-bg);
+}
+
+.submission-punctuation-warnings > [role="region"] {
+  min-height: 0;
+  max-height: 18rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: var(--space-1) var(--space-2);
+}
+
+.submission-punctuation-warnings > [role="region"]:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+.submission-punctuation-warnings ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.submission-punctuation-warnings li {
+  padding: var(--space-2) 0;
+}
+
+.submission-punctuation-warnings li + li {
+  border-top: 1px solid var(--color-border);
+}
+
+.submission-punctuation-warnings li > p,
+.submission-punctuation-warnings blockquote {
+  margin: var(--space-1) 0 0;
+}
+
+.submission-punctuation-warnings li > p {
+  color: var(--color-text-soft);
+}
+
+.submission-punctuation-warnings blockquote {
+  white-space: pre-wrap;
+}
+
+.submission-punctuation-warnings mark {
+  color: var(--color-status-warning-text);
+  background: var(--color-status-warning-bg);
+}

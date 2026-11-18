@@ -109,6 +109,7 @@ export function ReferenceDictionaryDialog({
         value={query}
         onChange={(event) => {
           const value = Array.from(event.target.value).slice(0, 80).join("");
+          if (value === query) return;
           setQuery(value);
           setOffset(0);
           setEntries([]);

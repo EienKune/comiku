@@ -8,6 +8,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { useSymbolInsertion } from "./use-symbol-insertion";
+import { installNativeTextEditMock } from "../native-text-edit.test-support";
 
 const update = vi.fn();
 const copy = vi.fn();
@@ -31,10 +32,6 @@ function Fixture({
     entries: removed
       ? []
       : [{ id: "entry-1", translatedText: text, localOnly }],
-    onUpdate: (id, value) => {
-      update(id, value);
-      setText(value);
-    },
   });
   return (
     <>
@@ -44,7 +41,10 @@ function Fixture({
           value={text}
           disabled={!writable || localOnly}
           {...insertion.bindTextarea("entry-1")}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            update("entry-1", event.target.value);
+            setText(event.target.value);
+          }}
         />
       )}
       <textarea aria-label="备注" />
@@ -60,6 +60,7 @@ beforeEach(() => {
   copy.mockReset().mockResolvedValue(undefined);
   update.mockReset();
   vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
+  return installNativeTextEditMock();
 });
 afterEach(() => {
   cleanup();
@@ -151,6 +152,7 @@ test("keeps IME composition fenced when partial input changes the controlled val
   const area = select();
   fireEvent.compositionStart(area);
   fireEvent.change(area, { target: { value: "甲入力丙" } });
+  update.mockClear();
   area.setSelectionRange(3, 3);
   fireEvent.select(area);
   fireEvent.keyUp(area, { key: "Process", isComposing: true });

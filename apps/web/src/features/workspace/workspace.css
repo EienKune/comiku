@@ -1173,6 +1173,20 @@
   outline: 3px solid var(--color-focus-ring);
   outline-offset: 2px;
 }
+.workspace-file-field input::file-selector-button {
+  margin-right: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-button-border);
+  border-radius: var(--radius-button);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+.workspace-file-field input::file-selector-button:hover {
+  background: var(--color-surface-soft);
+  border-color: var(--color-button-border-hover);
+}
 .workspace-file-field small {
   color: var(--color-text-muted);
   font-weight: var(--font-weight-regular);

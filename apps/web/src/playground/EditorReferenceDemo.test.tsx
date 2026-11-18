@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -7,7 +7,9 @@ import {
   screen,
 } from "@testing-library/react";
 import { client } from "../features/account/api";
+import { installNativeTextEditMock } from "../features/editor/native-text-edit.test-support";
 import { EditorReferenceDemo } from "./EditorReferenceDemo";
+beforeEach(installNativeTextEditMock);
 afterEach(() => {
   cleanup();
   vi.useRealTimers();

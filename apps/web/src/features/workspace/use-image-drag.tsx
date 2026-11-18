@@ -39,6 +39,32 @@ type Visual = {
   id: string;
   target: ImageDragTarget | null;
 };
+// Keep the pointer/capture/scroll coordinator shared, while each editor owns
+// its DOM identity and user-facing vocabulary.
+export type ImageDragSemantics = {
+  groupSelector: string;
+  listSelector: string;
+  itemSelector: string;
+  groupId: (element: HTMLElement) => string | undefined;
+  itemId: (element: HTMLElement) => string | undefined;
+  allowedButtonSelector: string;
+  feedbackClassName: string;
+  feedbackTestId: string;
+  announceDrop: (caption: string, slot: number) => string;
+  announceCancel: string;
+};
+const imageSemantics: ImageDragSemantics = {
+  groupSelector: "[data-image-drag-group]",
+  listSelector: "[data-image-drag-list]",
+  itemSelector: "[data-media-id]",
+  groupId: (element) => element.dataset.imageDragGroup,
+  itemId: (element) => element.dataset.mediaId,
+  allowedButtonSelector: "[data-image-drag-preview],[data-image-drag-grip]",
+  feedbackClassName: "image-drag-feedback",
+  feedbackTestId: "image-drag-feedback",
+  announceDrop: (caption, slot) => `${caption} 已移到第 ${slot + 1} 页`,
+  announceCancel: "拖动已取消，图片归属和顺序未更改",
+};
 export function useImageDrag(options: {
   groups: readonly ImageDragGroup[];
   validIds: readonly string[];
@@ -49,6 +75,7 @@ export function useImageDrag(options: {
   caption: (id: string) => string;
   disabled?: boolean;
   onDraggingChange?: (dragging: boolean) => void;
+  semantics?: ImageDragSemantics;
 }): { drag: ImageDrag; feedback: ReactNode } {
   const latest = useRef(options);
   latest.current = options;
@@ -68,19 +95,20 @@ export function useImageDrag(options: {
   const [visual, setVisual] = useState<Visual | null>(null),
     [announcement, setAnnouncement] = useState("");
   function hit(current: Session): ImageDragTarget | null {
+    const semantics = latest.current.semantics ?? imageSemantics;
     const element = document.elementFromPoint(current.x, current.y);
-    const group = element?.closest<HTMLElement>("[data-image-drag-group]");
+    const group = element?.closest<HTMLElement>(semantics.groupSelector);
     if (!group || !current.root.contains(group)) return null;
     const model = latest.current.groups.find(
-      (item) => item.id === group.dataset.imageDragGroup,
+      (item) => item.id === semantics.groupId(group),
     );
     if (!model) return null;
-    const list = group.matches("[data-image-drag-list]")
+    const list = group.matches(semantics.listSelector)
       ? group
-      : group.querySelector<HTMLElement>("[data-image-drag-list]");
+      : group.querySelector<HTMLElement>(semantics.listSelector);
     const rows = list
-      ? [...list.querySelectorAll<HTMLElement>("[data-media-id]")].filter(
-          (row) => row.dataset.mediaId !== current.id,
+      ? [...list.querySelectorAll<HTMLElement>(semantics.itemSelector)].filter(
+          (row) => semantics.itemId(row) !== current.id,
         )
       : [];
     const bounds = list?.getBoundingClientRect();
@@ -96,9 +124,12 @@ export function useImageDrag(options: {
     return {
       groupId: model.id,
       slot,
-      before: insideList ? rows[slot]?.dataset.mediaId : undefined,
+      before:
+        insideList && rows[slot] ? semantics.itemId(rows[slot]) : undefined,
       after:
-        slot === remaining.length ? rows.at(-1)?.dataset.mediaId : undefined,
+        slot === remaining.length && rows.length
+          ? semantics.itemId(rows[rows.length - 1])
+          : undefined,
     };
   }
   function positionFeedback(current: Session) {
@@ -193,9 +224,15 @@ export function useImageDrag(options: {
           current.snapshot,
         );
         setAnnouncement(
-          `${latest.current.caption(current.id)} 已移到第 ${target.slot + 1} 页`,
+          (latest.current.semantics ?? imageSemantics).announceDrop(
+            latest.current.caption(current.id),
+            target.slot,
+          ),
         );
-      } else setAnnouncement("拖动已取消，图片归属和顺序未更改");
+      } else
+        setAnnouncement(
+          (latest.current.semantics ?? imageSemantics).announceCancel,
+        );
       latest.current.onDraggingChange?.(false);
     }
     visualRef.current = null;
@@ -236,8 +273,9 @@ export function useImageDrag(options: {
       }
     };
     const up = (event: globalThis.PointerEvent) => {
-      if (clickToken.current?.pointerId === event.pointerId)
-        clickToken.current.expires = performance.now() + 600;
+      const token = clickToken.current;
+      if (token && token.pointerId === event.pointerId)
+        token.expires = performance.now() + 600;
       const current = session.current;
       if (!current || current.pointerId !== event.pointerId) return;
       current.x = event.clientX;
@@ -306,7 +344,9 @@ export function useImageDrag(options: {
     const button = element.closest("button");
     if (
       button &&
-      !button.matches("[data-image-drag-preview],[data-image-drag-grip]")
+      !button.matches(
+        (latest.current.semantics ?? imageSemantics).allowedButtonSelector,
+      )
     )
       return;
     const { rootRef, scrollRef, disabled, validIds, snapshot } = latest.current,
@@ -358,8 +398,8 @@ export function useImageDrag(options: {
               feedbackElement.current = element;
               if (element && session.current) positionFeedback(session.current);
             }}
-            className="image-drag-feedback"
-            data-testid="image-drag-feedback"
+            className={(options.semantics ?? imageSemantics).feedbackClassName}
+            data-testid={(options.semantics ?? imageSemantics).feedbackTestId}
             style={{ left: 0, top: 0 }}
           >
             <GripVertical size={16} />

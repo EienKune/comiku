@@ -5,12 +5,12 @@ import {
   useState,
   type TextareaHTMLAttributes,
 } from "react";
+import { replaceTextareaRange } from "../native-text-edit";
 export interface SymbolInsertionContext {
   scope: string;
   writable: boolean;
   selectedEntryId: string | null;
   entries: { id: string; translatedText: string; localOnly?: boolean }[];
-  onUpdate: (id: string, value: string) => void;
 }
 interface Target {
   scope: string;
@@ -40,7 +40,6 @@ export function useSymbolInsertion(context: SymbolInsertionContext) {
   const latest = useRef(context);
   latest.current = context;
   const target = useRef<Target | null>(null);
-  const pendingCaret = useRef<Target | null>(null);
   const composingNodes = useRef(new WeakSet<HTMLTextAreaElement>());
   const [status, setStatus] = useState("");
 
@@ -48,19 +47,11 @@ export function useSymbolInsertion(context: SymbolInsertionContext) {
     const saved = target.current;
     if (saved && !valid(saved, context)) {
       target.current = null;
-      pendingCaret.current = null;
-    }
-    const pending = pendingCaret.current;
-    if (pending && valid(pending, context)) {
-      pendingCaret.current = null;
-      pending.node.focus({ preventScroll: true });
-      pending.node.setSelectionRange(pending.start, pending.end);
     }
   });
   useEffect(() => {
     const clear = () => {
       target.current = null;
-      pendingCaret.current = null;
     };
     const focus = (event: FocusEvent) => {
       const node = event.target;
@@ -133,15 +124,15 @@ export function useSymbolInsertion(context: SymbolInsertionContext) {
       saved &&
       valid(saved, latest.current) &&
       !saved.composing &&
-      saved.node.value === saved.text
+      replaceTextareaRange(saved.node, {
+        start: saved.start,
+        end: saved.end,
+        expectedText: saved.text,
+        replacement: symbol,
+      })
     ) {
-      const text =
-        saved.text.slice(0, saved.start) + symbol + saved.text.slice(saved.end);
-      const caret = saved.start + symbol.length;
-      const next = { ...saved, text, start: caret, end: caret };
-      target.current = next;
-      pendingCaret.current = next;
-      latest.current.onUpdate(saved.id, text);
+      // Native input already went through the textarea's existing onChange.
+      remember(saved.id, saved.node);
       setStatus(`已插入 ${symbol}`);
       return;
     }

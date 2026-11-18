@@ -1,12 +1,31 @@
-import { useCallback, useEffect, useRef } from "react";
-import { TriangleAlert } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { CircleCheck, TriangleAlert } from "lucide-react";
 import "./error-toast.css";
+
+export type ToastNotice = {
+  tone: "success" | "warning" | "error";
+  message: string;
+};
 
 export function ErrorToast({
   message,
   onDismiss,
 }: {
   message: string;
+  onDismiss: () => void;
+}) {
+  const notice = useMemo<ToastNotice | null>(
+    () => (message ? { tone: "error", message } : null),
+    [message],
+  );
+  return <FeedbackToast notice={notice} onDismiss={onDismiss} />;
+}
+
+export function FeedbackToast({
+  notice,
+  onDismiss,
+}: {
+  notice: ToastNotice | null;
   onDismiss: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -21,11 +40,11 @@ export function ErrorToast({
 
   useEffect(() => {
     const toast = ref.current;
-    if (!toast || !message) {
+    if (!toast || !notice) {
       hovered.current = false;
       return;
     }
-    // A nonmodal top-layer popover remains visible above the author dialog.
+    // A nonmodal popover keeps feedback visible above an open workflow dialog.
     toast.showPopover?.();
     resume();
     return () => {
@@ -37,15 +56,17 @@ export function ErrorToast({
       )
         toast.hidePopover();
     };
-  }, [message, pause, resume]);
+  }, [notice, pause, resume]);
 
-  if (!message) return null;
+  if (!notice) return null;
+  const Icon = notice.tone === "success" ? CircleCheck : TriangleAlert;
   return (
     <div
       ref={ref}
       popover="manual"
-      className="ui-error-toast"
-      role="alert"
+      className="ui-feedback-toast"
+      data-tone={notice.tone}
+      role={notice.tone === "error" ? "alert" : "status"}
       onPointerEnter={() => {
         hovered.current = true;
         pause();
@@ -55,8 +76,8 @@ export function ErrorToast({
         resume();
       }}
     >
-      <TriangleAlert size={18} aria-hidden="true" />
-      <span>{message}</span>
+      <Icon size={18} aria-hidden="true" />
+      <span>{notice.message}</span>
     </div>
   );
 }

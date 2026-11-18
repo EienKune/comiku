@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { useState } from "react";
 import {
   cleanup,
@@ -43,6 +43,15 @@ function WorkspaceTestShell({ user }: { user: CurrentUser }) {
     </TopbarActionsContext.Provider>
   );
 }
+
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.removeAttribute("open");
+  };
+});
 
 afterEach(() => {
   cleanup();
@@ -559,8 +568,10 @@ test("lets the current participant cancel an active assignment", async () => {
 
   expect(await screen.findByText("正在翻译的作品")).toBeTruthy();
   expect(screen.queryByText("发布")).toBeNull();
-  vi.spyOn(window, "confirm").mockReturnValue(true);
   fireEvent.click(screen.getByRole("button", { name: "取消接取" }));
+  fireEvent.click(
+    screen.getByRole("dialog").querySelector("button:last-child")!,
+  );
   await waitFor(() =>
     expect(post).toHaveBeenCalledWith(
       "/api/works/{id}/stages/leave",
@@ -1842,6 +1853,11 @@ test("manual source upload uses a signed session before finalizing candidates", 
     ),
   );
   expect(window.localStorage.length).toBe(0);
+  expect(
+    (await screen.findByText("1 个图组入库完成")).closest(
+      '[data-tone="success"]',
+    ),
+  ).not.toBeNull();
 });
 
 test("reading album has its own query boundary, stays available after a card-list error and is absent from work view", async () => {

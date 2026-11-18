@@ -1,0 +1,58 @@
+[data-marker-reorder-id] {
+  position: relative;
+}
+[data-marker-reorder-moving="true"] {
+  opacity: 0.5;
+}
+[data-marker-reorder-active="true"] {
+  user-select: none;
+}
+[data-marker-reorder-before="true"]::before,
+[data-marker-reorder-after="true"]::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--color-brand-700);
+  pointer-events: none;
+}
+[data-marker-reorder-before="true"]::before {
+  top: -7px;
+}
+[data-marker-reorder-after="true"]::after {
+  bottom: -7px;
+}
+.marker-reorder-controls {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 2px;
+}
+.marker-reorder-controls .ui-icon-button {
+  width: 28px;
+  height: 32px;
+  box-shadow: none;
+}
+.marker-reorder-controls .marker-reorder-grip {
+  cursor: grab;
+  touch-action: none;
+}
+.marker-reorder-controls .marker-reorder-grip:active {
+  cursor: grabbing;
+}
+.marker-reorder-controls .marker-reorder-grip[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+@media (pointer: coarse) {
+  .marker-reorder-controls .ui-icon-button {
+    width: 44px;
+    height: 44px;
+  }
+}
+.marker-reorder-feedback {
+  color: var(--color-text);
+}

@@ -1,10 +1,16 @@
 import { Avatar } from "../components/Avatar";
 import { ImagePicker } from "../components/ImagePicker";
-import { ErrorToast } from "../components/ErrorToast";
+import { ConfirmationDemo } from "./ConfirmationDemo";
+import {
+  ErrorToast,
+  FeedbackToast,
+  type ToastNotice,
+} from "../components/ErrorToast";
 import { useEffect, useRef, useState } from "react";
 import { OptionalSection } from "../components/OptionalSection";
 import { PlatformLinks } from "../components/PlatformLinks";
 import { SourceManagementPattern } from "./SourceManagementPattern";
+import { ContributionDemo } from "./ContributionDemo";
 import {
   AlertCircle,
   Archive,
@@ -301,7 +307,7 @@ export function DesignSystemPlayground() {
       trigger?.focus();
     };
   }, [dialogOpen]);
-  const [toastVisible, setToastVisible] = useState(false);
+  const [toast, setToast] = useState<ToastNotice | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [selectedCandidates, setSelectedCandidates] = useState<string[]>([
     "post-a",
@@ -328,8 +334,7 @@ export function DesignSystemPlayground() {
   }
 
   function showToast() {
-    setToastVisible(true);
-    window.setTimeout(() => setToastVisible(false), 2600);
+    setToast({ tone: "success", message: "保存成功（样例）" });
   }
 
   return (
@@ -807,6 +812,7 @@ export function DesignSystemPlayground() {
                   >
                     打开确认对话框
                   </Button>
+                  <ConfirmationDemo />
                   <Button variant="ghost" onClick={showToast}>
                     显示轻提示
                   </Button>
@@ -841,6 +847,7 @@ export function DesignSystemPlayground() {
               <p>私有头像读取失败时显示昵称首字，不替代作品署名。</p>
               <WorkViewsDemo />
               <SourceManagementPattern />
+              <ContributionDemo />
               <ImageLightboxDemo />
               <ImageOrderingDemo />
               <h3>作者平台主页</h3>
@@ -1418,28 +1425,7 @@ export function DesignSystemPlayground() {
         message={errorMessage}
         onDismiss={() => setErrorMessage("")}
       />
-      <div
-        className={`toast ${toastVisible ? "is-visible" : ""}`}
-        role="status"
-        aria-live="polite"
-        aria-hidden={!toastVisible}
-        inert={!toastVisible}
-      >
-        <span>
-          <Check size={16} />
-        </span>
-        <div>
-          <strong>轻提示样例</strong>
-          <small>此处仅演示反馈样式，没有写入剪贴板。</small>
-        </div>
-        <IconButton
-          label="关闭提示"
-          size="sm"
-          onClick={() => setToastVisible(false)}
-        >
-          <X size={14} />
-        </IconButton>
-      </div>
+      <FeedbackToast notice={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }
