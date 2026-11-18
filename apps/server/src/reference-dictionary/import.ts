@@ -39,26 +39,49 @@ export async function importReferenceDictionary(
         throw new DictionaryImportError(
           "Dictionary source revision conflict; inspect current source revision before retrying",
         );
+      const { key, fileSha256, importerVersion, ...metadata } = data.source;
       if (
         current &&
-        current.fileSha256 === data.source.fileSha256 &&
-        current.importerVersion === data.source.importerVersion
-      )
+        current.fileSha256 === fileSha256 &&
+        current.importerVersion === importerVersion
+      ) {
+        if (
+          current.name === metadata.name &&
+          current.version === metadata.version &&
+          current.sourceUrl === metadata.sourceUrl &&
+          current.attribution === metadata.attribution &&
+          current.license === metadata.license
+        )
+          return {
+            status: "unchanged",
+            revision: current.revision,
+            entries: data.entries.length,
+          };
+        // A source label correction does not import a new corpus snapshot.
+        const source = await tx.onomatopoeiaSource.update({
+          where: { id: current.id },
+          data: { ...metadata, revision: { increment: 1 } },
+        });
         return {
-          status: "unchanged",
-          revision: current.revision,
+          status: "imported",
+          revision: source.revision,
           entries: data.entries.length,
         };
+      }
       const source = current
         ? await tx.onomatopoeiaSource.update({
             where: { id: current.id },
             data: {
-              ...data.source,
+              ...metadata,
+              fileSha256,
+              importerVersion,
               revision: { increment: 1 },
               importedAt: new Date(),
             },
           })
-        : await tx.onomatopoeiaSource.create({ data: data.source });
+        : await tx.onomatopoeiaSource.create({
+            data: { key, fileSha256, importerVersion, ...metadata },
+          });
       if (current)
         await tx.onomatopoeiaEntry.deleteMany({
           where: { sourceId: source.id },
