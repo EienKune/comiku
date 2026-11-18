@@ -19805,6 +19805,286 @@
         ]
       }
     },
+    "/api/contributions/summary": {
+      "get": {
+        "operationId": "getContributionSummary",
+        "parameters": [
+          {
+            "required": false,
+            "name": "period",
+            "in": "query",
+            "schema": {
+              "default": "month",
+              "type": "string"
+            }
+          },
+          {
+            "required": false,
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "default": "personal",
+              "type": "string"
+            }
+          },
+          {
+            "required": false,
+            "name": "userId",
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributionSummaryDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "contributions"
+        ]
+      }
+    },
+    "/api/contributions/details": {
+      "get": {
+        "operationId": "getContributionDetails",
+        "parameters": [
+          {
+            "required": false,
+            "name": "period",
+            "in": "query",
+            "schema": {
+              "default": "month",
+              "type": "string"
+            }
+          },
+          {
+            "required": false,
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "default": "personal",
+              "type": "string"
+            }
+          },
+          {
+            "required": false,
+            "name": "userId",
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "metric",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "required": false,
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "maximum": 100000,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "required": false,
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContributionDetailsDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "contributions"
+        ]
+      }
+    },
     "/api/notifications/status": {
       "get": {
         "operationId": "getNotificationStatus",
@@ -33999,6 +34279,219 @@
           "pendingCandidates",
           "myParticipatingWorks",
           "recentActivity"
+        ]
+      },
+      "ContributionCountsDto": {
+        "type": "object",
+        "properties": {
+          "translate": {
+            "type": "number"
+          },
+          "proofread": {
+            "type": "number"
+          },
+          "typeset": {
+            "type": "number"
+          },
+          "works": {
+            "type": "number"
+          },
+          "published": {
+            "type": "number"
+          },
+          "tasks": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "translate",
+          "proofread",
+          "typeset",
+          "works",
+          "published",
+          "tasks"
+        ]
+      },
+      "ContributionAchievementDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "condition": {
+            "type": "string"
+          },
+          "progress": {
+            "type": "number"
+          },
+          "target": {
+            "type": "number"
+          },
+          "achieved": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "condition",
+          "progress",
+          "target",
+          "achieved"
+        ]
+      },
+      "ContributionSummaryDto": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "type": "string",
+            "enum": [
+              "month",
+              "all"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "personal",
+              "team"
+            ]
+          },
+          "userId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "month": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string",
+            "example": "Asia/Shanghai"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ContributionCountsDto"
+          },
+          "achievements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContributionAchievementDto"
+            }
+          }
+        },
+        "required": [
+          "period",
+          "scope",
+          "userId",
+          "month",
+          "timezone",
+          "counts",
+          "achievements"
+        ]
+      },
+      "ContributionCreditDto": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "stage": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkStage"
+              }
+            ]
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "userId",
+          "displayName",
+          "stage",
+          "completedAt"
+        ]
+      },
+      "ContributionDetailDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "workId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workNumber": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "workflowStatus": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowStatus"
+              }
+            ]
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "contributions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContributionCreditDto"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "workId",
+          "workNumber",
+          "title",
+          "workflowStatus",
+          "publishedAt",
+          "contributions"
+        ]
+      },
+      "ContributionDetailsDto": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "number"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContributionDetailDto"
+            }
+          }
+        },
+        "required": [
+          "total",
+          "offset",
+          "limit",
+          "items"
         ]
       },
       "NotificationBoundedMetricDto": {

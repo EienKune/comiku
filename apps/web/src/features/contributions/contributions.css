@@ -1,0 +1,138 @@
+.contribution-page {
+  display: grid;
+  gap: var(--space-5);
+}
+.contribution-page > .account-heading {
+  margin: 0;
+  width: 100%;
+  text-align: left;
+}
+.contribution-toolbar,
+.contribution-toolbar > [role="group"],
+.contribution-summary-heading,
+.contribution-pagination {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.contribution-toolbar,
+.contribution-summary-heading {
+  justify-content: space-between;
+}
+.contribution-toolbar .ui-field {
+  min-width: min(16rem, 100%);
+}
+.contribution-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.contribution-metric {
+  height: auto;
+  min-height: 6rem;
+  text-align: left;
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+}
+.contribution-metric > span {
+  display: grid;
+  gap: var(--space-2);
+  width: 100%;
+  white-space: normal;
+}
+.contribution-metric strong {
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+.contribution-metric[aria-pressed="true"] {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.contribution-panel {
+  padding: var(--space-5);
+  min-width: 0;
+}
+.contribution-panel h2 {
+  margin: 0 0 var(--space-4);
+}
+.contribution-method {
+  color: var(--color-text-muted);
+}
+.contribution-method summary {
+  cursor: pointer;
+}
+.contribution-method p {
+  line-height: 1.7;
+}
+.contribution-achievements,
+.contribution-details {
+  padding: 0;
+  list-style: none;
+  margin: 0;
+}
+.contribution-achievements {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+.contribution-achievements > li {
+  min-width: 0;
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
+}
+.contribution-achievements > li > div,
+.contribution-details > li > div,
+.contribution-details > li > ul > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.contribution-achievements p {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.contribution-achievements progress {
+  min-width: 0;
+  flex: 1;
+  accent-color: var(--color-brand-700);
+}
+.contribution-details > li {
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-4) 0;
+  overflow-wrap: anywhere;
+}
+.contribution-details > li > ul {
+  list-style: none;
+  padding: var(--space-3) 0 0;
+  display: grid;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+}
+.contribution-details a {
+  color: var(--color-brand-700);
+}
+.contribution-pagination {
+  justify-content: flex-end;
+  margin-top: var(--space-4);
+}
+@media (max-width: 700px) {
+  .contribution-metrics,
+  .contribution-achievements {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .contribution-toolbar > .ui-field {
+    width: 100%;
+  }
+  .contribution-panel {
+    padding: var(--space-4);
+  }
+}
+@media (max-width: 420px) {
+  .contribution-achievements {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

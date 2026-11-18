@@ -15,6 +15,7 @@ import {
   Settings,
   Settings2,
   Users,
+  ChartNoAxesCombined,
 } from "lucide-react";
 import {
   Link,
@@ -84,6 +85,12 @@ const navigation: { label: string; items: NavItem[] }[] = [
         label: "团队成员",
         icon: Users,
         permission: "members:read",
+      },
+      {
+        to: "/contributions",
+        label: "我的贡献",
+        icon: ChartNoAxesCombined,
+        permission: "works:read",
       },
       {
         to: "/settings/system",
