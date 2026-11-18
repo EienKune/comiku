@@ -326,7 +326,11 @@ export function usePunctuationCheck(context: Context) {
                               disabled={!valid || !repairable(result)}
                               onClick={() => act(result, replacement)}
                             >
-                              替换为 {replacement}
+                              {result.ruleId === "ascii-double-quotes"
+                                ? "换为中文引号"
+                                : replacement === ": "
+                                  ? "换为半角冒号加空格"
+                                  : `替换为 ${replacement}`}
                             </Button>
                           ))}
                         </div>

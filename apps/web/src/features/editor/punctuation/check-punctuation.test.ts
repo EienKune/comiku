@@ -37,9 +37,9 @@ test("reports each Chinese dot run once, keeps both allowed ellipsis lengths, an
   expect(
     checkPunctuation("老师.\n真的. ”").map((issue) => issue.ruleId),
   ).toEqual(["chinese-sentence-period", "chinese-sentence-period"]);
-  expect(
-    checkPunctuation("… …… 老、老师… 「老师」 『某书』\n地球\n得到\n的确"),
-  ).toEqual([]);
+  expect(checkPunctuation("… …… 「老师」 『某书』\n地球\n得到\n的确")).toEqual(
+    [],
+  );
 });
 
 test.each([
@@ -56,9 +56,87 @@ test.each([
   "C:\\资料\\老师.",
   "/资料/老师...",
   "你好.png",
-  "老师.下一句尚待确认",
+  "检查 https://例子.测试/老师... 和 中文.png",
+  '保留原文 "Hello, world." 供参考',
+  '命令 `代码 "中文", 参数:值？`',
+  "价格12:30前为3,000元，版本v1.2.3。",
+  "老师: 继续。\n老 师\n「老师」『老师』“老师”",
 ])("does not rewrite protected punctuation in %s", (text) => {
   expect(checkPunctuation(text)).toEqual([]);
+});
+
+test("reports halfwidth commas and distinguishes pauses, stutters and lists", () => {
+  const issues = checkPunctuation("准备好,开始。然后､再看。老、老师，甲、乙。");
+  expect(
+    issues.map(({ ruleId, severity, replacements }) => ({
+      ruleId,
+      severity,
+      replacements,
+    })),
+  ).toEqual([
+    { ruleId: "chinese-comma", severity: "confirm", replacements: ["，"] },
+    { ruleId: "chinese-comma", severity: "confirm", replacements: ["，"] },
+    { ruleId: "pause-comma", severity: "confirm", replacements: ["…", "，"] },
+    { ruleId: "pause-comma", severity: "confirm", replacements: ["，"] },
+  ]);
+});
+
+test("groups a pair of straight double quotes without changing the inner text or offsets", () => {
+  const text = '第一行\r\n😀她说"𠮷老师？"。';
+  const issues = checkPunctuation(text);
+  expect(issues.map(({ ruleId }) => ruleId)).toEqual([
+    "ascii-double-quotes",
+    "halfwidth-question-exclamation",
+  ]);
+  expect(text.slice(issues[0].start, issues[0].end)).toBe('"𠮷老师？"');
+  expect(issues[0].replacements).toEqual(["“𠮷老师？”"]);
+  expect(checkPunctuation('她说"未闭合')).toEqual([]);
+});
+
+test("keeps quote pairing local when protected data contains or touches straight quotes", () => {
+  const text = '她说"老师 https://example.com"，看 `未配对的"`，然后"中文"。';
+  const issues = checkPunctuation(text);
+  expect(issues).toHaveLength(1);
+  expect(text.slice(issues[0].start, issues[0].end)).toBe('"中文"');
+  expect(issues[0].replacements).toEqual(["“中文”"]);
+  expect(checkPunctuation('打开"C:\\资料\\老师.txt"')).toEqual([]);
+});
+
+test("reports ambiguous colon and spacing formats without treating the permitted formats as errors", () => {
+  const issues = checkPunctuation(
+    "备注:继续 保持。\n下一行: 可以这样。\n时间12:30。\n老 师",
+  );
+  expect(
+    issues.map(({ ruleId, severity, replacements }) => ({
+      ruleId,
+      severity,
+      replacements,
+    })),
+  ).toEqual([
+    { ruleId: "ascii-colon", severity: "confirm", replacements: ["：", ": "] },
+    { ruleId: "mixed-spacing", severity: "confirm", replacements: ["，"] },
+  ]);
+});
+
+test("reports dots at clause boundaries but leaves periods in filenames and English untouched", () => {
+  const text =
+    "...\n…老师\n「老师」.下一句\n老师 .\n老师．\n链接：https://例子.测试/老师.。老师...\n老师abc.png " +
+    "你好.png 3.14 FOXY...";
+  const issues = checkPunctuation(text);
+  expect(issues.map(({ start, end }) => text.slice(start, end))).toEqual([
+    "...",
+    ".",
+    ".",
+    "．",
+    "...",
+  ]);
+  expect(issues.map(({ ruleId }) => ruleId)).toEqual([
+    "dot-ellipsis",
+    "chinese-sentence-period",
+    "chinese-sentence-period",
+    "chinese-sentence-period",
+    "dot-ellipsis",
+  ]);
 });
 
 function images(): EditableTranslationImage[] {
