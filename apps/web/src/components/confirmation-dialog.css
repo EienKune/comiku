@@ -1,0 +1,31 @@
+.ui-confirmation-dialog {
+  box-sizing: border-box;
+  width: min(28rem, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-5);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-lg);
+  overflow-wrap: anywhere;
+}
+.ui-confirmation-dialog::backdrop {
+  background: var(--color-overlay);
+}
+.ui-confirmation-dialog h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+.ui-confirmation-dialog > p {
+  color: var(--color-text-soft);
+  font-size: var(--text-sm);
+}
+.ui-confirmation-dialog footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}

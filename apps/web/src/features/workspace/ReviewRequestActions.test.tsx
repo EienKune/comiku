@@ -1,6 +1,7 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import {
   cleanup,
+  act,
   fireEvent,
   render,
   screen,
@@ -10,6 +11,15 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import { client, queryClient } from "../account/api";
 import { ReviewRequestActions } from "./ReviewRequestActions";
+
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.removeAttribute("open");
+  };
+});
 
 afterEach(() => {
   cleanup();
@@ -46,11 +56,11 @@ test("withdraw uses the fresh baseline, updates caches and removes its button on
     };
     return result(review);
   });
-  vi.spyOn(window, "confirm").mockReturnValue(true);
   queryClient.setQueryData(["work", "work"], { revision: 6 });
   queryClient.setQueryData(["works", "read"], { items: [] });
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "撤销审核请求" }));
+  fireEvent.click(await screen.findByRole("button", { name: "撤销请求" }));
   await screen.findByText("审核请求已撤销，已恢复原制作进度");
   expect(post).toHaveBeenCalledWith(
     "/api/reviews/{id}/withdraw",
@@ -79,9 +89,9 @@ test("a completed concurrent decision refreshes the result after a withdrawal co
       response: new Response(null, { status: 409 }),
     } as never;
   });
-  vi.spyOn(window, "confirm").mockReturnValue(true);
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "撤销审核请求" }));
+  fireEvent.click(await screen.findByRole("button", { name: "撤销请求" }));
   expect(await screen.findByRole("alert")).toHaveProperty(
     "textContent",
     "审核事项已处理",
@@ -101,3 +111,37 @@ test("non-applicants see the context link but cannot withdraw", async () => {
   );
   expect(screen.queryByRole("button", { name: "撤销审核请求" })).toBeNull();
 });
+
+test.each(["cancel", "escape", "revision", "permission"])(
+  "withdrawal makes no request after %s invalidates approval",
+  async (reason) => {
+    const review = { canWithdraw: true, workRevision: 6, editorEpoch: 8 };
+    vi.spyOn(client, "GET").mockResolvedValue(result(review));
+    const post = vi.spyOn(client, "POST");
+    mount();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "撤销审核请求" }),
+    );
+    const approve = await screen.findByRole("button", { name: "撤销请求" });
+    expect(post).not.toHaveBeenCalled();
+    if (reason === "cancel")
+      fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    else if (reason === "escape")
+      fireEvent(
+        screen.getByRole("dialog"),
+        new Event("cancel", { cancelable: true }),
+      );
+    else
+      await act(async () => {
+        queryClient.setQueryData(["review", "review"], {
+          ...review,
+          ...(reason === "revision"
+            ? { workRevision: 7 }
+            : { canWithdraw: false }),
+        });
+      });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(approve);
+    expect(post).not.toHaveBeenCalled();
+  },
+);

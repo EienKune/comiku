@@ -11,6 +11,7 @@ import {
   Check,
   Cloud,
   Hand,
+  Keyboard,
   MessageSquarePlus,
   Minus,
   Move,
@@ -22,6 +23,15 @@ import { useCanvasWheelZoom } from "../features/editor/use-canvas-wheel-zoom";
 import "../components/marker-hit-area.css";
 import "../components/editor-tool-keycap.css";
 import { MarkerTooltip } from "../components/MarkerTooltip";
+import { EditorShortcutDialog } from "../features/editor/shortcuts/EditorShortcutDialog";
+import {
+  captureShortcut,
+  defaultEditorShortcuts,
+  isShortcutControl,
+  shortcutAria,
+  shortcutLabel,
+  type EditorShortcuts,
+} from "../features/editor/shortcuts/editor-shortcuts";
 
 type MarkerPositionType = "inside" | "outside";
 type ToolMode = "add" | "move-marker" | "pan";
@@ -83,6 +93,11 @@ const markerTypeLabel: Record<MarkerPositionType, string> = {
 };
 
 export function MarkerDemo() {
+  const [shortcuts, setShortcuts] = useState<EditorShortcuts>({
+    ...defaultEditorShortcuts,
+  });
+  const [showShortcutSettings, setShowShortcutSettings] = useState(false);
+  const composing = useRef(false);
   const [markers, setMarkers] = useState(initialMarkers);
   const [selectedId, setSelectedId] = useState(initialMarkers[0].id);
   const [toolMode, setToolMode] = useState<ToolMode>("pan");
@@ -176,11 +191,8 @@ export function MarkerDemo() {
     const target = event.target;
     if (
       event.defaultPrevented ||
-      event.ctrlKey ||
-      event.altKey ||
-      event.metaKey ||
-      event.shiftKey ||
       event.repeat ||
+      composing.current ||
       event.nativeEvent.isComposing ||
       event.nativeEvent.keyCode === 229 ||
       dragRef.current ||
@@ -188,19 +200,57 @@ export function MarkerDemo() {
         'dialog[open], [role="dialog"][aria-modal="true"]',
       ) ||
       !(target instanceof Element) ||
-      !target.closest(".marker-demo__stage, .marker-demo__tools") ||
+      !target.closest(
+        ".marker-demo__stage, .marker-demo__tools, .translation-list",
+      ) ||
       target.closest(
         'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="spinbutton"], [role="slider"]',
-      ) ||
-      !["1", "2", "3", "4"].includes(event.key)
+      )
     )
       return;
-    event.preventDefault();
-    if (target.closest(".translation-marker"))
-      stageRef.current?.focus({ preventScroll: true });
-    if (event.key === "2") chooseAddTool("inside");
-    else if (event.key === "3") chooseAddTool("outside");
-    else chooseTool(event.key === "1" ? "pan" : "move-marker");
+    const captured = captureShortcut(event.nativeEvent);
+    if (!captured || !("shortcut" in captured)) return;
+    const action = (["pan", "add-inside", "add-outside", "move"] as const).find(
+      (id) => shortcuts[id] === captured.shortcut,
+    );
+    if (action) {
+      if (
+        !target.closest(".marker-demo__stage, .marker-demo__tools") ||
+        (!target.closest(".marker-demo__tools") && isShortcutControl(target))
+      )
+        return;
+      event.preventDefault();
+      if (target.closest(".translation-marker"))
+        stageRef.current?.focus({ preventScroll: true });
+      if (action === "add-inside") chooseAddTool("inside");
+      else if (action === "add-outside") chooseAddTool("outside");
+      else chooseTool(action === "pan" ? "pan" : "move-marker");
+    } else if (
+      target.closest(".marker-demo__stage, .translation-list") &&
+      !isShortcutControl(target)
+    ) {
+      const key = captured.shortcut;
+      if (
+        key === shortcuts["previous-marker"] ||
+        key === shortcuts["next-marker"]
+      ) {
+        event.preventDefault();
+        const previous = key === shortcuts["previous-marker"];
+        const nextIndex =
+          selectedIndex === -1
+            ? previous
+              ? markers.length - 1
+              : 0
+            : selectedIndex + (previous ? -1 : 1);
+        if (markers[nextIndex]) setSelectedId(markers[nextIndex].id);
+      } else if (
+        key === shortcuts["previous-page"] ||
+        key === shortcuts["next-page"]
+      ) {
+        // This preview has a single page; both boundaries remain on this page.
+        event.preventDefault();
+      }
+    }
   }
 
   function addMarker(event: MouseEvent<HTMLDivElement>) {
@@ -336,7 +386,28 @@ export function MarkerDemo() {
   }
 
   return (
-    <div className="marker-demo" onKeyDown={toolShortcut}>
+    <div
+      className="marker-demo"
+      onKeyDown={toolShortcut}
+      onCompositionStartCapture={() => {
+        composing.current = true;
+      }}
+      onCompositionEndCapture={() => {
+        composing.current = false;
+      }}
+    >
+      {showShortcutSettings && (
+        <EditorShortcutDialog
+          bindings={shortcuts}
+          notice={null}
+          helpText="聚焦按键框后按下新快捷键。设置仅用于本次演示，不会修改账号偏好。此示例仅有一页；在画布或标记列表聚焦时可切换标记。"
+          onSave={(next) => {
+            setShortcuts({ ...next });
+            return null;
+          }}
+          onClose={() => setShowShortcutSettings(false)}
+        />
+      )}
       <div className="marker-demo__toolbar">
         <div
           className="marker-demo__tools"
@@ -347,15 +418,15 @@ export function MarkerDemo() {
             type="button"
             className={`editor-tool-button${toolMode === "pan" ? " is-active" : ""}`}
             aria-label="移动画布"
-            aria-keyshortcuts="1"
-            title="移动画布 · 快捷键 1（画布或工具栏聚焦时）"
+            aria-keyshortcuts={shortcutAria(shortcuts.pan)}
+            title={`移动画布 · 快捷键 ${shortcutLabel(shortcuts.pan)}（画布或工具栏聚焦时）`}
             aria-pressed={toolMode === "pan"}
             onClick={() => chooseTool("pan")}
           >
             <Hand size={15} />
             移动画布
             <kbd className="editor-tool-keycap" aria-hidden="true">
-              1
+              {shortcutLabel(shortcuts.pan)}
             </kbd>
           </button>
           <button
@@ -366,15 +437,15 @@ export function MarkerDemo() {
                 : "editor-tool-button"
             }
             aria-label="框内标点"
-            aria-keyshortcuts="2"
-            title="框内标点 · 快捷键 2（画布或工具栏聚焦时）"
+            aria-keyshortcuts={shortcutAria(shortcuts["add-inside"])}
+            title={`框内标点 · 快捷键 ${shortcutLabel(shortcuts["add-inside"])}（画布或工具栏聚焦时）`}
             aria-pressed={toolMode === "add" && newMarkerType === "inside"}
             onClick={() => chooseAddTool("inside")}
           >
             <MessageSquarePlus size={15} />
             框内标点
             <kbd className="editor-tool-keycap" aria-hidden="true">
-              2
+              {shortcutLabel(shortcuts["add-inside"])}
             </kbd>
           </button>
           <button
@@ -385,33 +456,41 @@ export function MarkerDemo() {
                 : "editor-tool-button"
             }
             aria-label="框外标点"
-            aria-keyshortcuts="3"
-            title="框外标点 · 快捷键 3（画布或工具栏聚焦时）"
+            aria-keyshortcuts={shortcutAria(shortcuts["add-outside"])}
+            title={`框外标点 · 快捷键 ${shortcutLabel(shortcuts["add-outside"])}（画布或工具栏聚焦时）`}
             aria-pressed={toolMode === "add" && newMarkerType === "outside"}
             onClick={() => chooseAddTool("outside")}
           >
             <MessageSquarePlus size={15} />
             框外标点
             <kbd className="editor-tool-keycap" aria-hidden="true">
-              3
+              {shortcutLabel(shortcuts["add-outside"])}
             </kbd>
           </button>
           <button
             type="button"
             className={`editor-tool-button${toolMode === "move-marker" ? " is-active" : ""}`}
             aria-label="移动标点"
-            aria-keyshortcuts="4"
-            title="移动标点 · 快捷键 4（画布或工具栏聚焦时）"
+            aria-keyshortcuts={shortcutAria(shortcuts.move)}
+            title={`移动标点 · 快捷键 ${shortcutLabel(shortcuts.move)}（画布或工具栏聚焦时）`}
             aria-pressed={toolMode === "move-marker"}
             onClick={() => chooseTool("move-marker")}
           >
             <Move size={15} />
             移动标点
             <kbd className="editor-tool-keycap" aria-hidden="true">
-              4
+              {shortcutLabel(shortcuts.move)}
             </kbd>
           </button>
         </div>
+
+        <IconButton
+          label="快捷键设置"
+          size="sm"
+          onClick={() => setShowShortcutSettings(true)}
+        >
+          <Keyboard size={15} />
+        </IconButton>
 
         <div className="marker-demo__zoom">
           <IconButton
@@ -504,7 +583,12 @@ export function MarkerDemo() {
             <Badge tone="brand">{markers.length} 条</Badge>
           </div>
 
-          <div className="translation-list">
+          <div
+            className="translation-list"
+            tabIndex={0}
+            role="region"
+            aria-label="演示标记列表"
+          >
             {markers.map((marker, index) => (
               <button
                 type="button"

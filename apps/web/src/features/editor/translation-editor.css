@@ -346,7 +346,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
+  gap: var(--space-3);
   padding: var(--space-2) var(--space-4);
 }
 
@@ -737,6 +737,11 @@
   padding: var(--space-3);
 }
 
+.translation-entry-list:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
 .translation-entry-card {
   display: grid;
   gap: var(--space-3);
@@ -781,6 +786,14 @@
   display: flex;
   margin-left: auto;
   gap: var(--space-1);
+}
+
+.translation-entry-position > button {
+  min-height: 2rem;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  white-space: nowrap;
+  font-size: var(--text-xs);
 }
 
 .translation-entry-actions .ui-icon-button {

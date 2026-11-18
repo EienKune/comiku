@@ -1,3 +1,4 @@
+import { useConfirmation } from "../../components/use-confirmation";
 import { sourceAccountLabel } from "./source-account-label";
 import { SourceAccountFilter } from "./SourceAccountFilter";
 import {
@@ -60,7 +61,11 @@ import { SourceSyncControl } from "./SourceSyncControl";
 import { MemberAvatar } from "../account/MemberAvatar";
 import { Avatar } from "../../components/Avatar";
 import { ImagePicker } from "../../components/ImagePicker";
-import { ErrorToast } from "../../components/ErrorToast";
+import {
+  ErrorToast,
+  FeedbackToast,
+  type ToastNotice,
+} from "../../components/ErrorToast";
 import { AuthorImageUpload } from "./author-image-upload";
 import {
   useCallback,
@@ -2355,9 +2360,11 @@ function uploadSessionSummary(result: CandidateUploadSession) {
 function ManualCandidateUpload({
   onUploaded,
   onClose,
+  onImportNotice,
 }: {
   onUploaded: () => Promise<unknown>;
   onClose: () => void;
+  onImportNotice: (notice: ToastNotice | null) => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const action = useAction();
@@ -2582,15 +2589,27 @@ function ManualCandidateUpload({
 
   async function confirmUpload() {
     if (!completed) return;
+    const candidates = completed.items.flatMap((item) =>
+      item.candidate ? [item.candidate] : [],
+    );
     await action.run(async () => {
-      await checkpoints.current.confirm(
-        completed.items.flatMap((item) =>
-          item.candidate ? [item.candidate] : [],
-        ),
-        drafts,
-        destination,
-      );
-      await onUploaded();
+      if (destination === "direct") onImportNotice(null);
+      try {
+        await checkpoints.current.confirm(candidates, drafts, destination);
+      } catch (error) {
+        if (destination === "direct")
+          onImportNotice({
+            tone: "warning",
+            message: "直接入库未全部确认，请查看详情",
+          });
+        throw error;
+      }
+      if (destination === "direct")
+        onImportNotice({
+          tone: "success",
+          message: `${candidates.length} 个图组入库完成`,
+        });
+      void onUploaded().catch(() => {});
       onClose();
     });
   }
@@ -3141,6 +3160,8 @@ export function CandidatesPage() {
   const compositionSettler = useRef<
     (sources: readonly CandidateImportEntry[]) => void
   >(() => {});
+  const [importToast, setImportToast] = useState<ToastNotice | null>(null);
+  const dismissImportToast = useCallback(() => setImportToast(null), []);
   const composition = useCandidateComposition(
     useCallback(
       (sources: readonly CandidateImportEntry[]) =>
@@ -3148,9 +3169,11 @@ export function CandidatesPage() {
       [],
     ),
     refreshCandidates,
+    setImportToast,
   );
   const imageImport = useCandidateImageImport(
     refreshCandidates,
+    setImportToast,
     composition.locked,
   );
   compositionSettler.current = imageImport.settleComposition;
@@ -3521,6 +3544,7 @@ export function CandidatesPage() {
         {showUpload && (
           <ManualCandidateUpload
             onClose={() => setShowUpload(false)}
+            onImportNotice={setImportToast}
             onUploaded={() =>
               Promise.all([
                 queryClient.invalidateQueries({ queryKey: ["candidates"] }),
@@ -3576,6 +3600,7 @@ export function CandidatesPage() {
             error={imageImport.error}
           />
         )}
+        <FeedbackToast notice={importToast} onDismiss={dismissImportToast} />
         {discardIntent && (
           <CandidateDiscardDialog
             count={discardIntent.size}
@@ -4558,6 +4583,19 @@ function TypesetVersionPanel({
     ),
   );
   const versions = query.data;
+  const confirmation = useConfirmation([
+    work.id,
+    work.revision,
+    versions?.workRevision,
+    canManage,
+    canUpload,
+    canCancelSubmission,
+    action.busy,
+    files,
+    sourceImageIds,
+    mode,
+    note,
+  ]);
   const previewVersion = versions?.items.find(
     (version) => version.id === preview?.versionId,
   );
@@ -4601,16 +4639,19 @@ function TypesetVersionPanel({
 
   async function uploadVersion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!files.length || !versions) return;
+    if (!files.length || !versions || action.busy) return;
+    const formElement = event.currentTarget;
     if (
       mode === "replace_current" &&
-      !window.confirm(
-        "替换会创建新的不可变版本，并把当前版本放入 30 天回收期。确定继续吗？",
-      )
+      !(await confirmation.confirm({
+        title: "替换当前成图版本？",
+        description: "替换会创建新的不可变版本，并把当前版本放入 30 天回收期。",
+        confirmLabel: "替换当前版本",
+        danger: true,
+      }))
     ) {
       return;
     }
-    const formElement = event.currentTarget;
     await action.run(async () => {
       await uploadDirect(
         {
@@ -4664,7 +4705,15 @@ function TypesetVersionPanel({
     const message = version.isCurrent
       ? "这是当前成图版本。删除后作品将暂时没有当前成图，确定继续吗？"
       : `删除成图版本 v${version.versionNumber}？30 天内仍可恢复。`;
-    if (!window.confirm(message)) return;
+    if (
+      !(await confirmation.confirm({
+        title: `删除成图版本 v${version.versionNumber}？`,
+        description: message,
+        confirmLabel: "删除版本",
+        danger: true,
+      }))
+    )
+      return;
     await action.run(async () => {
       const result = await unwrap(
         await client.POST(
@@ -4712,9 +4761,12 @@ function TypesetVersionPanel({
   async function submitTypeset() {
     if (!versions?.currentVersionId) return;
     if (
-      !window.confirm(
-        "确认当前成图版本已经完整，可以交给运营发布吗？提交后将冻结本轮嵌字署名。",
-      )
+      !(await confirmation.confirm({
+        title: "提交嵌字阶段？",
+        description:
+          "请确认当前成图版本已经完整，可以交给运营发布。提交后将冻结本轮嵌字署名。",
+        confirmLabel: "提交嵌字",
+      }))
     ) {
       return;
     }
@@ -4737,9 +4789,13 @@ function TypesetVersionPanel({
 
   async function cancelTypesetSubmission() {
     if (
-      !window.confirm(
-        "确定取消嵌字提交吗？作品将回到嵌字中，原负责人恢复编辑资格，当前成图和历史提交记录都会保留。",
-      )
+      !(await confirmation.confirm({
+        title: "取消嵌字提交？",
+        description:
+          "作品将回到嵌字中，原负责人恢复编辑资格，当前成图和历史提交记录都会保留。",
+        confirmLabel: "取消提交",
+        danger: true,
+      }))
     ) {
       return;
     }
@@ -4763,6 +4819,7 @@ function TypesetVersionPanel({
 
   return (
     <Surface className="workspace-panel workspace-typeset-versions">
+      {confirmation.dialog}
       <div className="workspace-panel-heading">
         <div>
           <h2>成图版本</h2>
@@ -5109,6 +5166,16 @@ function PublishingPanel({
     ),
   );
 
+  const confirmation = useConfirmation([
+    work.id,
+    work.revision,
+    query.data?.workRevision,
+    canConfirm,
+    user,
+    action.busy,
+    note,
+  ]);
+
   async function copyText(text: string) {
     await action.run(async () => {
       if (!navigator.clipboard?.writeText) {
@@ -5136,9 +5203,11 @@ function PublishingPanel({
     event.preventDefault();
     if (!query.data) return;
     if (
-      !window.confirm(
-        `确认已使用成图版本 v${query.data.currentTypesetVersionNumber} 完成发布吗？文案和版本将保存为不可变历史。`,
-      )
+      !(await confirmation.confirm({
+        title: "确认发布完成？",
+        description: `请确认已使用成图版本 v${query.data.currentTypesetVersionNumber} 完成发布。文案和版本将保存为不可变历史。`,
+        confirmLabel: "确认发布",
+      }))
     ) {
       return;
     }
@@ -5188,6 +5257,7 @@ function PublishingPanel({
 
   return (
     <Surface className="workspace-panel workspace-publishing">
+      {confirmation.dialog}
       <div className="workspace-panel-heading">
         <div>
           <h2>发布整理</h2>
@@ -5329,6 +5399,12 @@ export function WorkDetailPage() {
   const query = useApiQuery(["work", id], async () =>
     unwrap(await client.GET("/api/works/{id}", { params: { path: { id } } })),
   );
+  const confirmation = useConfirmation([
+    id,
+    query.data?.revision,
+    user,
+    action.busy,
+  ]);
   function discardEditorCache() {
     queryClient.removeQueries({
       queryKey: ["translation-editor", id],
@@ -5440,7 +5516,15 @@ export function WorkDetailPage() {
         : activeCount === 1 && stage === "proofread"
           ? "你是最后一名校对。取消后会恢复最近的正式翻译版本并使本轮校对草稿失效，是否继续？"
           : "确定取消本次接取吗？已保存的共享内容会保留，未完成页需要重新分配。";
-    if (!window.confirm(warning)) return;
+    if (
+      !(await confirmation.confirm({
+        title: `取消${stageLabels[stage]}接取？`,
+        description: warning,
+        confirmLabel: "取消接取",
+        danger: true,
+      }))
+    )
+      return;
     await action.run(async () => {
       const updated = await unwrap(
         await client.POST("/api/works/{id}/stages/leave", {
@@ -5462,11 +5546,14 @@ export function WorkDetailPage() {
   async function updateCollaboration(work: WorkDetail) {
     const next = work.collaborationMode === "single" ? "multi" : "single";
     if (
-      !window.confirm(
-        next === "multi"
-          ? "开启多人协作后，同一阶段可加入多人，并启用页码分工与个人完成确认。"
-          : "切回单人模式要求每个阶段至多一名参与者，且不能保留同一用户翻译并校对的记录。是否继续？",
-      )
+      !(await confirmation.confirm({
+        title: next === "multi" ? "开启多人协作？" : "切回单人模式？",
+        description:
+          next === "multi"
+            ? "开启多人协作后，同一阶段可加入多人，并启用页码分工与个人完成确认。"
+            : "切回单人模式要求每个阶段至多一名参与者，且不能保留同一用户翻译并校对的记录。",
+        confirmLabel: next === "multi" ? "开启多人协作" : "切回单人模式",
+      }))
     ) {
       return;
     }
@@ -5531,6 +5618,7 @@ export function WorkDetailPage() {
   }
   return (
     <PermissionGate permission="works:read">
+      {confirmation.dialog}
       <Link className="workspace-back" to="/works">
         <ArrowLeft size={16} />
         返回作品
@@ -6321,15 +6409,26 @@ export function ReviewDetailPage() {
   const query = useApiQuery(["review", id], async () =>
     unwrap(await client.GET("/api/reviews/{id}", { params: { path: { id } } })),
   );
+  const confirmation = useConfirmation([
+    id,
+    query.data?.workRevision,
+    query.data?.editorEpoch,
+    user,
+    action.busy,
+  ]);
   async function resolve(
     review: Review,
     resolution: "continue_production" | "discard" | "restore_production",
   ) {
     if (
       resolution === "discard" &&
-      !window.confirm(
-        "舍弃后作品退出正常制作列表，编号、人员和成果保留，可由管理员恢复。确认舍弃吗？",
-      )
+      !(await confirmation.confirm({
+        title: "舍弃作品？",
+        description:
+          "舍弃后作品退出正常制作列表，编号、人员和成果保留，可由管理员恢复。",
+        confirmLabel: "舍弃作品",
+        danger: true,
+      }))
     )
       return;
     await action.run(async () => {
@@ -6362,6 +6461,7 @@ export function ReviewDetailPage() {
   }
   return (
     <PermissionGate permission="works:read">
+      {confirmation.dialog}
       <div className="account-content-boundary workspace-review-detail">
         <Link className="workspace-back" to="/reviews">
           <ArrowLeft size={16} />

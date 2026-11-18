@@ -155,6 +155,47 @@ test("dictionary PostgreSQL preserves meanings, exact/normalized/literal search 
   }
 });
 
+test("dictionary metadata corrections preserve the imported corpus identity and timestamp", async () => {
+  const db = new PrismaService(environment);
+  const key = `synthetic_${randomUUID()}`;
+  try {
+    const initial = snapshot(key, "カクッ");
+    await importReferenceDictionary(db, initial, 0);
+    const before = await db.onomatopoeiaSource.findUniqueOrThrow({
+      where: { key },
+      include: { entries: { orderBy: { sourceRef: "asc" } } },
+    });
+    const corrected = {
+      ...initial,
+      source: {
+        ...initial.source,
+        name: "Corrected synthetic reference",
+        version: "2",
+        sourceUrl: null,
+        attribution: "Corrected synthetic attribution",
+        license: null,
+      },
+    };
+    assert.equal(
+      (await importReferenceDictionary(db, corrected, 1)).revision,
+      2,
+    );
+    assert.equal(
+      (await importReferenceDictionary(db, corrected, 2)).status,
+      "unchanged",
+    );
+    await assert.rejects(importReferenceDictionary(db, initial, 1), /revision/);
+    const after = await db.onomatopoeiaSource.findUniqueOrThrow({
+      where: { key },
+      include: { entries: { orderBy: { sourceRef: "asc" } } },
+    });
+    assert.deepEqual(after, { ...before, ...corrected.source, revision: 2 });
+  } finally {
+    await db.onomatopoeiaSource.deleteMany({ where: { key } });
+    await db.$disconnect();
+  }
+});
+
 test("dictionary replacement is atomic, parser-aware and fenced for stale/concurrent/new importers", async () => {
   const db = new PrismaService(environment);
   const key = `synthetic_${randomUUID()}`,

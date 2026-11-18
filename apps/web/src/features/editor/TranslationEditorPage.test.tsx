@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -12,6 +12,15 @@ import { MemoryRouter, Outlet, Route, Routes } from "react-router";
 import type { CurrentUser } from "@comiku/api-client";
 import { client } from "../account/api";
 import { TranslationEditorPage } from "./TranslationEditorPage";
+
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.removeAttribute("open");
+  };
+});
 
 afterEach(() => {
   cleanup();
@@ -244,9 +253,9 @@ test("opens the real editor data and focuses the matching text entry from a mark
   fireEvent.submit(pageJump.closest("form")!);
   expect(await screen.findByAltText("第 2 页")).toBeTruthy();
 
-  vi.spyOn(window, "confirm").mockReturnValue(true);
   fireEvent.click(submit);
   fireEvent.click(submit);
+  fireEvent.click(await screen.findByRole("button", { name: "确认提交" }));
   await waitFor(() => expect(stageSubmitCount).toBe(1));
 });
 
@@ -334,7 +343,6 @@ test("submits unchanged proofreading and opens an existing note", async () => {
     data: { items: [], expiresInSeconds: 90 },
     response: new Response(null, { status: 200 }),
   } as never);
-  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   render(
     <QueryClientProvider
       client={
@@ -367,8 +375,8 @@ test("submits unchanged proofreading and opens an existing note", async () => {
     expect((submit as HTMLButtonElement).disabled).toBe(false),
   );
   fireEvent.click(submit);
+  fireEvent.click(await screen.findByRole("button", { name: "确认提交" }));
   await waitFor(() => expect(submitted).toBe(true));
-  expect(confirm).toHaveBeenCalled();
   expect(post).toHaveBeenCalledWith(
     "/api/works/{id}/stages/submit",
     expect.objectContaining({

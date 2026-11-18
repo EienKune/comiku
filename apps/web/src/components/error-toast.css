@@ -1,4 +1,4 @@
-.ui-error-toast {
+.ui-feedback-toast {
   position: fixed;
   inset: max(var(--space-5), env(safe-area-inset-top)) 0 auto;
   margin: 0 auto;
@@ -19,7 +19,16 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.ui-error-toast > svg {
+.ui-feedback-toast[data-tone="success"] {
+  border-color: var(--color-status-success-border);
+  background: var(--color-status-success-bg);
+  color: var(--color-status-success-text);
+}
+.ui-feedback-toast[data-tone="warning"] {
+  background: var(--color-status-warning-bg);
+  color: var(--color-status-warning-text);
+}
+.ui-feedback-toast > svg {
   flex: none;
   margin-top: 2px;
 }

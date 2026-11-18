@@ -171,3 +171,71 @@ test("shows an explicit retry after failure and clears old results as soon as qu
   await tick();
   expect(search).toHaveBeenCalledTimes(2);
 });
+
+test("ignored input beyond 80 code points preserves loaded pages and pagination", async () => {
+  const query = "あ".repeat(79) + "🙂";
+  const second = { ...entry, id: "second", original: "コツコツ" };
+  search
+    .mockResolvedValueOnce({ entries: [entry], nextOffset: 20 })
+    .mockResolvedValueOnce({ entries: [second], nextOffset: 40 });
+  render(<Fixture />);
+  open();
+  const input = screen.getByRole<HTMLInputElement>("searchbox");
+  fireEvent.change(input, { target: { value: query } });
+  await tick();
+  fireEvent.change(input, { target: { value: query + "う" } });
+  expect(input.value).toBe(query);
+  expect(screen.getByText(entry.original)).toBeTruthy();
+  expect(screen.queryByText(/正在查询/)).toBeNull();
+  await tick();
+  expect(search).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(screen.getByRole("button", { name: "继续加载" }));
+  await tick(0);
+  fireEvent.change(input, { target: { value: query + "🙂" } });
+  expect(screen.getByText(entry.original)).toBeTruthy();
+  expect(screen.getByText(second.original)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "继续加载" })).toBeTruthy();
+  await tick();
+  expect(search.mock.calls.map(([text, offset]) => [text, offset])).toEqual([
+    [query, 0],
+    [query, 20],
+  ]);
+});
+
+test("an in-flight capped query completes and an ignored suffix leaves its error retryable", async () => {
+  const query = "🙂".repeat(80);
+  let resolve!: (value: Awaited<ReturnType<typeof search>>) => void;
+  search.mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  search.mockRejectedValueOnce(new Error("合成读取失败"));
+  render(<Fixture />);
+  open();
+  const input = screen.getByRole("searchbox");
+  fireEvent.change(input, { target: { value: query } });
+  await tick();
+  fireEvent.change(input, { target: { value: query + "a" } });
+  expect(search.mock.calls[0][2].aborted).toBe(false);
+  await act(async () => {
+    resolve({ entries: [entry], nextOffset: null });
+  });
+  expect(screen.getByText(entry.original)).toBeTruthy();
+
+  const replaced = "x" + "🙂".repeat(79);
+  fireEvent.change(input, { target: { value: replaced } });
+  await tick();
+  fireEvent.change(input, { target: { value: replaced + "b" } });
+  expect(screen.getByRole("alert").textContent).toContain("合成读取失败");
+  fireEvent.click(screen.getByRole("button", { name: "重试" }));
+  await tick();
+  expect(search.mock.calls[2][0]).toBe(replaced);
+  fireEvent.change(input, { target: { value: replaced.slice(1) } });
+  await tick();
+  fireEvent.change(input, { target: { value: "" } });
+  await tick();
+  expect(search).toHaveBeenCalledTimes(4);
+});

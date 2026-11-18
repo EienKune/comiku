@@ -15,6 +15,7 @@ import {
   Settings,
   Settings2,
   Users,
+  ChartNoAxesCombined,
 } from "lucide-react";
 import {
   Link,
@@ -56,6 +57,12 @@ const navigation: { label: string; items: NavItem[] }[] = [
         icon: LayoutDashboard,
       },
       { to: "/works", label: "作品", icon: Archive, permission: "works:read" },
+      {
+        to: "/contributions",
+        label: "我的贡献",
+        icon: ChartNoAxesCombined,
+        permission: "works:read",
+      },
       {
         to: "/candidates",
         label: "候选池",
