@@ -537,22 +537,17 @@ test.each(["work", "birthday"] as const)(
   async (scope) => {
     const { get, patch } = mount();
     await screen.findAllByText("作品 1 类 · 工作 2 项");
-    fireEvent.click(screen.getByRole("button", { name: "编辑 合成群一" }));
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: scope === "work" ? "工作提醒" : "生日提醒",
-      }),
-    );
-    if (scope === "work")
-      fireEvent.click(
-        within(
-          await screen.findByRole("form", { name: "合成群一的工作提醒" }),
-        ).getByLabelText("72 小时未交稿"),
-      );
-    else
-      fireEvent.click(
-        await screen.findByRole("checkbox", { name: /接收生日提醒/ }),
-      );
+    const group = openGroupControls("合成群一");
+    const section = scope === "work" ? "工作提醒" : "生日提醒";
+    const reminder =
+      scope === "work" ? "72 小时未交稿" : "合成群一接收生日提醒";
+    const save = scope === "work" ? "保存工作提醒" : "保存生日订阅";
+    fireEvent.click(group.navigation.getByRole("button", { name: section }));
+    const reminderControls =
+      scope === "work"
+        ? within(await group.findByRole("form", { name: "合成群一的工作提醒" }))
+        : group;
+    fireEvent.click(await reminderControls.findByLabelText(reminder));
     const fresh = { ...channel, revision: 4 };
     const read = get.getMockImplementation() as unknown as (
       path: string,
@@ -576,20 +571,12 @@ test.each(["work", "birthday"] as const)(
       path === "/api/notifications/channels/{id}"
         ? reply(fresh)
         : reply({}, 409)) as never);
-    fireEvent.click(screen.getByRole("button", { name: "作品通知" }));
-    fireEvent.click(screen.getByRole("button", { name: "保存群设置" }));
-    await screen.findByText("配置已保存");
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: scope === "work" ? "工作提醒" : "生日提醒",
-      }),
-    );
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: scope === "work" ? "保存工作提醒" : "保存生日订阅",
-      }),
-    );
-    await screen.findByText(
+    fireEvent.click(group.navigation.getByRole("button", { name: "作品通知" }));
+    fireEvent.click(group.footer.getByRole("button", { name: "保存群设置" }));
+    await group.findByText("配置已保存");
+    fireEvent.click(group.navigation.getByRole("button", { name: section }));
+    fireEvent.click(group.footer.getByRole("button", { name: save }));
+    await group.findByText(
       scope === "work" ? /群订阅已变化/ : /生日订阅已变化/,
     );
     expect(patch.mock.calls[1][1]).toEqual(
@@ -598,21 +585,13 @@ test.each(["work", "birthday"] as const)(
       }),
     );
     expect(
-      (
-        screen.getByRole("checkbox", {
-          name: scope === "work" ? "72 小时未交稿" : /接收生日提醒/,
-        }) as HTMLInputElement
-      ).checked,
+      (reminderControls.getByLabelText(reminder) as HTMLInputElement).checked,
     ).toBe(true);
     fireEvent.click(
-      screen.getByRole("button", { name: "保留草稿并以当前版本重试" }),
+      group.getByRole("button", { name: "保留草稿并以当前版本重试" }),
     );
     patch.mockResolvedValue(reply({}) as never);
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: scope === "work" ? "保存工作提醒" : "保存生日订阅",
-      }),
-    );
+    fireEvent.click(group.footer.getByRole("button", { name: save }));
     await waitFor(() => expect(patch).toHaveBeenCalledTimes(3));
     expect(patch.mock.calls[2][1]).toEqual(
       expect.objectContaining({
