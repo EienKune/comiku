@@ -138,6 +138,23 @@ test("reports dots at clause boundaries but leaves periods in filenames and Engl
   ]);
 });
 
+test.each([
+  ["老师！", "半角问号 ? 和感叹号 !"],
+  ["老师...", "… 或 ……"],
+  ["老师.", "全角句号（。）"],
+  ["你好,老师", "全角 ，"],
+  ["老、老师", "省略号 … 或逗号 ，"],
+  ["老师、你好", "中文逗号 ，"],
+  ['她说"老师"', "“译文”"],
+  ["备注:继续", "说明：内容 或 说明: 内容"],
+  ["老师 你好。", "逗号 ，"],
+])("shows a clear punctuation example when checking %s", (text, example) => {
+  const issues = checkPunctuation(text);
+  expect(issues).toHaveLength(1);
+  expect(issues[0].explanation).toContain(example);
+  expect(issues[0].explanation).not.toMatch(/。$/u);
+});
+
 function images(): EditableTranslationImage[] {
   return [0, 1].map((orderIndex) => ({
     id: `image:${orderIndex}`,

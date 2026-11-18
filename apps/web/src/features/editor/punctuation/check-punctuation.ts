@@ -77,7 +77,7 @@ function checkLine(line: string, offset: number, issues: PunctuationIssue[]) {
         "halfwidth-question-exclamation",
         start,
         end,
-        "组规要求中文译文的问号、感叹号使用半角 ? 和 !。",
+        "组规要求中文译文使用半角问号 ? 和感叹号 !",
         [mark === "？" ? "?" : "!"],
         "format",
       );
@@ -96,7 +96,7 @@ function checkLine(line: string, offset: number, issues: PunctuationIssue[]) {
             "ascii-double-quotes",
             openingQuote,
             end,
-            "中文引文可使用成对的全角引号。请保留需要照录的原文格式。",
+            "需要照录时可保留原格式。中文引文可用成对的全角引号，如 “译文”",
             [`“${quoted}”`],
           );
         }
@@ -109,7 +109,7 @@ function checkLine(line: string, offset: number, issues: PunctuationIssue[]) {
     const right = hanAfter(line, end);
     if (mark === "," || mark === "､") {
       if (left || right)
-        add("chinese-comma", start, end, "中文句子中的逗号通常使用全角 ，。", [
+        add("chinese-comma", start, end, "中文句子中的逗号通常使用全角 ，", [
           "，",
         ]);
     } else if (mark === "、") {
@@ -123,8 +123,8 @@ function checkLine(line: string, offset: number, issues: PunctuationIssue[]) {
           start,
           end,
           repeated
-            ? "重复字之间的顿号可表示结巴。按语气选择省略号、逗号或保留顿号。"
-            : "若是从日文保留的逗号，可改为中文逗号。并列或有意停顿可以保留顿号。",
+            ? "重复字之间的顿号可表示结巴。可保留顿号，或按语气改用省略号 … 或逗号 ，"
+            : "并列或有意停顿可以保留顿号。若是沿用日文逗号，可改用中文逗号 ，",
           repeated ? ["…", "，"] : ["，"],
         );
       }
@@ -134,7 +134,7 @@ function checkLine(line: string, offset: number, issues: PunctuationIssue[]) {
           "ascii-colon",
           start,
           end,
-          "竖排可以使用半角冒号。横排请使用全角冒号或半角冒号加空格。",
+          "竖排可用半角冒号。横排可用全角冒号或半角冒号加空格，如 说明：内容 或 说明: 内容",
           ["：", ": "],
         );
     } else if (mark[0] === " ") {
@@ -143,7 +143,7 @@ function checkLine(line: string, offset: number, issues: PunctuationIssue[]) {
           "mixed-spacing",
           start,
           end,
-          "同一行同时用了空格和标点断句。若此处需要统一，可使用逗号；有意留白可以保留。",
+          "有意留白可以保留。若要统一这行的断句方式，可改用逗号 ，",
           ["，"],
         );
     } else if (mark !== "。") {
@@ -165,7 +165,7 @@ function checkLine(line: string, offset: number, issues: PunctuationIssue[]) {
           "dot-ellipsis",
           start,
           end,
-          "疑似用点号模拟省略号。中文省略号可用 … 或 ……，请按语气选择。",
+          "疑似用点号模拟省略号。可按语气选择 … 或 ……",
           mark.length >= 4 ? ["……", "…"] : ["…", "……"],
         );
       } else if (
@@ -179,7 +179,7 @@ function checkLine(line: string, offset: number, issues: PunctuationIssue[]) {
           "chinese-sentence-period",
           start,
           end,
-          "疑似用点号代替中文句号。请先确认是否为保留内容。",
+          "疑似用点号代替中文句号。若无需照录原文，可改用全角句号（。）",
           ["。"],
         );
       }
