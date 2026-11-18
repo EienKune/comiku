@@ -29,3 +29,19 @@
   gap: var(--space-3);
   margin-top: var(--space-5);
 }
+
+.ui-confirmation-dialog--with-details[open] {
+  display: flex;
+  flex-direction: column;
+  width: min(40rem, calc(100vw - 32px));
+}
+
+.ui-confirmation-details {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ui-confirmation-dialog--with-details > :not(.ui-confirmation-details) {
+  flex-shrink: 0;
+}

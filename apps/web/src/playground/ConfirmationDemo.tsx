@@ -1,6 +1,16 @@
 import { useState } from "react";
 import { Button } from "../components/ui";
 import { useConfirmation } from "../components/use-confirmation";
+import { checkPunctuation } from "../features/editor/punctuation/check-punctuation";
+import { SubmissionPunctuationWarnings } from "../features/editor/punctuation/SubmissionPunctuationWarnings";
+
+const exampleTranslation = "老师,请等一下！";
+const exampleWarnings = checkPunctuation(exampleTranslation).map((issue) => ({
+  ...issue,
+  imageNumber: 2,
+  entryNumber: 1,
+  text: exampleTranslation,
+}));
 
 export function ConfirmationDemo() {
   const [single, setSingle] = useState(false);
@@ -21,6 +31,22 @@ export function ConfirmationDemo() {
     <>
       <Button variant="secondary" onClick={() => void changeMode()}>
         {single ? "开启多人协作" : "切回单人模式"}
+      </Button>
+      <Button
+        variant="secondary"
+        onClick={() =>
+          void confirmation.confirm({
+            title: "提交翻译阶段？",
+            description: "服务器当前内容将保存为不可变版本。",
+            cancelLabel: "返回修改",
+            confirmLabel: "确认提交",
+            details: (
+              <SubmissionPunctuationWarnings results={exampleWarnings} />
+            ),
+          })
+        }
+      >
+        提交翻译
       </Button>
       {confirmation.dialog}
     </>

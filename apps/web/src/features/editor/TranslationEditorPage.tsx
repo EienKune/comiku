@@ -79,7 +79,8 @@ import "../../components/marker-hit-area.css";
 import "../../components/editor-tool-keycap.css";
 import { EditorReferenceTools } from "./reference/EditorReferenceTools";
 import { useSymbolInsertion } from "./reference/use-symbol-insertion";
-import { usePunctuationCheck } from "./punctuation/use-punctuation-check";
+import { checkTranslationPunctuation } from "./punctuation/check-punctuation";
+import { SubmissionPunctuationWarnings } from "./punctuation/SubmissionPunctuationWarnings";
 import "./translation-editor.css";
 
 type MarkerPosition = components["schemas"]["MarkerPositionType"];
@@ -326,11 +327,25 @@ export function TranslationEditorPage() {
   const writable = Boolean(
     editor.data?.canEdit && presenceMode === "edit" && !recoveryDraft,
   );
+  const stageContentReady =
+    editor.data?.submissionStage !== "translate" ||
+    (draftHydrated &&
+      initializedKey.current === `${user.id}:${workId}` &&
+      editor.isSuccess &&
+      !editor.isFetching &&
+      labelPlusOperation !== "import" &&
+      !reviewPending &&
+      !reorderPending);
   const confirmation = useConfirmation([
     workId,
     editor.data?.workRevision,
     editor.data?.editorEpoch,
+    editor.data?.latestVersion?.id,
+    editor.data?.submissionStage,
+    editor.data?.reviewStatus,
+    editor.data?.multiStageReady,
     editor.data?.canEdit,
+    stageContentReady,
     writable,
     images,
     hasUnsaved,
@@ -393,44 +408,6 @@ export function TranslationEditorPage() {
     writable,
     selectedEntryId,
     entries: currentEntries,
-  });
-  const punctuation = usePunctuationCheck({
-    scope: {
-      workId,
-      editorEpoch: editor.data?.editorEpoch ?? 0,
-      latestVersionId: editor.data?.latestVersion?.id ?? null,
-    },
-    images,
-    ready: Boolean(
-      draftHydrated &&
-      initializedKey.current === `${user.id}:${workId}` &&
-      user.permissions.includes("works:read") &&
-      editor.isSuccess &&
-      !editor.isFetching &&
-      !recoveryDraft,
-    ),
-    writable:
-      writable &&
-      saveState !== "syncing" &&
-      labelPlusOperation !== "import" &&
-      !reviewPending,
-    canRepair: () =>
-      writableRef.current &&
-      !stageSubmissionInFlight.current &&
-      !reorderRunning.current &&
-      editorHeadRef.current.editorEpoch === editorDataRef.current?.editorEpoch,
-    getTextarea: (id) =>
-      entryRefs.current.get(id)?.querySelector("textarea") ?? null,
-    onLocate: (result) => {
-      const index = imagesRef.current.findIndex(
-        (image) => image.id === result.imageId,
-      );
-      if (index < 0) return;
-      if (index !== pageIndex) goToPage(index);
-      selectEntry(result.entryId);
-    },
-    onUpdate: (entryId, translatedText) =>
-      updateEntry(entryId, { translatedText }),
   });
   useCanvasWheelZoom({
     canvas: canvasRef,
@@ -1423,6 +1400,7 @@ export function TranslationEditorPage() {
     if (
       stageSubmissionInFlight.current ||
       reorderRunning.current ||
+      !stageContentReady ||
       !editor.data ||
       !submissionStage ||
       !writable ||
@@ -1440,19 +1418,26 @@ export function TranslationEditorPage() {
       setMessage("多人协作还有页面未分配、未完成或完成后又被修改。");
       return;
     }
-    if (
-      !(await confirmation.confirm({
-        title: `提交${submissionStage === "translate" ? "翻译" : "校对"}阶段？`,
-        description: "服务器当前内容将保存为不可变版本。",
-        confirmLabel: "确认提交",
-      }))
-    ) {
-      return;
-    }
     stageSubmissionInFlight.current = true;
-    setSaveState("syncing");
-    setMessage(null);
     try {
+      const warnings =
+        submissionStage === "translate"
+          ? checkTranslationPunctuation(imagesRef.current)
+          : [];
+      if (
+        !(await confirmation.confirm({
+          title: `提交${submissionStage === "translate" ? "翻译" : "校对"}阶段？`,
+          description: "服务器当前内容将保存为不可变版本。",
+          confirmLabel: "确认提交",
+          ...(warnings.length > 0 && {
+            cancelLabel: "返回修改",
+            details: <SubmissionPunctuationWarnings results={warnings} />,
+          }),
+        }))
+      )
+        return;
+      setSaveState("syncing");
+      setMessage(null);
       const result = await client.POST("/api/works/{id}/stages/submit", {
         params: { path: { id: workId } },
         body: {
@@ -2137,13 +2122,11 @@ export function TranslationEditorPage() {
     <div
       className="translation-editor"
       onKeyDown={toolShortcut}
-      onCompositionStartCapture={(event) => {
+      onCompositionStartCapture={() => {
         shortcutComposing.current = true;
-        punctuation.compositionStart(event);
       }}
-      onCompositionEndCapture={(event) => {
+      onCompositionEndCapture={() => {
         shortcutComposing.current = false;
-        punctuation.compositionEnd(event);
       }}
     >
       {confirmation.dialog}
@@ -2516,6 +2499,7 @@ export function TranslationEditorPage() {
             <Button
               size="sm"
               disabled={
+                !stageContentReady ||
                 !writable ||
                 hasUnsaved ||
                 !online ||
@@ -2626,7 +2610,6 @@ export function TranslationEditorPage() {
               <span className="translation-file-label">导出 LabelPlus</span>
             </Button>
           )}
-          {punctuation.tools}
           <EditorReferenceTools
             key={referenceScope}
             insert={symbolInsertion.insert}
@@ -2655,7 +2638,6 @@ export function TranslationEditorPage() {
         </div>
       </div>
       <div className="translation-editor-notices">
-        {punctuation.notice}
         {editor.data.reviewStatus !== "normal" && (
           <section
             className={`translation-review-status is-${editor.data.reviewStatus}`}

@@ -3,7 +3,6 @@ import type { EditableTranslationImage } from "../draft-storage";
 import {
   checkPunctuation,
   checkTranslationPunctuation,
-  isPunctuationResultCurrent,
 } from "./check-punctuation";
 
 test("reports fullwidth questions and exclamations as separate definite fixes with UTF-16 offsets", () => {
@@ -167,36 +166,15 @@ function images(): EditableTranslationImage[] {
   }));
 }
 
-test("scans all parsed image drafts, preserves temporary identities, and rejects changed text, revision, epoch, work or deletion", () => {
-  const scope = { workId: "work", editorEpoch: 3, latestVersionId: "version" };
-  const drafts = images();
-  const results = checkTranslationPunctuation(scope, drafts);
+test("checks translated text on every page and preserves page and marker numbering", () => {
+  const results = checkTranslationPunctuation(images());
   expect(results).toHaveLength(2);
   expect(results[1]).toMatchObject({
-    imageId: "image:1",
-    entryId: "local:pending",
     imageNumber: 2,
     entryNumber: 1,
     start: 4,
+    text: "本地草稿？",
   });
-  expect(isPunctuationResultCurrent(results[1], scope, drafts)).toBe(true);
-  for (const changed of [
-    { ...scope, workId: "other" },
-    { ...scope, editorEpoch: 4 },
-    { ...scope, latestVersionId: "new" },
-  ])
-    expect(isPunctuationResultCurrent(results[1], changed, drafts)).toBe(false);
-  for (const change of [
-    { translatedText: "已修改？" },
-    { revision: 3 },
-    { orderIndex: 2 },
-  ]) {
-    const changed = images();
-    Object.assign(changed[1].entries[0], change);
-    expect(isPunctuationResultCurrent(results[1], scope, changed)).toBe(false);
-  }
-  drafts[1].entries = [];
-  expect(isPunctuationResultCurrent(results[1], scope, drafts)).toBe(false);
 });
 
 test("handles a maximum-length synthetic label with many adjacent dot runs and preserves result order", () => {

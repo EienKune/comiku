@@ -198,59 +198,23 @@ export function checkPunctuation(text: string): PunctuationIssue[] {
   return issues;
 }
 
-export interface PunctuationScope {
-  workId: string;
-  editorEpoch: number;
-  latestVersionId: string | null;
-}
-
-export interface PunctuationResult extends PunctuationIssue, PunctuationScope {
-  imageId: string;
-  entryId: string;
+export interface PunctuationResult extends PunctuationIssue {
   imageNumber: number;
   entryNumber: number;
-  revision: number;
   text: string;
 }
 
 export function checkTranslationPunctuation(
-  scope: PunctuationScope,
-  images: EditableTranslationImage[],
+  images: readonly EditableTranslationImage[],
 ): PunctuationResult[] {
   return images.flatMap((image) =>
     image.entries.flatMap((entry) =>
       checkPunctuation(entry.translatedText).map((issue) => ({
-        ...scope,
         ...issue,
-        imageId: image.id,
-        entryId: entry.id,
         imageNumber: image.orderIndex + 1,
         entryNumber: entry.orderIndex + 1,
-        revision: entry.revision,
         text: entry.translatedText,
       })),
     ),
-  );
-}
-
-export function isPunctuationResultCurrent(
-  result: PunctuationResult,
-  scope: PunctuationScope,
-  images: EditableTranslationImage[],
-) {
-  if (
-    result.workId !== scope.workId ||
-    result.editorEpoch !== scope.editorEpoch ||
-    result.latestVersionId !== scope.latestVersionId
-  )
-    return false;
-  const image = images.find((image) => image.id === result.imageId);
-  if (!image || image.orderIndex + 1 !== result.imageNumber) return false;
-  const entry = image.entries.find((item) => item.id === result.entryId);
-  return Boolean(
-    entry &&
-    entry.orderIndex + 1 === result.entryNumber &&
-    entry.revision === result.revision &&
-    entry.translatedText === result.text,
   );
 }

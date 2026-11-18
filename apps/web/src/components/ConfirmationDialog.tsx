@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "./ui";
 import "./confirmation-dialog.css";
@@ -6,6 +6,8 @@ import "./confirmation-dialog.css";
 export type Confirmation = {
   title: string;
   description: string;
+  details?: ReactNode;
+  cancelLabel?: string;
   confirmLabel: string;
   danger?: boolean;
 };
@@ -24,7 +26,7 @@ export function ConfirmationDialog({
     const previous = document.activeElement;
     const element = dialog.current;
     element?.showModal();
-    element?.querySelector<HTMLButtonElement>("button")?.focus();
+    element?.querySelector<HTMLButtonElement>("footer button")?.focus();
     return () => {
       element?.close();
       if (previous instanceof HTMLElement && previous.isConnected)
@@ -34,7 +36,7 @@ export function ConfirmationDialog({
   return createPortal(
     <dialog
       ref={dialog}
-      className="ui-confirmation-dialog"
+      className={`ui-confirmation-dialog${options.details ? " ui-confirmation-dialog--with-details" : ""}`}
       aria-labelledby={title}
       aria-describedby={description}
       onCancel={(event) => {
@@ -47,13 +49,13 @@ export function ConfirmationDialog({
       }}
       onKeyDown={(event) => {
         if (event.key !== "Tab") return;
-        const buttons = Array.from(
-          event.currentTarget.querySelectorAll<HTMLButtonElement>(
-            "button:not(:disabled)",
+        const controls = Array.from(
+          event.currentTarget.querySelectorAll<HTMLElement>(
+            '[tabindex="0"], button:not(:disabled)',
           ),
         );
-        const first = buttons[0];
-        const last = buttons.at(-1);
+        const first = controls[0];
+        const last = controls.at(-1);
         if (event.shiftKey && document.activeElement === first) {
           event.preventDefault();
           last?.focus();
@@ -65,13 +67,16 @@ export function ConfirmationDialog({
     >
       <h2 id={title}>{options.title}</h2>
       <p id={description}>{options.description}</p>
+      {options.details && (
+        <div className="ui-confirmation-details">{options.details}</div>
+      )}
       <footer>
         <Button
           type="button"
           variant="secondary"
           onClick={() => onClose(false)}
         >
-          取消
+          {options.cancelLabel ?? "取消"}
         </Button>
         <Button
           type="button"
