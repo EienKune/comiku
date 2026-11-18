@@ -58,12 +58,6 @@ const navigation: { label: string; items: NavItem[] }[] = [
       },
       { to: "/works", label: "作品", icon: Archive, permission: "works:read" },
       {
-        to: "/contributions",
-        label: "我的贡献",
-        icon: ChartNoAxesCombined,
-        permission: "works:read",
-      },
-      {
         to: "/candidates",
         label: "候选池",
         icon: Images,
@@ -91,6 +85,12 @@ const navigation: { label: string; items: NavItem[] }[] = [
         label: "团队成员",
         icon: Users,
         permission: "members:read",
+      },
+      {
+        to: "/contributions",
+        label: "我的贡献",
+        icon: ChartNoAxesCombined,
+        permission: "works:read",
       },
       {
         to: "/settings/system",
