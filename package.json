@@ -8,7 +8,7 @@
     "pnpm": "9.1.2"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @comiku/web --filter @comiku/server \"/^dev(:worker)?$/\"",
+    "dev": "pnpm db:generate && pnpm --parallel --filter @comiku/web --filter @comiku/server \"/^dev:watch(:worker)?$/\"",
     "dev:web": "pnpm --filter @comiku/web dev",
     "dev:server": "pnpm --filter @comiku/server dev",
     "build": "pnpm --recursive --if-present build",
