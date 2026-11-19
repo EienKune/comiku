@@ -5,6 +5,7 @@ import {
   useState,
   type MouseEvent,
   type PointerEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import {
   Check,
@@ -17,7 +18,9 @@ import {
   Trash2,
 } from "lucide-react";
 import { Badge, Button, IconButton } from "../components/ui";
-import { useAltWheelZoom } from "../features/editor/use-alt-wheel-zoom";
+import { useCanvasWheelZoom } from "../features/editor/use-canvas-wheel-zoom";
+import "../components/marker-hit-area.css";
+import "../components/editor-tool-keycap.css";
 import { MarkerTooltip } from "../components/MarkerTooltip";
 
 type MarkerPositionType = "inside" | "outside";
@@ -107,7 +110,7 @@ export function MarkerDemo() {
     return () => window.clearTimeout(timer);
   }, [markers]);
 
-  useAltWheelZoom({
+  useCanvasWheelZoom({
     canvas: stageRef,
     image: artboardRef,
     zoom: zoom / 100,
@@ -169,10 +172,51 @@ export function MarkerDemo() {
     setNewMarkerType(positionType);
   }
 
+  function toolShortcut(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const target = event.target;
+    if (
+      event.defaultPrevented ||
+      event.ctrlKey ||
+      event.altKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.repeat ||
+      event.nativeEvent.isComposing ||
+      event.nativeEvent.keyCode === 229 ||
+      dragRef.current ||
+      document.querySelector(
+        'dialog[open], [role="dialog"][aria-modal="true"]',
+      ) ||
+      !(target instanceof Element) ||
+      !target.closest(".marker-demo__stage, .marker-demo__tools") ||
+      target.closest(
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="spinbutton"], [role="slider"]',
+      ) ||
+      !["1", "2", "3", "4"].includes(event.key)
+    )
+      return;
+    event.preventDefault();
+    if (target.closest(".translation-marker"))
+      stageRef.current?.focus({ preventScroll: true });
+    if (event.key === "2") chooseAddTool("inside");
+    else if (event.key === "3") chooseAddTool("outside");
+    else chooseTool(event.key === "1" ? "pan" : "move-marker");
+  }
+
   function addMarker(event: MouseEvent<HTMLDivElement>) {
     if (toolMode !== "add") return;
 
-    const bounds = event.currentTarget.getBoundingClientRect();
+    const bounds = artboardRef.current?.getBoundingClientRect();
+    if (
+      !bounds ||
+      !bounds.width ||
+      !bounds.height ||
+      event.clientX < bounds.left ||
+      event.clientX > bounds.right ||
+      event.clientY < bounds.top ||
+      event.clientY > bounds.bottom
+    )
+      return;
     const marker: Marker = {
       id: crypto.randomUUID(),
       x: Math.max(
@@ -292,7 +336,7 @@ export function MarkerDemo() {
   }
 
   return (
-    <div className="marker-demo">
+    <div className="marker-demo" onKeyDown={toolShortcut}>
       <div className="marker-demo__toolbar">
         <div
           className="marker-demo__tools"
@@ -301,47 +345,71 @@ export function MarkerDemo() {
         >
           <button
             type="button"
-            className={toolMode === "pan" ? "is-active" : ""}
+            className={`editor-tool-button${toolMode === "pan" ? " is-active" : ""}`}
+            aria-label="移动画布"
+            aria-keyshortcuts="1"
+            title="移动画布 · 快捷键 1（画布或工具栏聚焦时）"
             aria-pressed={toolMode === "pan"}
             onClick={() => chooseTool("pan")}
           >
             <Hand size={15} />
             移动画布
+            <kbd className="editor-tool-keycap" aria-hidden="true">
+              1
+            </kbd>
           </button>
           <button
             type="button"
             className={
               toolMode === "add" && newMarkerType === "inside"
-                ? "is-active"
-                : ""
+                ? "editor-tool-button is-active"
+                : "editor-tool-button"
             }
+            aria-label="框内标点"
+            aria-keyshortcuts="2"
+            title="框内标点 · 快捷键 2（画布或工具栏聚焦时）"
             aria-pressed={toolMode === "add" && newMarkerType === "inside"}
             onClick={() => chooseAddTool("inside")}
           >
             <MessageSquarePlus size={15} />
             框内标点
+            <kbd className="editor-tool-keycap" aria-hidden="true">
+              2
+            </kbd>
           </button>
           <button
             type="button"
             className={
               toolMode === "add" && newMarkerType === "outside"
-                ? "is-active"
-                : ""
+                ? "editor-tool-button is-active"
+                : "editor-tool-button"
             }
+            aria-label="框外标点"
+            aria-keyshortcuts="3"
+            title="框外标点 · 快捷键 3（画布或工具栏聚焦时）"
             aria-pressed={toolMode === "add" && newMarkerType === "outside"}
             onClick={() => chooseAddTool("outside")}
           >
             <MessageSquarePlus size={15} />
             框外标点
+            <kbd className="editor-tool-keycap" aria-hidden="true">
+              3
+            </kbd>
           </button>
           <button
             type="button"
-            className={toolMode === "move-marker" ? "is-active" : ""}
+            className={`editor-tool-button${toolMode === "move-marker" ? " is-active" : ""}`}
+            aria-label="移动标点"
+            aria-keyshortcuts="4"
+            title="移动标点 · 快捷键 4（画布或工具栏聚焦时）"
             aria-pressed={toolMode === "move-marker"}
             onClick={() => chooseTool("move-marker")}
           >
             <Move size={15} />
             移动标点
+            <kbd className="editor-tool-keycap" aria-hidden="true">
+              4
+            </kbd>
           </button>
         </div>
 
@@ -383,20 +451,23 @@ export function MarkerDemo() {
           onPointerCancel={stopDragging}
         >
           <div
-            ref={artboardRef}
             className="marker-artboard"
-            style={{
-              transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom / 100})`,
-            }}
+            style={{ transform: `translate3d(${pan.x}px, ${pan.y}px, 0)` }}
             onClick={addMarker}
           >
-            <div className="marker-artboard__panel marker-artboard__panel--one" />
-            <div className="marker-artboard__panel marker-artboard__panel--two" />
-            <div className="marker-artboard__panel marker-artboard__panel--three" />
-            <div className="marker-artboard__bubble marker-artboard__bubble--one" />
-            <div className="marker-artboard__bubble marker-artboard__bubble--two" />
-            <div className="marker-artboard__character marker-artboard__character--one" />
-            <div className="marker-artboard__character marker-artboard__character--two" />
+            <div
+              ref={artboardRef}
+              className="marker-artboard-content"
+              style={{ transform: `scale(${zoom / 100})` }}
+            >
+              <div className="marker-artboard__panel marker-artboard__panel--one" />
+              <div className="marker-artboard__panel marker-artboard__panel--two" />
+              <div className="marker-artboard__panel marker-artboard__panel--three" />
+              <div className="marker-artboard__bubble marker-artboard__bubble--one" />
+              <div className="marker-artboard__bubble marker-artboard__bubble--two" />
+              <div className="marker-artboard__character marker-artboard__character--one" />
+              <div className="marker-artboard__character marker-artboard__character--two" />
+            </div>
 
             {markers.map((marker, index) => (
               <MarkerTooltip
@@ -406,7 +477,10 @@ export function MarkerDemo() {
                 <button
                   type="button"
                   className={`translation-marker translation-marker--${marker.positionType} ${marker.id === selectedId ? "is-selected" : ""}`}
-                  style={{ left: `${marker.x}%`, top: `${marker.y}%` }}
+                  style={{
+                    left: `${50 + (marker.x - 50) * (zoom / 100)}%`,
+                    top: `${50 + (marker.y - 50) * (zoom / 100)}%`,
+                  }}
                   aria-label={`选择第 ${index + 1} 条${markerTypeLabel[marker.positionType]}翻译`}
                   onPointerDown={(event) => startMarkerDrag(event, marker)}
                   onClick={(event) => {

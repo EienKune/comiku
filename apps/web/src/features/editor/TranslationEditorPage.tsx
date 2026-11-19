@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -62,7 +63,11 @@ import {
   type TranslationDraftRecord,
   type TranslationImage,
 } from "./draft-storage";
-import { useAltWheelZoom } from "./use-alt-wheel-zoom";
+import { useCanvasWheelZoom } from "./use-canvas-wheel-zoom";
+import "../../components/marker-hit-area.css";
+import "../../components/editor-tool-keycap.css";
+import { EditorReferenceTools } from "./reference/EditorReferenceTools";
+import { useSymbolInsertion } from "./reference/use-symbol-insertion";
 import "./translation-editor.css";
 
 type MarkerPosition = components["schemas"]["MarkerPositionType"];
@@ -93,12 +98,13 @@ type MarkerUndo = {
 const tools: {
   value: EditorTool;
   label: string;
+  shortcut: string;
   icon: typeof Grab;
 }[] = [
-  { value: "pan", label: "移动画布", icon: Grab },
-  { value: "add-inside", label: "添加框内", icon: Plus },
-  { value: "add-outside", label: "添加框外", icon: CircleDot },
-  { value: "move", label: "移动标记", icon: Move },
+  { value: "pan", label: "移动画布", shortcut: "1", icon: Grab },
+  { value: "add-inside", label: "添加框内", shortcut: "2", icon: Plus },
+  { value: "add-outside", label: "添加框外", shortcut: "3", icon: CircleDot },
+  { value: "move", label: "移动标记", shortcut: "4", icon: Move },
 ];
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -304,7 +310,16 @@ export function TranslationEditorPage() {
   );
   const writableRef = useRef(writable);
   writableRef.current = writable;
-  useAltWheelZoom({
+  const referenceScope = `${workId}:${currentImage?.id ?? ""}:${editor.data?.editorEpoch ?? 0}`;
+  const symbolInsertion = useSymbolInsertion({
+    scope: referenceScope,
+    writable,
+    selectedEntryId,
+    entries: currentEntries,
+    onUpdate: (entryId, translatedText) =>
+      updateEntry(entryId, { translatedText }),
+  });
+  useCanvasWheelZoom({
     canvas: canvasRef,
     image: imageRef,
     zoom,
@@ -1333,6 +1348,46 @@ export function TranslationEditorPage() {
     };
   }
 
+  function selectTool(value: EditorTool) {
+    markerUndoStack.current = [];
+    setTool(value);
+  }
+
+  function toolShortcut(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (
+      event.defaultPrevented ||
+      event.ctrlKey ||
+      event.altKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.repeat ||
+      event.nativeEvent.isComposing ||
+      event.nativeEvent.keyCode === 229 ||
+      !draftHydrated ||
+      recoveryDraft ||
+      !currentImage ||
+      drag.current ||
+      document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')
+    )
+      return;
+    const target = event.target;
+    if (
+      !(target instanceof Element) ||
+      !target.closest(".translation-canvas, .translation-tool-group") ||
+      target.closest(
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="spinbutton"], [role="slider"]',
+      )
+    )
+      return;
+    const next = tools.find((item) => item.shortcut === event.key);
+    if (!next || (!writable && next.value !== "pan")) return;
+    event.preventDefault();
+    // Tool changes remount marker tooltips; retain a stable keyboard target.
+    if (target.closest(".translation-marker"))
+      canvasRef.current?.focus({ preventScroll: true });
+    selectTool(next.value);
+  }
+
   function stagePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if ((event.target as HTMLElement).closest(".translation-page-controls")) {
       return;
@@ -1740,7 +1795,7 @@ export function TranslationEditorPage() {
     );
 
   return (
-    <div className="translation-editor">
+    <div className="translation-editor" onKeyDown={toolShortcut}>
       {showEntryChoice && (
         <div className="translation-entry-choice-backdrop">
           <section
@@ -2126,21 +2181,23 @@ export function TranslationEditorPage() {
       </header>
       <div className="translation-editor-toolbar" aria-label="编辑工具">
         <div className="translation-tool-group">
-          {tools.map(({ value, label, icon: ToolIcon }) => (
+          {tools.map(({ value, label, shortcut, icon: ToolIcon }) => (
             <button
               type="button"
               key={value}
-              className={tool === value ? "is-active" : ""}
+              className={`editor-tool-button${tool === value ? " is-active" : ""}`}
               aria-pressed={tool === value}
               aria-label={label}
+              aria-keyshortcuts={shortcut}
+              title={`${label} · 快捷键 ${shortcut}（画布或工具栏聚焦时）`}
               disabled={!writable && value !== "pan"}
-              onClick={() => {
-                markerUndoStack.current = [];
-                setTool(value);
-              }}
+              onClick={() => selectTool(value)}
             >
               <ToolIcon size={16} />
-              <span>{label}</span>
+              <span className="translation-tool-label">{label}</span>
+              <kbd className="editor-tool-keycap" aria-hidden="true">
+                {shortcut}
+              </kbd>
             </button>
           ))}
         </div>
@@ -2163,6 +2220,7 @@ export function TranslationEditorPage() {
                 size="sm"
                 variant="secondary"
                 leadingIcon={<Upload size={15} />}
+                aria-label="导入 LabelPlus"
                 loading={labelPlusOperation === "preview"}
                 disabled={
                   !writable ||
@@ -2174,11 +2232,11 @@ export function TranslationEditorPage() {
                     ? "审核事项解决前不能导入正式版本"
                     : hasUnsaved
                       ? "请先同步当前本地修改"
-                      : undefined
+                      : "导入 LabelPlus"
                 }
                 onClick={() => labelPlusInputRef.current?.click()}
               >
-                导入 LabelPlus
+                <span className="translation-file-label">导入 LabelPlus</span>
               </Button>
             )}
           {editor.data.canExportLabelPlus && (
@@ -2186,14 +2244,20 @@ export function TranslationEditorPage() {
               size="sm"
               variant="secondary"
               leadingIcon={<Download size={15} />}
+              aria-label="导出 LabelPlus"
               loading={labelPlusOperation === "export"}
               disabled={hasUnsaved}
-              title={hasUnsaved ? "请先同步当前本地修改" : undefined}
+              title={hasUnsaved ? "请先同步当前本地修改" : "导出 LabelPlus"}
               onClick={() => void exportLabelPlus()}
             >
-              导出 LabelPlus
+              <span className="translation-file-label">导出 LabelPlus</span>
             </Button>
           )}
+          <EditorReferenceTools
+            key={referenceScope}
+            insert={symbolInsertion.insert}
+            status={symbolInsertion.status}
+          />
         </div>
         <div className="translation-zoom-group">
           <IconButton
@@ -2303,7 +2367,7 @@ export function TranslationEditorPage() {
         <section
           ref={canvasRef}
           tabIndex={0}
-          aria-label="图片标记画布，Alt 加滚轮缩放，Ctrl 加 Z 撤销连续新标点"
+          aria-label="图片标记画布，滚轮缩放，Ctrl 加 Z 撤销连续新标点"
           className={`translation-canvas is-tool-${tool}`}
           onPointerDown={stagePointerDown}
           onPointerMove={stagePointerMove}
@@ -2315,19 +2379,12 @@ export function TranslationEditorPage() {
               className="translation-image-layer"
               style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
             >
-              <div
-                className="translation-image-frame"
-                style={
-                  {
-                    transform: `scale(${zoom})`,
-                    "--translation-marker-scale": 1 / zoom,
-                  } as React.CSSProperties
-                }
-              >
+              <div className="translation-image-frame">
                 <img
                   ref={imageRef}
                   src={imageUrl.data!.url}
                   alt={`第 ${pageIndex + 1} 页`}
+                  style={{ transform: `scale(${zoom})` }}
                   draggable={false}
                 />
                 {currentEntries.map((entry, index) => (
@@ -2339,8 +2396,8 @@ export function TranslationEditorPage() {
                       type="button"
                       className={`translation-marker is-${entry.markerPositionType}${selectedEntryId === entry.id ? " is-selected" : ""}${entry.localOnly ? " is-local" : ""}`}
                       style={{
-                        left: `${entry.markerX * 100}%`,
-                        top: `${entry.markerY * 100}%`,
+                        left: `${(0.5 + (entry.markerX - 0.5) * zoom) * 100}%`,
+                        top: `${(0.5 + (entry.markerY - 0.5) * zoom) * 100}%`,
                       }}
                       aria-label={`标记 ${index + 1}`}
                       onPointerDown={(event) =>
@@ -2463,12 +2520,16 @@ export function TranslationEditorPage() {
                   <label>
                     <span>译文</span>
                     <textarea
+                      {...symbolInsertion.bindTextarea(entry.id)}
                       value={entry.translatedText}
                       disabled={!writable || entry.localOnly}
                       placeholder={
                         entry.localOnly ? "标记同步后即可输入" : "输入对应译文"
                       }
-                      onFocus={() => selectEntry(entry.id)}
+                      onFocus={(event) => {
+                        selectEntry(entry.id);
+                        symbolInsertion.bindTextarea(entry.id).onFocus?.(event);
+                      }}
                       onChange={(event) =>
                         updateEntry(entry.id, {
                           translatedText: event.target.value,
