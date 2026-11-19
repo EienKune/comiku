@@ -1,3 +1,4 @@
+import { useConfirmation } from "../../components/use-confirmation";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
@@ -33,10 +34,28 @@ export function ReviewRequestActions({
     refetchOnMount: "always",
   });
 
+  const confirmation = useConfirmation([
+    reviewId,
+    workId,
+    query.data?.workRevision,
+    query.data?.editorEpoch,
+    query.data?.canWithdraw,
+    busy,
+    disabled,
+  ]);
+
   async function withdraw() {
     const review = query.data;
     if (!review?.canWithdraw || busy || disabled) return;
-    if (!window.confirm("撤销本人的审核请求并恢复原制作进度，确认吗？")) return;
+    if (
+      !(await confirmation.confirm({
+        title: "撤销审核请求？",
+        description: "将撤销本人的审核请求并恢复原制作进度。",
+        confirmLabel: "撤销请求",
+        danger: true,
+      }))
+    )
+      return;
     setBusy(true);
     setError(null);
     setSuccess(null);
@@ -66,6 +85,7 @@ export function ReviewRequestActions({
 
   return (
     <div>
+      {confirmation.dialog}
       <div className="workspace-inline-actions">
         {showLink && (
           <Link className="account-link" to={`/reviews/${reviewId}`}>

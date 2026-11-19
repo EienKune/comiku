@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   cleanup,
   act,
@@ -12,16 +12,18 @@ import { MemoryRouter, Outlet, Route, Routes } from "react-router";
 import type { CurrentUser, components } from "@comiku/api-client";
 import { client } from "../account/api";
 import { TranslationEditorPage } from "./TranslationEditorPage";
+import { installNativeTextEditMock } from "./native-text-edit.test-support";
 
 type Entry = components["schemas"]["TranslationEntryDto"];
 type Editor = components["schemas"]["TranslationEditorDto"];
+beforeEach(installNativeTextEditMock);
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-async function fixture(canEdit = true) {
+async function fixture(canEdit = true, seededEntries = 0) {
   vi.stubGlobal("PointerEvent", MouseEvent);
   const user: CurrentUser = {
     id: "00000000-0000-4000-8000-000000000001",
@@ -73,7 +75,27 @@ async function fixture(canEdit = true) {
       entries: [],
     })),
   };
+  const seededImage = head.images[0];
+  seededImage.entries = Array.from(
+    { length: seededEntries },
+    (_, orderIndex) => ({
+      id: crypto.randomUUID(),
+      workImageId: seededImage.id,
+      orderIndex,
+      markerX: 0.2 + orderIndex * 0.05,
+      markerY: 0.3 + orderIndex * 0.05,
+      markerPositionType: "inside",
+      translatedText: `原文 ${orderIndex + 1}`,
+      note: null,
+      revision: 0,
+      createdById: user.id,
+      updatedById: user.id,
+      createdAt: "2026-11-18T00:00:00Z",
+      updatedAt: "2026-11-18T00:00:00Z",
+    }),
+  );
   let delayCreate: (() => Promise<void>) | null = null;
+  let delayReorder: Promise<void> | null = null;
   let failCreate = false;
   const created = new Map<string, Entry>();
   const response = (data: unknown, status = 200) =>
@@ -122,6 +144,44 @@ async function fixture(canEdit = true) {
   const post = vi
     .spyOn(client, "POST")
     .mockImplementation(async (path, options) => {
+      if (path === "/api/work-images/{imageId}/markers/{entryId}/reorder") {
+        if (delayReorder) await delayReorder;
+        const { params, body } = options as {
+          params: { path: { imageId: string; entryId: string } };
+          body: {
+            beforeMarkerId: string | null;
+            expectedImageRevision: number;
+            expectedEditorEpoch: number;
+          };
+        };
+        const image = head.images.find(
+          (item) => item.id === params.path.imageId,
+        )!;
+        if (
+          !head.canEdit ||
+          body.expectedEditorEpoch !== head.editorEpoch ||
+          body.expectedImageRevision !== image.translationRevision
+        )
+          return response(null, 409);
+        const others = image.entries.filter(
+          (item) => item.id !== params.path.entryId,
+        );
+        const entry = image.entries.find(
+          (item) => item.id === params.path.entryId,
+        )!;
+        const position =
+          body.beforeMarkerId === null
+            ? others.length
+            : others.findIndex((item) => item.id === body.beforeMarkerId);
+        others.splice(position, 0, entry);
+        image.entries = others.map((item, orderIndex) => ({
+          ...item,
+          orderIndex,
+        }));
+        image.translationRevision++;
+        head.workflowStatus = "translating";
+        return response({ ...image, mutation: mutation() });
+      }
       if (path !== "/api/work-images/{imageId}/markers")
         return response({ items: [], expiresInSeconds: 90 });
       if (delayCreate) await delayCreate();
@@ -249,6 +309,9 @@ async function fixture(canEdit = true) {
     setDelay: (delay: () => Promise<void>) => {
       delayCreate = delay;
     },
+    setReorderDelay: (delay: Promise<void>) => {
+      delayReorder = delay;
+    },
     failCreate: () => {
       failCreate = true;
     },
@@ -274,6 +337,138 @@ test("defaults to pan, preserves marker selection and removes ordering controls"
   fireEvent.click(screen.getByRole("button", { name: "移动画布" }));
   fireEvent.click(screen.getByRole("button", { name: "标记 1" }));
   await waitFor(() => expect(document.activeElement?.tagName).toBe("TEXTAREA"));
+});
+
+test("a saved marker can change its bubble position without losing its translation", async () => {
+  const f = await fixture(true, 1);
+  const entry = f.head.images[0].entries[0]!;
+  const patch = vi.spyOn(client, "PATCH").mockImplementation(
+    async () =>
+      ({
+        data: { ...entry, markerPositionType: "outside", revision: 1 },
+        response: new Response(),
+      }) as never,
+  );
+  const type = screen.getByRole("combobox", { name: "标记 1 的属性" });
+  fireEvent.click(type);
+  fireEvent.click(screen.getByRole("option", { name: "框外" }));
+  expect(
+    screen
+      .getByRole("button", { name: "标记 1" })
+      .classList.contains("is-outside"),
+  ).toBe(true);
+  expect(
+    (screen.getByPlaceholderText("输入对应译文") as HTMLTextAreaElement).value,
+  ).toBe("原文 1");
+  fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+  await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+  expect(patch).toHaveBeenCalledWith("/api/translation-entries/{entryId}", {
+    params: { path: { entryId: entry.id } },
+    body: {
+      expectedRevision: 0,
+      expectedEditorEpoch: 0,
+      markerX: entry.markerX,
+      markerY: entry.markerY,
+      markerPositionType: "outside",
+      translatedText: "原文 1",
+      note: null,
+    },
+  });
+});
+
+test("reorders by stable IDs and preserves the moved marker's unsaved text and focus", async () => {
+  const f = await fixture(true, 3);
+  const [first, second, third] = f.head.images[0].entries;
+  const fields = screen.getAllByPlaceholderText(
+    "输入对应译文",
+  ) as HTMLTextAreaElement[];
+  fireEvent.change(fields[2], { target: { value: "本地后补译文" } });
+  const grip = screen.getByRole("button", { name: "拖动标记 3调整顺序" });
+  grip.focus();
+  fireEvent.keyDown(grip, { key: "ArrowUp" });
+  await waitFor(() =>
+    expect(f.head.images[0].entries.map((item) => item.id)).toEqual([
+      first.id,
+      third.id,
+      second.id,
+    ]),
+  );
+  await waitFor(() =>
+    expect(
+      (screen.getAllByPlaceholderText("输入对应译文")[1] as HTMLTextAreaElement)
+        .value,
+    ).toBe("本地后补译文"),
+  );
+  expect(screen.getByRole("button", { name: "拖动标记 2调整顺序" })).toBe(grip);
+  expect(document.activeElement).toBe(grip);
+  expect(f.post).toHaveBeenCalledWith(
+    "/api/work-images/{imageId}/markers/{entryId}/reorder",
+    {
+      params: { path: { imageId: f.head.images[0].id, entryId: third.id } },
+      body: {
+        beforeMarkerId: second.id,
+        expectedImageRevision: 0,
+        expectedEditorEpoch: 0,
+      },
+    },
+  );
+});
+
+test("reorder receipt cannot silently rebase a dirty draft over a colleague's newer translation", async () => {
+  const f = await fixture(true, 2);
+  const remote = f.head.images[0].entries[0]!;
+  const patch = vi.spyOn(client, "PATCH");
+  fireEvent.change(screen.getAllByPlaceholderText("输入对应译文")[0], {
+    target: { value: "本地译文" },
+  });
+  remote.translatedText = "其他成员的译文";
+  remote.revision = 1;
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: "拖动标记 2调整顺序" }),
+    { key: "ArrowUp" },
+  );
+  await screen.findByText(
+    "标记顺序已保存，但有译文同时被其他参与者修改。请确认保留哪一版译文。",
+  );
+  await waitFor(() =>
+    expect(
+      (screen.getAllByPlaceholderText("输入对应译文")[1] as HTMLTextAreaElement)
+        .value,
+    ).toBe("其他成员的译文"),
+  );
+  expect(patch).not.toHaveBeenCalled();
+  expect(f.head.images[0].translationRevision).toBe(1);
+});
+
+test("suspends adding markers until a pending reorder reconciles", async () => {
+  const f = await fixture(true, 2);
+  const [first, second] = f.head.images[0].entries;
+  let release!: () => void;
+  f.setReorderDelay(
+    new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+  );
+  const tools = screen.getByRole("button", {
+    name: "添加框内",
+  }) as HTMLButtonElement;
+  fireEvent.click(tools);
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: "拖动标记 2调整顺序" }),
+    { key: "ArrowUp" },
+  );
+  await waitFor(() => expect(tools.disabled).toBe(true));
+  f.point();
+  expect(screen.queryByRole("button", { name: "标记 3" })).toBeNull();
+  release();
+  await waitFor(() => expect(tools.disabled).toBe(false));
+  expect(f.head.images[0].entries.map((entry) => entry.id)).toEqual([
+    second.id,
+    first.id,
+  ]);
+  expect(f.createCalls().map(([path]) => path)).not.toContain(
+    "/api/work-images/{imageId}/markers",
+  );
 });
 
 test("number shortcuts select the four tools without performing a server mutation", async () => {

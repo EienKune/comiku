@@ -2111,63 +2111,6 @@
   gap: var(--space-2);
 }
 
-.toast {
-  position: fixed;
-  right: var(--space-6);
-  bottom: var(--space-6);
-  z-index: 120;
-  display: grid;
-  align-items: center;
-  width: min(calc(100vw - 2rem), 24rem);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-preview-toast, rgba(255, 255, 255, 0.94));
-  box-shadow: var(--shadow-md);
-  grid-template-columns: auto 1fr auto;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(1rem);
-  transition:
-    opacity var(--duration-normal),
-    transform var(--duration-normal);
-  backdrop-filter: blur(16px);
-}
-
-.toast.is-visible {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
-}
-
-.toast > span {
-  display: grid;
-  width: 2rem;
-  height: 2rem;
-  border-radius: var(--radius-sm);
-  background: var(--color-status-success-bg);
-  place-items: center;
-  color: var(--color-status-success-text);
-}
-
-.toast > div {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-
-.toast strong {
-  font-size: var(--text-sm);
-}
-.toast small {
-  overflow: hidden;
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 @media (max-width: 1280px) {
   :root {
     --sidebar-width: 13.5rem;
@@ -2472,11 +2415,6 @@
   .dialog__actions .ui-button:last-child {
     grid-column: 1 / -1;
   }
-
-  .toast {
-    right: var(--space-4);
-    bottom: var(--space-4);
-  }
 }
 /* v1.1 interaction previews */
 .motion-toggle {
@@ -2718,8 +2656,7 @@
 .sidebar-profile strong,
 .sidebar-principle strong,
 .hero-card strong,
-.feedback strong,
-.toast strong {
+.feedback strong {
   font-weight: var(--font-weight-control);
 }
 .playground-batch-topbar {

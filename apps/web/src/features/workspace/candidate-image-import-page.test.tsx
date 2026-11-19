@@ -254,7 +254,10 @@ test("Apply remains local across snapshot refresh; final confirmation atomically
       },
     ]),
   );
-  await screen.findByText("1 项入库完成");
+  const toast = await screen.findByText("1 项入库完成");
+  expect(
+    toast.closest('[data-tone="success"][popover="manual"]'),
+  ).not.toBeNull();
 });
 
 test("uncertain response locks editing and retries the identical manifest after reopening confirmation", async () => {
@@ -268,6 +271,11 @@ test("uncertain response locks editing and retries the identical manifest after 
     within(dialog).getByRole("button", { name: "确认创建 1 部作品" }),
   );
   await screen.findByRole("button", { name: "重试本次入库" });
+  expect(
+    screen
+      .getByText("入库结果待确认，请重试原请求")
+      .closest('[data-tone="warning"][popover="manual"]'),
+  ).not.toBeNull();
   fireEvent.click(within(dialog).getByRole("button", { name: "返回候选池" }));
   expect(
     (screen.getByRole("button", { name: "整理图片" }) as HTMLButtonElement)
@@ -303,6 +311,11 @@ test("partial import removes only completed selections, preserving the failed po
     within(dialog).getByRole("button", { name: "确认创建 2 部作品" }),
   );
   await screen.findByText("版本已变化");
+  expect(
+    screen
+      .getByText("已入库 1 项，1 项未完成")
+      .closest('[data-tone="warning"][popover="manual"]'),
+  ).not.toBeNull();
   fireEvent.click(
     within(dialog).getByRole("button", { name: "返回检查未完成项" }),
   );
@@ -317,6 +330,27 @@ test("partial import removes only completed selections, preserving the failed po
     ).checked,
   ).toBe(false);
   expect(state.writes[0].items[1].mediaIds).toEqual(["b-two", "b-three"]);
+});
+
+test("confirmed import failure shows a toast and keeps the server reason and candidate selection", async () => {
+  const { dispatch } = fixture();
+  dispatch.mockResolvedValueOnce({
+    results: [{ id: "a", outcome: "failed", message: "原图不可用" }],
+  });
+  mount();
+  await screen.findByText("正文 a");
+  selectA();
+  const dialog = beginImport();
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "确认创建 1 部作品" }),
+  );
+  const toast = await screen.findByText("入库失败，请查看未完成原因");
+  expect(toast.closest('[data-tone="error"][role="alert"]')).not.toBeNull();
+  expect(within(dialog).getByText("原图不可用")).toBeTruthy();
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "返回检查未完成项" }),
+  );
+  expect(screen.getByText("已选择 1 项候选")).toBeTruthy();
 });
 
 test("a revision change never silently rebases a draft; only explicit reload starts a newly reviewed selection", async () => {
@@ -460,6 +494,11 @@ test("topbar split creates every named work through a single confirmation and di
     within(dialog).getByRole("button", { name: "确认创建 2 部作品" }),
   );
   const result = await screen.findByRole("dialog", { name: "已创建作品" });
+  expect(
+    screen
+      .getByText("2 部作品入库完成")
+      .closest('[data-tone="success"][popover="manual"]'),
+  ).not.toBeNull();
   expect(
     within(result)
       .getByRole("link", { name: /第一作/ })

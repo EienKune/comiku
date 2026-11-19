@@ -1,8 +1,9 @@
 import { useId, useRef, useState } from "react";
 import { Button, IconButton } from "../../../components/ui";
-import { BookOpen, Sparkles, X } from "lucide-react";
+import { BookOpen, GripVertical, Sparkles, X } from "lucide-react";
 import { ReferenceDictionaryDialog } from "./ReferenceDictionaryDialog";
 import type { searchReferenceDictionary } from "./reference-dictionary-api";
+import { useSymbolPanel } from "./use-symbol-panel";
 import "./reference-tools.css";
 
 const symbols = Array.from("…～♡♠「」『』（）○●※☆★□◇♪♬·〆");
@@ -19,6 +20,7 @@ export function EditorReferenceTools({
   const [dictionaryOpen, setDictionaryOpen] = useState(false);
   const [symbolsOpen, setSymbolsOpen] = useState(false);
   const symbolOpener = useRef<HTMLDivElement>(null);
+  const symbolPanel = useSymbolPanel(symbolsOpen, symbolOpener);
   const panelId = useId();
   function closeSymbols() {
     setSymbolsOpen(false);
@@ -35,7 +37,10 @@ export function EditorReferenceTools({
       <Button
         size="sm"
         variant="secondary"
+        className="editor-reference-trigger"
         leadingIcon={<BookOpen size={15} />}
+        aria-label="拟声词"
+        title="拟声词"
         onClick={() => {
           setSymbolsOpen(false);
           setDictionaryOpen(true);
@@ -46,7 +51,10 @@ export function EditorReferenceTools({
       <Button
         size="sm"
         variant="secondary"
+        className="editor-reference-trigger"
         leadingIcon={<Sparkles size={15} />}
+        aria-label="符号"
+        title="符号"
         aria-expanded={symbolsOpen}
         aria-controls={panelId}
         onClick={() => setSymbolsOpen((open) => !open)}
@@ -65,6 +73,8 @@ export function EditorReferenceTools({
           role="group"
           aria-label="常用符号"
           className="editor-symbol-panel"
+          ref={symbolPanel.panel}
+          style={symbolPanel.style}
           onKeyDown={(event) => {
             if (event.key === "Escape" && !event.nativeEvent.isComposing) {
               event.preventDefault();
@@ -73,8 +83,11 @@ export function EditorReferenceTools({
             }
           }}
         >
-          <header>
-            <strong>常用符号</strong>
+          <header {...symbolPanel.headerProps}>
+            <strong>
+              <GripVertical size={15} aria-hidden="true" />
+              常用符号
+            </strong>
             <IconButton size="sm" label="关闭符号" onClick={closeSymbols}>
               <X size={16} />
             </IconButton>

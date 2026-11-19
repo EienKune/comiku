@@ -1,3 +1,4 @@
+import { useConfirmation } from "../../components/use-confirmation";
 import { refreshReviewViews } from "../workspace/review-cache";
 import {
   useEffect,
@@ -24,6 +25,7 @@ import {
   Grab,
   HardDrive,
   ImageIcon,
+  Keyboard,
   LoaderCircle,
   Maximize2,
   Move,
@@ -64,10 +66,21 @@ import {
   type TranslationImage,
 } from "./draft-storage";
 import { useCanvasWheelZoom } from "./use-canvas-wheel-zoom";
+import { useMarkerReorder } from "./use-marker-reorder";
+import {
+  captureShortcut,
+  isShortcutControl,
+  shortcutAria,
+  shortcutLabel,
+} from "./shortcuts/editor-shortcuts";
+import { useEditorShortcuts } from "./shortcuts/use-editor-shortcuts";
+import { EditorShortcutDialog } from "./shortcuts/EditorShortcutDialog";
 import "../../components/marker-hit-area.css";
 import "../../components/editor-tool-keycap.css";
 import { EditorReferenceTools } from "./reference/EditorReferenceTools";
 import { useSymbolInsertion } from "./reference/use-symbol-insertion";
+import { checkTranslationPunctuation } from "./punctuation/check-punctuation";
+import { SubmissionPunctuationWarnings } from "./punctuation/SubmissionPunctuationWarnings";
 import "./translation-editor.css";
 
 type MarkerPosition = components["schemas"]["MarkerPositionType"];
@@ -98,13 +111,12 @@ type MarkerUndo = {
 const tools: {
   value: EditorTool;
   label: string;
-  shortcut: string;
   icon: typeof Grab;
 }[] = [
-  { value: "pan", label: "移动画布", shortcut: "1", icon: Grab },
-  { value: "add-inside", label: "添加框内", shortcut: "2", icon: Plus },
-  { value: "add-outside", label: "添加框外", shortcut: "3", icon: CircleDot },
-  { value: "move", label: "移动标记", shortcut: "4", icon: Move },
+  { value: "pan", label: "移动画布", icon: Grab },
+  { value: "add-inside", label: "添加框内", icon: Plus },
+  { value: "add-outside", label: "添加框外", icon: CircleDot },
+  { value: "move", label: "移动标记", icon: Move },
 ];
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -206,6 +218,9 @@ const reviewStatusCopy = {
 export function TranslationEditorPage() {
   const { id: workId = "" } = useParams();
   const user = useAccount();
+  const shortcuts = useEditorShortcuts(user.id);
+  const [showShortcutSettings, setShowShortcutSettings] = useState(false);
+  const shortcutComposing = useRef(false);
   const [images, setImages] = useState<EditableTranslationImage[]>([]);
   const imagesRef = useRef<EditableTranslationImage[]>([]);
   const [pageIndex, setPageIndex] = useState(0);
@@ -229,6 +244,10 @@ export function TranslationEditorPage() {
   const serverMutationQueue = useRef<Promise<void>>(Promise.resolve());
   const stageSubmissionInFlight = useRef(false);
   const entryRefs = useRef(new Map<string, HTMLElement>());
+  const entryListRef = useRef<HTMLDivElement>(null);
+  const editorMounted = useRef(false);
+  const reorderRunning = useRef(false);
+  const [reorderPending, setReorderPending] = useState(false);
   const imageRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLElement>(null);
   const markerUndoStack = useRef<MarkerUndo[]>([]);
@@ -308,16 +327,87 @@ export function TranslationEditorPage() {
   const writable = Boolean(
     editor.data?.canEdit && presenceMode === "edit" && !recoveryDraft,
   );
+  const stageContentReady =
+    editor.data?.submissionStage !== "translate" ||
+    (draftHydrated &&
+      initializedKey.current === `${user.id}:${workId}` &&
+      editor.isSuccess &&
+      !editor.isFetching &&
+      labelPlusOperation !== "import" &&
+      !reviewPending &&
+      !reorderPending);
+  const confirmation = useConfirmation([
+    workId,
+    editor.data?.workRevision,
+    editor.data?.editorEpoch,
+    editor.data?.latestVersion?.id,
+    editor.data?.submissionStage,
+    editor.data?.reviewStatus,
+    editor.data?.multiStageReady,
+    editor.data?.canEdit,
+    stageContentReady,
+    writable,
+    images,
+    hasUnsaved,
+    online,
+    saveState,
+  ]);
   const writableRef = useRef(writable);
   writableRef.current = writable;
   const referenceScope = `${workId}:${currentImage?.id ?? ""}:${editor.data?.editorEpoch ?? 0}`;
+  const markerEditsAvailable = Boolean(
+    writable &&
+    draftHydrated &&
+    initializedKey.current === `${user.id}:${workId}` &&
+    labelPlusOperation !== "import" &&
+    !reviewPending,
+  );
+  const markerWorkspaceScope = JSON.stringify([
+    user.id,
+    workId,
+    editor.data?.editorEpoch ?? 0,
+    editor.data?.latestVersion?.id ?? null,
+  ]);
+  const reorderScope = JSON.stringify([
+    markerWorkspaceScope,
+    currentImage?.id ?? null,
+    currentImage?.translationRevision ?? null,
+  ]);
+  const canReorder =
+    markerEditsAvailable &&
+    online &&
+    currentEntries.length > 1 &&
+    !currentEntries.some((entry) => entry.localOnly);
+  const reorderContext = useRef({
+    workspace: markerWorkspaceScope,
+    scope: reorderScope,
+    allowed: canReorder,
+  });
+  reorderContext.current = {
+    workspace: markerWorkspaceScope,
+    scope: reorderScope,
+    allowed: canReorder,
+  };
+  useEffect(() => {
+    editorMounted.current = true;
+    return () => {
+      editorMounted.current = false;
+    };
+  }, []);
+  const markerReorder = useMarkerReorder({
+    ids: currentEntries.map((entry) => entry.id),
+    scope: reorderScope,
+    listRef: entryListRef,
+    disabled: !canReorder || reorderPending,
+    caption: (id) =>
+      `标记 ${currentEntries.findIndex((entry) => entry.id === id) + 1}`,
+    onReorder: (id, beforeId) => void reorderMarker(id, beforeId),
+  });
   const symbolInsertion = useSymbolInsertion({
     scope: referenceScope,
     writable,
     selectedEntryId,
     entries: currentEntries,
-    onUpdate: (entryId, translatedText) =>
-      updateEntry(entryId, { translatedText }),
   });
   useCanvasWheelZoom({
     canvas: canvasRef,
@@ -471,6 +561,7 @@ export function TranslationEditorPage() {
       !labelPlusPreview?.canImport ||
       !labelPlusStage ||
       labelPlusPending ||
+      reorderRunning.current ||
       !writable ||
       hasUnsaved ||
       current.reviewStatus !== "normal"
@@ -527,7 +618,8 @@ export function TranslationEditorPage() {
       !current ||
       !current.canExportLabelPlus ||
       hasUnsaved ||
-      labelPlusPending
+      labelPlusPending ||
+      reorderRunning.current
     ) {
       return;
     }
@@ -733,9 +825,25 @@ export function TranslationEditorPage() {
     }
   }
 
+  function selectEntryFromShortcut(entryId: string) {
+    selectEntry(entryId);
+    const list = entryListRef.current;
+    const card = entryRefs.current.get(entryId);
+    if (!list || !card) return;
+    const viewport = list.getBoundingClientRect();
+    const row = card.getBoundingClientRect();
+    if (row.top < viewport.top) list.scrollTop += row.top - viewport.top;
+    else if (row.bottom > viewport.bottom)
+      list.scrollTop += Math.min(
+        row.bottom - viewport.bottom,
+        row.top - viewport.top,
+      );
+  }
+
   async function enterConflict(
     localImages: EditableTranslationImage[],
     reason: string,
+    isCurrent: () => boolean = () => true,
   ) {
     markerUndoStack.current = [];
     undoFailure.current++;
@@ -753,12 +861,14 @@ export function TranslationEditorPage() {
     setRecoveryDraft(localDraft);
     replaceDirty(new Set());
     await saveTranslationDraft(localDraft).catch(() => undefined);
+    if (!isCurrent()) return;
     try {
       const latest = await unwrap(
         await client.GET("/api/works/{workId}/translations", {
           params: { path: { workId } },
         }),
       );
+      if (!isCurrent()) return;
       const crossedEpoch =
         latest.editorEpoch !== (localDraft.editorEpoch ?? 0) ||
         (latest.latestVersion?.id ?? null) !==
@@ -768,7 +878,8 @@ export function TranslationEditorPage() {
       replaceEditorHead(latest);
       replaceImages(latest.images);
     } catch {
-      setMessage("检测到版本冲突，同时无法重新读取服务端内容。请稍后重试。");
+      if (isCurrent())
+        setMessage("检测到版本冲突，同时无法重新读取服务端内容。请稍后重试。");
     }
   }
 
@@ -879,6 +990,147 @@ export function TranslationEditorPage() {
     if (debounce) scheduleSave(entryId);
   }
 
+  function changeMarkerPosition(entryId: string, value: string) {
+    if (
+      !markerEditsAvailable ||
+      !writableRef.current ||
+      stageSubmissionInFlight.current ||
+      (value !== "inside" && value !== "outside")
+    )
+      return;
+    const entry = imagesRef.current
+      .find((image) => image.id === currentImage?.id)
+      ?.entries.find((item) => item.id === entryId);
+    if (!entry || entry.localOnly || entry.markerPositionType === value) return;
+    markerUndoStack.current = [];
+    selectEntry(entry.id);
+    updateEntry(entry.id, { markerPositionType: value });
+  }
+
+  async function reorderMarker(entryId: string, beforeMarkerId: string | null) {
+    if (!currentImage || !canReorder || reorderRunning.current) return;
+    const { id: imageId, translationRevision } = currentImage;
+    const { editorEpoch, latestVersionId } = editorHeadRef.current;
+    const ordered = currentImage.entries.map((entry) => entry.id);
+    const next = ordered.filter((id) => id !== entryId);
+    const target =
+      beforeMarkerId === null ? next.length : next.indexOf(beforeMarkerId);
+    if (next.length === ordered.length || target < 0) return;
+    next.splice(target, 0, entryId);
+    if (next.every((id, index) => id === ordered[index])) return;
+    const sameWorkspace = () =>
+      editorMounted.current &&
+      reorderContext.current.workspace === markerWorkspaceScope &&
+      editorHeadRef.current.editorEpoch === editorEpoch &&
+      editorHeadRef.current.latestVersionId === latestVersionId;
+    reorderRunning.current = true;
+    setReorderPending(true);
+    markerUndoStack.current = [];
+    try {
+      await enqueueServerMutation(async () => {
+        if (!sameWorkspace()) return;
+        const live = imagesRef.current.find((image) => image.id === imageId);
+        if (
+          !reorderContext.current.allowed ||
+          reorderContext.current.scope !== reorderScope ||
+          !writableRef.current ||
+          !navigator.onLine ||
+          stageSubmissionInFlight.current ||
+          !live ||
+          live.translationRevision !== translationRevision ||
+          live.entries.length !== ordered.length ||
+          live.entries.some(
+            (entry, index) => entry.localOnly || entry.id !== ordered[index],
+          )
+        ) {
+          setMessage("标记顺序或编辑状态已变化，请重新调整。");
+          return;
+        }
+        setSaveState("syncing");
+        setMessage(null);
+        let rejected = false;
+        try {
+          const result = await client.POST(
+            "/api/work-images/{imageId}/markers/{entryId}/reorder",
+            {
+              params: { path: { imageId, entryId } },
+              body: {
+                beforeMarkerId,
+                expectedImageRevision: translationRevision,
+                expectedEditorEpoch: editorEpoch,
+              },
+            },
+          );
+          if (!sameWorkspace()) return;
+          if (result.response.status === 409) {
+            await enterConflict(
+              imagesRef.current,
+              "标记顺序或编辑版本已变化，请核对服务端内容。",
+              sameWorkspace,
+            );
+            return;
+          }
+          rejected =
+            result.response.status >= 400 && result.response.status < 500;
+          const savedImage = await unwrap(result);
+          if (
+            savedImage.id !== imageId ||
+            savedImage.translationRevision !== translationRevision + 1 ||
+            savedImage.entries.length !== next.length ||
+            savedImage.entries.some((entry, index) => entry.id !== next[index])
+          )
+            throw new Error("服务端未返回已确认的标记顺序");
+          const serverRevisions = new Map(
+            savedImage.entries.map((entry) => [entry.id, entry.revision]),
+          );
+          const currentImageEntries = imagesRef.current.find(
+            (image) => image.id === imageId,
+          )?.entries;
+          if (
+            currentImageEntries?.some(
+              (entry) =>
+                dirtyRef.current.has(entry.id) &&
+                serverRevisions.get(entry.id) !== entry.revision,
+            )
+          ) {
+            await enterConflict(
+              imagesRef.current,
+              "标记顺序已保存，但有译文同时被其他参与者修改。请确认保留哪一版译文。",
+              sameWorkspace,
+            );
+            return;
+          }
+          applyMutationMeta(savedImage.mutation);
+          updateImages((allImages) =>
+            allImages.map((image) =>
+              image.id === imageId
+                ? mergeServerImage(savedImage, image, dirtyRef.current)
+                : image,
+            ),
+          );
+          finishServerMutation();
+        } catch (error) {
+          if (!sameWorkspace()) return;
+          if (!rejected) {
+            await enterConflict(
+              imagesRef.current,
+              "无法确认排序结果，请核对服务端顺序。",
+              sameWorkspace,
+            );
+            return;
+          }
+          setMessage(
+            error instanceof Error ? error.message : "标记顺序保存失败",
+          );
+          setSaveState("failed");
+        }
+      });
+    } finally {
+      reorderRunning.current = false;
+      if (editorMounted.current) setReorderPending(false);
+    }
+  }
+
   function syncCreatedEntry(entryId: string) {
     return enqueueServerMutation(() => performSyncCreatedEntry(entryId));
   }
@@ -969,6 +1221,7 @@ export function TranslationEditorPage() {
       !liveImage ||
       !writable ||
       creatingEntry ||
+      reorderRunning.current ||
       undoPending.current > 0 ||
       liveImage.entries.some((entry) => entry.localOnly)
     ) {
@@ -1049,7 +1302,12 @@ export function TranslationEditorPage() {
     }
     if (
       entry.translatedText.trim() &&
-      !window.confirm("这个标记已有译文，确定删除吗？")
+      !(await confirmation.confirm({
+        title: "删除已有译文的标记？",
+        description: "这个标记已有译文，删除后该标记及译文会一并移除。",
+        confirmLabel: "删除标记",
+        danger: true,
+      }))
     ) {
       return false;
     }
@@ -1141,6 +1399,8 @@ export function TranslationEditorPage() {
   async function submitCurrentStage() {
     if (
       stageSubmissionInFlight.current ||
+      reorderRunning.current ||
+      !stageContentReady ||
       !editor.data ||
       !submissionStage ||
       !writable ||
@@ -1158,17 +1418,26 @@ export function TranslationEditorPage() {
       setMessage("多人协作还有页面未分配、未完成或完成后又被修改。");
       return;
     }
-    if (
-      !window.confirm(
-        `确定提交${submissionStage === "translate" ? "翻译" : "校对"}阶段吗？服务器当前内容将保存为不可变版本。`,
-      )
-    ) {
-      return;
-    }
     stageSubmissionInFlight.current = true;
-    setSaveState("syncing");
-    setMessage(null);
     try {
+      const warnings =
+        submissionStage === "translate"
+          ? checkTranslationPunctuation(imagesRef.current)
+          : [];
+      if (
+        !(await confirmation.confirm({
+          title: `提交${submissionStage === "translate" ? "翻译" : "校对"}阶段？`,
+          description: "服务器当前内容将保存为不可变版本。",
+          confirmLabel: "确认提交",
+          ...(warnings.length > 0 && {
+            cancelLabel: "返回修改",
+            details: <SubmissionPunctuationWarnings results={warnings} />,
+          }),
+        }))
+      )
+        return;
+      setSaveState("syncing");
+      setMessage(null);
       const result = await client.POST("/api/works/{id}/stages/submit", {
         params: { path: { id: workId } },
         body: {
@@ -1227,9 +1496,12 @@ export function TranslationEditorPage() {
       return;
     }
     if (
-      !window.confirm(
-        `确定取消${stageCopy(cancelableSubmissionStage)}提交吗？已保存内容和不可变版本会保留，作品将回退到${stageCopy(cancelableSubmissionStage)}中。`,
-      )
+      !(await confirmation.confirm({
+        title: `取消${stageCopy(cancelableSubmissionStage)}提交？`,
+        description: `已保存内容和不可变版本会保留，作品将回退到${stageCopy(cancelableSubmissionStage)}中。`,
+        confirmLabel: "取消提交",
+        danger: true,
+      }))
     ) {
       return;
     }
@@ -1356,36 +1628,88 @@ export function TranslationEditorPage() {
   function toolShortcut(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (
       event.defaultPrevented ||
-      event.ctrlKey ||
-      event.altKey ||
-      event.metaKey ||
-      event.shiftKey ||
       event.repeat ||
+      shortcutComposing.current ||
       event.nativeEvent.isComposing ||
       event.nativeEvent.keyCode === 229 ||
       !draftHydrated ||
       recoveryDraft ||
       !currentImage ||
       drag.current ||
+      markerReorder.dragActiveRef.current ||
       document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')
     )
       return;
     const target = event.target;
     if (
       !(target instanceof Element) ||
-      !target.closest(".translation-canvas, .translation-tool-group") ||
       target.closest(
         'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="spinbutton"], [role="slider"]',
       )
     )
       return;
-    const next = tools.find((item) => item.shortcut === event.key);
-    if (!next || (!writable && next.value !== "pan")) return;
-    event.preventDefault();
-    // Tool changes remount marker tooltips; retain a stable keyboard target.
-    if (target.closest(".translation-marker"))
-      canvasRef.current?.focus({ preventScroll: true });
-    selectTool(next.value);
+    const captured = captureShortcut(event.nativeEvent);
+    if (!captured || !("shortcut" in captured)) return;
+    const next = tools.find(
+      (item) => shortcuts.bindings[item.value] === captured.shortcut,
+    );
+    if (next) {
+      if (
+        !target.closest(".translation-canvas, .translation-tool-group") ||
+        (!writable && next.value !== "pan") ||
+        (reorderRunning.current &&
+          (next.value === "add-inside" || next.value === "add-outside"))
+      )
+        return;
+      if (
+        !target.closest(".translation-tool-group") &&
+        isShortcutControl(target)
+      )
+        return;
+      event.preventDefault();
+      // Tool changes remount marker tooltips; retain a stable keyboard target.
+      if (target.closest(".translation-marker"))
+        canvasRef.current?.focus({ preventScroll: true });
+      selectTool(next.value);
+      return;
+    }
+    if (
+      !target.closest(".translation-canvas, .translation-entry-list") ||
+      isShortcutControl(target)
+    )
+      return;
+    const key = captured.shortcut;
+    if (
+      key === shortcuts.bindings["previous-page"] ||
+      key === shortcuts.bindings["next-page"]
+    ) {
+      event.preventDefault();
+      const nextPage =
+        pageIndex + (key === shortcuts.bindings["previous-page"] ? -1 : 1);
+      if (nextPage >= 0 && nextPage < images.length) {
+        // A marker may unmount when changing pages; retain the keyboard scope.
+        if (target.closest(".translation-marker"))
+          canvasRef.current?.focus({ preventScroll: true });
+        goToPage(nextPage);
+      }
+    } else if (
+      key === shortcuts.bindings["previous-marker"] ||
+      key === shortcuts.bindings["next-marker"]
+    ) {
+      event.preventDefault();
+      const index = currentEntries.findIndex(
+        (entry) => entry.id === selectedEntryId,
+      );
+      const previous = key === shortcuts.bindings["previous-marker"];
+      const nextIndex =
+        index === -1
+          ? previous
+            ? currentEntries.length - 1
+            : 0
+          : index + (previous ? -1 : 1);
+      const entry = currentEntries[nextIndex];
+      if (entry) selectEntryFromShortcut(entry.id);
+    }
   }
 
   function stagePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -1795,7 +2119,25 @@ export function TranslationEditorPage() {
     );
 
   return (
-    <div className="translation-editor" onKeyDown={toolShortcut}>
+    <div
+      className="translation-editor"
+      onKeyDown={toolShortcut}
+      onCompositionStartCapture={() => {
+        shortcutComposing.current = true;
+      }}
+      onCompositionEndCapture={() => {
+        shortcutComposing.current = false;
+      }}
+    >
+      {confirmation.dialog}
+      {showShortcutSettings && (
+        <EditorShortcutDialog
+          bindings={shortcuts.bindings}
+          notice={shortcuts.notice}
+          onSave={shortcuts.save}
+          onClose={() => setShowShortcutSettings(false)}
+        />
+      )}
       {showEntryChoice && (
         <div className="translation-entry-choice-backdrop">
           <section
@@ -2075,6 +2417,7 @@ export function TranslationEditorPage() {
               disabled={
                 hasUnsaved ||
                 !online ||
+                reorderPending ||
                 saveState === "syncing" ||
                 Boolean(recoveryDraft)
               }
@@ -2156,6 +2499,7 @@ export function TranslationEditorPage() {
             <Button
               size="sm"
               disabled={
+                !stageContentReady ||
                 !writable ||
                 hasUnsaved ||
                 !online ||
@@ -2181,27 +2525,42 @@ export function TranslationEditorPage() {
       </header>
       <div className="translation-editor-toolbar" aria-label="编辑工具">
         <div className="translation-tool-group">
-          {tools.map(({ value, label, shortcut, icon: ToolIcon }) => (
+          {tools.map(({ value, label, icon: ToolIcon }) => (
             <button
               type="button"
               key={value}
               className={`editor-tool-button${tool === value ? " is-active" : ""}`}
               aria-pressed={tool === value}
               aria-label={label}
-              aria-keyshortcuts={shortcut}
-              title={`${label} · 快捷键 ${shortcut}（画布或工具栏聚焦时）`}
-              disabled={!writable && value !== "pan"}
+              aria-keyshortcuts={shortcutAria(shortcuts.bindings[value])}
+              title={`${label} · 快捷键 ${shortcutLabel(shortcuts.bindings[value])}（画布或工具栏聚焦时）`}
+              disabled={
+                (!writable && value !== "pan") ||
+                (reorderPending &&
+                  (value === "add-inside" || value === "add-outside"))
+              }
               onClick={() => selectTool(value)}
             >
               <ToolIcon size={16} />
               <span className="translation-tool-label">{label}</span>
               <kbd className="editor-tool-keycap" aria-hidden="true">
-                {shortcut}
+                {shortcutLabel(shortcuts.bindings[value])}
               </kbd>
             </button>
           ))}
         </div>
         <div className="translation-file-actions">
+          <Button
+            size="sm"
+            variant="secondary"
+            className="translation-file-button"
+            leadingIcon={<Keyboard size={15} />}
+            aria-label="快捷键"
+            title="快捷键"
+            onClick={() => setShowShortcutSettings(true)}
+          >
+            快捷键
+          </Button>
           <input
             ref={labelPlusInputRef}
             type="file"
@@ -2219,12 +2578,14 @@ export function TranslationEditorPage() {
               <Button
                 size="sm"
                 variant="secondary"
+                className="translation-file-button"
                 leadingIcon={<Upload size={15} />}
                 aria-label="导入 LabelPlus"
                 loading={labelPlusOperation === "preview"}
                 disabled={
                   !writable ||
                   hasUnsaved ||
+                  reorderPending ||
                   editor.data.reviewStatus !== "normal"
                 }
                 title={
@@ -2236,21 +2597,22 @@ export function TranslationEditorPage() {
                 }
                 onClick={() => labelPlusInputRef.current?.click()}
               >
-                <span className="translation-file-label">导入 LabelPlus</span>
+                导入 LabelPlus
               </Button>
             )}
           {editor.data.canExportLabelPlus && (
             <Button
               size="sm"
               variant="secondary"
+              className="translation-file-button"
               leadingIcon={<Download size={15} />}
               aria-label="导出 LabelPlus"
               loading={labelPlusOperation === "export"}
-              disabled={hasUnsaved}
+              disabled={hasUnsaved || reorderPending}
               title={hasUnsaved ? "请先同步当前本地修改" : "导出 LabelPlus"}
               onClick={() => void exportLabelPlus()}
             >
-              <span className="translation-file-label">导出 LabelPlus</span>
+              导出 LabelPlus
             </Button>
           )}
           <EditorReferenceTools
@@ -2425,6 +2787,10 @@ export function TranslationEditorPage() {
           <div className="translation-page-controls">
             <IconButton
               label="上一页"
+              title={`上一页 · 快捷键 ${shortcutLabel(shortcuts.bindings["previous-page"])}（画布或标记列表聚焦时）`}
+              aria-keyshortcuts={shortcutAria(
+                shortcuts.bindings["previous-page"],
+              )}
               disabled={pageIndex === 0}
               onClick={() => goToPage(pageIndex - 1)}
             >
@@ -2450,6 +2816,8 @@ export function TranslationEditorPage() {
             </form>
             <IconButton
               label="下一页"
+              title={`下一页 · 快捷键 ${shortcutLabel(shortcuts.bindings["next-page"])}（画布或标记列表聚焦时）`}
+              aria-keyshortcuts={shortcutAria(shortcuts.bindings["next-page"])}
               disabled={pageIndex >= images.length - 1}
               onClick={() => goToPage(pageIndex + 1)}
             >
@@ -2476,11 +2844,21 @@ export function TranslationEditorPage() {
                   : "需要先加入翻译或校对协作，才能保存修改。"}
             </p>
           )}
-          <div className="translation-entry-list">
+          <div
+            className="translation-entry-list"
+            ref={entryListRef}
+            tabIndex={0}
+            role="region"
+            aria-label="译文标记列表"
+            aria-busy={reorderPending}
+            {...markerReorder.listProps}
+          >
             {currentEntries.length ? (
               currentEntries.map((entry, index) => (
                 <article
-                  key={entry.id}
+                  {...markerReorder.rowProps(entry.id)}
+                  // Discard native textarea history at work/epoch/write-access boundaries.
+                  key={`${referenceScope}:${writable}:${entry.id}`}
                   ref={(node) => {
                     if (node) entryRefs.current.set(entry.id, node);
                     else entryRefs.current.delete(entry.id);
@@ -2496,17 +2874,37 @@ export function TranslationEditorPage() {
                     >
                       {index + 1}
                     </button>
-                    <Badge
-                      tone={
-                        entry.markerPositionType === "inside"
-                          ? "translation"
-                          : "violet"
-                      }
-                    >
-                      {entry.markerPositionType === "inside" ? "框内" : "框外"}
-                    </Badge>
+                    {writable && !entry.localOnly ? (
+                      <SelectControl
+                        className="translation-entry-position"
+                        aria-label={`标记 ${index + 1} 的属性`}
+                        value={entry.markerPositionType}
+                        disabled={!markerEditsAvailable}
+                        onValueChange={(value) =>
+                          changeMarkerPosition(entry.id, value)
+                        }
+                      >
+                        <option value="inside">框内</option>
+                        <option value="outside">框外</option>
+                      </SelectControl>
+                    ) : (
+                      <Badge
+                        tone={
+                          entry.markerPositionType === "inside"
+                            ? "translation"
+                            : "violet"
+                        }
+                      >
+                        {entry.markerPositionType === "inside"
+                          ? "框内"
+                          : "框外"}
+                      </Badge>
+                    )}
                     {entry.localOnly && <Badge tone="warning">待创建</Badge>}
                     <div className="translation-entry-actions">
+                      {writable &&
+                        currentEntries.length > 1 &&
+                        markerReorder.controls(entry.id)}
                       <IconButton
                         size="sm"
                         label="删除标记"
@@ -2570,6 +2968,7 @@ export function TranslationEditorPage() {
               </div>
             )}
           </div>
+          {markerReorder.feedback}
           {selectedEntry && (
             <div className="translation-selected-summary">
               当前选择：标记 {selectedEntry.orderIndex + 1}

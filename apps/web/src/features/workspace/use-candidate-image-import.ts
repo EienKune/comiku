@@ -1,5 +1,6 @@
 import type { SeriesImportIntent } from "./work-series-api";
 import { useCallback, useMemo, useRef, useState } from "react";
+import type { ToastNotice } from "../../components/ErrorToast";
 import { client, unwrap } from "../account/api";
 import {
   applyImportDraft,
@@ -31,6 +32,7 @@ type Confirmation = {
 };
 export function useCandidateImageImport(
   onComplete: () => Promise<unknown>,
+  onNotice: (notice: ToastNotice | null) => void,
   externalLocked = false,
 ) {
   const [state, setState] = useState(emptyCandidateImportState),
@@ -192,6 +194,7 @@ export function useCandidateImageImport(
     )
       return;
     running.current = true;
+    onNotice(null);
     setConfirmation({ ...confirmation, phase: "submitting", error: undefined });
     setError("");
     setSuccess("");
@@ -240,16 +243,26 @@ export function useCandidateImageImport(
         (result) => !["succeeded", "unchanged"].includes(result.outcome),
       );
       if (failures.length) {
+        const completed = response.results.length - failures.length;
         setConfirmation({
           entries,
           phase: "result",
           results: response.results,
-          error: `${response.results.length - failures.length} 项完成，${failures.length} 项需要重新检查`,
+          error: `${completed} 项完成，${failures.length} 项需要重新检查`,
+        });
+        onNotice({
+          tone: completed ? "warning" : "error",
+          message: completed
+            ? `已入库 ${completed} 项，${failures.length} 项未完成`
+            : "入库失败，请查看未完成原因",
         });
       } else {
         setConfirmation(null);
         setConfirmationVisible(false);
-        setSuccess(`${response.results.length} 项入库完成`);
+        onNotice({
+          tone: "success",
+          message: `${response.results.length} 项入库完成`,
+        });
       }
       void complete.current().catch(() => {});
     } catch (e) {
@@ -262,6 +275,7 @@ export function useCandidateImageImport(
         error: message,
       });
       setError("本次入库结果尚未确认，请继续查看并重试原请求。");
+      onNotice({ tone: "warning", message: "入库结果待确认，请重试原请求" });
     } finally {
       running.current = false;
     }

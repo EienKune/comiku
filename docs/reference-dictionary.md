@@ -32,7 +32,7 @@ pnpm dictionary:import /absolute/private/reference.json
 pnpm dictionary:import /absolute/private/reference.json --apply --expected-revision 0
 ```
 
-已有来源必须传入已核对的当前revision。导入器先完整校验，再取得该来源的事务锁并重新检查revision；替换词条与更新来源元数据在同一事务中完成。失败回滚旧记录；同一文件与同一解析/映射版本重复导入返回`unchanged`。修复解析或人工映射后必须改变导入版本，即使原文件字节没有变化。输出仅含状态、数量和revision，不输出释义、连接串或凭据。
+已有来源必须传入已核对的当前revision。导入器先完整校验，再取得该来源的事务锁并重新检查revision；替换词条与更新来源元数据在同一事务中完成。文件、解析/映射版本和来源元数据都相同时，重复导入返回`unchanged`。只更正来源名称、资料版本、链接、署名或许可时，revision递增，保留原词条和词条快照的导入时间。修复解析或人工映射后必须改变导入版本，即使原文件字节没有变化。输出仅含状态、数量和revision，不输出释义、连接串或凭据。
 
 网络或提交回执丢失时，CLI不能证明事务是否已提交；成功提交后的连接清理也可能报错。遇到结果未确认，先只读核对来源revision与导入指纹，再决定是否按当前revision重试，不把报错直接等同于回滚：
 

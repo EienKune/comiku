@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import type { ToastNotice } from "../../components/ErrorToast";
 import {
   compositionApi,
   CompositionRequestError,
@@ -32,6 +33,7 @@ type Session = {
 export function useCandidateComposition(
   onSettled: (sources: readonly CandidateImportEntry[]) => void,
   onComplete: () => Promise<unknown>,
+  onNotice?: (notice: ToastNotice | null) => void,
 ) {
   const [session, setSession] = useState<Session | null>(null),
     [visible, setVisible] = useState(false);
@@ -39,8 +41,8 @@ export function useCandidateComposition(
     running = useRef(false),
     current = useRef(session);
   current.current = session;
-  const callbacks = useRef({ onSettled, onComplete });
-  callbacks.current = { onSettled, onComplete };
+  const callbacks = useRef({ onSettled, onComplete, onNotice });
+  callbacks.current = { onSettled, onComplete, onNotice };
   const locked =
     session?.phase === "submitting" || session?.phase === "uncertain";
   function open(mode: CompositionMode, state: CandidateImportState) {
@@ -116,6 +118,7 @@ export function useCandidateComposition(
     )
       return;
     running.current = true;
+    callbacks.current.onNotice?.(null);
     const wasUncertain = value.phase === "uncertain";
     setSession({ ...value, phase: "submitting", error: undefined });
     try {
@@ -137,6 +140,10 @@ export function useCandidateComposition(
           stored.current.delete(key);
       }
       setSession({ ...value, phase: "result", result, error: undefined });
+      callbacks.current.onNotice?.({
+        tone: "success",
+        message: `${result.works.length} 部作品入库完成`,
+      });
       void callbacks.current.onComplete().catch(() => {});
     } catch (error) {
       const definite =
@@ -150,6 +157,12 @@ export function useCandidateComposition(
         ...value,
         phase: definite ? "review" : "uncertain",
         error: error instanceof Error ? error.message : "尚未确认本次入库结果",
+      });
+      callbacks.current.onNotice?.({
+        tone: definite ? "error" : "warning",
+        message: definite
+          ? "入库失败，请查看原因"
+          : "入库结果待确认，请查询或重试本次请求",
       });
     } finally {
       running.current = false;

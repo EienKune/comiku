@@ -47,6 +47,10 @@ const SystemManagementPage = lazy(async () => ({
   default: (await import("../system/SystemManagementPage"))
     .SystemManagementPage,
 }));
+const ContributionsPage = lazy(async () => ({
+  default: (await import("../contributions/ContributionsPage"))
+    .ContributionsPage,
+}));
 
 export function WorkspaceRoutes() {
   const user = useAccount();
@@ -85,6 +89,18 @@ export function WorkspaceRoutes() {
         <Route path="/settings" element={<ProfilePage />} />
         <Route path="/settings/password" element={<PasswordPage />} />
         <Route path="/members" element={<MembersPage />} />
+        <Route
+          path="/contributions"
+          element={
+            user.permissions.includes("works:read") ? (
+              <ContributionsPage />
+            ) : (
+              <SectionHeading title="无权访问">
+                当前账号没有作品访问权限。
+              </SectionHeading>
+            )
+          }
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>

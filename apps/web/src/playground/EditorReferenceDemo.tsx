@@ -42,7 +42,6 @@ export function EditorReferenceDemo() {
     writable: true,
     selectedEntryId: "example",
     entries: [{ id: "example", translatedText: text }],
-    onUpdate: (_id, value) => setText(value),
   });
   return (
     <Surface className="editor-reference-demo">
