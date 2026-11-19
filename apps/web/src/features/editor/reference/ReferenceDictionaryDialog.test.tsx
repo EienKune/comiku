@@ -114,6 +114,31 @@ test("debounces input, aborts on query change and close, ignores a stale resolve
   expect(search.mock.calls[1][2].aborted).toBe(true);
 });
 
+test("keeps the result when extra input is truncated to the same query", async () => {
+  search.mockResolvedValueOnce({ entries: [entry], nextOffset: null });
+  const query = "あ".repeat(80);
+  render(<Fixture />);
+  open();
+  const input = screen.getByRole<HTMLInputElement>("searchbox");
+
+  fireEvent.change(input, { target: { value: query } });
+  await tick();
+  expect(screen.getByText("カチッ")).toBeTruthy();
+
+  fireEvent.change(input, { target: { value: `${query}い` } });
+  await tick();
+  expect(input.value).toBe(query);
+  expect(screen.queryByText("正在查询…")).toBeNull();
+  expect(screen.getByText("カチッ")).toBeTruthy();
+  expect(search).toHaveBeenCalledTimes(1);
+
+  const shorterQuery = query.slice(1);
+  fireEvent.change(input, { target: { value: shorterQuery } });
+  await tick();
+  expect(search).toHaveBeenCalledTimes(2);
+  expect(search.mock.calls[1].slice(0, 2)).toEqual([shorterQuery, 0]);
+});
+
 test("keeps independent senses and sources, distinguishes meanings from nullable suggestions and appends the next 20-record page", async () => {
   const copy = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("navigator", { clipboard: { writeText: copy } });

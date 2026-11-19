@@ -69,3 +69,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.translation-editor .translation-tool-group .editor-tool-keycap {
+  flex-shrink: 1;
+}
