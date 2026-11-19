@@ -19,7 +19,8 @@ X/Pixiv 资料解析返回有效期十分钟的 `profileProof`，绑定操作人
 | 配置                                                | 含义                                                                    |
 | --------------------------------------------------- | ----------------------------------------------------------------------- |
 | `NODE_ENV`                                          | development / test / production                                         |
-| `APP_ORIGIN`                                        | 浏览器入口，默认 `http://localhost:5173`；必须精确匹配实际端口          |
+| `APP_ORIGIN`                                        | 主浏览器入口及通知链接地址，默认 `http://localhost:5173`                |
+| `APP_ADDITIONAL_ORIGINS`                            | 额外浏览器入口，逗号分隔；同样检查准确的协议、地址和非默认端口          |
 | `HOST` / `PORT`                                     | API 监听地址，默认 `127.0.0.1:3000`                                     |
 | `VITE_API_BASE_URL`                                 | 开发留空，Vite 将 `/api` 代理到 API；分离部署时填写 HTTPS API origin    |
 | `DATABASE_URL`                                      | 实际业务库 PostgreSQL URL，密码特殊字符需 URL 编码                      |
@@ -93,7 +94,7 @@ BA 常驻推理进程可用独立 EnvironmentFile 注入 `PIXAI_MODEL_DIR`、`PI
 - **pnpm 版本不匹配**：运行 `Get-Command pnpm -All`（PowerShell）或 `which -a pnpm`，确认调用 9.1.2。已有正确版本时调整 PATH；没有则安装 `npm install --global pnpm@9.1.2`。不要关闭 engine-strict 或无版本安装最新版。
 - **作品详情通用服务器错误**：先检查 API 日志和 `pnpm db:status`。有待应用迁移时先停止当前运行的 API/worker 进程，执行 `pnpm db:deploy`，然后重启；不要 reset 或 demo:init。数据库 ready 不代表迁移齐全。
 - **数据库连不上**：确认 Docker 和对应 PostgreSQL 容器健康、端口与 DATABASE_URL 一致；重启系统后先启动 Docker。不要直接删除 Docker 虚拟磁盘或数据卷。
-- **Vite 换到其他端口**：先关闭本项目遗留进程，或同步 APP_ORIGIN 后重启。浏览器地址和 Origin 不一致会拒绝写请求。
+- **Vite 换到其他端口**：先关闭本项目遗留进程，或同步 APP_ORIGIN 后重启。写请求的 Origin 必须精确匹配主入口或已配置的额外入口。
 - **Windows API 端口 EACCES**：检查 `netsh interface ipv4 show excludedportrange protocol=tcp`；换一个不在排除范围内的 PORT，Vite 会读取同一配置。
 - **请求来源或格式无效**：使用配置的页面 origin；JSON 写请求需正确 Content-Type 和 `X-Comiku-Request`，空请求体接口也按客户端契约发送 `{}`。不要移除服务端来源检查。
 - **缩略图/ZIP 长时间排队**：检查 worker、数据库、任务状态与临时磁盘容量，使用 `pnpm ops:status`。不要通过重复提交覆盖版本基线。

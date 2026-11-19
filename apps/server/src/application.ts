@@ -65,7 +65,7 @@ export async function createApplication(environment: Environment) {
     .getInstance()
     .set("trust proxy", environment.trustedProxyCidrs ?? false);
   app.enableCors({
-    origin: environment.appOrigin,
+    origin: environment.allowedAppOrigins,
     credentials: true,
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "X-Comiku-Request"],

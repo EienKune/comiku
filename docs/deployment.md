@@ -37,7 +37,7 @@ API/worker/tools 通过绝对 `COMIKU_ENV_FILE` 加载相同配置，显式容�
 
 调整[主题包装配](themes.md)时，先修改共享清单并运行 `pnpm api:generate`，再从同一提交构建 Pages 前端及 API／worker 镜像，保持可用主题一致。部署镜像已包含共享主题目录。管理员在网页选择已装配的默认外观时，设置即时生效，无需重新构建。
 
-API 仍精确匹配 `APP_ORIGIN`、携带凭据 CORS 和写请求 `X-Comiku-Request`，生产 Cookie 为 Secure、HttpOnly、SameSite=Lax、Path=/api、API host-only；在线 Swagger 关闭。不要使用默认 `pages.dev` 与任意另一主域拼接为正式登录部署。
+API 的携带凭据 CORS 与写请求来源校验精确匹配 `APP_ORIGIN` 和 `APP_ADDITIONAL_ORIGINS`，写请求仍需 `X-Comiku-Request`。额外入口也须使用 HTTPS，代理应原样转发浏览器的 Origin，R2 浏览器直传和直读需同步桶 CORS。通知链接使用主入口。生产 Cookie 为 Secure、HttpOnly、SameSite=Lax、Path=/api、API host-only；在线 Swagger 关闭。不要使用默认 `pages.dev` 与任意另一主域拼接为正式登录部署。
 
 源站方案采用 Caddy + Cloudflare Origin CA，Cloudflare 设置 **Full (strict)**。证书需覆盖 API 子域；Caddy 2.10.2 固定镜像。Origin CA 不用于浏览器直接访问源站。Caddy 不发布管理端口，不记录包含签名地址或 Cookie 的访问日志。
 

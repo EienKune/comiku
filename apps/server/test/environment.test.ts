@@ -120,6 +120,7 @@ test("validates configuration and uses explicit development defaults", () => {
     port: 3000,
     databaseUrl,
     appOrigin: "http://localhost:5173",
+    allowedAppOrigins: ["http://localhost:5173"],
     authSessionIdleSeconds: 1800,
     authSessionAbsoluteSeconds: 28800,
     xOfficialDailyBudget: 0,

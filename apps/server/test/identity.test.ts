@@ -101,3 +101,40 @@ test("production cookies are Secure and HttpOnly, scoped to the API", () => {
     false,
   );
 });
+
+test("additional browser origins extend the exact HTTPS allowlist while keeping the primary URL", () => {
+  const input = {
+    NODE_ENV: "production",
+    APP_ORIGIN: "https://comiku.test:10240",
+    DATABASE_URL: "postgresql://localhost/comiku_test",
+    R2_ACCOUNT_ID: "0123456789abcdef0123456789abcdef",
+    R2_ACCESS_KEY_ID: "fixture-access-key",
+    R2_SECRET_ACCESS_KEY: "fixture-secret-key",
+    R2_BUCKET: "comiku-private",
+  };
+  const env = parseEnvironment({
+    ...input,
+    APP_ADDITIONAL_ORIGINS:
+      " https://192.0.2.7, https://comiku.test:10240, https://192.0.2.7 ",
+  });
+  assert.equal(env.appOrigin, input.APP_ORIGIN);
+  assert.deepEqual(env.allowedAppOrigins, [
+    input.APP_ORIGIN,
+    "https://192.0.2.7",
+  ]);
+  for (const value of [
+    "*",
+    "null",
+    "http://192.0.2.7",
+    "https://192.0.2.7:443",
+    "https://192.0.2.7/",
+    "https://192.0.2.7/path",
+    "https://user@192.0.2.7",
+    "https://192.0.2.7,",
+  ]) {
+    assert.throws(
+      () => parseEnvironment({ ...input, APP_ADDITIONAL_ORIGINS: value }),
+      /APP_ADDITIONAL_ORIGINS/u,
+    );
+  }
+});
