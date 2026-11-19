@@ -37,7 +37,10 @@ export function EditorReferenceTools({
       <Button
         size="sm"
         variant="secondary"
+        className="editor-reference-trigger"
         leadingIcon={<BookOpen size={15} />}
+        aria-label="拟声词"
+        title="拟声词"
         onClick={() => {
           setSymbolsOpen(false);
           setDictionaryOpen(true);
@@ -48,7 +51,10 @@ export function EditorReferenceTools({
       <Button
         size="sm"
         variant="secondary"
+        className="editor-reference-trigger"
         leadingIcon={<Sparkles size={15} />}
+        aria-label="符号"
+        title="符号"
         aria-expanded={symbolsOpen}
         aria-controls={panelId}
         onClick={() => setSymbolsOpen((open) => !open)}

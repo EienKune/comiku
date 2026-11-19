@@ -2553,7 +2553,10 @@ export function TranslationEditorPage() {
           <Button
             size="sm"
             variant="secondary"
+            className="translation-file-button"
             leadingIcon={<Keyboard size={15} />}
+            aria-label="快捷键"
+            title="快捷键"
             onClick={() => setShowShortcutSettings(true)}
           >
             快捷键
@@ -2575,6 +2578,7 @@ export function TranslationEditorPage() {
               <Button
                 size="sm"
                 variant="secondary"
+                className="translation-file-button"
                 leadingIcon={<Upload size={15} />}
                 aria-label="导入 LabelPlus"
                 loading={labelPlusOperation === "preview"}
@@ -2593,13 +2597,14 @@ export function TranslationEditorPage() {
                 }
                 onClick={() => labelPlusInputRef.current?.click()}
               >
-                <span className="translation-file-label">导入 LabelPlus</span>
+                导入 LabelPlus
               </Button>
             )}
           {editor.data.canExportLabelPlus && (
             <Button
               size="sm"
               variant="secondary"
+              className="translation-file-button"
               leadingIcon={<Download size={15} />}
               aria-label="导出 LabelPlus"
               loading={labelPlusOperation === "export"}
@@ -2607,7 +2612,7 @@ export function TranslationEditorPage() {
               title={hasUnsaved ? "请先同步当前本地修改" : "导出 LabelPlus"}
               onClick={() => void exportLabelPlus()}
             >
-              <span className="translation-file-label">导出 LabelPlus</span>
+              导出 LabelPlus
             </Button>
           )}
           <EditorReferenceTools
