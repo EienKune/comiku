@@ -1,3 +1,4 @@
+import { FilePickerButton } from "../../components/ImagePicker";
 import { useConfirmation } from "../../components/use-confirmation";
 import { sourceAccountLabel } from "./source-account-label";
 import { SourceAccountFilter } from "./SourceAccountFilter";
@@ -6,6 +7,22 @@ import {
   sourceQuery,
   type SourceSelection,
 } from "./source-filter-state";
+import {
+  CollaborationModePreview,
+  type RetainedPages,
+} from "./CollaborationModePreview";
+import { PageWorkflowDialog } from "./PageWorkflowOverview";
+import { SourceHdReplacement } from "./SourceHdReplacement";
+import { SingleTypesetArchiveImport } from "./SingleTypesetArchiveImport";
+import { TypesetCurrentImageTools } from "./TypesetCurrentImageTools";
+import { TypesetCollaborationPanel } from "./TypesetCollaborationPanel";
+import { PageClaimControl } from "./PageClaimControl";
+import { AddProofreader } from "./AddProofreader";
+import {
+  workPageAssignments,
+  pageNumbers,
+  releaseSupplements,
+} from "./page-workflow";
 import { WorkAlbum } from "./WorkAlbum";
 import { WorkSeriesAssociation } from "./WorkSeriesAssociation";
 import { WorkViewNavigation, type WorkPerspective } from "./WorkViewNavigation";
@@ -119,6 +136,7 @@ import {
   EmptyState,
   SearchField,
   SelectField,
+  SelectControl,
   Surface,
   TextField,
 } from "../../components/ui";
@@ -153,6 +171,8 @@ import { useAuthorCollection } from "./author-collection";
 import { AuthorPicker } from "./AuthorPicker";
 import {
   canHandleStage,
+  currentWorkStage as currentStage,
+  stageClaimAccess,
   workingTabs,
   workViewState,
   type ClaimStage,
@@ -4372,82 +4392,221 @@ function WorkCard({
   );
 }
 
-function currentStage(status: WorkflowStatus): WorkStage | null {
-  if (status === "pending_translate" || status === "translating") {
-    return "translate";
-  }
-  if (status === "pending_proofread" || status === "proofreading") {
-    return "proofread";
-  }
-  if (status === "pending_typeset" || status === "typesetting") {
-    return "typeset";
-  }
-  if (status === "pending_publish") return "publish";
-  return null;
-}
 function PageAssignmentEditor({
   work,
-  participant,
+  participant: initialParticipant,
+  manageParticipants,
   onUpdated,
+  onLeave,
+  leaveBusy = false,
+  leaveError = "",
 }: {
   work: WorkDetail;
   participant: WorkDetail["participants"][number];
+  manageParticipants?: WorkDetail["participants"];
   onUpdated: (work: WorkDetail) => void;
+  onLeave?: () => Promise<void>;
+  leaveBusy?: boolean;
+  leaveError?: string;
 }) {
+  const user = useAccount();
   const action = useAction();
-  const [selected, setSelected] = useState(participant.assignedImageIds);
-  useEffect(() => setSelected(participant.assignedImageIds), [participant]);
+  const [participantId, setParticipantId] = useState(initialParticipant.id);
+  const participant =
+    manageParticipants?.find((person) => person.id === participantId) ??
+    initialParticipant;
+  const assignments = useMemo(
+    () =>
+      workPageAssignments(work).filter(
+        (page) => page.stage === participant.stage,
+      ),
+    [work, participant.stage],
+  );
+  const owned = useMemo(
+    () =>
+      assignments
+        .filter((page) => page.participantId === participant.id)
+        .map((page) => page.workImageId),
+    [assignments, participant.id],
+  );
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState(owned);
+  useEffect(() => setSelected(owned), [owned]);
+  const confirmation = useConfirmation([
+    work.id,
+    work.revision,
+    participant.id,
+    selected,
+  ]);
+  const own = participant.userId === user.id;
   async function save() {
     await action.run(async () => {
+      const released = owned.filter((id) => !selected.includes(id));
+      let supplements: Awaited<ReturnType<typeof releaseSupplements>> = [];
+      if (participant.stage === "typeset" && selected.length === 0)
+        supplements = await releaseSupplements(work.id, participant.id);
+      if (
+        released.length &&
+        !(await confirmation.confirm({
+          title: "取消这些页的认领？",
+          description: `第 ${pageNumbers(work, released)} 页：取消认领将清空这些页的当前${participant.stage === "typeset" ? "成图" : "翻译内容"}和提交。${supplements.length ? `同时清空补充图：${supplements.map((draft) => draft.sourceName).join("、")}。` : ""}历史版本保留。`,
+          confirmLabel: "清空并取消认领",
+          danger: true,
+        }))
+      )
+        return;
+      const body = {
+        expectedRevision: work.revision,
+        idempotencyKey: crypto.randomUUID(),
+        stage: participant.stage as CoordinatedStage,
+        participantId: participant.id,
+        imageIds: selected,
+        confirmClearDraft: released.length > 0,
+        impactImageIds: released,
+        impactSupplementIds: supplements.map((draft) => draft.id),
+      };
       const updated = await unwrap(
         await client.POST("/api/works/{id}/stages/assignments", {
           params: { path: { id: work.id } },
-          body: {
-            expectedRevision: work.revision,
-            idempotencyKey: crypto.randomUUID(),
-            stage: participant.stage as CoordinatedStage,
-            participantId: participant.id,
-            imageIds: selected,
-          },
+          body,
         }),
       );
       onUpdated(updated);
-      action.setSuccess("页码分工已保存");
+      queryClient.removeQueries({
+        queryKey: ["translation-editor", work.id],
+        exact: true,
+      });
+      await invalidateWorkViews(work.id);
+      action.setSuccess("页码认领已更新");
+      setOpen(false);
     });
   }
+  const editable =
+    !participant.submittedAt &&
+    stageClaimAccess(user, work, participant.stage as ClaimStage).inWindow &&
+    (!own ||
+      canHandleStage(
+        user,
+        participant.stage as ClaimStage,
+        work.sourceLanguage,
+      ));
+  const submitted = new Set(
+    assignments
+      .filter((page) => page.submittedAt)
+      .map((page) => page.workImageId),
+  );
+  const allowed = new Set(
+    (own && !manageParticipants
+      ? work.images
+          .filter(
+            (image) =>
+              !assignments.some(
+                (page) =>
+                  page.workImageId === image.id &&
+                  page.participantId &&
+                  page.participantId !== participant.id,
+              ),
+          )
+          .map((image) => image.id)
+      : owned
+    ).filter((id) => !submitted.has(id)),
+  );
   return (
-    <details className="workspace-page-assignment">
-      <summary>
-        分工页码 · {participant.assignedImageIds.length || "未设置"} 页
-      </summary>
-      <div className="workspace-page-assignment__pages">
-        {work.images.map((image, index) => (
-          <label key={image.id}>
-            <input
-              type="checkbox"
-              checked={selected.includes(image.id)}
-              onChange={() =>
-                setSelected((current) =>
-                  current.includes(image.id)
-                    ? current.filter((id) => id !== image.id)
-                    : [...current, image.id],
-                )
-              }
-            />
-            {index + 1}
-          </label>
-        ))}
-      </div>
-      <Feedback error={action.error} success={action.success} />
+    <>
       <Button
         size="sm"
         variant="secondary"
-        loading={action.busy}
-        onClick={() => void save()}
+        className="workspace-page-assignment-manage"
+        disabled={leaveBusy}
+        onClick={() => {
+          setSelected(owned);
+          action.clearError();
+          setOpen(true);
+        }}
       >
-        保存分工
+        {manageParticipants
+          ? "管理页认领"
+          : `管理本人认领 · ${owned.length} 页`}
       </Button>
-    </details>
+      {open && (
+        <PageWorkflowDialog
+          work={work}
+          stage={participant.stage as "translate" | "typeset"}
+          title={manageParticipants ? "管理页认领" : "管理本人认领"}
+          toolbar={
+            manageParticipants && (
+              <label className="workspace-claim-member-select">
+                管理成员
+                <SelectControl
+                  aria-label="管理成员"
+                  value={participant.id}
+                  disabled={action.busy || leaveBusy}
+                  onValueChange={(value) => {
+                    setParticipantId(value);
+                    action.clearError();
+                  }}
+                >
+                  {manageParticipants.map((person) => (
+                    <option key={person.id} value={person.id}>
+                      {person.displayName}
+                    </option>
+                  ))}
+                </SelectControl>
+              </label>
+            )
+          }
+          busy={action.busy || leaveBusy}
+          onClose={() => setOpen(false)}
+          selection={
+            !editable
+              ? undefined
+              : {
+                  ids: selected,
+                  available: allowed,
+                  toggle: (id) =>
+                    setSelected((current) =>
+                      current.includes(id)
+                        ? current.filter((x) => x !== id)
+                        : [...current, id],
+                    ),
+                }
+          }
+          footer={
+            !editable ? undefined : (
+              <>
+                <Feedback
+                  error={action.error || leaveError}
+                  success={action.success}
+                />
+                {own && onLeave && (
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    className="workspace-page-assignment-leave"
+                    loading={leaveBusy}
+                    disabled={action.busy}
+                    onClick={() => void onLeave()}
+                  >
+                    取消接取
+                  </Button>
+                )}
+                {editable && (
+                  <Button
+                    size="sm"
+                    loading={action.busy}
+                    disabled={leaveBusy}
+                    onClick={() => void save()}
+                  >
+                    保存认领
+                  </Button>
+                )}
+              </>
+            )
+          }
+        />
+      )}
+      {confirmation.dialog}
+    </>
   );
 }
 
@@ -4563,6 +4722,7 @@ function TypesetVersionPanel({
   onWorkUpdated: (work: WorkDetail) => Promise<unknown>;
 }) {
   const action = useAction();
+  const currentUser = useAccount();
   const [files, setFiles] = useState<File[]>([]);
   const [sourceImageIds, setSourceImageIds] = useState<Record<string, string>>(
     {},
@@ -4601,25 +4761,6 @@ function TypesetVersionPanel({
   );
   const previewImage =
     preview === null ? undefined : previewVersion?.images[preview.imageIndex];
-  const previewQuery = useImageUrl(
-    ["typeset-version-image", work.id, preview?.versionId, previewImage?.id],
-    async () =>
-      unwrap(
-        await client.GET(
-          "/api/works/{workId}/typeset/versions/{versionId}/images/{imageId}/url",
-          {
-            params: {
-              path: {
-                workId: work.id,
-                versionId: preview!.versionId,
-                imageId: previewImage!.id,
-              },
-            },
-          },
-        ),
-      ),
-    Boolean(previewImage),
-  );
 
   async function finish(result: TypesetVersionList, message: string) {
     queryClient.setQueryData(["typeset-versions", work.id], result);
@@ -4831,7 +4972,7 @@ function TypesetVersionPanel({
       </div>
       {work.workflowStatus === "pending_publish" && (
         <p className="workspace-muted">
-          当前成图已提交并冻结。需要调整时，由本轮嵌字提交人先取消提交；审核处理中请等待审核决定。
+          当前成图已交齐。可直接修订完整成图；替换当前图后仍保持待发布。
         </p>
       )}
       {canCancelSubmission &&
@@ -4850,23 +4991,29 @@ function TypesetVersionPanel({
         message="可以继续上传和整理修正版供复核；审核解决前不能确认嵌字完成。"
       />
       {canUpload && (
+        <SingleTypesetArchiveImport
+          workId={work.id}
+          revision={work.revision}
+          images={work.images}
+          onChanged={async () => {
+            await Promise.all([query.refetch(), onUpdated()]);
+          }}
+        />
+      )}
+      {canUpload && (
         <form
           className="workspace-typeset-upload"
           onSubmit={(event) => void uploadVersion(event)}
         >
-          <label className="workspace-file-field">
-            <span>成图图片</span>
-            <input
-              type="file"
+          <div className="workspace-file-field">
+            <strong>成图图片</strong>
+            <FilePickerButton
+              label="选择成图图片"
+              inputLabel="成图图片"
               accept="image/png,image/jpeg,image/webp"
               multiple
-              required
-              onChange={(event) => {
-                setFiles(
-                  orderTypesetFiles(
-                    Array.from(event.currentTarget.files ?? []),
-                  ),
-                );
+              onFiles={(files) => {
+                setFiles(orderTypesetFiles(files));
                 setSourceImageIds({});
               }}
             />
@@ -4874,7 +5021,7 @@ function TypesetVersionPanel({
               可上传与原图数量或尺寸不同的结果，也可加入说明图；至少 1 张、最多
               100 张，每张不超过 25 MiB，版本合计不超过 250 MiB。
             </small>
-          </label>
+          </div>
           <SelectField
             label="上传方式"
             value={mode}
@@ -5107,40 +5254,58 @@ function TypesetVersionPanel({
             </Button>
           </div>
         )}
-      {preview && previewVersion && (
-        <ImageLightbox
-          src={
-            isDisplayableImageUrl(previewQuery.data?.url) &&
-            !previewQuery.isFetching
-              ? previewQuery.data.url
-              : undefined
-          }
-          alt={`成图版本 v${previewVersion.versionNumber} 第 ${preview.imageIndex + 1} 页`}
-          index={preview.imageIndex}
-          count={previewVersion.images.length}
-          loading={previewQuery.isPending || previewQuery.isFetching}
-          onClose={() => setPreview(null)}
-          onPrevious={
-            preview.imageIndex > 0
-              ? () =>
-                  setPreview((current) =>
-                    current
-                      ? { ...current, imageIndex: current.imageIndex - 1 }
-                      : null,
-                  )
-              : undefined
-          }
-          onNext={
-            preview.imageIndex < previewVersion.images.length - 1
-              ? () =>
-                  setPreview((current) =>
-                    current
-                      ? { ...current, imageIndex: current.imageIndex + 1 }
-                      : null,
-                  )
-              : undefined
-          }
-        />
+      {preview && previewVersion && previewImage && (
+        <section aria-label="成图查看">
+          <div className="workspace-inline-actions">
+            <Button variant="secondary" onClick={() => setPreview(null)}>
+              关闭对比
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={preview.imageIndex === 0}
+              onClick={() =>
+                setPreview({ ...preview, imageIndex: preview.imageIndex - 1 })
+              }
+            >
+              上一张
+            </Button>
+            <span>
+              第 {preview.imageIndex + 1} / {previewVersion.images.length} 张
+            </span>
+            <Button
+              variant="secondary"
+              disabled={preview.imageIndex === previewVersion.images.length - 1}
+              onClick={() =>
+                setPreview({ ...preview, imageIndex: preview.imageIndex + 1 })
+              }
+            >
+              下一张
+            </Button>
+          </div>
+          <TypesetCurrentImageTools
+            workId={work.id}
+            versionId={previewVersion.id}
+            imageId={previewImage.id}
+            workImageId={previewImage.workImageId}
+            images={work.images}
+            revision={work.revision}
+            canReplace={
+              previewVersion.isCurrent &&
+              work.workflowStatus === "pending_publish" &&
+              work.reviewStatus === "normal" &&
+              currentUser.roles.includes("typesetter") &&
+              work.participants.some(
+                (person) =>
+                  person.stage === "typeset" &&
+                  person.userId === currentUser.id &&
+                  !person.leftAt,
+              )
+            }
+            onChanged={async () => {
+              await Promise.all([query.refetch(), onUpdated()]);
+            }}
+          />
+        </section>
       )}
     </Surface>
   );
@@ -5411,25 +5576,6 @@ export function WorkDetailPage() {
       exact: true,
     });
   }
-  async function stageAction(work: WorkDetail, stage: CoordinatedStage) {
-    await action.run(async () => {
-      const body = {
-        expectedRevision: work.revision,
-        idempotencyKey: crypto.randomUUID(),
-        stage,
-      };
-      const updated = await unwrap(
-        await client.POST("/api/works/{id}/stages/join", {
-          params: { path: { id } },
-          body,
-        }),
-      );
-      queryClient.setQueryData(["work", id], updated);
-      discardEditorCache();
-      await invalidateWorkViews();
-      action.setSuccess(`已加入${stageLabels[stage]}`);
-    });
-  }
   async function claimStage(work: WorkDetail, stage: CoordinatedStage) {
     await action.run(async () => {
       const updated = await unwrap(
@@ -5510,16 +5656,41 @@ export function WorkDetailPage() {
         !participant.submittedAt &&
         !participant.leftAt,
     ).length;
+    const released = workPageAssignments(work)
+      .filter((page) => page.stage === stage && page.userId === user.id)
+      .map((page) => page.workImageId);
+    let supplements: Awaited<ReturnType<typeof releaseSupplements>> = [];
+    try {
+      if (stage === "typeset")
+        supplements = await releaseSupplements(
+          work.id,
+          work.participants.find(
+            (person) =>
+              person.stage === "typeset" &&
+              person.userId === user.id &&
+              !person.leftAt,
+          )?.id,
+        );
+    } catch (error) {
+      await action.run(async () => {
+        throw error;
+      });
+      return;
+    }
     const warning =
-      activeCount === 1 && stage === "translate"
-        ? "你是最后一名翻译。取消后会删除本轮全部未提交译文并使旧设备草稿失效，是否继续？"
-        : activeCount === 1 && stage === "proofread"
-          ? "你是最后一名校对。取消后会恢复最近的正式翻译版本并使本轮校对草稿失效，是否继续？"
-          : "确定取消本次接取吗？已保存的共享内容会保留，未完成页需要重新分配。";
+      stage === "proofread"
+        ? activeCount === 1
+          ? "你是最后一名校对。退出将放弃本轮校对稿并恢复正式翻译基线。"
+          : "退出校对后将保留其他校对当前处理内容。"
+        : `第 ${pageNumbers(work, released)} 页：取消认领将清空这些页的当前${stage === "typeset" ? "成图" : "翻译内容"}和提交。历史版本保留。`;
     if (
       !(await confirmation.confirm({
         title: `取消${stageLabels[stage]}接取？`,
-        description: warning,
+        description:
+          warning +
+          (supplements.length
+            ? ` 同时清空补充图：${supplements.map((draft) => draft.sourceName).join("、")}。`
+            : ""),
         confirmLabel: "取消接取",
         danger: true,
       }))
@@ -5533,6 +5704,9 @@ export function WorkDetailPage() {
             expectedRevision: work.revision,
             idempotencyKey: crypto.randomUUID(),
             stage,
+            confirmClearDraft: stage !== "proofread" || activeCount === 1,
+            impactImageIds: released,
+            impactSupplementIds: supplements.map((draft) => draft.id),
           },
         }),
       );
@@ -5544,28 +5718,106 @@ export function WorkDetailPage() {
     });
   }
   async function updateCollaboration(work: WorkDetail) {
-    const next = work.collaborationMode === "single" ? "multi" : "single";
+    const next: "single" | "multi" =
+      work.collaborationMode === "single" ? "multi" : "single";
+    const facts = work as WorkDetail & {
+      hasProductionProgress?: boolean;
+      collaborationMigrationIssue?: string | null;
+    };
+    if (next === "single" && facts.hasProductionProgress) {
+      await action.run(async () => {
+        throw new Error(
+          "作品已有工作进展，不能切回单人模式。可由一人认领全部空闲页继续完成。",
+        );
+      });
+      return;
+    }
+    if (facts.collaborationMigrationIssue) {
+      await action.run(async () => {
+        throw new Error(facts.collaborationMigrationIssue!);
+      });
+      return;
+    }
+    const pages = workPageAssignments(work);
+    const retained: RetainedPages = {
+      translate: new Set(
+        pages
+          .filter((page) => page.stage === "translate")
+          .map((page) => page.workImageId),
+      ),
+      typeset: new Set(
+        pages
+          .filter((page) => page.stage === "typeset")
+          .map((page) => page.workImageId),
+      ),
+    };
     if (
       !(await confirmation.confirm({
         title: next === "multi" ? "开启多人协作？" : "切回单人模式？",
         description:
           next === "multi"
-            ? "开启多人协作后，同一阶段可加入多人，并启用页码分工与个人完成确认。"
-            : "切回单人模式要求每个阶段至多一名参与者，且不能保留同一用户翻译并校对的记录。",
-        confirmLabel: next === "multi" ? "开启多人协作" : "切回单人模式",
+            ? "请按原负责人的明确选择保留页码。未保留页将清空当前稿件并释放认领；选择保留不等于提交。"
+            : "仅从未开工的作品可回切。各岗位保留最早加入的合格成员并由其负责全部原稿页。",
+        ...(next === "multi" && {
+          details: <CollaborationModePreview work={work} retained={retained} />,
+        }),
+        confirmLabel: next === "multi" ? "确认范围并开启" : "切回单人模式",
+        danger: next === "multi",
       }))
-    ) {
+    )
       return;
+    let supplements: Awaited<ReturnType<typeof releaseSupplements>> = [];
+    if (next === "multi" && retained.typeset.size === 0) {
+      try {
+        supplements = await releaseSupplements(
+          work.id,
+          work.participants.find(
+            (person) => person.stage === "typeset" && !person.leftAt,
+          )?.id,
+        );
+      } catch (error) {
+        await action.run(async () => {
+          throw error;
+        });
+        return;
+      }
+      if (
+        supplements.length &&
+        !(await confirmation.confirm({
+          title: "同时清空补充图？",
+          description: `放弃全部嵌字页还会清空补充图：${supplements.map((draft) => draft.sourceName).join("、")}。`,
+          confirmLabel: "清空并转换",
+          danger: true,
+        }))
+      )
+        return;
     }
+    const cleared = [
+      ...new Set(
+        pages
+          .filter(
+            (page) =>
+              (page.stage === "translate" || page.stage === "typeset") &&
+              !retained[page.stage].has(page.workImageId),
+          )
+          .map((page) => page.workImageId),
+      ),
+    ];
     await action.run(async () => {
+      const body = {
+        collaborationMode: next,
+        expectedRevision: work.revision,
+        idempotencyKey: crypto.randomUUID(),
+        retainedTranslationImageIds: [...retained.translate],
+        retainedTypesetImageIds: [...retained.typeset],
+        confirmClearDraft: cleared.length > 0,
+        impactImageIds: cleared,
+        impactSupplementIds: supplements.map((draft) => draft.id),
+      };
       const updated = await unwrap(
         await client.PATCH("/api/works/{id}/collaboration", {
           params: { path: { id } },
-          body: {
-            collaborationMode: next,
-            expectedRevision: work.revision,
-            idempotencyKey: crypto.randomUUID(),
-          },
+          body,
         }),
       );
       queryClient.setQueryData(["work", id], updated);
@@ -5626,18 +5878,10 @@ export function WorkDetailPage() {
       <PageState query={query}>
         {(work) => {
           const productionWritable =
+            !work.collaborationMigrationIssue &&
             work.reviewStatus === "normal" &&
             work.workflowStatus !== "archived";
           const stage = currentStage(work.workflowStatus);
-          const joined =
-            stage &&
-            work.participants.some(
-              (item) =>
-                item.userId === user.id &&
-                item.stage === stage &&
-                !item.submittedAt &&
-                !item.leftAt,
-            );
           const hasHandoffAccess =
             user.roles.some((role) =>
               ["admin", "source", "reviewer"].includes(role),
@@ -5736,10 +5980,6 @@ export function WorkDetailPage() {
                 >
                   {work.collaborationMode === "multi" ? "多人协作" : "单人模式"}
                 </Badge>
-                <Link to={`/works/${work.id}/editor`}>
-                  <ScanText size={14} />
-                  翻译工作区
-                </Link>
                 {work.sourcePostUrl && (
                   <a
                     className="workspace-source-link"
@@ -5751,6 +5991,11 @@ export function WorkDetailPage() {
                   </a>
                 )}
               </div>
+              {work.collaborationMigrationIssue && (
+                <p role="status" className="workspace-notice">
+                  旧作品分工待核对：{work.collaborationMigrationIssue}
+                </p>
+              )}
               <Feedback error={action.error} success={action.success} />
 
               <div className="workspace-detail-grid">
@@ -5764,16 +6009,15 @@ export function WorkDetailPage() {
                           : "当前没有可加入的工作阶段"}
                       </p>
                     </div>
-                    {joined &&
-                      stage &&
-                      (stage === "translate" || stage === "proofread") && (
-                        <Link
-                          className="account-link"
-                          to={`/works/${work.id}/editor`}
-                        >
-                          进入工作区
-                        </Link>
-                      )}
+                    <Link
+                      className="account-link workspace-editor-entry"
+                      to={`/works/${work.id}/editor`}
+                    >
+                      <ScanText size={14} />
+                      {stage === "proofread"
+                        ? "进入校对工作区"
+                        : "进入翻译工作区"}
+                    </Link>
                   </div>
                   {stage === "publish" && (
                     <p className="workspace-notice">
@@ -5815,6 +6059,21 @@ export function WorkDetailPage() {
                       />
                     ))}
                   </div>
+                  {productionWritable &&
+                    !work.typesetHandoffStartedAt &&
+                    !["published", "archived"].includes(work.workflowStatus) &&
+                    user.roles.some(
+                      (role) => role === "admin" || role === "source",
+                    ) && (
+                      <SourceHdReplacement
+                        workId={work.id}
+                        images={work.images}
+                        revision={work.revision}
+                        onChanged={async () => {
+                          await query.refetch();
+                        }}
+                      />
+                    )}
                   <WorkSourceRecord workId={work.id} />
                   {stage === "typeset" && (
                     <section className="workspace-handoff-panel">
@@ -5912,28 +6171,32 @@ export function WorkDetailPage() {
                         (person) => !person.submittedAt,
                       );
                       const hasCurrentUser = participants.some(
-                        (person) =>
-                          person.userId === user.id && !person.submittedAt,
+                        (person) => person.userId === user.id,
                       );
                       const isCurrent = stage === itemStage;
-                      const canSelf =
-                        !(
-                          itemStage === "proofread" && work.proofreadingSkipped
-                        ) &&
-                        canHandleStage(user, itemStage, work.sourceLanguage);
-                      return (
-                        <div
-                          className={`workspace-stage-row${isCurrent ? " is-current" : ""}`}
-                          key={itemStage}
-                        >
-                          <div className="workspace-stage-label">
-                            <strong>{stageLabels[itemStage]}</strong>
-                            <small>{isCurrent ? "当前阶段" : "职责"}</small>
-                          </div>
+                      const { canClaim, canAddProofreader } = stageClaimAccess(
+                        user,
+                        work,
+                        itemStage,
+                      );
+                      const pageStage =
+                        work.collaborationMode === "multi" &&
+                        (itemStage === "translate" || itemStage === "typeset")
+                          ? itemStage
+                          : null;
+                      const currentParticipant = participants.find(
+                        (person) => person.userId === user.id,
+                      );
+                      const details = (
+                        <>
+                          {" "}
                           <div className="workspace-stage-people">
                             {participants.length ? (
                               participants.map((person) => (
-                                <div key={person.id}>
+                                <div
+                                  key={person.id}
+                                  className="workspace-stage-member"
+                                >
                                   <span>
                                     <span className="workspace-participant-name">
                                       <MemberAvatar
@@ -5958,27 +6221,45 @@ export function WorkDetailPage() {
                                         : ""}
                                     </small>
                                   </span>
-                                  {person.userId === user.id &&
-                                    work.workflowStatus !== "published" &&
-                                    productionWritable && (
-                                      <div className="workspace-credit-editor">
-                                        <TextField
-                                          label={`${stageLabels[itemStage]}临时署名`}
-                                          value={
-                                            temporaryCredits[person.id] ??
-                                            person.workCreditName ??
-                                            ""
-                                          }
-                                          placeholder={person.displayName}
-                                          hint={`仅用于本作品的${stageLabels[itemStage]}职责；留空使用成员昵称。`}
-                                          maxLength={100}
-                                          onChange={(event) =>
-                                            setTemporaryCredits((current) => ({
-                                              ...current,
-                                              [person.id]: event.target.value,
-                                            }))
-                                          }
-                                        />
+                                </div>
+                              ))
+                            ) : !pageStage ? (
+                              <span className="workspace-muted">
+                                {itemStage === "proofread" &&
+                                work.proofreadingSkipped
+                                  ? "已跳过校对"
+                                  : "尚未分配"}
+                              </span>
+                            ) : null}
+                          </div>
+                          {currentParticipant && (
+                            <div className="workspace-stage-personal-controls">
+                              {currentParticipant.userId === user.id &&
+                                work.workflowStatus !== "published" &&
+                                productionWritable && (
+                                  <div className="workspace-credit-editor">
+                                    <TextField
+                                      label={`${stageLabels[itemStage]}临时署名`}
+                                      value={
+                                        temporaryCredits[
+                                          currentParticipant.id
+                                        ] ??
+                                        currentParticipant.workCreditName ??
+                                        ""
+                                      }
+                                      placeholder={
+                                        currentParticipant.displayName
+                                      }
+                                      hint={`仅用于本作品的${stageLabels[itemStage]}职责；留空使用成员昵称。`}
+                                      maxLength={100}
+                                      onChange={(event) =>
+                                        setTemporaryCredits((current) => ({
+                                          ...current,
+                                          [currentParticipant.id]:
+                                            event.target.value,
+                                        }))
+                                      }
+                                      action={
                                         <Button
                                           size="sm"
                                           variant="secondary"
@@ -5986,77 +6267,86 @@ export function WorkDetailPage() {
                                           onClick={() =>
                                             void updateStageCredit(
                                               work,
-                                              person,
+                                              currentParticipant,
                                               itemStage,
                                             )
                                           }
                                         >
                                           保存署名
                                         </Button>
-                                      </div>
-                                    )}
-                                  {productionWritable &&
-                                    !person.submittedAt &&
-                                    work.collaborationMode === "multi" &&
-                                    (person.userId === user.id ||
-                                      user.permissions.includes(
-                                        "works:admin",
-                                      )) &&
-                                    (itemStage === "translate" ||
-                                      itemStage === "proofread") && (
-                                      <PageAssignmentEditor
-                                        work={work}
-                                        participant={person}
-                                        onUpdated={(updated) =>
-                                          queryClient.setQueryData(
-                                            ["work", id],
-                                            updated,
-                                          )
-                                        }
-                                      />
-                                    )}
-                                </div>
-                              ))
-                            ) : (
-                              <span className="workspace-muted">
-                                {itemStage === "proofread" &&
-                                work.proofreadingSkipped
-                                  ? "已跳过校对"
-                                  : "尚未分配"}
-                              </span>
-                            )}
-                          </div>
+                                      }
+                                    />
+                                  </div>
+                                )}
+                              {productionWritable &&
+                                !currentParticipant.submittedAt &&
+                                work.collaborationMode === "multi" &&
+                                currentParticipant.userId === user.id &&
+                                (itemStage === "translate" ||
+                                  itemStage === "typeset") && (
+                                  <PageAssignmentEditor
+                                    work={work}
+                                    participant={currentParticipant}
+                                    leaveBusy={action.busy}
+                                    leaveError={
+                                      currentParticipant.userId === user.id
+                                        ? action.error
+                                        : ""
+                                    }
+                                    onLeave={
+                                      currentParticipant.userId === user.id
+                                        ? () => leaveStage(work, itemStage)
+                                        : undefined
+                                    }
+                                    onUpdated={(updated) =>
+                                      queryClient.setQueryData(
+                                        ["work", id],
+                                        updated,
+                                      )
+                                    }
+                                  />
+                                )}
+                            </div>
+                          )}
                           <div className="workspace-stage-action">
-                            {!activeParticipants.length &&
-                              (isCurrent || !participants.length) &&
+                            {pageStage &&
                               productionWritable &&
-                              (canSelf ? (
-                                <Button
-                                  size="sm"
-                                  loading={action.busy}
-                                  onClick={() =>
-                                    void claimStage(work, itemStage)
+                              user.permissions.includes("works:admin") &&
+                              participants.length > 0 && (
+                                <PageAssignmentEditor
+                                  work={work}
+                                  participant={participants[0]}
+                                  manageParticipants={participants}
+                                  leaveBusy={action.busy}
+                                  onUpdated={(updated) =>
+                                    queryClient.setQueryData(
+                                      ["work", id],
+                                      updated,
+                                    )
                                   }
-                                >
-                                  认领
-                                </Button>
-                              ) : null)}
-                            {activeParticipants.length > 0 &&
-                              isCurrent &&
-                              canSelf &&
-                              productionWritable &&
-                              (work.collaborationMode === "multi" &&
-                              !hasCurrentUser ? (
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  onClick={() =>
-                                    void stageAction(work, itemStage)
-                                  }
-                                >
-                                  加入协作
-                                </Button>
-                              ) : null)}
+                                />
+                              )}
+                            {itemStage === "proofread" && canAddProofreader && (
+                              <AddProofreader
+                                work={work}
+                                onUpdated={(updated) =>
+                                  queryClient.setQueryData(
+                                    ["work", id],
+                                    updated,
+                                  )
+                                }
+                              />
+                            )}
+
+                            {!pageStage && canClaim && (
+                              <Button
+                                size="sm"
+                                loading={action.busy}
+                                onClick={() => void claimStage(work, itemStage)}
+                              >
+                                认领
+                              </Button>
+                            )}
                             {activeParticipants.length > 0 &&
                               work.collaborationMode === "single" &&
                               isCurrent &&
@@ -6065,17 +6355,56 @@ export function WorkDetailPage() {
                                   单人模式，仅查看
                                 </span>
                               )}
-                            {hasCurrentUser && productionWritable && (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                loading={action.busy}
-                                onClick={() => void leaveStage(work, itemStage)}
-                              >
-                                取消接取
-                              </Button>
-                            )}
+                            {hasCurrentUser &&
+                              !pageStage &&
+                              participants.some(
+                                (person) =>
+                                  person.userId === user.id &&
+                                  !person.submittedAt,
+                              ) &&
+                              productionWritable && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  loading={action.busy}
+                                  onClick={() =>
+                                    void leaveStage(work, itemStage)
+                                  }
+                                >
+                                  取消接取
+                                </Button>
+                              )}
                           </div>
+                        </>
+                      );
+                      return (
+                        <div
+                          className={`workspace-stage-row${isCurrent ? " is-current" : ""}`}
+                          key={itemStage}
+                        >
+                          <div className="workspace-stage-label">
+                            <strong>{stageLabels[itemStage]}</strong>
+                            <small>{isCurrent ? "当前阶段" : "职责"}</small>
+                          </div>
+                          {pageStage ? (
+                            <PageClaimControl
+                              work={work}
+                              stage={pageStage}
+                              canClaim={canClaim}
+                              onUpdated={(updated) =>
+                                queryClient.setQueryData(["work", id], updated)
+                              }
+                            >
+                              {participants.length > 0 && (
+                                <div className="page-workflow-members">
+                                  <h3>参与成员</h3>
+                                  {details}
+                                </div>
+                              )}
+                            </PageClaimControl>
+                          ) : (
+                            details
+                          )}
                         </div>
                       );
                     })}
@@ -6120,20 +6449,39 @@ export function WorkDetailPage() {
                 "pending_publish",
                 "published",
                 "archived",
-              ].includes(work.workflowStatus) && (
-                <TypesetVersionPanel
-                  work={work}
-                  canManage={canManageTypesetVersions}
-                  canUpload={canUploadTypesetVersion}
-                  canCancelSubmission={canCancelTypesetSubmission}
-                  onUpdated={() =>
-                    Promise.all([query.refetch(), invalidateWorkViews(work.id)])
-                  }
-                  onWorkUpdated={() =>
-                    Promise.all([query.refetch(), invalidateWorkViews(work.id)])
-                  }
-                />
-              )}
+              ].includes(work.workflowStatus) &&
+                (work.collaborationMode === "multi" ? (
+                  <TypesetCollaborationPanel
+                    workId={work.id}
+                    actorId={user.id}
+                    workRevision={work.revision}
+                    onChanged={async () => {
+                      await Promise.all([
+                        query.refetch(),
+                        invalidateWorkViews(work.id),
+                      ]);
+                    }}
+                  />
+                ) : (
+                  <TypesetVersionPanel
+                    work={work}
+                    canManage={canManageTypesetVersions}
+                    canUpload={canUploadTypesetVersion}
+                    canCancelSubmission={canCancelTypesetSubmission}
+                    onUpdated={() =>
+                      Promise.all([
+                        query.refetch(),
+                        invalidateWorkViews(work.id),
+                      ])
+                    }
+                    onWorkUpdated={() =>
+                      Promise.all([
+                        query.refetch(),
+                        invalidateWorkViews(work.id),
+                      ])
+                    }
+                  />
+                ))}
               {["pending_publish", "published"].includes(work.workflowStatus) &&
                 canPreparePublishing && (
                   <PublishingPanel

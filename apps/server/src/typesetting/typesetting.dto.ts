@@ -106,6 +106,10 @@ export class DeleteTypesetVersionDto extends ManageTypesetVersionDto {
 }
 
 export class TypesetVersionImageDto {
+  @ApiProperty({ type: String, format: "uuid", nullable: true }) supplementId!:
+    string | null;
+  @ApiProperty({ type: String, nullable: true }) supplementPosition!:
+    string | null;
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: String, format: "uuid", nullable: true })
   workImageId!: string | null;

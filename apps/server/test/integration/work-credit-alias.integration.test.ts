@@ -1,3 +1,4 @@
+import { translationPageHeads } from "./page-heads.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -147,6 +148,8 @@ test("one member's translation and typesetting credits remain independent throug
           await credit("translate", "提交时译者");
           await works.leaveStage(member.id, work.id, {
             stage: "typeset",
+            confirmClearDraft: true,
+            impactImageIds: work.images.map((i) => i.id),
             expectedRevision: (await head()).revision,
             idempotencyKey: randomUUID(),
           });
@@ -174,6 +177,7 @@ test("one member's translation and typesetting credits remain independent throug
           const beforeSubmit = await head();
           await works.submitStage(member.id, work.id, {
             stage: "translate",
+            pageHeads: await translationPageHeads(tx, work.id, member.id),
             expectedRevision: beforeSubmit.revision,
             expectedEditorEpoch: beforeSubmit.editorEpoch,
             idempotencyKey: randomUUID(),

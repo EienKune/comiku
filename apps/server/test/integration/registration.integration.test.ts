@@ -40,6 +40,7 @@ test("public registration and administrator qualifications preserve account and 
   });
   const workIds: string[] = [];
   const candidateIds: string[] = [];
+  let originalFileId = "";
   type Browser = { cookie?: string; id?: string };
   const anonymous: Browser = {};
   async function request<T = UserDto>(
@@ -141,6 +142,9 @@ test("public registration and administrator qualifications preserve account and 
         sourceLanguage: "ja",
         workflowStatus: status,
         title: prefix,
+        images: {
+          create: { originalFileObjectId: originalFileId, orderIndex: 0 },
+        },
       },
     });
     workIds.push(row.id);
@@ -183,6 +187,19 @@ test("public registration and administrator qualifications preserve account and 
   }
   const admin = await account("admin", ["admin"]),
     member = await account("member");
+  originalFileId = (
+    await db.fileObject.create({
+      data: {
+        objectKey: `registration/${randomUUID()}`,
+        bucketScope: "source",
+        kind: "fixture",
+        contentType: "image/png",
+        size: 1n,
+        checksum: "0".repeat(64),
+        createdById: admin.id,
+      },
+    })
+  ).id;
   try {
     await db.accountRegistrationSettings.deleteMany();
     await t.test(
@@ -587,7 +604,7 @@ test("public registration and administrator qualifications preserve account and 
       },
     );
     await t.test(
-      "completed history stays intact and cancellation cannot revive an ineligible participant",
+      "personal cancellation preserves the other participant's completed history without reviving qualification",
       async () => {
         const one = await account("roundone"),
           two = await account("roundtwo"),
@@ -602,6 +619,50 @@ test("public registration and administrator qualifications preserve account and 
             submittedAt,
           })),
         });
+        await db.work.update({
+          where: { id: row.id },
+          data: { collaborationMode: "multi", revision: 1, editorEpoch: 1 },
+        });
+        const firstImage = await db.workImage.findFirstOrThrow({
+          where: { workId: row.id },
+        });
+        const secondImage = await db.workImage.create({
+          data: {
+            workId: row.id,
+            originalFileObjectId: originalFileId,
+            orderIndex: 1,
+          },
+        });
+        const participants = await db.workStageParticipant.findMany({
+          where: { workId: row.id },
+        });
+        await db.workPageAssignment.createMany({
+          data: [
+            { image: firstImage, who: one },
+            { image: secondImage, who: two },
+          ].map(({ image, who }) => ({
+            workId: row.id,
+            workImageId: image.id,
+            stage: "translate",
+            participantId: participants.find((p) => p.userId === who.id)!.id,
+            generation: 1,
+            submittedGeneration: 1,
+            submittedRevision: 0,
+            submittedAt,
+          })),
+        });
+        await db.translationVersion.create({
+          data: {
+            workId: row.id,
+            stage: "translate",
+            kind: "translate_submission",
+            versionNumber: 1,
+            workRevision: 1,
+            editorEpoch: 1,
+            createdById: one.id,
+            contributorUserIds: [one.id, two.id],
+          },
+        });
         await manage(two, []);
         const result = await request(
           one,
@@ -609,22 +670,46 @@ test("public registration and administrator qualifications preserve account and 
           `/api/works/${row.id}/stages/submission/cancel`,
           {
             stage: "translate",
-            expectedRevision: 0,
-            expectedEditorEpoch: 0,
+            expectedRevision: 1,
+            expectedEditorEpoch: 1,
             idempotencyKey: randomUUID(),
           },
         );
-        assert.equal(result.status, 409);
+        assert.equal(result.status, 200);
         assert.equal(
           (await db.work.findUniqueOrThrow({ where: { id: row.id } }))
             .workflowStatus,
-          "pending_proofread",
+          "translating",
         );
         assert.equal(
           await db.workStageParticipant.count({
             where: { workId: row.id, submittedAt },
           }),
-          2,
+          1,
+        );
+        assert.equal(
+          await db.userRole.count({
+            where: { userId: two.id, role: "translator" },
+          }),
+          0,
+        );
+        assert.equal(
+          (
+            await db.workPageAssignment.findUniqueOrThrow({
+              where: {
+                workImageId_stage: {
+                  workImageId: secondImage.id,
+                  stage: "translate",
+                },
+              },
+            })
+          ).submittedAt?.toISOString(),
+          submittedAt.toISOString(),
+        );
+        assert.equal(
+          await db.translationVersion.count({ where: { workId: row.id } }),
+          1,
+          "prior immutable submission survives personal cancellation",
         );
       },
     );
@@ -654,6 +739,15 @@ test("public registration and administrator qualifications preserve account and 
     );
   } finally {
     await db.workEvent.deleteMany({ where: { workId: { in: workIds } } });
+    await db.workPageAssignment.deleteMany({
+      where: { workId: { in: workIds } },
+    });
+    await db.translationVersion.deleteMany({
+      where: { workId: { in: workIds } },
+    });
+    await db.workStageAssignment.deleteMany({
+      where: { participant: { workId: { in: workIds } } },
+    });
     await db.workStageParticipant.deleteMany({
       where: { workId: { in: workIds } },
     });
@@ -661,6 +755,7 @@ test("public registration and administrator qualifications preserve account and 
     await db.work.deleteMany({ where: { id: { in: workIds } } });
     await db.candidatePost.deleteMany({ where: { id: { in: candidateIds } } });
     await db.author.delete({ where: { id: author.id } });
+    await db.fileObject.deleteMany({ where: { id: originalFileId } });
     const ids = (
       await db.user.findMany({
         where: { username: { startsWith: prefix } },

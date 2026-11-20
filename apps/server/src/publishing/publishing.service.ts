@@ -55,7 +55,12 @@ const publicationDetails = {
   },
   creditAliases: { select: { userId: true, stage: true, creditName: true } },
   stageParticipants: {
-    select: { userId: true, user: { select: { displayName: true } } },
+    select: {
+      userId: true,
+      stage: true,
+      leftAt: true,
+      user: { select: { displayName: true } },
+    },
   },
   publishRecords: {
     orderBy: { publishedAt: "desc" },
@@ -356,10 +361,14 @@ export class PublishingService {
       throw new ConflictException("默认发布模板不可用");
     }
     const credits = this.submissionCredits(work);
+    const hasPublishedSnapshot =
+      work.workflowStatus === WorkflowStatus.published &&
+      work.publishRecords.length > 0;
     if (
-      !credits.translate.length ||
-      (!work.proofreadSkippedVersionId && !credits.proofread.length) ||
-      !credits.typeset.length
+      !hasPublishedSnapshot &&
+      (!credits.translate.length ||
+        (!work.proofreadSkippedVersionId && !credits.proofread.length) ||
+        !credits.typeset.length)
     ) {
       throw new ConflictException("作品缺少已冻结的翻译、校对或嵌字署名");
     }
@@ -391,17 +400,24 @@ export class PublishingService {
         creditName,
       ]),
     );
-    const displayNames = new Map(
-      work.stageParticipants.map(({ userId, user }) => [
-        userId,
-        user.displayName,
-      ]),
-    );
+    const participants = new Map<
+      string,
+      PublicationWork["stageParticipants"][number]
+    >();
+    for (const participant of work.stageParticipants) {
+      const key = `${participant.stage}:${participant.userId}`;
+      const previous = participants.get(key);
+      // Rejoining creates a new membership; physical row order must not let
+      // an earlier departed membership hide the same user's current duty.
+      if (!previous || (previous.leftAt && !participant.leftAt))
+        participants.set(key, participant);
+    }
     const result = {
       translate: [] as string[],
       proofread: [] as string[],
       typeset: [] as string[],
     };
+    const seen = new Set<string>();
     for (const event of work.events) {
       const detail = event.detail;
       if (!detail || Array.isArray(detail) || typeof detail !== "object") {
@@ -415,7 +431,8 @@ export class PublishingService {
       )) {
         continue;
       }
-      if (result[stage].length || !Array.isArray(detail.credits)) continue;
+      if (seen.has(stage) || !Array.isArray(detail.credits)) continue;
+      seen.add(stage);
       result[stage] = [
         ...new Set(
           detail.credits.flatMap((credit) => {
@@ -430,10 +447,14 @@ export class PublishingService {
             }
             const userId =
               typeof credit.userId === "string" ? credit.userId : null;
+            const participant = userId
+              ? participants.get(`${stage}:${userId}`)
+              : undefined;
+            if (participant?.leftAt) return [];
             return [
               (userId
                 ? (aliases.get(`${stage}:${userId}`) ??
-                  displayNames.get(userId))
+                  participant?.user.displayName)
                 : undefined) ?? credit.creditName.trim(),
             ];
           }),

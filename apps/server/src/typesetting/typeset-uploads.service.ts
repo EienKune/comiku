@@ -26,6 +26,7 @@ import { ENVIRONMENT, type Environment } from "../config/environment.js";
 import { FileObjectsService } from "../files/file-objects.service.js";
 import { TypesettingService } from "./typesetting.service.js";
 import { WorksService } from "../works/works.service.js";
+import { TypesetCollaborationService } from "./typeset-collaboration.service.js";
 import {
   prepareTypesetBatchFile,
   typesetName,
@@ -93,6 +94,9 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
     private readonly typesetting: TypesettingService,
     @Inject(WorksService) private readonly works: WorksService,
     @Inject(ENVIRONMENT) private readonly environment: Environment,
+    @Optional()
+    @Inject(TypesetCollaborationService)
+    private readonly collaboration?: TypesetCollaborationService,
     @Optional() @Inject(JobsService) private readonly jobs?: JobsService,
   ) {}
 
@@ -646,6 +650,53 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
 
   async confirm(actorId: string, id: string, previewId: string) {
     await this.find(actorId, id);
+    const multiPreview = await this.db.typesetUploadPreview.findFirst({
+      where: { id: previewId, sessionId: id },
+      include: { work: true },
+    });
+    if (multiPreview?.work.collaborationMode === "multi") {
+      if (!this.collaboration)
+        throw new ConflictException("请在作品详情完成多人页映射");
+      const state = await this.collaboration.state(multiPreview.workId);
+      const participant = state.participants.find((p) => p.userId === actorId);
+      const ids = multiPreview.imageIds as string[];
+      const images = await this.db.typesetUploadImage.findMany({
+        where: { id: { in: ids }, uploadFile: { sessionId: id } },
+      });
+      const ignored: string[] = [];
+      const mappings = ids.flatMap((imageId) => {
+        const image = images.find((i) => i.id === imageId);
+        const number = image ? typesetName(image.sourceName).pageNumber : null;
+        const page = number ? state.pages[number - 1] : undefined;
+        if (!image || !page)
+          throw new ConflictException(
+            "存在未明确映射或越界成图，请在作品详情核对页映射",
+          );
+        if (page.assignment?.participantId !== participant?.id) {
+          ignored.push(image.sourceName);
+          return [];
+        }
+        return [{ imageId, workImageId: page.id, position: "page" as const }];
+      });
+      if (!mappings.length)
+        throw new ConflictException("本批没有本人有权保存的成图");
+      const result = await this.collaboration.apply(
+        actorId,
+        multiPreview.workId,
+        {
+          sessionId: id,
+          expectedRevision: multiPreview.workRevision,
+          idempotencyKey: multiPreview.idempotencyKey,
+          mappings,
+        },
+      );
+      return {
+        workId: multiPreview.workId,
+        versionId: result?.versionId ?? null,
+        stageSubmitted: false,
+        ignored,
+      };
+    }
     return this.db.$transaction(async (tx) => {
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM typeset_upload_sessions WHERE id = ${id}::uuid FOR UPDATE`,
@@ -767,6 +818,11 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
           select: { fileObjectId: true },
         });
         const retained = new Set(referenced.map((image) => image.fileObjectId));
+        const draftReferences = await tx.workTypesetDraft.findMany({
+          where: { fileObjectId: { in: ids } },
+          select: { fileObjectId: true },
+        });
+        for (const draft of draftReferences) retained.add(draft.fileObjectId);
         const orphanIds = ids.filter((fileId) => !retained.has(fileId));
         await tx.fileObject.updateMany({
           where: { id: { in: orphanIds } },
@@ -793,6 +849,7 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
         lifecycleStatus: "pending_deletion",
         typesetImages: { none: {} },
         typesetUploadImages: { none: {} },
+        typesetDrafts: { none: {} },
       },
       select: { id: true },
       take: 100,

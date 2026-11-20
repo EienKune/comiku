@@ -325,7 +325,32 @@ export class WorkDto {
   @ApiProperty({ type: String, format: "date-time" }) updatedAt!: string;
 }
 
+export class WorkPageAssignmentDto {
+  @ApiProperty({ type: String, format: "uuid" }) id!: string;
+  @ApiProperty({ type: String, format: "uuid" }) workImageId!: string;
+  @ApiProperty({ enum: [WorkStage.translate, WorkStage.typeset] })
+  stage!: WorkStage;
+  @ApiProperty({ type: String, format: "uuid", nullable: true })
+  participantId!: string | null;
+  @ApiProperty({ type: String, format: "uuid", nullable: true }) userId!:
+    string | null;
+  @ApiProperty({ type: Number }) generation!: number;
+  @ApiProperty({ type: Number }) draftRevision!: number;
+  @ApiProperty({ type: Number, nullable: true }) submittedRevision!:
+    number | null;
+  @ApiProperty({ type: Number, nullable: true }) submittedGeneration!:
+    number | null;
+  @ApiProperty({ type: String, nullable: true }) submittedAt!: string | null;
+  @ApiProperty({ type: Boolean }) isSubmitted!: boolean;
+}
+
 export class WorkDetailDto extends WorkDto {
+  @ApiProperty({ type: WorkPageAssignmentDto, isArray: true })
+  pageAssignments!: WorkPageAssignmentDto[];
+  @ApiProperty({ type: Boolean }) hasProductionProgress!: boolean;
+  @ApiProperty({ type: String, nullable: true }) collaborationMigrationIssue!:
+    string | null;
+
   @ApiProperty({ type: Boolean }) canSkipProofreading!: boolean;
   @ApiProperty({ type: String, nullable: true })
   skipProofreadingUnavailableReason!: string | null;
@@ -381,7 +406,25 @@ export class WorkMutationDto {
   idempotencyKey!: string;
 }
 
+export class AddWorkProofreaderDto extends WorkMutationDto {
+  @ApiProperty({ type: String, format: "uuid" }) @IsUUID() userId!: string;
+}
+
 export class JoinWorkStageDto extends WorkMutationDto {
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    isArray: true,
+    maxItems: 100,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  imageIds?: string[];
+
   @ApiProperty({ enum: coordinatedWorkStages })
   @IsIn(coordinatedWorkStages)
   stage!: (typeof coordinatedWorkStages)[number];
@@ -472,12 +515,67 @@ export class UpdateStageCreditDto extends WorkMutationDto {
 }
 
 export class LeaveWorkStageDto extends WorkMutationDto {
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    isArray: true,
+    maxItems: 100,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  impactSupplementIds?: string[];
+
+  @ApiPropertyOptional({ type: Boolean })
+  @IsOptional()
+  @IsBoolean()
+  confirmClearDraft?: boolean;
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    isArray: true,
+    maxItems: 100,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  impactImageIds?: string[];
+
   @ApiProperty({ enum: coordinatedWorkStages })
   @IsIn(coordinatedWorkStages)
   stage!: (typeof coordinatedWorkStages)[number];
 }
 
+export class WorkSubmissionPageHeadDto {
+  @ApiProperty({ type: String, format: "uuid" }) @IsUUID() imageId!: string;
+  @ApiProperty({ type: Number, minimum: 0 })
+  @IsInt()
+  @Min(0)
+  generation!: number;
+  @ApiProperty({ type: Number, minimum: 0 })
+  @IsInt()
+  @Min(0)
+  draftRevision!: number;
+}
+
 export class SubmitWorkStageDto extends WorkMutationDto {
+  @ApiPropertyOptional({
+    type: WorkSubmissionPageHeadDto,
+    isArray: true,
+    maxItems: 100,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique((head: WorkSubmissionPageHeadDto) => head.imageId)
+  @ValidateNested({ each: true })
+  @Type(() => WorkSubmissionPageHeadDto)
+  pageHeads?: WorkSubmissionPageHeadDto[];
+
   @ApiProperty({ enum: WorkStage, enumName: "WorkStage" })
   @IsEnum(WorkStage)
   stage!: WorkStage;
@@ -551,6 +649,60 @@ export class UpdateWorkDto extends WorkMutationDto {
 }
 
 export class UpdateWorkCollaborationDto extends WorkMutationDto {
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    isArray: true,
+    maxItems: 100,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  impactSupplementIds?: string[];
+
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    isArray: true,
+    maxItems: 100,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  retainedTranslationImageIds?: string[];
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    isArray: true,
+    maxItems: 100,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  retainedTypesetImageIds?: string[];
+  @ApiPropertyOptional({ type: Boolean })
+  @IsOptional()
+  @IsBoolean()
+  confirmClearDraft?: boolean;
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    isArray: true,
+    maxItems: 100,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  impactImageIds?: string[];
+
   @ApiProperty({
     enum: WorkCollaborationMode,
     enumName: "WorkCollaborationMode",
@@ -560,6 +712,36 @@ export class UpdateWorkCollaborationDto extends WorkMutationDto {
 }
 
 export class UpdateStageAssignmentsDto extends WorkMutationDto {
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    isArray: true,
+    maxItems: 100,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  impactSupplementIds?: string[];
+
+  @ApiPropertyOptional({ type: Boolean })
+  @IsOptional()
+  @IsBoolean()
+  confirmClearDraft?: boolean;
+  @ApiPropertyOptional({
+    type: String,
+    format: "uuid",
+    isArray: true,
+    maxItems: 100,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  impactImageIds?: string[];
+
   @ApiProperty({ enum: coordinatedWorkStages })
   @IsIn(coordinatedWorkStages)
   stage!: (typeof coordinatedWorkStages)[number];
@@ -584,6 +766,19 @@ export class UpdateStageAssignmentsDto extends WorkMutationDto {
 }
 
 export class CompleteStageContributionDto extends WorkMutationDto {
+  @ApiPropertyOptional({
+    type: WorkSubmissionPageHeadDto,
+    isArray: true,
+    maxItems: 100,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique((head: WorkSubmissionPageHeadDto) => head.imageId)
+  @ValidateNested({ each: true })
+  @Type(() => WorkSubmissionPageHeadDto)
+  pageHeads?: WorkSubmissionPageHeadDto[];
+
   @ApiProperty({ enum: [WorkStage.translate, WorkStage.proofread] })
   @IsIn([WorkStage.translate, WorkStage.proofread])
   stage!: WorkStage;

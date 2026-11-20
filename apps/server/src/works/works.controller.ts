@@ -24,6 +24,7 @@ import {
 import { Access, type AuthRequest } from "../common/access.js";
 import { bodyValidation } from "../common/http.js";
 import {
+  AddWorkProofreaderDto,
   CancelWorkStageSubmissionDto,
   ClaimWorkStagesDto,
   CompleteStageContributionDto,
@@ -208,6 +209,21 @@ export class WorksController {
     @Body(bodyValidation(UpdateStageCreditDto)) input: UpdateStageCreditDto,
   ) {
     return this.works.updateStageCredit(request.actor.userId, id, input);
+  }
+
+  @Post(":id/stages/proofreaders")
+  @HttpCode(200)
+  @Access({ permission: "works:read" })
+  @ApiOperation({ operationId: "addWorkProofreader" })
+  @ApiParam({ name: "id", format: "uuid" })
+  @ApiBody({ type: AddWorkProofreaderDto })
+  @ApiOkResponse({ type: WorkDetailDto })
+  addProofreader(
+    @Req() request: AuthRequest,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(bodyValidation(AddWorkProofreaderDto)) input: AddWorkProofreaderDto,
+  ) {
+    return this.works.addProofreader(request.actor.userId, id, input);
   }
 
   @Post(":id/stages/leave")

@@ -136,7 +136,7 @@ async function fixture(canEdit = true) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  await screen.findByAltText("第 1 页");
+  fireEvent.load(await screen.findByAltText("第 1 页"));
   await waitFor(() =>
     expect(
       (screen.getByRole("button", { name: "添加框内" }) as HTMLButtonElement)
@@ -200,7 +200,7 @@ test("list navigation ignores text fields, buttons, IME, active dialogs, and rep
   press(list, "ArrowDown");
   expect(screen.getByText("当前选择：标记 1")).toBeTruthy();
   const area = screen.getByDisplayValue("第1页译文1");
-  const page = screen.getByRole("spinbutton", { name: "跳转页码，共 2 页" });
+  const page = screen.getByRole("button", { name: /预览并跳转页面/ });
   for (const target of [
     area,
     page,

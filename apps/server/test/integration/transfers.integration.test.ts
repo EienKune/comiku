@@ -666,6 +666,9 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
       });
       await db.labelPlusFile.deleteMany({ where: { workId: { in: workIds } } });
       await db.workEvent.deleteMany({ where: { workId: { in: workIds } } });
+      await db.workPageAssignment.deleteMany({
+        where: { workId: { in: workIds } },
+      });
       await db.workStageParticipant.deleteMany({
         where: { workId: { in: workIds } },
       });
