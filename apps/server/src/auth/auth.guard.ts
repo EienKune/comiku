@@ -38,7 +38,8 @@ export class AuthGuard implements CanActivate {
           ? "application/json"
           : policy.contentType;
       if (
-        req.headers.origin !== this.environment.appOrigin ||
+        typeof req.headers.origin !== "string" ||
+        !this.environment.allowedAppOrigins.includes(req.headers.origin) ||
         req.headers["x-comiku-request"] !== "1" ||
         (expectedContentType !== null && !req.is(expectedContentType))
       ) {

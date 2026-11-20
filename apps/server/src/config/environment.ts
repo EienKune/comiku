@@ -9,6 +9,7 @@ export interface Environment {
   port: number;
   databaseUrl: string;
   appOrigin: string;
+  allowedAppOrigins: string[];
   authSessionIdleSeconds: number;
   authSessionAbsoluteSeconds: number;
   authorProfileProofSecret?: string;
@@ -81,6 +82,27 @@ export function loadRootEnvironment(): void {
   ) {
     throw new Error("Cannot read the environment file.");
   }
+}
+
+function parseAppOrigin(
+  value: string,
+  key: string,
+  production: boolean,
+): string {
+  try {
+    const origin = new URL(value);
+    if (
+      origin.origin === value &&
+      (origin.protocol === "https:" ||
+        (!production && origin.protocol === "http:"))
+    )
+      return value;
+  } catch {
+    // Use the same configuration error for malformed and unsupported origins.
+  }
+  throw new Error(
+    `${key} must contain exact HTTP(S) origins; production requires HTTPS.`,
+  );
 }
 
 export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
@@ -224,22 +246,29 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
     throw new Error(
       "AUTH_SESSION lifetimes must be safe positive seconds with idle <= absolute.",
     );
-  const appOrigin =
-    input.APP_ORIGIN ??
-    (nodeEnv === "production" ? "" : "http://localhost:5173");
-  try {
-    const origin = new URL(appOrigin);
-    if (
-      origin.origin !== appOrigin ||
-      !["http:", "https:"].includes(origin.protocol) ||
-      (nodeEnv === "production" && origin.protocol !== "https:")
-    )
-      throw new Error();
-  } catch {
-    throw new Error(
-      "APP_ORIGIN must be an exact HTTP(S) origin; production requires HTTPS.",
-    );
-  }
+  const production = nodeEnv === "production";
+  const appOrigin = parseAppOrigin(
+    input.APP_ORIGIN ?? (production ? "" : "http://localhost:5173"),
+    "APP_ORIGIN",
+    production,
+  );
+  const additionalOrigins = input.APP_ADDITIONAL_ORIGINS?.trim();
+  const allowedAppOrigins = [
+    ...new Set([
+      appOrigin,
+      ...(additionalOrigins
+        ? additionalOrigins
+            .split(",")
+            .map((origin) =>
+              parseAppOrigin(
+                origin.trim(),
+                "APP_ADDITIONAL_ORIGINS",
+                production,
+              ),
+            )
+        : []),
+    ]),
+  ];
   if (
     integer("TYPESET_BATCH_MAX_WORKS", 20, 1) > 20 ||
     integer("TYPESET_BATCH_MAX_MIB", 512, 1) > 1024
@@ -392,6 +421,7 @@ export function parseEnvironment(input: NodeJS.ProcessEnv): Environment {
     port: Number(port),
     databaseUrl: databaseUrl!,
     appOrigin,
+    allowedAppOrigins,
     authSessionIdleSeconds,
     authSessionAbsoluteSeconds,
     xOfficialDailyBudget: integer("X_OFFICIAL_DAILY_BUDGET", 0),
