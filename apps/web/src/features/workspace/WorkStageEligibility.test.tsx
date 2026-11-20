@@ -140,7 +140,7 @@ test.each(["single", "multi"] as const)(
       ).toBeNull();
     } else {
       fireEvent.click(
-        within(proofreadRow).getByRole("button", { name: "认领" }),
+        within(proofreadRow).getByRole("button", { name: "加入校对" }),
       );
       await waitFor(() =>
         expect(post).toHaveBeenCalledWith(
@@ -163,7 +163,7 @@ test("an enrolled multi translator can claim remaining pages", async () => {
   ).toBeTruthy();
 });
 
-test("an existing first proofreader cannot be bypassed through the ordinary claim button", async () => {
+test("an eligible member may join an existing proofreader but cannot add other members", async () => {
   const work = fixture("proofread");
   work.participants = [work.participants[1]];
   await show(work);
@@ -178,8 +178,8 @@ test("an existing first proofreader cannot be bypassed through the ordinary clai
     within(proofreadRow).queryByRole("button", { name: "认领" }),
   ).toBeNull();
   expect(
-    within(proofreadRow).queryByRole("button", { name: "加入校对" }),
-  ).toBeNull();
+    within(proofreadRow).getByRole("button", { name: "加入校对" }),
+  ).toBeTruthy();
   expect(
     within(proofreadRow).queryByRole("button", { name: "添加校对" }),
   ).toBeNull();

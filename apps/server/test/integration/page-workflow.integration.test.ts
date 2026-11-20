@@ -460,11 +460,46 @@ test("page ownership claims, empty-page submissions, cancellation and explicit r
       expectedRevision: head.revision,
       idempotencyKey: randomUUID(),
     });
-    head = await works.addProofreader(a, workId, {
-      userId: b,
+    await db.userRole.deleteMany({ where: { userId: loser, role: "admin" } });
+    const outsider = await member("unassigned");
+    await assert.rejects(
+      works.addProofreader(outsider, workId, {
+        userId: c,
+        expectedRevision: head.revision,
+        idempotencyKey: randomUUID(),
+      }),
+      /只有当前校对或管理员可以添加校对/,
+      "qualified outsiders cannot delegate before joining",
+    );
+    await db.work.update({
+      where: { id: workId },
+      data: { collaborationMode: "single" },
+    });
+    await assert.rejects(
+      works.claimStage(outsider, workId, {
+        stage: "proofread",
+        expectedRevision: head.revision,
+        idempotencyKey: randomUUID(),
+      }),
+      /单人模式下该职责已有负责人/,
+      "self joining must not bypass the single-owner rule",
+    );
+    await db.work.update({
+      where: { id: workId },
+      data: { collaborationMode: "multi" },
+    });
+    head = await works.claimStage(b, workId, {
+      stage: "proofread",
       expectedRevision: head.revision,
       idempotencyKey: randomUUID(),
     });
+    assert.equal(
+      head.participants.find(
+        (p) => p.userId === b && p.stage === "proofread" && !p.leftAt,
+      )?.participationMode,
+      "collaborator",
+      "qualified ordinary members can join existing multiplayer proofreading",
+    );
     const extra = [a, b, c].find((id) => id !== a && id !== b)!;
     head = await works.addProofreader(a, workId, {
       userId: extra,
@@ -477,7 +512,6 @@ test("page ownership claims, empty-page submissions, cancellation and explicit r
       idempotencyKey: randomUUID(),
     });
 
-    await db.userRole.deleteMany({ where: { userId: loser, role: "admin" } });
     const sessionA = await db.authSession.create({
       data: {
         userId: a,

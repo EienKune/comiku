@@ -6,6 +6,7 @@ import { client, queryClient, unwrap } from "../account/api";
 import { useAction } from "../account/use-action";
 import { Feedback } from "../account/forms";
 import { workPageAssignments } from "./page-workflow";
+import { StageMemberSummary } from "./StageMemberSummary";
 
 type Work = components["schemas"]["WorkDetailDto"];
 export function PageClaimControl({
@@ -36,13 +37,6 @@ export function PageClaimControl({
   const free = work.images.filter((image) => !assigned.has(image.id));
   const available = new Set(free.map((im) => im.id));
   const chosen = selected.filter((id) => available.has(id));
-  const members = [
-    ...new Map(
-      work.participants
-        .filter((p) => p.stage === stage && !p.leftAt)
-        .map((p) => [p.userId, p.displayName]),
-    ).values(),
-  ];
   const name = stage === "translate" ? "翻译" : "嵌字";
   function toggle(id: string) {
     setSelected((current) =>
@@ -93,9 +87,7 @@ export function PageClaimControl({
             ? `已提交 ${work.images.filter((image) => submitted.has(image.id)).length} / 总 ${work.images.length} 页`
             : `剩余 ${free.length} 页未分配`}
         </strong>
-        <span>
-          {members.length ? `参与：${members.join("、")}` : "暂无成员认领"}
-        </span>
+        <StageMemberSummary work={work} stage={stage} />
       </div>
       <Button
         size="sm"

@@ -56,7 +56,8 @@ export function stageClaimAccess(
     qualified &&
     !singleConflict &&
     (stage === "proofread"
-      ? participants.length === 0
+      ? !participants.some((person) => person.userId === member.id) &&
+        (work.collaborationMode === "multi" || participants.length === 0)
       : work.collaborationMode === "multi" ||
         participants.length === 0 ||
         (current === stage &&

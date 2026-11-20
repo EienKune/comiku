@@ -18,6 +18,7 @@ import { TypesetCurrentImageTools } from "./TypesetCurrentImageTools";
 import { TypesetCollaborationPanel } from "./TypesetCollaborationPanel";
 import { PageClaimControl } from "./PageClaimControl";
 import { AddProofreader } from "./AddProofreader";
+import { StageMemberSummary } from "./StageMemberSummary";
 import {
   workPageAssignments,
   pageNumbers,
@@ -6189,10 +6190,9 @@ export function WorkDetailPage() {
                       );
                       const details = (
                         <>
-                          {" "}
-                          <div className="workspace-stage-people">
-                            {participants.length ? (
-                              participants.map((person) => (
+                          {pageStage ? (
+                            <div className="workspace-stage-people">
+                              {participants.map((person) => (
                                 <div
                                   key={person.id}
                                   className="workspace-stage-member"
@@ -6222,16 +6222,20 @@ export function WorkDetailPage() {
                                     </small>
                                   </span>
                                 </div>
-                              ))
-                            ) : !pageStage ? (
-                              <span className="workspace-muted">
-                                {itemStage === "proofread" &&
+                              ))}
+                            </div>
+                          ) : (
+                            <StageMemberSummary
+                              work={work}
+                              stage={itemStage}
+                              emptyText={
+                                itemStage === "proofread" &&
                                 work.proofreadingSkipped
                                   ? "已跳过校对"
-                                  : "尚未分配"}
-                              </span>
-                            ) : null}
-                          </div>
+                                  : "尚未分配"
+                              }
+                            />
+                          )}
                           {currentParticipant && (
                             <div className="workspace-stage-personal-controls">
                               {currentParticipant.userId === user.id &&
@@ -6344,7 +6348,10 @@ export function WorkDetailPage() {
                                 loading={action.busy}
                                 onClick={() => void claimStage(work, itemStage)}
                               >
-                                认领
+                                {itemStage === "proofread" &&
+                                work.collaborationMode === "multi"
+                                  ? "加入校对"
+                                  : "认领"}
                               </Button>
                             )}
                             {activeParticipants.length > 0 &&
@@ -6384,7 +6391,7 @@ export function WorkDetailPage() {
                         >
                           <div className="workspace-stage-label">
                             <strong>{stageLabels[itemStage]}</strong>
-                            <small>{isCurrent ? "当前阶段" : "职责"}</small>
+                            {isCurrent && <small>当前阶段</small>}
                           </div>
                           {pageStage ? (
                             <PageClaimControl

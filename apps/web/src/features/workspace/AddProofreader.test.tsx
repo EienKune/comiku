@@ -85,34 +85,19 @@ function show(
   return { work, updated };
 }
 
-test("a qualified administrator joins existing proofreading through the add endpoint and is omitted from the member picker", async () => {
+test("administrator delegation excludes self and refreshes cached workflow permissions", async () => {
   queryClient.setQueryData(["translation-editor", "work"], { canEdit: false });
   const invalidate = vi.spyOn(queryClient, "invalidateQueries");
-  const response = vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ id: "work", revision: 8 }), {
-      status: 200,
-    }),
-  );
+  const response = vi
+    .fn()
+    .mockResolvedValue(
+      new Response(JSON.stringify({ id: "work", revision: 8 }), {
+        status: 200,
+      }),
+    );
   vi.stubGlobal("fetch", response);
   const { updated } = show(actor(["admin", "translator", "proofreader"]));
-  fireEvent.click(screen.getByRole("button", { name: "加入校对" }));
-  await waitFor(() =>
-    expect(updated).toHaveBeenCalledWith({ id: "work", revision: 8 }),
-  );
-  expect(response).toHaveBeenCalledWith(
-    "/api/works/work/stages/proofreaders",
-    expect.objectContaining({ method: "POST", body: expect.any(String) }),
-  );
-  expect(JSON.parse(response.mock.calls[0][1].body)).toMatchObject({
-    userId: "self",
-    expectedRevision: 7,
-  });
-  expect(
-    queryClient.getQueryData(["translation-editor", "work"]),
-  ).toBeUndefined();
-  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["works"] });
-  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["dashboard"] });
-  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["dashboard-works"] });
+  expect(screen.queryByRole("button", { name: "加入校对" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "添加校对" }));
   const picker = await screen.findByRole("combobox", { name: "选择校对成员" });
   fireEvent.click(picker);
@@ -121,6 +106,29 @@ test("a qualified administrator joins existing proofreading through the add endp
       .getAllByRole("option")
       .map((option) => option.textContent),
   ).toEqual(["选择校对成员", "合格校对"]);
+  fireEvent.click(
+    within(screen.getByRole("listbox")).getByRole("option", {
+      name: "合格校对",
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "添加" }));
+  await waitFor(() =>
+    expect(updated).toHaveBeenCalledWith({ id: "work", revision: 8 }),
+  );
+  expect(response).toHaveBeenCalledWith(
+    "/api/works/work/stages/proofreaders",
+    expect.objectContaining({ method: "POST", body: expect.any(String) }),
+  );
+  expect(JSON.parse(response.mock.calls[0][1].body)).toMatchObject({
+    userId: "eligible",
+    expectedRevision: 7,
+  });
+  expect(
+    queryClient.getQueryData(["translation-editor", "work"]),
+  ).toBeUndefined();
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["works"] });
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["dashboard"] });
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["dashboard-works"] });
 });
 
 test.each([

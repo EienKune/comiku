@@ -63,3 +63,58 @@ test("URLs default to work while explicit reading and legacy phase links retain 
     workViewState(new URLSearchParams("phase=translation"), member(["source"])),
   ).toMatchObject({ view: "read", tab: "translation" });
 });
+
+test("multiplayer proofreading lets qualified outsiders join while preserving delegation and single-owner limits", async () => {
+  const { stageClaimAccess } = await import("./work-views");
+  type Work = Parameters<typeof stageClaimAccess>[1];
+  const work = {
+    sourceLanguage: "ja",
+    collaborationMode: "multi",
+    workflowStatus: "proofreading",
+    reviewStatus: "normal",
+    participants: [{ userId: "first", stage: "proofread", leftAt: null }],
+  } as Work;
+  const outsider = { id: "self", ...member(["proofreader"], ["ja"]) };
+  expect(stageClaimAccess(outsider, work, "proofread")).toMatchObject({
+    canClaim: true,
+    canAddProofreader: false,
+  });
+  expect(
+    stageClaimAccess({ ...outsider, id: "first" }, work, "proofread"),
+  ).toMatchObject({ canClaim: false, canAddProofreader: true });
+  expect(
+    stageClaimAccess(
+      { ...outsider, roles: ["admin", "proofreader"] },
+      work,
+      "proofread",
+    ),
+  ).toMatchObject({ canClaim: true, canAddProofreader: true });
+  expect(
+    stageClaimAccess(
+      { ...outsider, languageCapabilities: ["ko"] },
+      work,
+      "proofread",
+    ).canClaim,
+  ).toBe(false);
+  expect(
+    stageClaimAccess(
+      outsider,
+      { ...work, collaborationMode: "single" },
+      "proofread",
+    ),
+  ).toMatchObject({ canClaim: false, canAddProofreader: false });
+  expect(
+    stageClaimAccess(
+      outsider,
+      { ...work, workflowStatus: "typesetting" },
+      "proofread",
+    ).canClaim,
+  ).toBe(false);
+  expect(
+    stageClaimAccess(
+      outsider,
+      { ...work, proofreadingSkipped: true },
+      "proofread",
+    ).canClaim,
+  ).toBe(false);
+});
