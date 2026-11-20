@@ -1475,15 +1475,6 @@ export class WorksService {
       });
       let participant = current.find((p) => p.userId === targetUserId);
       if (
-        input.stage === "proofread" &&
-        current.length &&
-        !participant &&
-        actionName !== "assign"
-      )
-        throw new ConflictException(
-          "该作品已有校对，请由当前校对或管理员直接添加",
-        );
-      if (
         work.collaborationMode === "single" &&
         current.some((p) => p.userId !== targetUserId)
       )

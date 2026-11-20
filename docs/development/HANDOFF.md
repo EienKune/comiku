@@ -2,6 +2,8 @@
 
 This tracked document records reusable implementation constraints. Business rules live in [architecture](../architecture.md), configuration in [configuration](../configuration.md), and visual rules in [DESIGN](../../DESIGN.md). Keep machine addresses, credentials, real samples, local experiments and deployment session notes outside the public repository.
 
+- Keep role-card actions separate from panel-level stacked forms, which add a section divider and vertical margins. Verify participant overflow and action alignment with long names, touch and keyboard access, and member lists taller than the viewport.
+
 - Keep `APP_ORIGIN` canonical for generated links. Accept additional browser origins through the same exact allowlist in request-origin validation and CORS. Proxies must forward the original Origin so unlisted writes still fail. Validate browser-to-R2 CORS for each added origin independently of application CORS.
 
 - Fingerprint decoding limits are resource-policy failures, not evidence of a corrupt original. Map Sharp's pixel-limit rejection to `pixel_limit`, retain exact-file matching, and test that distinction with a synthetic oversized image. Do not relax the decoding budget or change fingerprint identity merely to clear historical failures.

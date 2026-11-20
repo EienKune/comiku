@@ -23,18 +23,6 @@ export function AddProofreader({
 }) {
   const user = useAccount();
   const { canAddProofreader } = stageClaimAccess(user, work, "proofread");
-  const canJoin =
-    canAddProofreader &&
-    canHandleStage(user, "proofread", work.sourceLanguage) &&
-    work.participants.some(
-      (person) => person.stage === "proofread" && !person.leftAt,
-    ) &&
-    !work.participants.some(
-      (person) =>
-        person.stage === "proofread" &&
-        !person.leftAt &&
-        person.userId === user.id,
-    );
   const [open, setOpen] = useState(false);
   const [userId, setUserId] = useState("");
   const action = useAction();
@@ -46,7 +34,7 @@ export function AddProofreader({
   const eligible = members.data?.filter(
     (member) =>
       canHandleStage(member, "proofread", work.sourceLanguage) &&
-      !(canJoin && member.id === user.id) &&
+      member.id !== user.id &&
       !work.participants.some(
         (person) =>
           person.stage === "proofread" &&
@@ -92,16 +80,7 @@ export function AddProofreader({
   }
   if (!canAddProofreader) return null;
   return (
-    <div className="workspace-stacked-form">
-      {canJoin && (
-        <Button
-          size="sm"
-          loading={action.busy}
-          onClick={() => void add(user.id)}
-        >
-          加入校对
-        </Button>
-      )}
+    <div className="workspace-proofreader-manage">
       <Button size="sm" variant="secondary" onClick={() => setOpen(!open)}>
         添加校对
       </Button>

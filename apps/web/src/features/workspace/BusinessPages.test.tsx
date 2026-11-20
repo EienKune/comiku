@@ -824,7 +824,13 @@ test("keeps submitted translator credit editable before publication", async () =
   );
 
   expect(await screen.findByText("等待校对的作品")).toBeTruthy();
-  expect(screen.getByText("已完成 · 提交时署名：译者署名")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: "翻译参与成员，1 人，查看完整名单" }),
+  );
+  expect(screen.getByText("提交时署名：译者署名")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: "翻译参与成员，1 人，查看完整名单" }),
+  );
   expect(screen.getByRole("textbox", { name: "翻译临时署名" })).toBeTruthy();
   fireEvent.change(screen.getByRole("textbox", { name: "翻译临时署名" }), {
     target: { value: "新翻译署名" },
@@ -2183,3 +2189,120 @@ test("author-account scope is shared by work cards and album, and clearing autho
   view.unmount();
   cache.clear();
 });
+
+test.each(["outsider", "administrator", "participant"] as const)(
+  "proofreading card separates self actions, manager controls and own signature: %s",
+  async (kind) => {
+    const user: CurrentUser = {
+      id: "self",
+      username: "self",
+      displayName: "本人",
+      roles:
+        kind === "administrator" ? ["admin", "proofreader"] : ["proofreader"],
+      languageCapabilities: ["ja"],
+      isActive: true,
+      mustChangePassword: false,
+      revision: 1,
+      canSkipProofreading: false,
+      permissions:
+        kind === "administrator"
+          ? ["works:read", "works:proofread", "works:admin"]
+          : ["works:read", "works:proofread"],
+    };
+    const work = {
+      id: "proofreading-work",
+      workNumber: 18,
+      authorId: "author",
+      authorName: "合成作者",
+      title: "校对卡片测试",
+      sourcePostUrl: null,
+      sourceText: null,
+      sourceLanguage: "ja",
+      collaborationMode: "multi",
+      workflowStatus: "proofreading",
+      reviewStatus: "normal",
+      priority: 0,
+      revision: 3,
+      editorEpoch: 0,
+      translationAttentionStage: null,
+      translationAttentionVersionNumber: null,
+      imageCount: 0,
+      coverImageId: null,
+      participantCount: 1,
+      assignedStages: ["proofread"],
+      importedAt: "2026-11-20T00:00:00Z",
+      publishedAt: null,
+      updatedAt: "2026-11-20T00:00:00Z",
+      images: [],
+      pageAssignments: [],
+      participants: [
+        {
+          id: "proofreader",
+          userId: kind === "participant" ? "self" : "first",
+          displayName: "首校",
+          avatarVersion: null,
+          stage: "proofread",
+          participationMode: "owner",
+          workCreditName: null,
+          creditNameSnapshot: null,
+          joinedAt: "2026-11-20T00:00:00Z",
+          submittedAt: null,
+          leftAt: null,
+          assignedImageIds: [],
+          contributionSubmittedAt: null,
+          contributionCurrent: false,
+        },
+      ],
+      events: [],
+      openReviewCaseId: null,
+    };
+    vi.spyOn(client, "GET").mockResolvedValue({
+      data: work,
+      response: new Response(null, { status: 200 }),
+    } as never);
+    const post = vi
+      .spyOn(client, "POST")
+      .mockResolvedValue({
+        data: { ...work, revision: 4 },
+        response: new Response(null, { status: 200 }),
+      } as never);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/works/${work.id}`]}>
+          <Routes>
+            <Route element={<Outlet context={user} />}>
+              <Route path="/works/:id" element={<WorkDetailPage />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByText("校对卡片测试");
+    expect(Boolean(screen.queryByRole("button", { name: "添加校对" }))).toBe(
+      kind !== "outsider",
+    );
+    expect(
+      Boolean(screen.queryByRole("textbox", { name: "校对临时署名" })),
+    ).toBe(kind === "participant");
+    expect(Boolean(screen.queryByRole("button", { name: "取消接取" }))).toBe(
+      kind === "participant",
+    );
+    expect(screen.queryByText("职责", { exact: true })).toBeNull();
+    if (kind !== "participant") {
+      fireEvent.click(screen.getByRole("button", { name: "加入校对" }));
+      await waitFor(() =>
+        expect(post).toHaveBeenCalledWith(
+          "/api/works/{id}/stages/claim",
+          expect.objectContaining({
+            body: expect.objectContaining({
+              stage: "proofread",
+              expectedRevision: 3,
+            }),
+          }),
+        ),
+      );
+    } else {
+      expect(screen.queryByRole("button", { name: "加入校对" })).toBeNull();
+    }
+  },
+);
