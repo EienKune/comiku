@@ -32331,6 +32331,37 @@
           "nextCursor"
         ]
       },
+      "PublishedStageCreditsDto": {
+        "type": "object",
+        "properties": {
+          "translate": {
+            "nullable": true,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "proofread": {
+            "nullable": true,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "typeset": {
+            "nullable": true,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "translate",
+          "proofread",
+          "typeset"
+        ]
+      },
       "WorkPageAssignmentDto": {
         "type": "object",
         "properties": {
@@ -32464,7 +32495,7 @@
           "workCreditName": {
             "type": "string",
             "nullable": true,
-            "description": "当前用户针对本作品、本职责设置的临时署名"
+            "description": "当前用户针对本作品、本职责设置的署名"
           },
           "creditNameSnapshot": {
             "type": "string",
@@ -32742,6 +32773,9 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "publishedCredits": {
+            "$ref": "#/components/schemas/PublishedStageCreditsDto"
           },
           "pageAssignments": {
             "type": "array",
@@ -33160,7 +33194,7 @@
             "nullable": true,
             "minLength": 1,
             "maxLength": 100,
-            "description": "当前用户在本作品对应职责中的临时署名"
+            "description": "当前用户在本作品对应职责中的署名"
           }
         },
         "required": [
@@ -33288,7 +33322,7 @@
             "nullable": true,
             "minLength": 1,
             "maxLength": 100,
-            "description": "当前作品对应职责的临时署名；null 表示恢复使用成员昵称"
+            "description": "当前作品对应职责的署名；null 表示恢复使用成员昵称"
           }
         },
         "required": [

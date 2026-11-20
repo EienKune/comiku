@@ -41,6 +41,17 @@ function SummaryAvatar({ member }: { member: SummaryMember }) {
   );
 }
 
+export function PublishedStageCredit({
+  work,
+  stage,
+}: {
+  work: Work;
+  stage: Stage;
+}) {
+  const names = work.publishedCredits?.[stage];
+  return names?.length ? <small>署名：{names.join("、")}</small> : null;
+}
+
 export function StageMemberSummary({
   work,
   stage,
@@ -143,7 +154,11 @@ export function StageMemberSummary({
   }, [open, close]);
 
   if (!members.length)
-    return <span className="stage-member-summary__empty">{emptyText}</span>;
+    return work.publishedCredits?.[stage]?.length ? (
+      <PublishedStageCredit work={work} stage={stage} />
+    ) : (
+      <span className="stage-member-summary__empty">{emptyText}</span>
+    );
   return (
     <div
       ref={rootRef}
@@ -249,20 +264,17 @@ export function StageMemberSummary({
                         ? ` · 已认领 ${member.pageCount} 页`
                         : ""}
                     </small>
-                    {person?.submittedAt && (
+                    {person && !work.publishedCredits?.[stage] && (
                       <small>
-                        提交时署名：
-                        {person.creditNameSnapshot ?? person.displayName}
+                        署名：{person.workCreditName ?? person.displayName}
                       </small>
-                    )}
-                    {!person?.submittedAt && person?.workCreditName && (
-                      <small>临时署名：{person.workCreditName}</small>
                     )}
                   </span>
                 </li>
               );
             })}
           </ul>
+          <PublishedStageCredit work={work} stage={stage} />
         </div>
       )}
     </div>

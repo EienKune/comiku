@@ -771,7 +771,7 @@ test("keeps submitted translator credit editable before publication", async () =
         stage: "translate",
         participationMode: "owner",
         workCreditName: "译者署名",
-        creditNameSnapshot: "译者署名",
+        creditNameSnapshot: "交稿时的旧名字",
         joinedAt: "2026-09-08T00:00:00.000Z",
         submittedAt: "2026-09-08T01:00:00.000Z",
         leftAt: null,
@@ -827,12 +827,12 @@ test("keeps submitted translator credit editable before publication", async () =
   fireEvent.click(
     screen.getByRole("button", { name: "翻译参与成员，1 人，查看完整名单" }),
   );
-  expect(screen.getByText("提交时署名：译者署名")).toBeTruthy();
+  expect(screen.getByText("署名：译者署名")).toBeTruthy();
   fireEvent.click(
     screen.getByRole("button", { name: "翻译参与成员，1 人，查看完整名单" }),
   );
-  expect(screen.getByRole("textbox", { name: "翻译临时署名" })).toBeTruthy();
-  fireEvent.change(screen.getByRole("textbox", { name: "翻译临时署名" }), {
+  expect(screen.getByRole("textbox", { name: "翻译署名" })).toBeTruthy();
+  fireEvent.change(screen.getByRole("textbox", { name: "翻译署名" }), {
     target: { value: "新翻译署名" },
   });
   fireEvent.click(screen.getAllByRole("button", { name: "保存署名" })[0]);
@@ -848,17 +848,22 @@ test("keeps submitted translator credit editable before publication", async () =
       }),
     ),
   );
+  fireEvent.click(
+    screen.getByRole("button", { name: "翻译参与成员，1 人，查看完整名单" }),
+  );
+  expect(await screen.findByText("署名：新翻译署名")).toBeTruthy();
+  expect(screen.queryByText(/交稿时的旧名字/)).toBeNull();
   expect(
-    (screen.getByRole("textbox", { name: "嵌字临时署名" }) as HTMLInputElement)
+    (screen.getByRole("textbox", { name: "嵌字署名" }) as HTMLInputElement)
       .value,
   ).toBe("嵌字署名");
-  fireEvent.change(screen.getByRole("textbox", { name: "嵌字临时署名" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "嵌字署名" }), {
     target: { value: "新嵌字署名" },
   });
   fireEvent.click(screen.getAllByRole("button", { name: "保存署名" })[1]);
   await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
   expect(
-    (screen.getByRole("textbox", { name: "翻译临时署名" }) as HTMLInputElement)
+    (screen.getByRole("textbox", { name: "翻译署名" }) as HTMLInputElement)
       .value,
   ).toBe("新翻译署名");
   expect(screen.queryByRole("link", { name: "继续完善翻译" })).toBeNull();
@@ -2281,9 +2286,9 @@ test.each(["outsider", "administrator", "participant"] as const)(
     expect(Boolean(screen.queryByRole("button", { name: "添加校对" }))).toBe(
       kind !== "outsider",
     );
-    expect(
-      Boolean(screen.queryByRole("textbox", { name: "校对临时署名" })),
-    ).toBe(kind === "participant");
+    expect(Boolean(screen.queryByRole("textbox", { name: "校对署名" }))).toBe(
+      kind === "participant",
+    );
     expect(Boolean(screen.queryByRole("button", { name: "取消接取" }))).toBe(
       kind === "participant",
     );

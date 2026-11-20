@@ -4697,6 +4697,11 @@ export interface components {
             workTotal: number;
             nextCursor: string | null;
         };
+        PublishedStageCreditsDto: {
+            translate: string[] | null;
+            proofread: string[] | null;
+            typeset: string[] | null;
+        };
         WorkPageAssignmentDto: {
             /** Format: uuid */
             id: string;
@@ -4734,7 +4739,7 @@ export interface components {
             displayName: string;
             stage: components["schemas"]["WorkStage"];
             participationMode: components["schemas"]["WorkParticipationMode"];
-            /** @description 当前用户针对本作品、本职责设置的临时署名 */
+            /** @description 当前用户针对本作品、本职责设置的署名 */
             workCreditName: string | null;
             creditNameSnapshot: string | null;
             /** Format: date-time */
@@ -4805,6 +4810,7 @@ export interface components {
             publishedAt: string | null;
             /** Format: date-time */
             updatedAt: string;
+            publishedCredits?: components["schemas"]["PublishedStageCreditsDto"];
             pageAssignments: components["schemas"]["WorkPageAssignmentDto"][];
             hasProductionProgress: boolean;
             collaborationMigrationIssue: string | null;
@@ -4890,7 +4896,7 @@ export interface components {
             imageIds?: string[];
             /** @enum {string} */
             stage: "translate" | "proofread" | "typeset";
-            /** @description 当前用户在本作品对应职责中的临时署名 */
+            /** @description 当前用户在本作品对应职责中的署名 */
             creditName?: string | null;
         };
         WorkClaimItemDto: {
@@ -4922,7 +4928,7 @@ export interface components {
             idempotencyKey: string;
             /** @enum {string} */
             stage: "translate" | "proofread" | "typeset";
-            /** @description 当前作品对应职责的临时署名；null 表示恢复使用成员昵称 */
+            /** @description 当前作品对应职责的署名；null 表示恢复使用成员昵称 */
             creditName?: string | null;
         };
         AddWorkProofreaderDto: {
