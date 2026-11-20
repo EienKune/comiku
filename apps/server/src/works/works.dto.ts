@@ -233,7 +233,7 @@ export class WorkParticipantDto {
   @ApiProperty({
     type: String,
     nullable: true,
-    description: "当前用户针对本作品、本职责设置的临时署名",
+    description: "当前用户针对本作品、本职责设置的署名",
   })
   workCreditName!: string | null;
   @ApiProperty({ type: String, nullable: true }) creditNameSnapshot!:
@@ -344,7 +344,18 @@ export class WorkPageAssignmentDto {
   @ApiProperty({ type: Boolean }) isSubmitted!: boolean;
 }
 
+export class PublishedStageCreditsDto {
+  @ApiProperty({ type: String, isArray: true, nullable: true }) translate!:
+    string[] | null;
+  @ApiProperty({ type: String, isArray: true, nullable: true }) proofread!:
+    string[] | null;
+  @ApiProperty({ type: String, isArray: true, nullable: true }) typeset!:
+    string[] | null;
+}
+
 export class WorkDetailDto extends WorkDto {
+  @ApiPropertyOptional({ type: PublishedStageCreditsDto })
+  publishedCredits?: PublishedStageCreditsDto;
   @ApiProperty({ type: WorkPageAssignmentDto, isArray: true })
   pageAssignments!: WorkPageAssignmentDto[];
   @ApiProperty({ type: Boolean }) hasProductionProgress!: boolean;
@@ -434,7 +445,7 @@ export class JoinWorkStageDto extends WorkMutationDto {
     nullable: true,
     minLength: 1,
     maxLength: 100,
-    description: "当前用户在本作品对应职责中的临时署名",
+    description: "当前用户在本作品对应职责中的署名",
   })
   @IsOptional()
   @Transform(trimmed)
@@ -504,7 +515,7 @@ export class UpdateStageCreditDto extends WorkMutationDto {
     nullable: true,
     minLength: 1,
     maxLength: 100,
-    description: "当前作品对应职责的临时署名；null 表示恢复使用成员昵称",
+    description: "当前作品对应职责的署名；null 表示恢复使用成员昵称",
   })
   @IsOptional()
   @Transform(trimmed)

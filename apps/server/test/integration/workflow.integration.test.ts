@@ -2318,6 +2318,15 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       where: { id: proofreader.user.id },
       data: { displayName: "发布后改名" },
     });
+    const publishedDetail = await request<{
+      publishedCredits: { translate: string[]; proofread: string[]; typeset: string[] };
+    }>(proofreader.browser, "GET", `/api/works/${workId}`);
+    assert.equal(publishedDetail.status, 200);
+    assert.deepEqual(publishedDetail.data.publishedCredits, {
+      translate: published.data.translationCredits,
+      proofread: published.data.proofreadCredits,
+      typeset: published.data.typesetCredits,
+    });
     const frozenPublishingView = await request<PublishingViewResponse>(
       operator.browser,
       "GET",

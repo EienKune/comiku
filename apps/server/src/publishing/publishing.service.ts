@@ -1,3 +1,4 @@
+import { publishedCreditNames } from "./published-credit-names.js";
 import { assertProductionWritable } from "../workflow/review-policy.js";
 import { DownloadsService } from "../transfers/downloads.service.js";
 import { createTypesetHandoffArchive } from "../typesetting/handoff-package.js";
@@ -284,10 +285,6 @@ export class PublishingService {
       prepared.work.workflowStatus === WorkflowStatus.published
         ? prepared.work.publishRecords[0]
         : undefined;
-    const publishedCredits = (value: Prisma.JsonValue | null | undefined) =>
-      Array.isArray(value) && value.every((item) => typeof item === "string")
-        ? (value as string[])
-        : null;
     return {
       workId,
       workRevision: prepared.work.revision,
@@ -297,13 +294,13 @@ export class PublishingService {
       authorCredit: prepared.authorCredit,
       sourcePostUrl: prepared.work.sourcePostUrl,
       translationCredits:
-        publishedCredits(publishedRecord?.translationCreditsSnapshot) ??
+        publishedCreditNames(publishedRecord?.translationCreditsSnapshot) ??
         prepared.credits.translate,
       proofreadCredits:
-        publishedCredits(publishedRecord?.proofreadCreditsSnapshot) ??
+        publishedCreditNames(publishedRecord?.proofreadCreditsSnapshot) ??
         prepared.credits.proofread,
       typesetCredits:
-        publishedCredits(publishedRecord?.typesetCreditsSnapshot) ??
+        publishedCreditNames(publishedRecord?.typesetCreditsSnapshot) ??
         prepared.credits.typeset,
       generatedText:
         publishedRecord?.generatedTextSnapshot ?? prepared.generatedText,
@@ -370,7 +367,7 @@ export class PublishingService {
         (!work.proofreadSkippedVersionId && !credits.proofread.length) ||
         !credits.typeset.length)
     ) {
-      throw new ConflictException("作品缺少已冻结的翻译、校对或嵌字署名");
+      throw new ConflictException("作品缺少翻译、校对或嵌字署名");
     }
     const authorCredit = normalizeAuthorCredit(
       work.sourceCandidatePost.authorExternalAccount?.handle,

@@ -136,18 +136,45 @@ test("keeps a hovered roster open across its gap and while the keyboard scroll a
   }
 });
 
-test("shows member names in the summary and distinguishes temporary credit in the full roster", () => {
+test("shows the current work credit after submission and defaults to the nickname when cleared", () => {
   render(
     <StageMemberSummary
-      work={work([person("1", { workCreditName: "临时署名" })])}
+      work={work([
+        person("1", {
+          workCreditName: "新名字",
+          creditNameSnapshot: "旧名字",
+          submittedAt: "2026-11-20T00:00:00Z",
+        }),
+        person("2", {
+          workCreditName: null,
+          creditNameSnapshot: "旧名字",
+          submittedAt: "2026-11-20T00:00:00Z",
+        }),
+      ])}
       stage="translate"
     />,
   );
   const trigger = screen.getByRole("button", { name: /翻译参与成员/ });
   expect(within(trigger).getByText("成员1")).toBeTruthy();
-  expect(screen.queryByText("临时署名：临时署名")).toBeNull();
+  expect(screen.queryByText("署名：新名字")).toBeNull();
   fireEvent.click(trigger);
-  expect(screen.getByText("临时署名：临时署名")).toBeTruthy();
+  expect(screen.getByText("署名：新名字")).toBeTruthy();
+  expect(screen.getByText("署名：成员2")).toBeTruthy();
+  expect(screen.queryByText(/旧名字/)).toBeNull();
+});
+
+test("uses the released credit list when a member later changes nickname", () => {
+  const data = work([person("1", { displayName: "新昵称" })]);
+  data.workflowStatus = "published";
+  data.publishedCredits = {
+    translate: ["发布用名"],
+    proofread: [],
+    typeset: [],
+  };
+  render(<StageMemberSummary work={data} stage="translate" />);
+  fireEvent.click(screen.getByRole("button", { name: /翻译参与成员/ }));
+  expect(screen.getByText("署名：发布用名")).toBeTruthy();
+  expect(screen.queryByText("署名：新昵称")).toBeNull();
 });
 
 test("does not show an empty stage when authoritative assignments retain an owner", () => {

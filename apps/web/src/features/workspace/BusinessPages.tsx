@@ -18,7 +18,7 @@ import { TypesetCurrentImageTools } from "./TypesetCurrentImageTools";
 import { TypesetCollaborationPanel } from "./TypesetCollaborationPanel";
 import { PageClaimControl } from "./PageClaimControl";
 import { AddProofreader } from "./AddProofreader";
-import { StageMemberSummary } from "./StageMemberSummary";
+import { PublishedStageCredit, StageMemberSummary } from "./StageMemberSummary";
 import {
   workPageAssignments,
   pageNumbers,
@@ -225,7 +225,7 @@ const eventLabels: Record<WorkEventAction, string> = {
   collaboration_mode_updated: "更新协作模式",
   stage_joined: "加入阶段",
   stage_assigned: "指派负责人",
-  stage_credit_updated: "更新作品临时署名",
+  stage_credit_updated: "更新作品署名",
   stage_assignment_updated: "更新页码分工",
   stage_contribution_completed: "完成本人分工",
   stage_left: "取消参与",
@@ -4905,8 +4905,7 @@ function TypesetVersionPanel({
     if (
       !(await confirmation.confirm({
         title: "提交嵌字阶段？",
-        description:
-          "请确认当前成图版本已经完整，可以交给运营发布。提交后将冻结本轮嵌字署名。",
+        description: "请确认当前成图版本已经完整，可以交给运营发布。",
         confirmLabel: "提交嵌字",
       }))
     ) {
@@ -5241,7 +5240,7 @@ function TypesetVersionPanel({
                   ? "当前成图仍需对照新文本复核"
                   : "当前版本已经可用于交付"}
               </strong>
-              <p>确认完成后进入待发布，并冻结本轮嵌字署名。</p>
+              <p>确认完成后进入待发布。</p>
             </div>
             <Button
               loading={action.busy}
@@ -5621,7 +5620,7 @@ export function WorkDetailPage() {
       await invalidateWorkViews();
       action.setSuccess(
         creditName
-          ? `${stageLabels[stage]}临时署名已保存`
+          ? `${stageLabels[stage]}署名已保存`
           : `${stageLabels[stage]}已恢复使用成员昵称署名`,
       );
     });
@@ -6211,7 +6210,7 @@ export function WorkDetailPage() {
                                     </span>
                                     <small>
                                       {person.submittedAt
-                                        ? `已完成 · 提交时署名：${person.creditNameSnapshot ?? person.displayName}`
+                                        ? "已完成"
                                         : person.participationMode === "owner"
                                           ? "负责人"
                                           : "协作者"}
@@ -6220,9 +6219,20 @@ export function WorkDetailPage() {
                                         ? " · 已完成分工"
                                         : ""}
                                     </small>
+                                    {!work.publishedCredits?.[itemStage] && (
+                                      <small>
+                                        署名：
+                                        {person.workCreditName ??
+                                          person.displayName}
+                                      </small>
+                                    )}
                                   </span>
                                 </div>
                               ))}
+                              <PublishedStageCredit
+                                work={work}
+                                stage={itemStage}
+                              />
                             </div>
                           ) : (
                             <StageMemberSummary
@@ -6243,7 +6253,7 @@ export function WorkDetailPage() {
                                 productionWritable && (
                                   <div className="workspace-credit-editor">
                                     <TextField
-                                      label={`${stageLabels[itemStage]}临时署名`}
+                                      label={`${stageLabels[itemStage]}署名`}
                                       value={
                                         temporaryCredits[
                                           currentParticipant.id
@@ -6254,7 +6264,7 @@ export function WorkDetailPage() {
                                       placeholder={
                                         currentParticipant.displayName
                                       }
-                                      hint={`仅用于本作品的${stageLabels[itemStage]}职责；留空使用成员昵称。`}
+                                      hint="留空使用成员昵称。"
                                       maxLength={100}
                                       onChange={(event) =>
                                         setTemporaryCredits((current) => ({

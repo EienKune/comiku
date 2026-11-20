@@ -305,7 +305,7 @@ test("keeps a rejected leave visible inside own management", async () => {
 
 test("keeps credit save beside the input and its hint below the input row", async () => {
   await show(fixture("translate", "single"));
-  const input = screen.getByRole("textbox", { name: "翻译临时署名" });
+  const input = screen.getByRole("textbox", { name: "翻译署名" });
   const row = input.closest(".ui-field__input-row");
   expect(row).not.toBeNull();
   expect(
@@ -336,7 +336,7 @@ test("members stay in join order and personal controls are outside the compact r
       name: /管理本人认领/,
     }),
   ).toBeNull();
-  expect(screen.getByRole("textbox", { name: "翻译临时署名" })).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "翻译署名" })).toBeTruthy();
   expect(screen.getByRole("button", { name: /管理本人认领/ })).toBeTruthy();
 });
 

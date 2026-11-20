@@ -1,3 +1,4 @@
+import { publishedCreditNames } from "../publishing/published-credit-names.js";
 import { matchesSourceAssetLineage } from "./source-asset-lineage.js";
 import {
   submitTypesetPagesTx,
@@ -672,8 +673,27 @@ export class WorksService {
     const capability = actorId
       ? await proofreadSkipAvailability(this.db, actorId, id)
       : { canSkipProofreading: false, skipProofreadingUnavailableReason: null };
+    const record =
+      work.workflowStatus === WorkflowStatus.published
+        ? await this.db.publishRecord.findFirst({
+            where: { workId: id },
+            orderBy: { publishedAt: "desc" },
+            select: {
+              translationCreditsSnapshot: true,
+              proofreadCreditsSnapshot: true,
+              typesetCreditsSnapshot: true,
+            },
+          })
+        : null;
     return {
       ...this.detailDto(work),
+      ...(record && {
+        publishedCredits: {
+          translate: publishedCreditNames(record.translationCreditsSnapshot),
+          proofread: publishedCreditNames(record.proofreadCreditsSnapshot),
+          typeset: publishedCreditNames(record.typesetCreditsSnapshot),
+        },
+      }),
       canSkipProofreading: capability.canSkipProofreading,
       skipProofreadingUnavailableReason:
         capability.skipProofreadingUnavailableReason,
@@ -1211,7 +1231,7 @@ export class WorksService {
         work.workflowStatus === WorkflowStatus.archived ||
         work.workflowStatus === WorkflowStatus.published
       ) {
-        throw new ConflictException("作品发布或归档后不能修改临时署名");
+        throw new ConflictException("作品发布或归档后不能修改署名");
       }
       const participant = await tx.workStageParticipant.findFirst({
         where: {
@@ -1222,7 +1242,7 @@ export class WorksService {
         },
       });
       if (!participant) {
-        throw new ConflictException("只有当前阶段的参与者可以设置作品临时署名");
+        throw new ConflictException("只有当前阶段的参与者可以设置作品署名");
       }
       const previous = await tx.workCreditAlias.findUnique({
         where: {
