@@ -84,7 +84,7 @@ export function PageClaimControl({
       <div>
         <strong>
           {work.images.length > 0 && free.length === 0
-            ? `已提交 ${work.images.filter((image) => submitted.has(image.id)).length} / 总 ${work.images.length} 页`
+            ? `已提交 ${work.images.filter((image) => submitted.has(image.id)).length} / ${work.images.length} 页`
             : `剩余 ${free.length} 页未分配`}
         </strong>
         <StageMemberSummary work={work} stage={stage} />

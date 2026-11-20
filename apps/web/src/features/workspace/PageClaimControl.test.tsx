@@ -147,7 +147,7 @@ test.each(["translate", "typeset"] as const)(
     } as unknown as components["schemas"]["WorkDetailDto"];
     const props = { stage, canClaim: false, onUpdated: vi.fn() };
     const view = render(<PageClaimControl {...props} work={assigned} />);
-    expect(screen.getByText("已提交 1 / 总 3 页")).toBeTruthy();
+    expect(screen.getByText("已提交 1 / 3 页")).toBeTruthy();
     expect(screen.queryByText("剩余 0 页未分配")).toBeNull();
     view.rerender(
       <PageClaimControl
@@ -161,7 +161,7 @@ test.each(["translate", "typeset"] as const)(
       />,
     );
     expect(screen.getByText("剩余 1 页未分配")).toBeTruthy();
-    expect(screen.queryByText("已提交 1 / 总 3 页")).toBeNull();
+    expect(screen.queryByText("已提交 1 / 3 页")).toBeNull();
     view.rerender(
       <PageClaimControl
         {...props}
