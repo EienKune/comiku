@@ -8,13 +8,18 @@ import { createApplication } from "../../src/application.js";
 import { candidateReviewFixture } from "./candidate-review-fixture.js";
 const idle = 7 * 86_400,
   absolute = 30 * 86_400;
-async function fixture(idleSeconds = idle, absoluteSeconds = absolute) {
+async function fixture(
+  idleSeconds = idle,
+  absoluteSeconds = absolute,
+  additionalOrigins?: string,
+) {
   const f = await candidateReviewFixture();
   const env = parseEnvironment({
     NODE_ENV: "test",
     DATABASE_URL: process.env.TEST_DATABASE_URL,
     AUTH_SESSION_IDLE_SECONDS: String(idleSeconds),
     AUTH_SESSION_ABSOLUTE_SECONDS: String(absoluteSeconds),
+    APP_ADDITIONAL_ORIGINS: additionalOrigins,
   });
   const service = new UsersService(f.db, {} as never, env);
   const token = randomBytes(32).toString("base64url"),
@@ -268,6 +273,90 @@ test("HTTP activity keeps CSRF/body protections, exposes auth-only interval and 
     });
     assert.equal(logout.status, 200);
     assert.equal((await request()).status, 401);
+  } finally {
+    await app.close();
+    await f.db.accountAudit.deleteMany({
+      where: { OR: [{ actorId: f.actor.id }, { targetId: f.actor.id }] },
+    });
+    await f.close();
+  }
+});
+
+test("both browser origins can log in and save, with origin-specific CORS", async () => {
+  const extraOrigin = "https://192.0.2.7";
+  const f = await fixture(idle, absolute, extraOrigin);
+  const app = await createApplication(f.env);
+  try {
+    const password = "synthetic-dual-origin-password";
+    await f.db.user.update({
+      where: { id: f.actor.id },
+      data: { passwordHash: await hashPassword(password) },
+    });
+    await app.listen(0, "127.0.0.1");
+    const base = await app.getUrl();
+    const request = (
+      path: string,
+      method: string,
+      origin: string,
+      body: object,
+      cookie?: string,
+    ) =>
+      fetch(base + path, {
+        method,
+        headers: {
+          Origin: origin,
+          "X-Comiku-Request": "1",
+          "Content-Type": "application/json",
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+    for (const [index, origin] of f.env.allowedAppOrigins.entries()) {
+      const login = await request("/api/auth/login", "POST", origin, {
+        username: f.actor.username,
+        password,
+      });
+      assert.equal(login.status, 200);
+      assert.equal(login.headers.get("access-control-allow-origin"), origin);
+      assert.equal(
+        login.headers.get("access-control-allow-credentials"),
+        "true",
+      );
+      const cookie = login.headers.get("set-cookie")!.split(";")[0];
+      await login.body?.cancel();
+      const displayName = `dual-origin-${index}`;
+      const save = await request(
+        "/api/users/me",
+        "PATCH",
+        origin,
+        { displayName },
+        cookie,
+      );
+      assert.equal(save.status, 200);
+      assert.equal(
+        ((await save.json()) as { displayName: string }).displayName,
+        displayName,
+      );
+      const rejected = await request(
+        "/api/users/me",
+        "PATCH",
+        extraOrigin + ".invalid",
+        { displayName: "rejected" },
+        cookie,
+      );
+      assert.equal(rejected.status, 403);
+      assert.equal(rejected.headers.get("access-control-allow-origin"), null);
+      await rejected.body?.cancel();
+      assert.equal(
+        (await f.db.user.findUniqueOrThrow({ where: { id: f.actor.id } }))
+          .displayName,
+        displayName,
+      );
+      assert.equal(
+        (await request("/api/auth/logout", "POST", origin, {}, cookie)).status,
+        200,
+      );
+    }
   } finally {
     await app.close();
     await f.db.accountAudit.deleteMany({

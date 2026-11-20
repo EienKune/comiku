@@ -37,7 +37,9 @@ API/worker/tools 通过绝对 `COMIKU_ENV_FILE` 加载相同配置，显式容�
 
 调整[主题包装配](themes.md)时，先修改共享清单并运行 `pnpm api:generate`，再从同一提交构建 Pages 前端及 API／worker 镜像，保持可用主题一致。部署镜像已包含共享主题目录。管理员在网页选择已装配的默认外观时，设置即时生效，无需重新构建。
 
-API 仍精确匹配 `APP_ORIGIN`、携带凭据 CORS 和写请求 `X-Comiku-Request`，生产 Cookie 为 Secure、HttpOnly、SameSite=Lax、Path=/api、API host-only；在线 Swagger 关闭。不要使用默认 `pages.dev` 与任意另一主域拼接为正式登录部署。
+额外入口通过 `deploy/.secrets/runtime.env` 中的 `APP_ADDITIONAL_ORIGINS` 配置，多个入口用逗号分隔。填写完整的 HTTPS origin，包含非默认端口。API 的携带凭据 CORS 与写请求来源校验共用主入口和额外入口的精确白名单，写请求仍需 `X-Comiku-Request`。代理应原样转发浏览器的 Origin。使用 R2 浏览器直传或直读时，也要在桶的 CORS 中加入相应入口。通知链接使用 `APP_ORIGIN`。
+
+生产会话 Cookie 使用 `Secure`、`HttpOnly`、`SameSite=Lax`，作用域为 API 主机的 `/api`。`app.<主域>` 和 `alt.<主域>` 可以通过 HTTPS 共用同站的 `api.<主域>`。独立域名或 IP 的页面直接请求原域名下的 API 属于跨站请求，会话 Cookie 受 `SameSite=Lax` 限制。这类入口可在页面所在的 HTTPS 地址下反向代理 `/api`，并将 `VITE_API_BASE_URL` 留空，使用同源会话。生产环境关闭在线 Swagger。
 
 源站方案采用 Caddy + Cloudflare Origin CA，Cloudflare 设置 **Full (strict)**。证书需覆盖 API 子域；Caddy 2.10.2 固定镜像。Origin CA 不用于浏览器直接访问源站。Caddy 不发布管理端口，不记录包含签名地址或 Cookie 的访问日志。
 
