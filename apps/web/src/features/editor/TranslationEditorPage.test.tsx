@@ -549,7 +549,7 @@ test("waits for a fresh editor response instead of hydrating an inactive cache",
   expect(screen.queryByText("旧缓存标题")).toBeNull();
 });
 
-test("asks before entering an editor that already has an active collaborator", async () => {
+test("opens directly when another collaborator is already active", async () => {
   const user: CurrentUser = {
     canSkipProofreading: false,
     id: "00000000-0000-4000-8000-000000000041",
@@ -644,15 +644,15 @@ test("asks before entering an editor that already has an active collaborator", a
     </QueryClientProvider>,
   );
 
-  expect(await screen.findByText("已有成员正在编辑")).toBeTruthy();
-  expect(screen.getByText("正在编辑的译者")).toBeTruthy();
+  await screen.findByText("暂无原图");
+  expect(screen.queryByText("已有成员正在编辑")).toBeNull();
+  expect(screen.queryByRole("button", { name: "进入协作" })).toBeNull();
   expect(screen.getByText("暂无原图")).toBeTruthy();
   expect(screen.queryByText(/正在加载第/)).toBeNull();
   expect(
     (screen.getByRole("button", { name: "添加框内" }) as HTMLButtonElement)
       .disabled,
   ).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "进入协作" }));
   await waitFor(() =>
     expect(
       (

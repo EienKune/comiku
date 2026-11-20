@@ -9,7 +9,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { proofreadSkipAvailability } from "../workflow/proofread-exemption.js";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import {
   Prisma,
   ReviewStatus,
@@ -256,22 +256,6 @@ export class TranslationsService {
         p.participant?.leftAt == null ? (p.participant?.userId ?? null) : null,
       submittedAt: p.submittedAt?.toISOString() ?? null,
     }));
-    const proofreadRequiresLease = currentStage === "proofread";
-    const proofreadLeases = proofreadRequiresLease
-      ? await this.db.proofreadPageLease.findMany({
-          where: {
-            workId,
-            editorEpoch: work.editorEpoch,
-            expiresAt: { gt: new Date() },
-          },
-          select: {
-            workImageId: true,
-            userId: true,
-            expiresAt: true,
-            user: { select: { displayName: true } },
-          },
-        })
-      : [];
     const editableImageIds = !canEdit
       ? []
       : currentStage === "translate" &&
@@ -351,13 +335,8 @@ export class TranslationsService {
           : assignedImageIds,
       editableImageIds,
       pageAssignments,
-      proofreadRequiresLease,
-      proofreadLeases: proofreadLeases.map((l) => ({
-        workImageId: l.workImageId,
-        userId: l.userId,
-        displayName: l.user.displayName,
-        expiresAt: l.expiresAt.toISOString(),
-      })),
+      proofreadRequiresLease: false,
+      proofreadLeases: [],
       contributionCurrent,
       multiStageReady,
       hasUnsubmittedChanges: latest
@@ -391,8 +370,15 @@ export class TranslationsService {
   ): Promise<LabelPlusImportPreviewDto> {
     await this.assertCanImportLabelPlus(actorId, workId);
     const parsed = this.parseLabelPlusUpload(upload);
-    const images = await this.labelPlusTargetImages(workId);
-    return this.labelPlusPreview(parsed, images);
+    // Bind the preview to a consistent draft while ordinary writes take the
+    // exclusive work lock. Read only IDs/revisions, never duplicate text bodies.
+    return this.db.$transaction(async (tx) => {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR SHARE`,
+      );
+      const target = await this.labelPlusTargetImages(workId, tx);
+      return this.labelPlusPreview(parsed, target);
+    });
   }
 
   async importLabelPlus(
@@ -484,13 +470,18 @@ export class TranslationsService {
         const target = await this.labelPlusTargetImages(workId, tx);
         const images = target.images;
         const preview = this.labelPlusPreview(parsed, target);
+        if (input.expectedContentBaseline !== preview.contentBaseline) {
+          throw new ConflictException(
+            "当前稿已变化或缺少预览基线，请重新预览导入",
+          );
+        }
         if (!preview.canImport) {
           throw new BadRequestException(preview.blockingIssues);
         }
 
         if (
-          editableWork.stage === "proofread" ||
-          editableWork.collaborationMode === "multi" ||
+          (editableWork.stage === "translate" &&
+            editableWork.collaborationMode === "multi") ||
           input.pageAccess
         ) {
           let scopes: (PageWriteAccessDto & { imageId: string })[];
@@ -502,7 +493,7 @@ export class TranslationsService {
             )
               throw Error();
           } catch {
-            throw new BadRequestException("请重新预览并核对每页的归属或编辑锁");
+            throw new BadRequestException("请重新预览并核对每页的归属");
           }
           const byId = new Map(scopes.map((p) => [p.imageId, p]));
           if (byId.size !== images.length)
@@ -516,7 +507,6 @@ export class TranslationsService {
               actorId,
               image.id,
               byId.get(image.id) ?? {},
-              sessionId,
             );
         } else {
           for (const image of images)
@@ -526,7 +516,6 @@ export class TranslationsService {
               actorId,
               image.id,
               {},
-              sessionId,
             );
         }
         if (editableWork.stage === "translate")
@@ -1062,6 +1051,7 @@ export class TranslationsService {
     input: CreateTranslationEntryDto,
     sessionId?: string,
   ): Promise<TranslationImageDraftDto> {
+    void sessionId; // Retained for compatibility with existing callers.
     return this.db.$transaction(async (tx) => {
       const workId = await this.getImageWorkId(tx, imageId);
       const work = await this.lockEditableWork(
@@ -1069,16 +1059,8 @@ export class TranslationsService {
         actorId,
         workId,
         input.expectedEditorEpoch,
-        Boolean(input.leaseToken),
       );
-      await this.assertPageWritable(
-        tx,
-        work,
-        actorId,
-        imageId,
-        input,
-        sessionId,
-      );
+      await this.assertPageWritable(tx, work, actorId, imageId, input);
       const image = await this.lockImage(tx, imageId);
       const replay = await tx.translationEntry.findUnique({
         where: {
@@ -1131,6 +1113,7 @@ export class TranslationsService {
     input: UpdateTranslationEntryDto,
     sessionId?: string,
   ): Promise<TranslationEntryDto> {
+    void sessionId; // Retained for compatibility with existing callers.
     if (
       input.markerX === undefined &&
       input.markerY === undefined &&
@@ -1151,7 +1134,6 @@ export class TranslationsService {
         actorId,
         entryWork.workImage.workId,
         input.expectedEditorEpoch,
-        Boolean(input.leaseToken),
       );
       const entry = await tx.translationEntry.findUnique({
         where: { id: entryId },
@@ -1163,7 +1145,6 @@ export class TranslationsService {
         actorId,
         entry.workImageId,
         input,
-        sessionId,
       );
       if (entry.revision !== input.expectedRevision) this.entryStale();
       const markerX = normalizeMarkerCoordinate(input.markerX);
@@ -1206,6 +1187,7 @@ export class TranslationsService {
     input: DeleteTranslationEntryDto,
     sessionId?: string,
   ): Promise<TranslationImageDraftDto> {
+    void sessionId; // Retained for compatibility with existing callers.
     return this.db.$transaction(async (tx) => {
       const entry = await tx.translationEntry.findUnique({
         where: { id: entryId },
@@ -1220,7 +1202,6 @@ export class TranslationsService {
         actorId,
         entry.workImage.workId,
         input.expectedEditorEpoch,
-        Boolean(input.leaseToken),
       );
       await this.assertPageWritable(
         tx,
@@ -1228,7 +1209,6 @@ export class TranslationsService {
         actorId,
         entry.workImageId,
         input,
-        sessionId,
       );
       const image = await this.lockImage(tx, entry.workImageId);
       if (image.translationRevision !== input.expectedImageRevision) {
@@ -1267,6 +1247,7 @@ export class TranslationsService {
     input: ReorderTranslationEntryDto,
     sessionId?: string,
   ): Promise<TranslationImageDraftDto> {
+    void sessionId; // Retained for compatibility with existing callers.
     return this.db.$transaction(async (tx) => {
       const workId = await this.getImageWorkId(tx, imageId);
       const work = await this.lockEditableWork(
@@ -1274,16 +1255,8 @@ export class TranslationsService {
         actorId,
         workId,
         input.expectedEditorEpoch,
-        Boolean(input.leaseToken),
       );
-      await this.assertPageWritable(
-        tx,
-        work,
-        actorId,
-        imageId,
-        input,
-        sessionId,
-      );
+      await this.assertPageWritable(tx, work, actorId, imageId, input);
       const image = await this.lockImage(tx, imageId);
       if (image.translationRevision !== input.expectedImageRevision) {
         this.imageStale();
@@ -1414,48 +1387,16 @@ export class TranslationsService {
     });
   }
 
-  async assertNoProofreadLeases(
-    tx: Prisma.TransactionClient,
-    workId: string,
-    editorEpoch: number,
-  ) {
-    const busy = await tx.proofreadPageLease.findFirst({
-      where: { workId, editorEpoch, expiresAt: { gt: new Date() } },
-      include: { user: { select: { displayName: true } } },
-    });
-    if (busy)
-      throw new ConflictException(
-        busy.user.displayName + " 正在编辑，请等其保存并释放后再提交",
-      );
-  }
-
   private async assertPageWritable(
     tx: Prisma.TransactionClient,
     work: EditableWorkState,
     actorId: string,
     imageId: string,
     access: PageWriteAccessDto,
-    sessionId?: string,
   ) {
-    if (work.stage === "proofread") {
-      if (!access.editorInstanceId || !access.leaseToken || !sessionId)
-        throw new ConflictException("请先取得本页校对编辑权");
-      const lease = await tx.proofreadPageLease.findUnique({
-        where: { workImageId: imageId },
-      });
-      if (
-        !lease ||
-        lease.workId !== work.id ||
-        lease.userId !== actorId ||
-        lease.sessionId !== sessionId ||
-        lease.editorInstanceId !== access.editorInstanceId ||
-        lease.leaseToken !== access.leaseToken ||
-        lease.expiresAt <= new Date() ||
-        lease.editorEpoch !== work.editorEpoch
-      )
-        throw new ConflictException("校对页锁已变化，请重新编辑本页");
-      return;
-    }
+    // Participation and epoch were checked under the work lock. Entry/page
+    // revisions provide conflict detection; legacy leases do not grant authority.
+    if (work.stage === "proofread") return;
     const page = await tx.workPageAssignment.findUnique({
       where: {
         workImageId_stage: { workImageId: imageId, stage: "translate" },
@@ -1519,7 +1460,6 @@ export class TranslationsService {
     actorId: string,
     workId: string,
     expectedEditorEpoch: number | undefined,
-    hasPageLease = false,
   ): Promise<EditableWorkState> {
     const rows = await tx.$queryRaw<
       {
@@ -1553,16 +1493,9 @@ export class TranslationsService {
       Prisma.sql`SELECT id FROM users WHERE id = ${actorId}::uuid FOR SHARE`,
     );
     assertProductionWritable(rows[0]);
-    // A first actual proofread save advances the epoch for every active lease in
-    // the same round. The caller still verifies the individual lease under this lock.
-    const startedWithLease =
-      hasPageLease &&
-      rows[0].workflowStatus === "proofreading" &&
-      expectedEditorEpoch === rows[0].editorEpoch - 1;
     if (
       expectedEditorEpoch !== undefined &&
-      rows[0].editorEpoch !== expectedEditorEpoch &&
-      !startedWithLease
+      rows[0].editorEpoch !== expectedEditorEpoch
     ) {
       throw new ConflictException({
         code: "EDITOR_EPOCH_STALE",
@@ -1922,6 +1855,11 @@ export class TranslationsService {
       select: {
         id: true,
         orderIndex: true,
+        translationRevision: true,
+        translationEntries: {
+          orderBy: entryOrder,
+          select: { id: true, revision: true },
+        },
         originalFileObject: { select: { contentType: true } },
       },
     });
@@ -1935,6 +1873,8 @@ export class TranslationsService {
       images: {
         id: string;
         orderIndex: number;
+        translationRevision: number;
+        translationEntries: { id: string; revision: number }[];
         originalFileObject: { contentType: string };
       }[];
     },
@@ -1955,6 +1895,21 @@ export class TranslationsService {
       blockingIssues.push("文件包含暂不支持的标记类型，请改为框内或框外。");
     }
     return {
+      contentBaseline: createHash("sha256")
+        .update(
+          JSON.stringify(
+            images.map((image) => [
+              image.id,
+              image.orderIndex,
+              image.translationRevision,
+              image.translationEntries.map((entry) => [
+                entry.id,
+                entry.revision,
+              ]),
+            ]),
+          ),
+        )
+        .digest("hex"),
       formatVersion: parsed.document.formatVersion,
       imageCount: parsed.document.images.length,
       markerCount: parsed.document.images.reduce(

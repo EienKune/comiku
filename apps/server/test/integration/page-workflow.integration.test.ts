@@ -243,6 +243,12 @@ test("page ownership claims, empty-page submissions, cancellation and explicit r
     });
 
     const translations = app.get(TranslationsService);
+    await db.userRole.deleteMany({ where: { userId: a, role: "admin" } });
+    const commonEmptyDraft = await translations.getEditor(a, workId);
+    assert.equal(
+      commonEmptyDraft.images.every((image) => image.entries.length === 0),
+      true,
+    );
     const imageBeforeDraft = await db.workImage.findUniqueOrThrow({
       where: { id: ids[0] },
     });
@@ -258,6 +264,45 @@ test("page ownership claims, empty-page submissions, cancellation and explicit r
       expectedAssignmentGeneration: ownedBeforeDraft.generation,
       idempotencyKey: randomUUID(),
     });
+    const winnerPage = head.pageAssignments.find(
+      (p) => p.stage === "translate" && p.workImageId === ids[1],
+    )!;
+    const createdOtherPage = await translations.createEntry(winner, ids[1], {
+      markerX: 0.5,
+      markerY: 0.6,
+      markerPositionType: "outside",
+      expectedImageRevision: commonEmptyDraft.images[1].translationRevision,
+      expectedEditorEpoch: commonEmptyDraft.editorEpoch,
+      expectedAssignmentGeneration: winnerPage.generation,
+      idempotencyKey: randomUUID(),
+    });
+    await translations.updateEntry(winner, createdOtherPage.entries[0].id, {
+      translatedText: "Other page preserved",
+      expectedRevision: 0,
+      expectedEditorEpoch: commonEmptyDraft.editorEpoch,
+      expectedAssignmentGeneration: winnerPage.generation,
+    });
+    await assert.rejects(
+      translations.updateEntry(winner, createdDraft.entries[0].id, {
+        translatedText: "Forbidden overwrite",
+        expectedRevision: 0,
+        expectedEditorEpoch: commonEmptyDraft.editorEpoch,
+        expectedAssignmentGeneration: ownedBeforeDraft.generation,
+      }),
+      /只能编辑本人/,
+    );
+    await assert.rejects(
+      translations.createEntry(loser, ids[2], {
+        markerX: 0.2,
+        markerY: 0.3,
+        markerPositionType: "inside",
+        expectedImageRevision: commonEmptyDraft.images[2].translationRevision,
+        expectedEditorEpoch: commonEmptyDraft.editorEpoch,
+        expectedAssignmentGeneration: winnerPage.generation,
+        idempotencyKey: randomUUID(),
+      }),
+      /需要先加入/,
+    );
     const beforeOtherTab = await works.get(workId, a);
     const oldHeads = heads(beforeOtherTab, a);
     await translations.updateEntry(a, createdDraft.entries[0].id, {
@@ -301,6 +346,9 @@ test("page ownership claims, empty-page submissions, cancellation and explicit r
       idempotencyKey: randomUUID(),
     });
     assert.equal(head.workflowStatus, "translating");
+    // The ordinary-owner save/submission checks above are complete. Restore
+    // administration only for the following collaboration-management checks.
+    await db.userRole.create({ data: { userId: a, role: "admin" } });
     await assert.rejects(
       () =>
         works.updateCollaboration(a, workId, {
@@ -327,6 +375,13 @@ test("page ownership claims, empty-page submissions, cancellation and explicit r
     };
     head = await works.submitStage(winner, workId, submit);
     assert.equal(head.workflowStatus, "pending_proofread");
+    assert.deepEqual(
+      (await translations.getEditor(winner, workId)).images
+        .slice(0, 2)
+        .map((image) => image.entries[0].translatedText),
+      ["Saved translation", "Other page preserved"],
+      "separate owners submit from the same empty baseline without replacing another page",
+    );
     await works.submitStage(winner, workId, submit);
     assert.equal(
       await db.translationVersion.count({
@@ -526,8 +581,6 @@ test("page ownership claims, empty-page submissions, cancellation and explicit r
         expiresAt: new Date(Date.now() + 3600000),
       },
     });
-    const editorA = randomUUID(),
-      editorB = randomUUID();
     const text = Buffer.from(
       [
         "1,0",
@@ -545,58 +598,75 @@ test("page ownership claims, empty-page submissions, cancellation and explicit r
       mimetype: "text/plain",
       size: text.byteLength,
     };
+    const preview = await translations.previewLabelPlusImport(
+      b,
+      workId,
+      upload,
+    );
     assert.equal(
-      (await translations.previewLabelPlusImport(b, workId, upload)).canImport,
+      preview.canImport,
       true,
       "a non-admin proofreader can preview the whole manuscript",
     );
+    assert.match(preview.contentBaseline, /^[a-f0-9]{64}$/);
     await assert.rejects(
-      () =>
-        translations.importLabelPlus(b, sessionB.id, workId, upload, {
-          stage: "proofread",
-          expectedRevision: head.revision,
-          expectedEditorEpoch: head.editorEpoch,
-          idempotencyKey: randomUUID(),
-          pageAccess: "[]",
-        }),
-      /每页.*编辑资格/,
+      translations.importLabelPlus(b, sessionB.id, workId, upload, {
+        stage: "proofread",
+        expectedRevision: head.revision,
+        expectedEditorEpoch: head.editorEpoch,
+        idempotencyKey: randomUUID(),
+      }),
+      /预览基线/,
     );
-    let leaseA = await translations.leasePage(a, sessionA.id, workId, ids[0], {
-      editorInstanceId: editorA,
+    const withdrawnEpoch = head.editorEpoch;
+    head = await works.cancelStageSubmission(winner, workId, {
+      stage: "translate",
+      expectedRevision: head.revision,
+      expectedEditorEpoch: head.editorEpoch,
+      idempotencyKey: randomUUID(),
+    });
+    head = await works.submitStage(winner, workId, {
+      pageHeads: heads(head, winner),
+      stage: "translate",
+      expectedRevision: head.revision,
+      expectedEditorEpoch: head.editorEpoch,
+      idempotencyKey: randomUUID(),
+    });
+    await assert.rejects(
+      translations.createEntry(b, ids[0], {
+        markerX: 0.2,
+        markerY: 0.3,
+        markerPositionType: "inside",
+        expectedImageRevision: 0,
+        expectedEditorEpoch: withdrawnEpoch,
+        idempotencyKey: randomUUID(),
+        editorInstanceId: randomUUID(),
+        leaseToken: randomUUID(),
+      }),
+      /新的正式版本/,
+      "old proofreading writes cannot survive withdrawal and resubmission even with legacy lease fields",
+    );
+    // Existing clients may still hold a lease; it must not block direct edits or submission.
+    await translations.leasePage(a, sessionA.id, workId, ids[0], {
+      editorInstanceId: randomUUID(),
       expectedEditorEpoch: head.editorEpoch,
     });
-    let leaseB = await translations.leasePage(b, sessionB.id, workId, ids[1], {
-      editorInstanceId: editorB,
-      expectedEditorEpoch: head.editorEpoch,
-    });
-    await assert.rejects(
-      () =>
-        translations.leasePage(a, sessionA.id, workId, ids[0], {
-          editorInstanceId: randomUUID(),
-          expectedEditorEpoch: head.editorEpoch,
-        }),
-      /正在编辑/,
+    let baseline = await translations.getEditor(b, workId);
+    assert.equal(baseline.proofreadRequiresLease, false);
+    assert.deepEqual(
+      baseline.proofreadLeases,
+      [],
+      "legacy leases are no longer projected as page restrictions",
     );
-    await assert.rejects(
-      () =>
-        works.submitStage(b, workId, {
-          stage: "proofread",
-          expectedRevision: head.revision,
-          expectedEditorEpoch: head.editorEpoch,
-          idempotencyKey: randomUUID(),
-        }),
-      /正在编辑/,
-    );
-    const createInput = () => ({
+    const createInput = (page: number, epoch = baseline.editorEpoch) => ({
       markerX: 0.2,
       markerY: 0.3,
       markerPositionType: "inside" as const,
-      expectedImageRevision: leaseA.image!.translationRevision,
-      expectedEditorEpoch: leaseA.editorEpoch,
-      editorInstanceId: editorA,
-      leaseToken: leaseA.leaseToken,
+      expectedImageRevision: baseline.images[page].translationRevision,
+      expectedEditorEpoch: epoch,
       idempotencyKey: randomUUID(),
     });
+    const oldEpoch = baseline.editorEpoch;
     const competition = await Promise.allSettled([
       works.cancelStageSubmission(winner, workId, {
         stage: "translate",
@@ -604,7 +674,7 @@ test("page ownership claims, empty-page submissions, cancellation and explicit r
         expectedEditorEpoch: head.editorEpoch,
         idempotencyKey: randomUUID(),
       }),
-      translations.createEntry(a, ids[0], createInput(), sessionA.id),
+      translations.createEntry(a, ids[0], createInput(0)),
     ]);
     assert.equal(
       competition.filter((r) => r.status === "fulfilled").length,
@@ -621,65 +691,135 @@ test("page ownership claims, empty-page submissions, cancellation and explicit r
         expectedEditorEpoch: head.editorEpoch,
         idempotencyKey: randomUUID(),
       });
-      leaseA = await translations.leasePage(a, sessionA.id, workId, ids[0], {
-        editorInstanceId: editorA,
-        expectedEditorEpoch: head.editorEpoch,
-      });
-      leaseB = await translations.leasePage(b, sessionB.id, workId, ids[1], {
-        editorInstanceId: editorB,
-        expectedEditorEpoch: head.editorEpoch,
-      });
-      await translations.createEntry(a, ids[0], createInput(), sessionA.id);
+      await assert.rejects(
+        translations.createEntry(b, ids[1], createInput(1, oldEpoch)),
+        /新的正式版本/,
+        "withdrawal and resubmission cannot authorize a stale proofreading round",
+      );
+      baseline = await translations.getEditor(b, workId);
+      await translations.createEntry(a, ids[0], createInput(0));
       head = await works.get(workId, a);
     }
     assert.equal(head.workflowStatus, "proofreading");
     assert.equal(
       head.editorEpoch,
-      leaseB.editorEpoch + 1,
+      baseline.editorEpoch + 1,
       "first save advances the stage epoch once",
     );
     await assert.rejects(
-      () =>
-        translations.createEntry(
-          b,
-          ids[1],
-          {
-            ...createInput(),
-            expectedImageRevision: leaseB.image!.translationRevision,
-            expectedEditorEpoch: leaseB.editorEpoch,
-            editorInstanceId: randomUUID(),
-            leaseToken: leaseB.leaseToken,
-          },
-          sessionB.id,
-        ),
-      /页锁/,
+      translations.createEntry(b, ids[1], createInput(1)),
+      /新的正式版本/,
     );
-    const savedB = await translations.createEntry(
+    const preRefreshImageRevision = baseline.images[1].translationRevision;
+    baseline = await translations.getEditor(b, workId);
+    assert.equal(
+      baseline.images[1].translationRevision,
+      preRefreshImageRevision,
+    );
+    const savedB = await translations.createEntry(b, ids[1], createInput(1));
+    assert.equal(
+      savedB.mutation?.editorEpoch,
+      head.editorEpoch,
+      "the same round's other proofreader can save after rereading the promoted epoch",
+    );
+    const addedOnSamePage = await translations.createEntry(
       b,
-      ids[1],
-      {
-        ...createInput(),
-        expectedImageRevision: leaseB.image!.translationRevision,
-        expectedEditorEpoch: leaseB.editorEpoch,
-        editorInstanceId: editorB,
-        leaseToken: leaseB.leaseToken,
-      },
-      sessionB.id,
+      ids[0],
+      createInput(0),
+    );
+    const entryA = baseline.images[0].entries[0];
+    const entryB = addedOnSamePage.entries.at(-1)!;
+    const beforePatches = await translations.previewLabelPlusImport(
+      b,
+      workId,
+      upload,
+    );
+    await translations.updateEntry(a, entryA.id, {
+      translatedText: "Proofreader A",
+      expectedRevision: entryA.revision,
+      expectedEditorEpoch: head.editorEpoch,
+    });
+    await translations.updateEntry(b, entryB.id, {
+      translatedText: "Proofreader B",
+      expectedRevision: entryB.revision,
+      expectedEditorEpoch: head.editorEpoch,
+    });
+    await assert.rejects(
+      translations.updateEntry(b, entryA.id, {
+        translatedText: "Stale overwrite",
+        expectedRevision: entryA.revision,
+        expectedEditorEpoch: head.editorEpoch,
+      }),
+      /条目已更新/,
+    );
+    await assert.rejects(
+      translations.updateEntry(outsider, entryA.id, {
+        translatedText: "Unauthorized overwrite",
+        expectedRevision: entryA.revision + 1,
+        expectedEditorEpoch: head.editorEpoch,
+      }),
+      /需要先加入/,
     );
     assert.equal(
-      savedB.entries.length,
-      1,
-      "other page's pre-start lease remains writable after epoch promotion",
+      (await works.get(workId, b)).revision,
+      head.revision,
+      "entry patches do not advance the work revision",
     );
-    assert.equal(savedB.mutation?.editorEpoch, head.editorEpoch);
-    await translations.releaseLease(a, sessionA.id, workId, ids[0], {
-      editorInstanceId: editorA,
-      leaseToken: leaseA.leaseToken,
+    await assert.rejects(
+      translations.importLabelPlus(b, sessionB.id, workId, upload, {
+        stage: "proofread",
+        expectedRevision: head.revision,
+        expectedEditorEpoch: head.editorEpoch,
+        expectedContentBaseline: beforePatches.contentBaseline,
+        idempotencyKey: randomUUID(),
+      }),
+      /当前稿已变化/,
+    );
+    assert.deepEqual(
+      (await translations.getEditor(b, workId)).images[0].entries.map(
+        (e) => e.translatedText,
+      ),
+      ["Proofreader A", "Proofreader B"],
+      "stale whole-manuscript import preserves both authors' patches",
+    );
+    const refreshedPreview = await translations.previewLabelPlusImport(
+      b,
+      workId,
+      upload,
+    );
+    const importedProof = await translations.importLabelPlus(
+      b,
+      sessionB.id,
+      workId,
+      upload,
+      {
+        stage: "proofread",
+        expectedRevision: head.revision,
+        expectedEditorEpoch: head.editorEpoch,
+        expectedContentBaseline: refreshedPreview.contentBaseline,
+        idempotencyKey: randomUUID(),
+      },
+    );
+    assert.equal(
+      importedProof.images.every((image) => image.entries.length === 0),
+      true,
+      "a qualified proofreader imports the confirmed manuscript without any page locks",
+    );
+    await translations.leasePage(a, sessionA.id, workId, ids[0], {
+      editorInstanceId: randomUUID(),
+      expectedEditorEpoch: importedProof.editorEpoch,
     });
-    await translations.releaseLease(b, sessionB.id, workId, ids[1], {
-      editorInstanceId: editorB,
-      leaseToken: leaseB.leaseToken,
-    });
+    assert.equal(
+      await db.proofreadPageLease.count({
+        where: {
+          workId,
+          editorEpoch: importedProof.editorEpoch,
+          expiresAt: { gt: new Date() },
+        },
+      }),
+      1,
+      "an active legacy lease is present when proofreading is submitted",
+    );
     head = await works.get(workId, a);
     head = await works.submitStage(b, workId, {
       stage: "proofread",
@@ -721,6 +861,7 @@ test("page ownership claims, empty-page submissions, cancellation and explicit r
     if (workId) {
       await db.workEvent.deleteMany({ where: { workId } });
       await db.proofreadPageLease.deleteMany({ where: { workId } });
+      await db.labelPlusFile.deleteMany({ where: { workId } });
       await db.workPageAssignment.deleteMany({ where: { workId } });
       await db.workStageAssignment.deleteMany({
         where: { participant: { workId } },

@@ -1,7 +1,6 @@
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import {
   cleanup,
-  act,
   fireEvent,
   render,
   screen,
@@ -278,143 +277,56 @@ test.each([200, 409])(
   },
 );
 
-test("browses without a lease, explicitly acquires fresh page content, and releases on navigation", async () => {
-  const fetcher = vi.fn().mockImplementation(async (_url, options) =>
-    options.method === "DELETE"
-      ? new Response(null, { status: 204 })
-      : Response.json({
-          leaseToken: "token",
-          editorEpoch: 1,
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
-          image: {
-            ...image,
-            entries: [{ ...entry, translatedText: "最新云端译文" }],
-          },
-        }),
-  );
+test("proofreading opens directly and navigation never obtains or releases a page lease", async () => {
+  const fetcher = vi.fn();
   vi.stubGlobal("fetch", fetcher);
   setup();
-  const text = await screen.findByDisplayValue("旧译文");
-  const permission = screen.getByLabelText("本页编辑权限");
-  expect(permission.closest(".translation-entry-panel")).toBeTruthy();
-  expect(
-    screen.getByLabelText("编辑工具").previousElementSibling?.tagName,
-  ).toBe("HEADER");
-  expect((text as HTMLTextAreaElement).disabled).toBe(true);
-  expect(fetcher).not.toHaveBeenCalled();
-  expect(screen.queryByRole("button", { name: "完成我的部分" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "编辑本页" }));
-  const fresh = await screen.findByDisplayValue("最新云端译文");
   await waitFor(() =>
-    expect((fresh as HTMLTextAreaElement).disabled).toBe(false),
+    expect(
+      (screen.getByDisplayValue("旧译文") as HTMLTextAreaElement).readOnly,
+    ).toBe(false),
   );
-  expect(
-    screen
-      .getByRole("button", { name: "保存并结束编辑" })
-      .closest(".translation-entry-panel"),
-  ).toBeTruthy();
-  expect(screen.queryByText("浏览不占用编辑锁")).toBeNull();
-  const acquire = JSON.parse(fetcher.mock.calls[0][1].body);
-  expect(acquire.expectedEditorEpoch).toBe(1);
-  expect(acquire.editorInstanceId).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "编辑本页" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "保存并结束编辑" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "下一页" }));
-  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
-  expect(fetcher.mock.calls[1][1].method).toBe("DELETE");
-  expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({
-    editorInstanceId: acquire.editorInstanceId,
-    leaseToken: "token",
-  });
   expect(await screen.findByAltText("第 2 页")).toBeTruthy();
+  expect(fetcher).not.toHaveBeenCalled();
 });
 
-test("renews without an image and preserves the dirty page while merging the new epoch", async () => {
-  let heartbeat: (() => void) | undefined;
-  const nativeInterval = window.setInterval.bind(window);
-  vi.spyOn(window, "setInterval").mockImplementation((callback, delay) => {
-    if (delay === 20_000 && typeof callback === "function")
-      heartbeat = () => callback();
-    return nativeInterval(callback, delay) as unknown as ReturnType<
-      typeof window.setInterval
-    >;
-  });
-  const fetcher = vi.fn().mockImplementation(async (_url, input) => {
-    if (input.method === "DELETE") return new Response(null, { status: 204 });
-    const renew = Boolean(JSON.parse(input.body).leaseToken);
-    return Response.json({
-      leaseToken: "token",
-      editorEpoch: renew ? 2 : 1,
-      expiresAt: new Date(
-        Date.now() + (renew ? 120_000 : 60_000),
-      ).toISOString(),
-      ...(!renew && { image }),
-    });
-  });
-  vi.stubGlobal("fetch", fetcher);
+test("dirty proofreading saves with the ordinary revision and epoch fences without a lease heartbeat", async () => {
+  const intervals = vi.spyOn(window, "setInterval");
   const patch = vi.spyOn(client, "PATCH").mockResolvedValue({
-    data: {
-      ...entry,
-      translatedText: "尚未保存的本地校对",
-      revision: 2,
-      mutation: {
-        workRevision: 4,
-        editorEpoch: 2,
-        workflowStatus: "proofreading",
-        submissionStage: "proofread",
-      },
-    },
+    data: { ...entry, translatedText: "本地校对", revision: 2 },
     response: new Response(null, { status: 200 }),
   } as never);
   setup();
-  fireEvent.click(await screen.findByRole("button", { name: "编辑本页" }));
   await waitFor(() =>
     expect(
-      (screen.getByDisplayValue("旧译文") as HTMLTextAreaElement).disabled,
+      (screen.getByDisplayValue("旧译文") as HTMLTextAreaElement).readOnly,
     ).toBe(false),
   );
   fireEvent.change(screen.getByDisplayValue("旧译文"), {
-    target: { value: "尚未保存的本地校对" },
+    target: { value: "本地校对" },
   });
-  await waitFor(() => expect(heartbeat).toBeTypeOf("function"));
-  await act(async () => {
-    heartbeat?.();
-  });
-  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
-  expect(
-    (screen.getByDisplayValue("尚未保存的本地校对") as HTMLTextAreaElement)
-      .disabled,
-  ).toBe(false);
-  expect(screen.queryByDisplayValue("旧译文")).toBeNull();
-  expect(screen.getByRole("button", { name: "保存并结束编辑" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
-  await waitFor(() =>
-    expect(patch).toHaveBeenCalledWith(
-      "/api/translation-entries/{entryId}",
-      expect.objectContaining({
-        body: expect.objectContaining({
-          expectedEditorEpoch: 2,
-          leaseToken: "token",
-          translatedText: "尚未保存的本地校对",
-        }),
-      }),
-    ),
+  await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+  const body = (
+    patch.mock.calls as unknown as [string, { body: Record<string, unknown> }][]
+  )[0][1].body;
+  expect(body).toMatchObject({
+    expectedRevision: 1,
+    expectedEditorEpoch: 1,
+    translatedText: "本地校对",
+  });
+  expect(body).not.toHaveProperty("leaseToken");
+  expect(body).not.toHaveProperty("editorInstanceId");
+  expect(intervals.mock.calls.some(([, delay]) => delay === 20_000)).toBe(
+    false,
   );
 });
 
-test("an ordinary multi proofreader can open LabelPlus and import all pages under their leases", async () => {
-  const fetcher = vi.fn().mockImplementation(async (url, input) =>
-    input.method === "DELETE"
-      ? new Response(null, { status: 204 })
-      : Response.json({
-          leaseToken: String(url).includes("page-one")
-            ? "token-one"
-            : "token-two",
-          editorEpoch: 1,
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
-          image: String(url).includes("page-one")
-            ? base.images[0]
-            : base.images[1],
-        }),
-  );
+test("an ordinary multi proofreader imports all mapped pages using the preview content baseline", async () => {
+  const fetcher = vi.fn();
   vi.stubGlobal("fetch", fetcher);
   setup();
   const imported = {
@@ -438,6 +350,7 @@ test("an ordinary multi proofreader can open LabelPlus and import all pages unde
           path === "/api/works/{workId}/labelplus/imports/preview"
             ? {
                 formatVersion: "1,0",
+                contentBaseline: "preview-baseline",
                 imageCount: 2,
                 markerCount: 1,
                 mappings: base.images.map((page, index) => ({
@@ -460,8 +373,7 @@ test("an ordinary multi proofreader can open LabelPlus and import all pages unde
     name: "导入 LabelPlus",
   });
   expect(user.roles).toEqual(["proofreader"]);
-  expect((open as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "编辑本页" }));
+  expect((open as HTMLButtonElement).disabled).toBe(false);
   await waitFor(() =>
     expect(
       (
@@ -501,23 +413,12 @@ test("an ordinary multi proofreader can open LabelPlus and import all pages unde
     ([path]) => path === "/api/works/{workId}/labelplus/imports",
   )![1].body;
   expect(body.get("stage")).toBe("proofread");
+  expect(body.get("expectedContentBaseline")).toBe("preview-baseline");
   expect(JSON.parse(String(body.get("pageAccess")))).toEqual([
-    {
-      imageId: "page-one",
-      editorInstanceId: expect.any(String),
-      leaseToken: "token-one",
-    },
-    {
-      imageId: "page-two",
-      editorInstanceId: expect.any(String),
-      leaseToken: "token-two",
-    },
+    { imageId: "page-one" },
+    { imageId: "page-two" },
   ]);
-  await waitFor(() =>
-    expect(
-      fetcher.mock.calls.filter(([, options]) => options.method === "DELETE"),
-    ).toHaveLength(2),
-  );
+  expect(fetcher).not.toHaveBeenCalled();
   expect(screen.getByDisplayValue("普通二校完整导入的译文")).toBeTruthy();
 });
 
@@ -531,7 +432,8 @@ test("keeps unowned translation pages read only while allowing the owner page", 
     editableImageIds: ["page-two"],
   });
   const text = await screen.findByDisplayValue("旧译文");
-  expect((text as HTMLTextAreaElement).disabled).toBe(true);
+  expect((text as HTMLTextAreaElement).readOnly).toBe(true);
+  expect((text as HTMLTextAreaElement).disabled).toBe(false);
   expect(screen.queryByRole("button", { name: "编辑本页" })).toBeNull();
   expect(screen.queryByLabelText("本页分工")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "下一页" }));
@@ -540,48 +442,28 @@ test("keeps unowned translation pages read only while allowing the owner page", 
   expect(screen.queryByText("此页不在本人当前可编辑范围。")).toBeNull();
 });
 
-test("saves with the instance lease and stays on the page when saving fails", async () => {
-  const fetcher = vi.fn().mockImplementation(async (_url, options) =>
-    options.method === "DELETE"
-      ? new Response(null, { status: 204 })
-      : Response.json({
-          leaseToken: "token",
-          editorEpoch: 1,
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
-          image,
-        }),
-  );
-  vi.stubGlobal("fetch", fetcher);
+test("failed proofreading saves preserve local text and do not require a lock to retry", async () => {
   const patch = vi.spyOn(client, "PATCH").mockResolvedValue({
     error: { message: "保存失败" },
     response: new Response(null, { status: 500 }),
   } as never);
   setup();
-  fireEvent.click(await screen.findByRole("button", { name: "编辑本页" }));
   await waitFor(() =>
     expect(
-      (screen.getByDisplayValue("旧译文") as HTMLTextAreaElement).disabled,
+      (screen.getByDisplayValue("旧译文") as HTMLTextAreaElement).readOnly,
     ).toBe(false),
   );
   fireEvent.change(screen.getByDisplayValue("旧译文"), {
     target: { value: "尚未保存的本地译文" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
   await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
-  expect(patch).toHaveBeenCalledWith(
-    "/api/translation-entries/{entryId}",
-    expect.objectContaining({
-      body: expect.objectContaining({
-        leaseToken: "token",
-        editorInstanceId: JSON.parse(fetcher.mock.calls[0][1].body)
-          .editorInstanceId,
-      }),
-    }),
-  );
-  expect(await screen.findByText(/当前页尚未保存成功/)).toBeTruthy();
   expect(screen.getByDisplayValue("尚未保存的本地译文")).toBeTruthy();
-  expect(screen.getByAltText("第 1 页")).toBeTruthy();
-  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(
+    (screen.getByDisplayValue("尚未保存的本地译文") as HTMLTextAreaElement)
+      .readOnly,
+  ).toBe(false);
+  expect(screen.queryByRole("button", { name: "编辑本页" })).toBeNull();
 });
 
 test("saves the exact owned draft before submitting without a second completion step", async () => {
@@ -774,68 +656,98 @@ test("loads a changed cloud draft for review before sending exact pending page h
   );
 });
 
-test("can request a page whose last known holder has since released it", async () => {
-  const fetcher = vi.fn().mockResolvedValue(
-    Response.json({
-      leaseToken: "new-token",
-      editorEpoch: 1,
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      image,
-    }),
-  );
-  vi.stubGlobal("fetch", fetcher);
+test("another active editor never blocks direct proofreading entry", async () => {
   setup({
     ...base,
-    proofreadLeases: [
+    activeParticipants: [
       {
-        workImageId: image.id,
-        displayName: "上一位校对",
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        userId: "other",
+        displayName: "其他校对",
+        mode: "edit",
+        isCurrentSession: false,
       },
-    ],
+    ] as never,
   });
-  expect(await screen.findByText(/上一位校对/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "编辑本页" }));
-  expect(
-    await screen.findByRole("button", { name: "保存并结束编辑" }),
-  ).toBeTruthy();
+  await waitFor(() =>
+    expect(
+      (screen.getByDisplayValue("旧译文") as HTMLTextAreaElement).readOnly,
+    ).toBe(false),
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByText("已有成员正在编辑")).toBeNull();
 });
 
-test("keeps the acquired page current while its edit request is in flight", async () => {
-  let respond!: (value: Response) => void;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn((_url, options) =>
-      options.method === "DELETE"
-        ? Promise.resolve(new Response(null, { status: 204 }))
-        : new Promise<Response>((resolve) => {
-            respond = resolve;
-          }),
-    ),
-  );
+test("page navigation stays available immediately without an acquisition request", async () => {
   setup();
-  fireEvent.click(await screen.findByRole("button", { name: "编辑本页" }));
+  await screen.findByDisplayValue("旧译文");
   expect(
     (screen.getByRole("button", { name: "下一页" }) as HTMLButtonElement)
       .disabled,
-  ).toBe(true);
-  expect(
-    (
-      screen.getByRole("button", {
-        name: /预览并跳转页面/,
-      }) as HTMLButtonElement
-    ).disabled,
-  ).toBe(true);
-  await act(async () => {
-    respond(
-      Response.json({
-        leaseToken: "a",
-        editorEpoch: 1,
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
-        image,
-      }),
-    );
-  });
+  ).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "下一页" }));
   expect(await screen.findByAltText("第 2 页")).toBeTruthy();
+});
+
+test("direct entry makes an authorized proofreader writable without collaboration or page-lock controls", async () => {
+  setup(base);
+  const text = (await screen.findByDisplayValue(
+    "旧译文",
+  )) as HTMLTextAreaElement;
+  await waitFor(() => expect(text.readOnly).toBe(false));
+  expect(text.disabled).toBe(false);
+  expect(screen.queryByRole("button", { name: "编辑本页" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "进入协作" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "仅查看" })).toBeNull();
+  expect(
+    (
+      vi.mocked(client.POST).mock.calls as unknown as [
+        string,
+        { body: { mode: string } },
+      ][]
+    ).some(
+      ([path, options]) =>
+        path === "/api/works/{workId}/translations/presence" &&
+        options?.body?.mode === "edit",
+    ),
+  ).toBe(true);
+});
+
+test("a qualified but unjoined reader keeps selectable readonly translation and notes without joining", async () => {
+  const patch = vi.spyOn(client, "PATCH");
+  setup({
+    ...base,
+    canEdit: false,
+    joinableStage: "proofread" as never,
+    editableImageIds: [],
+    images: [{ ...image, entries: [{ ...entry, note: "可复制备注" }] }],
+  } as never);
+  const text = (await screen.findByDisplayValue(
+    "旧译文",
+  )) as HTMLTextAreaElement;
+  const note = screen.getByDisplayValue("可复制备注") as HTMLTextAreaElement;
+  for (const field of [text, note]) {
+    expect(field.readOnly).toBe(true);
+    expect(field.disabled).toBe(false);
+    field.focus();
+    field.setSelectionRange(0, field.value.length);
+    expect(field.selectionEnd).toBe(field.value.length);
+    expect(fireEvent.keyDown(field, { key: "c", ctrlKey: true })).toBe(true);
+    fireEvent.keyDown(field, { key: "Delete" });
+    fireEvent.keyDown(field, { key: "x", ctrlKey: true });
+  }
+  expect(text.value).toBe("旧译文");
+  expect(note.value).toBe("可复制备注");
+  expect(patch).not.toHaveBeenCalled();
+  expect(
+    (
+      vi.mocked(client.POST).mock.calls as unknown as [
+        string,
+        { body: { mode: string } },
+      ][]
+    ).every(
+      ([path, options]) =>
+        path === "/api/works/{workId}/translations/presence" &&
+        options.body.mode === "view",
+    ),
+  ).toBe(true);
 });

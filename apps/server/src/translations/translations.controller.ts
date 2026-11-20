@@ -133,6 +133,7 @@ export class TranslationsController {
         stage: { type: "string", enum: ["translate", "proofread"] },
         expectedRevision: { type: "integer", minimum: 0 },
         expectedEditorEpoch: { type: "integer", minimum: 0 },
+        expectedContentBaseline: { type: "string", maxLength: 64 },
         pageAccess: { type: "string" },
         idempotencyKey: { type: "string", format: "uuid" },
       },

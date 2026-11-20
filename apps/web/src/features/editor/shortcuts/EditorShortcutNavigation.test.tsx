@@ -260,3 +260,17 @@ test("saved custom shortcuts update keycaps and behavior and readonly retains na
   expect(press(canvas, "g").defaultPrevented).toBe(false);
   expect(press(canvas, "h").defaultPrevented).toBe(true);
 });
+
+test("readonly translation selection keeps native copy and text navigation without editor shortcuts", async () => {
+  await fixture(false);
+  const area = screen.getByDisplayValue("第1页译文1") as HTMLTextAreaElement;
+  expect(area.readOnly).toBe(true);
+  expect(area.disabled).toBe(false);
+  area.focus();
+  area.setSelectionRange(0, area.value.length);
+  expect(press(area, "c", { ctrlKey: true }).defaultPrevented).toBe(false);
+  expect(press(area, "ArrowRight").defaultPrevented).toBe(false);
+  expect(press(area, "Delete").defaultPrevented).toBe(false);
+  expect(screen.getByAltText("第 1 页")).toBeTruthy();
+  expect(area.value).toBe("第1页译文1");
+});
