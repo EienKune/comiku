@@ -5183,6 +5183,7 @@ export interface components {
             message: string;
         };
         LabelPlusImportPreviewDto: {
+            contentBaseline: string;
             formatVersion: string;
             imageCount: number;
             markerCount: number;
@@ -18130,6 +18131,7 @@ export interface operations {
                     stage: "translate" | "proofread";
                     expectedRevision: number;
                     expectedEditorEpoch: number;
+                    expectedContentBaseline?: string;
                     pageAccess?: string;
                     /** Format: uuid */
                     idempotencyKey: string;

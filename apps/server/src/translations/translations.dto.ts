@@ -141,6 +141,7 @@ export class LabelPlusImageMappingDto {
 }
 
 export class LabelPlusImportPreviewDto {
+  @ApiProperty({ type: String }) contentBaseline!: string;
   @ApiProperty({ type: String }) formatVersion!: string;
   @ApiProperty({ type: Number, minimum: 1 }) imageCount!: number;
   @ApiProperty({ type: Number, minimum: 0 }) markerCount!: number;
@@ -153,6 +154,12 @@ export class LabelPlusImportPreviewDto {
 }
 
 export class ImportLabelPlusDto {
+  @ApiPropertyOptional({ type: String, maxLength: 64 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  expectedContentBaseline?: string;
+
   @ApiPropertyOptional({ type: String })
   @IsOptional()
   @IsString()

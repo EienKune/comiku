@@ -452,17 +452,6 @@ test("single-stage identity locks and multi-page contributions integrate server 
       proofreadClaimed.data.editorEpoch,
       resubmitted.data.editorEpoch,
     );
-    const editorInstanceId = randomUUID();
-    const lease = await request<{ leaseToken: string }>(
-      memberA.browser,
-      "POST",
-      `/api/works/${collaborative.id}/translations/pages/${collaborative.images[1].id}/lease`,
-      {
-        editorInstanceId,
-        expectedEditorEpoch: proofreadClaimed.data.editorEpoch,
-      },
-    );
-    assert.equal(lease.status, 200);
     const proofreadEdit = await request<{
       translatedText: string;
       mutation: { editorEpoch: number; workflowStatus: string };
@@ -473,8 +462,6 @@ test("single-stage identity locks and multi-page contributions integrate server 
       {
         expectedRevision: createdMarker.data.entries[0].revision,
         expectedEditorEpoch: proofreadClaimed.data.editorEpoch,
-        editorInstanceId,
-        leaseToken: lease.data.leaseToken,
         translatedText: "校对首次改动",
       },
     );

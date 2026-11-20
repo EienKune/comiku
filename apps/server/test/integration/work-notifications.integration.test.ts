@@ -462,9 +462,11 @@ for (const receiverMode of ["legacy", "templates"] as const) {
         );
         const importBaseline = await view(translator.browser);
         const importKey = randomUUID();
+        let expectedContentBaseline = "";
         const importBody = () => {
           const form = new FormData();
           form.set("stage", "translate");
+          form.set("expectedContentBaseline", expectedContentBaseline);
           form.set("expectedRevision", String(importBaseline.revision));
           form.set("expectedEditorEpoch", String(importBaseline.editorEpoch));
           form.set("idempotencyKey", importKey);
@@ -500,6 +502,23 @@ for (const receiverMode of ["legacy", "templates"] as const) {
           );
           return form;
         };
+        const importPreview = await fetch(
+          base + `/api/works/${workId}/labelplus/imports/preview`,
+          {
+            method: "POST",
+            headers: {
+              Origin: "http://localhost:5173",
+              "X-Comiku-Request": "1",
+              Cookie: translator.browser.cookie!,
+            },
+            body: importBody(),
+          },
+        );
+        assert.equal(importPreview.status, 200);
+        expectedContentBaseline = (
+          (await importPreview.json()) as { contentBaseline: string }
+        ).contentBaseline;
+        assert.match(expectedContentBaseline, /^[a-f0-9]{64}$/);
         for (let repeat = 0; repeat < 2; repeat++) {
           const imported = await fetch(
             base + `/api/works/${workId}/labelplus/imports`,

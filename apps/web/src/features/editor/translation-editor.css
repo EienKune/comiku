@@ -856,10 +856,6 @@
   box-shadow: var(--shadow-focus);
 }
 
-.translation-entry-card textarea:disabled {
-  background: var(--color-surface-muted);
-}
-
 .translation-entry-empty {
   display: grid;
   min-height: 16rem;
@@ -1010,4 +1006,12 @@
   .translation-editor-back {
     padding-inline: var(--space-2);
   }
+}
+
+/* Native readonly textareas retain selection/copy in Chromium, WebKit and Firefox. */
+.translation-entry-card textarea[readonly] {
+  caret-color: transparent;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
 }

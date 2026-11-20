@@ -39,7 +39,7 @@ function Fixture({
         <textarea
           aria-label="译文"
           value={text}
-          disabled={!writable || localOnly}
+          readOnly={!writable || localOnly}
           {...insertion.bindTextarea("entry-1")}
           onChange={(event) => {
             update("entry-1", event.target.value);

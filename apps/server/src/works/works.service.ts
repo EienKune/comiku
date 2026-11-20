@@ -2245,12 +2245,6 @@ export class WorksService {
     if (!active.some((participant) => participant.userId === actorId))
       throw new ForbiddenException("需要先加入该阶段才能提交");
     const creditedParticipants = active;
-    if (input.stage === "proofread")
-      await this.translations.assertNoProofreadLeases(
-        tx,
-        workId,
-        work.editorEpoch,
-      );
     const now = new Date();
     const nextWorkRevision = work.revision + 1;
     const changesTextVersion = input.stage === "proofread";

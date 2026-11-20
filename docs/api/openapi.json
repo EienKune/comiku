@@ -15808,6 +15808,10 @@
                     "type": "integer",
                     "minimum": 0
                   },
+                  "expectedContentBaseline": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
                   "pageAccess": {
                     "type": "string"
                   },
@@ -34417,6 +34421,9 @@
       "LabelPlusImportPreviewDto": {
         "type": "object",
         "properties": {
+          "contentBaseline": {
+            "type": "string"
+          },
           "formatVersion": {
             "type": "string"
           },
@@ -34451,6 +34458,7 @@
           }
         },
         "required": [
+          "contentBaseline",
           "formatVersion",
           "imageCount",
           "markerCount",

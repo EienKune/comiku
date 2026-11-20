@@ -4,7 +4,6 @@ import { useConfirmation } from "../../components/use-confirmation";
 import { refreshReviewViews } from "../workspace/review-cache";
 import {
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -36,12 +35,11 @@ import {
   Save,
   Trash2,
   Upload,
-  UserRoundCheck,
   Users,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { Link, Navigate, useNavigate, useParams } from "react-router";
+import { Link, Navigate, useParams } from "react-router";
 import { ReviewRequestActions } from "../workspace/ReviewRequestActions";
 import { SkipProofreadingButton } from "../workspace/SkipProofreadingButton";
 import { Badge, Button, IconButton, SelectControl } from "../../components/ui";
@@ -62,13 +60,8 @@ import {
   type TranslationDraftRecord,
   type TranslationImage,
 } from "./draft-storage";
-import {
-  requestPageLease,
-  releasePageLease,
-  acquireImportPageLeases,
-  type PageEditor,
-  type PageLease,
-} from "./page-access";
+import { getPageWriteAccess, type PageEditor } from "./page-access";
+import { mergeServerImage } from "./merge-server-image";
 import { useCanvasWheelZoom } from "./use-canvas-wheel-zoom";
 import { useMarkerReorder } from "./use-marker-reorder";
 import {
@@ -148,32 +141,6 @@ function entryContentMatches(
   );
 }
 
-function mergeServerImage(
-  serverImage: TranslationImage,
-  localImage: EditableTranslationImage | undefined,
-  dirtyIds: Set<string>,
-): EditableTranslationImage {
-  if (!localImage) return serverImage;
-  return {
-    ...serverImage,
-    entries: serverImage.entries.map((serverEntry) => {
-      const localEntry = localImage.entries.find(
-        (entry) => entry.id === serverEntry.id,
-      );
-      return localEntry && dirtyIds.has(serverEntry.id)
-        ? {
-            ...serverEntry,
-            markerX: localEntry.markerX,
-            markerY: localEntry.markerY,
-            markerPositionType: localEntry.markerPositionType,
-            translatedText: localEntry.translatedText,
-            note: localEntry.note,
-          }
-        : serverEntry;
-    }),
-  };
-}
-
 function statusCopy(state: SaveState, savedAt: Date | null) {
   switch (state) {
     case "syncing":
@@ -236,7 +203,6 @@ const reviewStatusCopy = {
 
 export function TranslationEditorPage() {
   const { id: workId = "" } = useParams();
-  const navigate = useNavigate();
   const user = useAccount();
   const queryClient = useQueryClient();
   const shortcuts = useEditorShortcuts(user.id);
@@ -245,14 +211,6 @@ export function TranslationEditorPage() {
   const [images, setImages] = useState<EditableTranslationImage[]>([]);
   const imagesRef = useRef<EditableTranslationImage[]>([]);
   const [pageIndex, setPageIndex] = useState(0);
-  const editorInstanceId = useRef(crypto.randomUUID());
-  const [pageLease, setPageLease] = useState<
-    (PageLease & { imageId: string }) | null
-  >(null);
-  const pageLeaseRef = useRef(pageLease);
-  pageLeaseRef.current = pageLease;
-  const [leasePending, setLeasePending] = useState(false);
-  const acquiringPage = useRef<symbol | null>(null);
   const [showPagePreview, setShowPagePreview] = useState(false);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [tool, setTool] = useState<EditorTool>("pan");
@@ -317,8 +275,6 @@ export function TranslationEditorPage() {
   const [activeParticipants, setActiveParticipants] = useState<
     TranslationPresence[]
   >([]);
-  const [showEntryChoice, setShowEntryChoice] = useState(false);
-  const [entryChoicePending, setEntryChoicePending] = useState(false);
   const [labelPlusFile, setLabelPlusFile] = useState<File | null>(null);
   const [labelPlusPreview, setLabelPlusPreview] =
     useState<LabelPlusImportPreview | null>(null);
@@ -358,13 +314,6 @@ export function TranslationEditorPage() {
 
   const currentImage = images[pageIndex];
   const pageNumber = currentImage ? pageIndex + 1 : 0;
-  useLayoutEffect(() => {
-    setLeasePending(false);
-    return () => {
-      acquiringPage.current = null;
-    };
-  }, [workId, currentImage?.id]);
-
   const imageUrl = useQuery({
     queryKey: ["work-image", workId, currentImage?.id],
     queryFn: async () =>
@@ -415,21 +364,12 @@ export function TranslationEditorPage() {
     Boolean(
       currentImage && pageEditor.editableImageIds.includes(currentImage.id),
     );
-  const requiresLease = Boolean(pageEditor?.proofreadRequiresLease);
-  const occupiedPageLease = pageEditor?.proofreadLeases?.find(
-    (lease) =>
-      lease.workImageId === currentImage?.id &&
-      Date.parse(lease.expiresAt) > Date.now(),
-  );
   const writable = Boolean(
     editor.data?.canEdit &&
     presenceMode === "edit" &&
     !stageRefreshing &&
     !recoveryDraft &&
-    pageEditable &&
-    (!requiresLease ||
-      (pageLease?.imageId === currentImage?.id &&
-        Date.parse(pageLease.expiresAt) > Date.now())),
+    pageEditable,
   );
   const canSubmitStage = Boolean(
     editor.data?.canEdit &&
@@ -441,39 +381,7 @@ export function TranslationEditorPage() {
     const current = editorDataRef.current as PageEditor | undefined;
     if (refreshingScopeRef.current === editorScope || !current?.canEdit)
       throw new Error("当前阶段没有编辑权限，本地草稿已保留，请核对最新状态。");
-    if (current.editableImageIds && !current.editableImageIds.includes(imageId))
-      throw new Error(
-        "此页分工或提交状态已变化，本地草稿保留，请核对最新状态。",
-      );
-    const assignment = current?.pageAssignments?.find(
-      (page) => page.workImageId === imageId,
-    );
-    if (current?.proofreadRequiresLease) {
-      const lease = pageLeaseRef.current;
-      if (
-        !lease ||
-        lease.imageId !== imageId ||
-        Date.parse(lease.expiresAt) <= Date.now()
-      )
-        throw new Error("本页编辑锁已失效，请重新取得编辑锁；本地内容已保留。");
-      return {
-        editorInstanceId: editorInstanceId.current,
-        leaseToken: lease.leaseToken,
-      };
-    }
-    return assignment
-      ? { expectedAssignmentGeneration: assignment.generation }
-      : {};
-  }
-  function leaseConflictMessage(error: unknown) {
-    const detail =
-      typeof error === "object" && error !== null && "message" in error
-        ? String(error.message)
-        : "";
-    if (!/页锁|编辑权|正在编辑|lease/i.test(detail)) return null;
-    pageLeaseRef.current = null;
-    setPageLease(null);
-    return "本页编辑锁已失效。本地内容已保留，请核对最新版本并重新取得编辑锁。";
+    return getPageWriteAccess(current, imageId);
   }
   const stageContentReady =
     editor.data?.submissionStage !== "translate" ||
@@ -576,17 +484,6 @@ export function TranslationEditorPage() {
     editor.data.cancelableSubmissionStage === "translate"
       ? null
       : (editor.data?.cancelableSubmissionStage ?? null);
-  const otherActiveEditors = activeParticipants
-    .filter(
-      (participant) =>
-        participant.mode === "edit" && !participant.isCurrentSession,
-    )
-    .filter(
-      (participant, index, participants) =>
-        participants.findIndex(
-          ({ userId }) => userId === participant.userId,
-        ) === index,
-    );
   const activeUserCount = new Set(
     activeParticipants.map(({ userId }) => userId),
   ).size;
@@ -614,65 +511,6 @@ export function TranslationEditorPage() {
   function replaceDirty(next: Set<string>) {
     dirtyRef.current = next;
     setDirtyEntryIds(next);
-  }
-
-  function chooseViewMode() {
-    setPresenceMode("view");
-    setShowEntryChoice(false);
-    void updateEditorPresence(workId, "view")
-      .then((presence) => setActiveParticipants(presence.items))
-      .catch(() => undefined);
-  }
-
-  async function enterCollaboration() {
-    const current = editorDataRef.current;
-    if (!current || entryChoicePending) return;
-    if (
-      current.joinableStage === "translate" &&
-      current.collaborationMode === "multi"
-    ) {
-      navigate(`/works/${workId}`);
-      return;
-    }
-    setEntryChoicePending(true);
-    setMessage(null);
-    try {
-      if (
-        current.joinableStage === "translate" ||
-        current.joinableStage === "proofread"
-      ) {
-        const joined = await unwrap(
-          await client.POST("/api/works/{id}/stages/join", {
-            params: { path: { id: workId } },
-            body: {
-              stage: current.joinableStage,
-              expectedRevision: current.workRevision,
-              idempotencyKey: crypto.randomUUID(),
-            },
-          }),
-        );
-        queryClient.setQueryData(["work", workId], joined);
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ["works"] }),
-          queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-          queryClient.invalidateQueries({ queryKey: ["dashboard-works"] }),
-        ]);
-        const refreshed = await editor.refetch();
-        if (!refreshed.data?.canEdit) {
-          throw new Error("加入协作后未能取得编辑权限，请刷新页面重试");
-        }
-        replaceEditorHead(refreshed.data);
-      }
-      const presence = await updateEditorPresence(workId, "edit");
-      setActiveParticipants(presence.items);
-      setPresenceMode("edit");
-      setShowEntryChoice(false);
-    } catch (error) {
-      setPresenceMode("view");
-      setMessage(error instanceof Error ? error.message : "进入协作失败");
-    } finally {
-      setEntryChoicePending(false);
-    }
   }
 
   async function previewLabelPlus(file: File) {
@@ -739,32 +577,18 @@ export function TranslationEditorPage() {
     body.append("expectedRevision", String(current.workRevision));
     body.append("expectedEditorEpoch", String(current.editorEpoch));
     body.append("idempotencyKey", crypto.randomUUID());
-    const held = pageLeaseRef.current;
-    let importLeases: Awaited<
-      ReturnType<typeof acquireImportPageLeases>
-    > | null = null;
-    let importedSuccessfully = false;
+    body.append("expectedContentBaseline", labelPlusPreview.contentBaseline);
     try {
       const targetIds = [
         ...new Set(
           labelPlusPreview.mappings.map((mapping) => mapping.targetImageId),
         ),
       ];
-      if ((current as PageEditor).proofreadRequiresLease)
-        importLeases = await acquireImportPageLeases({
-          workId,
-          editorInstanceId: editorInstanceId.current,
-          editorEpoch: current.editorEpoch,
-          images: imagesRef.current,
-          targetIds,
-          held,
-        });
       if (!isCurrent()) return;
       body.append(
         "pageAccess",
         JSON.stringify(
-          importLeases?.access ??
-            targetIds.map((imageId) => ({ imageId, ...pageAccess(imageId) })),
+          targetIds.map((imageId) => ({ imageId, ...pageAccess(imageId) })),
         ),
       );
       const imported = await unwrap(
@@ -774,7 +598,6 @@ export function TranslationEditorPage() {
         }),
       );
       if (!isCurrent()) return;
-      importedSuccessfully = true;
       queryClient.setQueryData(["translation-editor", workId], imported);
       replaceEditorHead(imported);
       replaceImages(imported.images);
@@ -801,15 +624,6 @@ export function TranslationEditorPage() {
       setSaveState("conflict");
       setMessage(error instanceof Error ? error.message : "LabelPlus 导入失败");
     } finally {
-      await importLeases?.release();
-      if (importedSuccessfully && held && isCurrent()) {
-        pageLeaseRef.current = null;
-        setPageLease(null);
-        await releasePageLease(workId, held.imageId, {
-          editorInstanceId: editorInstanceId.current,
-          leaseToken: held.leaseToken,
-        }).catch(() => undefined);
-      }
       if (isCurrent()) setLabelPlusOperation(null);
     }
   }
@@ -1000,91 +814,7 @@ export function TranslationEditorPage() {
     setOffset({ x: 0, y: 0 });
   }
 
-  async function finishEditingPage() {
-    await syncAll();
-    if (
-      dirtyRef.current.size ||
-      imagesRef.current.some((image) =>
-        image.entries.some((entry) => entry.localOnly),
-      )
-    ) {
-      setMessage("当前页尚未保存成功，请重试保存后再离开；本地草稿已保留。");
-      return false;
-    }
-    const lease = pageLeaseRef.current;
-    if (lease) {
-      try {
-        await releasePageLease(workId, lease.imageId, {
-          editorInstanceId: editorInstanceId.current,
-          leaseToken: lease.leaseToken,
-        });
-      } catch (error) {
-        setMessage(error instanceof Error ? error.message : "释放编辑锁失败");
-        return false;
-      }
-      pageLeaseRef.current = null;
-      setPageLease(null);
-    }
-    return true;
-  }
-  async function editCurrentPage() {
-    if (!currentImage || !editor.data || acquiringPage.current) return;
-    const attempt = Symbol();
-    acquiringPage.current = attempt;
-    setLeasePending(true);
-    setMessage(null);
-    try {
-      const lease = await requestPageLease(workId, currentImage.id, {
-        editorInstanceId: editorInstanceId.current,
-        expectedEditorEpoch: editorHeadRef.current.editorEpoch,
-      });
-      if (acquiringPage.current !== attempt) {
-        await releasePageLease(workId, currentImage.id, {
-          editorInstanceId: editorInstanceId.current,
-          leaseToken: lease.leaseToken,
-        });
-        return;
-      }
-      if (
-        dirtyRef.current.size ||
-        imagesRef.current.some((image) =>
-          image.entries.some((entry) => entry.localOnly),
-        )
-      ) {
-        await releasePageLease(workId, currentImage.id, {
-          editorInstanceId: editorInstanceId.current,
-          leaseToken: lease.leaseToken,
-        });
-        await enterConflict(
-          imagesRef.current,
-          "编辑锁已重新可用，请核对服务端基线后明确恢复本地内容。",
-        );
-        return;
-      }
-      updateImages((all) =>
-        all.map((image) =>
-          image.id === currentImage.id ? lease.image : image,
-        ),
-      );
-      const held = { ...lease, imageId: currentImage.id };
-      pageLeaseRef.current = held;
-      setPageLease(held);
-      setPresenceMode("edit");
-    } catch (error) {
-      if (acquiringPage.current === attempt)
-        setMessage(
-          error instanceof Error ? error.message : "无法取得本页编辑锁",
-        );
-    } finally {
-      if (acquiringPage.current === attempt) {
-        acquiringPage.current = null;
-        setLeasePending(false);
-      }
-    }
-  }
   async function goToPage(nextIndex: number) {
-    if (acquiringPage.current) return;
-    if (requiresLease && !(await finishEditingPage())) return;
     markerUndoStack.current = [];
     if (!images.length) return;
     const safeIndex = clamp(nextIndex, 0, images.length - 1);
@@ -1162,7 +892,7 @@ export function TranslationEditorPage() {
       previous.editorEpoch === latest.editorEpoch &&
       previous.latestVersion?.id === latest.latestVersion?.id
     )
-      return "本页编辑锁已失效，已读取当前阶段；请重新取得编辑锁后继续。";
+      return "本页编辑权限已变化，已读取当前阶段；本地草稿保留供核对。";
     return "作品阶段或正式版本已变化，已更新当前状态，请核对后继续。";
   }
 
@@ -1189,12 +919,8 @@ export function TranslationEditorPage() {
     setRefreshingScope(editorScope);
     markerUndoStack.current = [];
     undoFailure.current++;
-    acquiringPage.current = null;
-    setLeasePending(false);
     setCreatingEntry(false);
     setLabelPlusOperation(null);
-    pageLeaseRef.current = null;
-    setPageLease(null);
     drag.current = null;
     for (const timer of saveTimers.current.values()) window.clearTimeout(timer);
     saveTimers.current.clear();
@@ -1209,6 +935,8 @@ export function TranslationEditorPage() {
             workId,
             imagesRef.current,
             editorHeadRef.current,
+            Date.now(),
+            dirtyRef.current,
           )
         : null);
     if (localDraft) {
@@ -1243,11 +971,11 @@ export function TranslationEditorPage() {
           throw new Error("读取到旧的作品状态，请稍后重试；本地草稿已保留。");
         queryClient.setQueryData(["translation-editor", workId], latest);
         editorDataRef.current = latest;
+        setPresenceMode(latest.canEdit ? "edit" : "view");
         replaceEditorHead(latest);
         replaceImages(localDraft ? localDraft.images : latest.images);
         setLabelPlusPreview(null);
         setLabelPlusFile(null);
-        setShowEntryChoice(false);
         refreshingScopeRef.current = null;
         setRefreshingScope(null);
         setSaveState(localDraft ? "conflict" : "saved");
@@ -1287,6 +1015,23 @@ export function TranslationEditorPage() {
     )
       return;
     if (
+      current.workflowStatus === "pending_translate" &&
+      signal.workflowStatus === "translating" &&
+      signal.editorEpoch === editorHeadRef.current.editorEpoch &&
+      signal.reviewStatus === current.reviewStatus &&
+      refreshingScopeRef.current !== editorScope
+    ) {
+      const next = {
+        ...current,
+        workflowStatus: signal.workflowStatus,
+        workRevision: signal.workRevision,
+      };
+      editorDataRef.current = next;
+      replaceEditorHead(next);
+      queryClient.setQueryData(["translation-editor", workId], next);
+      return;
+    }
+    if (
       signal.workflowStatus !== current.workflowStatus ||
       signal.reviewStatus !== current.reviewStatus ||
       signal.editorEpoch !== editorHeadRef.current.editorEpoch ||
@@ -1325,6 +1070,8 @@ export function TranslationEditorPage() {
         workId,
         localImages,
         editorHeadRef.current,
+        Date.now(),
+        dirtyRef.current,
       );
     setRecoveryDraft(localDraft);
     recoveryDraftRef.current = localDraft;
@@ -1355,6 +1102,31 @@ export function TranslationEditorPage() {
       if (conflictIsCurrent())
         setMessage("检测到版本冲突，同时无法重新读取服务端内容。请稍后重试。");
     }
+  }
+
+  async function reconcileServerImage(
+    serverImage: TranslationImage,
+    acknowledgedLocalEntryId?: string,
+    conflictMessage = "图片标记已保存，但尚未同步的译文已被其他参与者修改或删除。本地原稿已保留供核对。",
+  ) {
+    const local = imagesRef.current.find(
+      (image) => image.id === serverImage.id,
+    );
+    const merged = mergeServerImage(
+      serverImage,
+      local,
+      dirtyRef.current,
+      acknowledgedLocalEntryId,
+    );
+    const next = imagesRef.current.map((image) =>
+      image.id === serverImage.id ? merged.image : image,
+    );
+    replaceImages(next);
+    if (merged.conflictedEntryIds.size) {
+      await enterConflict(next, conflictMessage);
+      return false;
+    }
+    return true;
   }
 
   function enqueueServerMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -1425,8 +1197,7 @@ export function TranslationEditorPage() {
       if (result.response.status === 409) {
         await enterConflict(
           imagesRef.current,
-          leaseConflictMessage(result.error) ??
-            "此条目已被其他参与者更新。请选择服务端内容，或明确重新应用本地译文。",
+          "此条目已被其他参与者更新。请选择服务端内容，或明确重新应用本地译文。",
           isCurrent,
         );
         return;
@@ -1578,8 +1349,7 @@ export function TranslationEditorPage() {
           if (result.response.status === 409) {
             await enterConflict(
               imagesRef.current,
-              leaseConflictMessage(result.error) ??
-                "标记顺序或编辑版本已变化，请核对服务端内容。",
+              "标记顺序或编辑版本已变化，请核对服务端内容。",
               sameWorkspace,
             );
             return;
@@ -1594,34 +1364,15 @@ export function TranslationEditorPage() {
             savedImage.entries.some((entry, index) => entry.id !== next[index])
           )
             throw new Error("服务端未返回已确认的标记顺序");
-          const serverRevisions = new Map(
-            savedImage.entries.map((entry) => [entry.id, entry.revision]),
-          );
-          const currentImageEntries = imagesRef.current.find(
-            (image) => image.id === imageId,
-          )?.entries;
-          if (
-            currentImageEntries?.some(
-              (entry) =>
-                dirtyRef.current.has(entry.id) &&
-                serverRevisions.get(entry.id) !== entry.revision,
-            )
-          ) {
-            await enterConflict(
-              imagesRef.current,
-              "标记顺序已保存，但有译文同时被其他参与者修改。请确认保留哪一版译文。",
-              sameWorkspace,
-            );
-            return;
-          }
           applyMutationMeta(savedImage.mutation);
-          updateImages((allImages) =>
-            allImages.map((image) =>
-              image.id === imageId
-                ? mergeServerImage(savedImage, image, dirtyRef.current)
-                : image,
-            ),
-          );
+          if (
+            !(await reconcileServerImage(
+              savedImage,
+              undefined,
+              "标记顺序已保存，但有译文同时被其他参与者修改。请确认保留哪一版译文。",
+            ))
+          )
+            return;
           finishServerMutation();
         } catch (error) {
           if (!sameWorkspace()) return;
@@ -1693,8 +1444,7 @@ export function TranslationEditorPage() {
       if (result.response.status === 409) {
         await enterConflict(
           imagesRef.current,
-          leaseConflictMessage(result.error) ??
-            "图片标记已被其他参与者调整，本地新标记未覆盖服务端顺序。",
+          "图片标记已被其他参与者调整，本地新标记未覆盖服务端顺序。",
         );
         return;
       }
@@ -1717,15 +1467,9 @@ export function TranslationEditorPage() {
         undoFailure.current++;
         setMessage("云端标点已变化，已停止连续撤销，请检查当前图片。");
       }
-      updateImages((allImages) =>
-        allImages.map((item) =>
-          item.id === image.id
-            ? mergeServerImage(savedImage, item, dirtyRef.current)
-            : item,
-        ),
-      );
       clearDirty(entryId);
       setSelectedEntryId(created?.id ?? null);
+      if (!(await reconcileServerImage(savedImage, entryId))) return;
       finishServerMutation();
     } catch (error) {
       if (!isCurrent()) return;
@@ -1863,23 +1607,14 @@ export function TranslationEditorPage() {
       });
       if (!isCurrent()) return false;
       if (result.response.status === 409) {
-        await enterConflict(
-          imagesRef.current,
-          leaseConflictMessage(result.error) ?? "删除前条目或图片顺序已更新。",
-        );
+        await enterConflict(imagesRef.current, "删除前条目或图片顺序已更新。");
         return false;
       }
       const savedImage = await unwrap(result);
       applyMutationMeta(savedImage.mutation);
-      updateImages((allImages) =>
-        allImages.map((image) =>
-          image.id === savedImage.id
-            ? mergeServerImage(savedImage, image, dirtyRef.current)
-            : image,
-        ),
-      );
       clearDirty(entry.id);
       setSelectedEntryId(null);
+      if (!(await reconcileServerImage(savedImage))) return false;
       finishServerMutation();
       return true;
     } catch (error) {
@@ -2060,16 +1795,6 @@ export function TranslationEditorPage() {
       )
         return;
       if (!isCurrent()) return;
-      const held = pageLeaseRef.current;
-      if (held) {
-        await releasePageLease(workId, held.imageId, {
-          editorInstanceId: editorInstanceId.current,
-          leaseToken: held.leaseToken,
-        });
-        if (!isCurrent()) return;
-        pageLeaseRef.current = null;
-        setPageLease(null);
-      }
       setSaveState("syncing");
       setMessage(null);
       const result = await client.POST("/api/works/{id}/stages/submit", {
@@ -2433,7 +2158,15 @@ export function TranslationEditorPage() {
         throw new Error(
           "当前阶段没有编辑权限，本地草稿已保留；请先撤回自己的提交或取得当前阶段的编辑资格。",
         );
-      const target = reapplyDraftContent(latest.images, recoveryDraft.images);
+      const target = reapplyDraftContent(
+        latest.images,
+        recoveryDraft.images,
+        recoveryDraft.dirtyEntryIds,
+      );
+      if (target.legacy || target.conflictedEntryIds.size)
+        throw new Error(
+          "本地草稿缺少可靠修改记录，或对应云端条目已变化；已保留本地原稿供复制核对。",
+        );
       if (
         access.editableImageIds &&
         target.images.some(
@@ -2445,63 +2178,6 @@ export function TranslationEditorPage() {
         throw new Error(
           "本地草稿含无权修改或已提交的页，已保留供核对，请先取得这些页的编辑资格。",
         );
-      if (access.proofreadRequiresLease) {
-        const draftImages = recoveryDraft.images;
-        for (const draftImage of draftImages) {
-          const current = latest.images.find(
-            (image) => image.id === draftImage.id,
-          );
-          if (!current) continue;
-          const candidate = reapplyDraftContent([current], [draftImage]);
-          if (!candidate.dirtyEntryIds.size) continue;
-          if (
-            access.editableImageIds &&
-            !access.editableImageIds.includes(current.id)
-          )
-            throw new Error("本地草稿含无权修改的页，已保留供核对。");
-          const lease = await requestPageLease(workId, current.id, {
-            editorInstanceId: editorInstanceId.current,
-            expectedEditorEpoch: editorHeadRef.current.editorEpoch,
-          });
-          if (!isCurrent()) {
-            await releasePageLease(workId, current.id, {
-              editorInstanceId: editorInstanceId.current,
-              leaseToken: lease.leaseToken,
-            }).catch(() => undefined);
-            return;
-          }
-          const held = { ...lease, imageId: current.id };
-          pageLeaseRef.current = held;
-          setPageLease(held);
-          const reapplied = reapplyDraftContent([lease.image], [draftImage]);
-          updateImages((all) =>
-            all.map((image) =>
-              image.id === current.id ? reapplied.images[0] : image,
-            ),
-          );
-          replaceDirty(reapplied.dirtyEntryIds);
-          await syncAll();
-          if (!isCurrent()) return;
-          if (dirtyRef.current.size)
-            throw new Error(
-              "恢复页保存失败，本地草稿保留。请重试或核对服务端版本。",
-            );
-          await releasePageLease(workId, current.id, {
-            editorInstanceId: editorInstanceId.current,
-            leaseToken: lease.leaseToken,
-          });
-          if (!isCurrent()) return;
-          pageLeaseRef.current = null;
-          setPageLease(null);
-        }
-        setRecoveryDraft(null);
-        recoveryDraftRef.current = null;
-        setDraftConflictKind(null);
-        setSaveState("saved");
-        setMessage("本地内容已按页取得编辑锁、核对最新基线并保存。");
-        await editor.refetch();
-        return;
-      }
       if (draftConflictKind === "recovery") {
         const reconciliation = reconcileTranslationDraft(
           latest.images,
@@ -2519,7 +2195,7 @@ export function TranslationEditorPage() {
           );
           return;
         }
-        replaceImages(recoveryDraft.images);
+        replaceImages(reconciliation.images);
         replaceDirty(reconciliation.dirtyEntryIds);
         setRecoveryDraft(null);
         recoveryDraftRef.current = null;
@@ -2532,7 +2208,10 @@ export function TranslationEditorPage() {
       const reapplied = reapplyDraftContent(
         latest.images,
         recoveryDraft.images,
+        recoveryDraft.dirtyEntryIds,
       );
+      if (reapplied.legacy || reapplied.conflictedEntryIds.size)
+        throw new Error("对应云端条目已变化，本地原稿已保留供复制核对。");
       replaceImages(reapplied.images);
       replaceDirty(reapplied.dirtyEntryIds);
       setRecoveryDraft(null);
@@ -2566,47 +2245,20 @@ export function TranslationEditorPage() {
     presenceStartedKey.current = key;
     setActiveParticipants(initialEditor.activeParticipants);
     let cancelled = false;
-    void updateEditorPresence(workId, "view")
+    const mode = initialEditor.canEdit ? "edit" : "view";
+    setPresenceMode(mode);
+    void updateEditorPresence(workId, mode)
       .then(async (presence) => {
         if (cancelled) return;
         setActiveParticipants(presence.items);
-        const anotherEditor = presence.items.some(
-          (item) => item.mode === "edit" && !item.isCurrentSession,
+        setPresenceMode(presence.viewOnly ? "view" : mode);
+        await observeEditorState.current(
+          presence as Partial<EditorStateSignal>,
         );
-        if (initialEditor.joinableStage || anotherEditor) {
-          setPresenceMode("view");
-          setShowEntryChoice(true);
-          return;
-        }
-        if (!initialEditor.canEdit) {
-          setPresenceMode("view");
-          return;
-        }
-        try {
-          const editing = await updateEditorPresence(workId, "edit");
-          if (!cancelled) {
-            setActiveParticipants(editing.items);
-            setPresenceMode(editing.viewOnly ? "view" : "edit");
-          }
-        } catch {
-          if (!cancelled) {
-            setPresenceMode("edit");
-            setMessage("协作状态暂时不可用，版本校验与自动保存仍然有效。");
-          }
-        }
       })
       .catch(() => {
-        if (cancelled) return;
-        const anotherEditor = initialEditor.activeParticipants.some(
-          (item) => item.mode === "edit" && !item.isCurrentSession,
-        );
-        if (initialEditor.joinableStage || anotherEditor) {
-          setPresenceMode("view");
-          setShowEntryChoice(true);
-        } else {
-          setPresenceMode(initialEditor.canEdit ? "edit" : "view");
-        }
-        setMessage("协作状态暂时不可用，版本校验与自动保存仍然有效。");
+        if (!cancelled)
+          setMessage("协作状态暂时不可用，版本校验与自动保存仍然有效。");
       });
     return () => {
       cancelled = true;
@@ -2655,86 +2307,6 @@ export function TranslationEditorPage() {
     };
   }, [presenceMode, workId, editorScope]);
 
-  const heldPageImageId = pageLease?.imageId;
-  const heldPageToken = pageLease?.leaseToken;
-  useEffect(() => {
-    if (!heldPageImageId || !heldPageToken) return;
-    let cancelled = false;
-    const timer = window.setInterval(() => {
-      const lease = pageLeaseRef.current;
-      if (!lease) return;
-      const sequence = reconciliationSequence.current;
-      void requestPageLease(workId, lease.imageId, {
-        editorInstanceId: editorInstanceId.current,
-        expectedEditorEpoch: editorHeadRef.current.editorEpoch,
-        leaseToken: lease.leaseToken,
-      })
-        .then((renewed) => {
-          const currentLease = pageLeaseRef.current;
-          if (
-            !cancelled &&
-            sequence === reconciliationSequence.current &&
-            currentLease?.imageId === lease.imageId &&
-            currentLease.leaseToken === lease.leaseToken
-          ) {
-            const next = {
-              ...currentLease,
-              leaseToken: renewed.leaseToken,
-              editorEpoch: renewed.editorEpoch,
-              expiresAt: renewed.expiresAt,
-            };
-            pageLeaseRef.current = next;
-            setPageLease(next);
-            editorHeadRef.current = {
-              ...editorHeadRef.current,
-              editorEpoch: renewed.editorEpoch,
-            };
-            queryClient.setQueryData(
-              ["translation-editor", workId],
-              (
-                current:
-                  components["schemas"]["TranslationEditorDto"] | undefined,
-              ) =>
-                current
-                  ? { ...current, editorEpoch: renewed.editorEpoch }
-                  : current,
-            );
-          }
-        })
-        .catch(() => {
-          const currentLease = pageLeaseRef.current;
-          if (
-            !cancelled &&
-            sequence === reconciliationSequence.current &&
-            currentLease?.imageId === lease.imageId &&
-            currentLease.leaseToken === lease.leaseToken
-          ) {
-            pageLeaseRef.current = null;
-            setPageLease(null);
-            setSaveState("conflict");
-            setMessage(
-              "本页编辑锁已失效，已保留本地草稿。重新连接后请核对最新版本并再次取得编辑锁。",
-            );
-            void refreshStageStateRef.current();
-          }
-        });
-    }, 20_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [heldPageImageId, heldPageToken, workId, queryClient]);
-  useEffect(
-    () => () => {
-      const lease = pageLeaseRef.current;
-      if (lease && dirtyRef.current.size === 0)
-        void releasePageLease(workId, lease.imageId, {
-          editorInstanceId: editorInstanceId.current,
-          leaseToken: lease.leaseToken,
-        }).catch(() => undefined);
-    },
-    [workId],
-  );
   useEffect(() => {
     const key = `${user.id}:${workId}`;
     if (
@@ -2827,24 +2399,31 @@ export function TranslationEditorPage() {
       workId,
       images,
       editorHeadRef.current,
+      Date.now(),
+      dirtyRef.current,
     );
     void saveTranslationDraft(draft).catch(() => {
-      setMessage("无法写入浏览器本地草稿，请不要关闭页面。");
-      setSaveState("failed");
+      setMessage((current) =>
+        recoveryDraftRef.current
+          ? `${current ?? "检测到版本冲突。"} 浏览器本地存储不可用，请不要关闭页面。`
+          : "无法写入浏览器本地草稿，请不要关闭页面。",
+      );
+      setSaveState((current) => (current === "conflict" ? current : "failed"));
     });
-  }, [draftHydrated, hasUnsaved, images, recoveryDraft, user.id, workId]);
+  }, [
+    draftHydrated,
+    hasUnsaved,
+    images,
+    dirtyEntryIds,
+    recoveryDraft,
+    user.id,
+    workId,
+  ]);
 
   useEffect(() => {
     function onlineHandler() {
       setOnline(true);
       if (dirtyRef.current.size) {
-        if (requiresLease && !pageLeaseRef.current) {
-          setSaveState("conflict");
-          setMessage(
-            "已重新连接，请先重新取得编辑锁并核对最新版本。本地内容已保留。",
-          );
-          return;
-        }
         setSaveState("local");
         void syncAll();
       }
@@ -2961,68 +2540,6 @@ export function TranslationEditorPage() {
           onSave={shortcuts.save}
           onClose={() => setShowShortcutSettings(false)}
         />
-      )}
-      {showEntryChoice && (
-        <div className="translation-entry-choice-backdrop">
-          <section
-            className="translation-entry-choice"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="translation-entry-choice-title"
-          >
-            <div className="translation-entry-choice-icon">
-              <Users size={22} />
-            </div>
-            <div>
-              <p>协作状态</p>
-              <h2 id="translation-entry-choice-title">
-                {otherActiveEditors.length
-                  ? "已有成员正在编辑"
-                  : editor.data.joinableStage
-                    ? `加入${stageCopy(editor.data.joinableStage)}协作`
-                    : "进入协作编辑"}
-              </h2>
-            </div>
-            {otherActiveEditors.length > 0 && (
-              <ul>
-                {otherActiveEditors.map((participant, index) => (
-                  <li key={`${participant.userId}:${index}`}>
-                    <UserRoundCheck size={16} />
-                    <span>{participant.displayName}</span>
-                    <small>正在编辑</small>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p className="translation-entry-choice-copy">
-              {editor.data.joinableStage
-                ? `加入后会将你记录为${stageCopy(editor.data.joinableStage)}协作者，并允许共同编辑。`
-                : "协作编辑允许多人同时工作；保存时仍会校验条目版本，冲突内容不会被静默覆盖。"}
-            </p>
-            <div className="translation-entry-choice-actions">
-              <Button
-                variant="secondary"
-                disabled={entryChoicePending}
-                onClick={chooseViewMode}
-              >
-                仅查看
-              </Button>
-              {(editor.data.canEdit || editor.data.joinableStage) && (
-                <Button
-                  loading={entryChoicePending}
-                  onClick={() => void enterCollaboration()}
-                >
-                  {editor.data.joinableStage === "translate" &&
-                  editor.data.collaborationMode === "multi"
-                    ? "选择认领页码"
-                    : editor.data.joinableStage
-                      ? `加入${stageCopy(editor.data.joinableStage)}协作`
-                      : "进入协作"}
-                </Button>
-              )}
-            </div>
-          </section>
-        </div>
       )}
       {labelPlusPreview && (
         <div className="translation-entry-choice-backdrop">
@@ -3171,17 +2688,7 @@ export function TranslationEditorPage() {
         </div>
       )}
       <header className="translation-editor-header">
-        <Link
-          className="translation-editor-back"
-          to={`/works/${workId}`}
-          onClick={(event) => {
-            if (!requiresLease) return;
-            event.preventDefault();
-            void finishEditingPage().then((saved) => {
-              if (saved) navigate(`/works/${workId}`);
-            });
-          }}
-        >
+        <Link className="translation-editor-back" to={`/works/${workId}`}>
           <ArrowLeft size={17} />
           返回作品
         </Link>
@@ -3214,16 +2721,6 @@ export function TranslationEditorPage() {
             </span>
           </div>
         )}
-        {presenceMode === "view" &&
-          (editor.data.canEdit || editor.data.joinableStage) && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setShowEntryChoice(true)}
-            >
-              加入协作
-            </Button>
-          )}
         <div className={`translation-save-state is-${saveState}`} role="status">
           <SaveStateIcon state={saveState} />
           <span>{statusCopy(saveState, savedAt)}</span>
@@ -3513,6 +3010,15 @@ export function TranslationEditorPage() {
                     正在显示未同步本地稿，可选取复制；该内容尚未写入当前阶段。使用服务端版本会放弃这份本地稿。
                   </p>
                 )}
+                {!showingLocalRecovery && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => replaceImages(recoveryDraft.images)}
+                  >
+                    查看本地草稿
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="secondary"
@@ -3654,7 +3160,7 @@ export function TranslationEditorPage() {
               aria-keyshortcuts={shortcutAria(
                 shortcuts.bindings["previous-page"],
               )}
-              disabled={leasePending || pageIndex === 0}
+              disabled={pageIndex === 0}
               onClick={() => goToPage(pageIndex - 1)}
             >
               <ChevronLeft />
@@ -3664,7 +3170,7 @@ export function TranslationEditorPage() {
               className="translation-page-preview-trigger"
               aria-haspopup="dialog"
               aria-expanded={showPagePreview}
-              disabled={leasePending || !images.length}
+              disabled={!images.length}
               aria-label={
                 currentImage
                   ? `预览并跳转页面，当前第 ${pageNumber} 页，共 ${images.length} 页`
@@ -3682,7 +3188,7 @@ export function TranslationEditorPage() {
               label="下一页"
               title={`下一页 · 快捷键 ${shortcutLabel(shortcuts.bindings["next-page"])}（画布或标记列表聚焦时）`}
               aria-keyshortcuts={shortcutAria(shortcuts.bindings["next-page"])}
-              disabled={leasePending || pageIndex >= images.length - 1}
+              disabled={pageIndex >= images.length - 1}
               onClick={() => goToPage(pageIndex + 1)}
             >
               <ChevronRight />
@@ -3698,52 +3204,22 @@ export function TranslationEditorPage() {
             </div>
             {!writable && <Badge tone="neutral">只读</Badge>}
           </div>
-          {(requiresLease || !writable) && (
+          {!writable && (
             <div
               className="translation-page-permission"
               aria-label="本页编辑权限"
             >
-              {!writable && (
-                <p className="translation-readonly-notice">
-                  {recoveryDraft
-                    ? "请先处理本地与云端内容，再继续编辑。"
-                    : editor.data.reviewStatus !== "normal"
-                      ? reviewStatusCopy[editor.data.reviewStatus]
-                      : presenceMode === "view" &&
-                          (editor.data.canEdit || editor.data.joinableStage)
-                        ? "当前以只读方式查看；加入协作后可以保存修改。"
-                        : requiresLease
-                          ? occupiedPageLease
-                            ? `${occupiedPageLease.displayName} 正在编辑，本页只读`
-                            : "浏览不占用编辑锁"
-                          : cancelableSubmissionStage
-                            ? "已提交，取消本人提交后可修改。"
-                            : pageEditor?.editableImageIds
-                              ? "此页不在本人当前可编辑范围。"
-                              : "请先认领职责。"}
-                </p>
-              )}
-              {requiresLease &&
-                (pageLease?.imageId === currentImage?.id ? (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => void finishEditingPage()}
-                  >
-                    保存并结束编辑
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    loading={leasePending}
-                    disabled={
-                      !editor.data.canEdit || !online || Boolean(recoveryDraft)
-                    }
-                    onClick={() => void editCurrentPage()}
-                  >
-                    编辑本页
-                  </Button>
-                ))}
+              <p className="translation-readonly-notice">
+                {recoveryDraft
+                  ? "请先处理本地与云端内容，再继续编辑。"
+                  : editor.data.reviewStatus !== "normal"
+                    ? reviewStatusCopy[editor.data.reviewStatus]
+                    : cancelableSubmissionStage
+                      ? "已提交，取消本人提交后可修改。"
+                      : pageEditor?.editableImageIds
+                        ? "此页不在本人当前可编辑范围。"
+                        : "请先认领职责。"}
+              </p>
             </div>
           )}
           <div
@@ -3822,10 +3298,7 @@ export function TranslationEditorPage() {
                     <textarea
                       {...symbolInsertion.bindTextarea(entry.id)}
                       value={entry.translatedText}
-                      disabled={
-                        (!writable || entry.localOnly) && !showingLocalRecovery
-                      }
-                      readOnly={showingLocalRecovery}
+                      readOnly={!writable || Boolean(entry.localOnly)}
                       placeholder={
                         entry.localOnly ? "标记同步后即可输入" : "输入对应译文"
                       }
@@ -3850,11 +3323,7 @@ export function TranslationEditorPage() {
                       <textarea
                         className="is-note"
                         value={entry.note ?? ""}
-                        disabled={
-                          (!writable || entry.localOnly) &&
-                          !showingLocalRecovery
-                        }
-                        readOnly={showingLocalRecovery}
+                        readOnly={!writable || Boolean(entry.localOnly)}
                         placeholder="可选，仅供协作说明"
                         onFocus={() => selectEntry(entry.id)}
                         onChange={(event) =>
