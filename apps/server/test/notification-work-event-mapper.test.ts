@@ -131,3 +131,38 @@ test("participation kind projects only the exact durable claim/join shapes for t
   )!;
   assert.equal("participationKind" in unrelated, false);
 });
+
+test("only formal material revisions and direct proofreading additions carry safe audience facts", () => {
+  const map = (action: string, detail: Record<string, unknown>) =>
+    mapWorkEventNotification({ ...source, action, detail }, 1);
+  assert.equal(
+    map("typeset_version_uploaded", { operation: "typeset-page-save" }),
+    null,
+  );
+  const revised = normalizeNotificationEvent(
+    map("typeset_version_uploaded", {
+      operation: "typeset-page-save",
+      isRevision: true,
+      affectedPageNumbers: [3, 1, 1],
+      affectsSupplement: true,
+    })!,
+  );
+  assert.deepEqual(revised.snapshot.affectedPageNumbers, [1, 3]);
+  assert.equal(revised.snapshot.affectsSupplement, true);
+  assert.equal(
+    map("metadata_updated", { operation: "source-hd-replaced", pageNumber: 2 })
+      ?.materialChange,
+    "source",
+  );
+  const assignment = map("stage_joined", {
+    stage: "proofread",
+    operation: "assign:proofread:user",
+    addedProofreader: "协作成员",
+  });
+  assert.equal(assignment?.addedProofreader, "协作成员");
+  assert.equal(
+    map("metadata_updated", { addedProofreader: "unrelated" })
+      ?.addedProofreader,
+    undefined,
+  );
+});

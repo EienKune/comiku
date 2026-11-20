@@ -75,7 +75,8 @@ export function validateNotificationFrozenRoutes(
       !/^[0-9a-f]{64}$/i.test(route.connectionFingerprint) ||
       typeof route.includeDetails !== "boolean" ||
       route.templateVersion !== 1 ||
-      ((inputVersion === 2 || inputVersion === 3) &&
+      (inputVersion >= 2 &&
+        inputVersion <= 4 &&
         (!route.content ||
           typeof route.content !== "object" ||
           typeof route.content.text !== "string" ||
@@ -85,7 +86,7 @@ export function validateNotificationFrozenRoutes(
     )
       throw new Error("notification_routes_invalid");
     ids.add(route.id);
-    if (inputVersion === 2 || inputVersion === 3) {
+    if (inputVersion >= 2 && inputVersion <= 4) {
       const exactKeys = (object: object, keys: string[]) =>
         Object.keys(object).length === keys.length &&
         Object.keys(object).every((key) => keys.includes(key));
@@ -276,7 +277,10 @@ export class NotificationWorkEventBridgeService {
       let errorCode: string | null = null;
       try {
         input = mapWorkEventNotification(source, resourceOrdinal);
-        if (!input) throw new Error("notification_event_invalid");
+        if (!input) {
+          status = "skipped";
+          errorCode = "no_public_notification";
+        }
       } catch {
         status = "invalid";
         errorCode = "source_mapping_invalid";
@@ -396,7 +400,8 @@ export class NotificationWorkEventBridgeService {
           sourceEventId: source.id,
           resourceId: source.workId,
           resourceOrdinal,
-          inputVersion: 3,
+          inputVersion:
+            input?.materialChange || input?.addedProofreader ? 4 : 3,
           safeInput: input
             ? (JSON.parse(JSON.stringify(input)) as Prisma.InputJsonValue)
             : {},

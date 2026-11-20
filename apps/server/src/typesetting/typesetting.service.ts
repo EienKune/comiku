@@ -1,3 +1,4 @@
+import { assertUnifiedHandoffCurrent } from "./typeset-material-identity.js";
 import { DirectUploadsService } from "../transfers/direct-uploads.service.js";
 import { DownloadsService } from "../transfers/downloads.service.js";
 import { assertCurrentHandoff } from "../workflow/revision-policy.js";
@@ -48,6 +49,11 @@ import { TypesetVersionUploadMode } from "./typesetting.dto.js";
 import { prepareTypesetImages } from "./typeset-image-upload.js";
 import type { ManualUploadFile } from "../candidates/manual-candidate-upload.js";
 import type { TypesetHandoffManifestDto } from "./typeset-batch.dto.js";
+import {
+  lockTypesetWorkTx,
+  typesetActorTx,
+  type TypesetMutation,
+} from "./typeset-page-workflow.js";
 
 const typesetVersionRetentionMs = 30 * 24 * 60 * 60 * 1000;
 
@@ -246,6 +252,16 @@ export class TypesettingService {
     const production = await this.db.work.findUnique({ where: { id: workId } });
     if (!production) throw new NotFoundException("作品不存在");
     assertProductionWritable(production);
+    const materialTextId =
+      production.requiredHandoffVersionId ??
+      (
+        await this.db.translationVersion.findFirst({
+          where: { workId },
+          orderBy: { versionNumber: "desc" },
+          select: { id: true },
+        })
+      )?.id ??
+      null;
     const replay = await this.db.typesetHandoffPackage.findUnique({
       where: {
         workId_kind_idempotencyKey: {
@@ -256,16 +272,38 @@ export class TypesettingService {
       },
     });
     if (replay) {
+      if (
+        replay.sourceAssetRevision !== production.sourceAssetRevision ||
+        replay.translationVersionId !== materialTextId
+      )
+        throw new ConflictException("材料已更新，请重新生成");
+      await assertUnifiedHandoffCurrent(this.db, production, replay.id);
       if (!(await this.files.exists(replay.fileObjectId)))
         throw new ConflictException("交接包文件已失效，请重新生成");
       return this.packageDto(replay);
     }
+    if (
+      production.revision !== input.expectedRevision ||
+      production.editorEpoch !== input.expectedEditorEpoch
+    )
+      throw new ConflictException("作品已更新，请刷新材料清单");
     const cached = await this.db.typesetHandoffPackage.findFirst({
       where: {
         workId,
         kind: "unified_handoff",
-        workRevision: input.expectedRevision,
-        editorEpoch: input.expectedEditorEpoch,
+        sourceAssetRevision: production.sourceAssetRevision,
+        translationVersionId: materialTextId,
+        editorEpoch: {
+          in: production.typesetHandoffStartedAt
+            ? [production.editorEpoch, production.editorEpoch - 1]
+            : [production.editorEpoch],
+        },
+        ...(!materialTextId
+          ? {
+              workRevision: input.expectedRevision,
+              editorEpoch: input.expectedEditorEpoch,
+            }
+          : {}),
         createdAt: { gt: new Date(Date.now() - 24 * 60 * 60_000) },
         fileObject: { lifecycleStatus: "active", deletedAt: null },
       },
@@ -402,6 +440,7 @@ export class TypesettingService {
             imageCount: work.images.length,
             markerCount,
             workRevision: current.revision,
+            sourceAssetRevision: current.sourceAssetRevision,
             editorEpoch: current.editorEpoch,
             translationVersionId:
               current.requiredHandoffVersionId ??
@@ -454,6 +493,7 @@ export class TypesettingService {
         workRevision: true,
         editorEpoch: true,
         translationVersionId: true,
+        sourceAssetRevision: true,
       },
     });
     if (!record) throw new NotFoundException("嵌字交接包不存在");
@@ -464,55 +504,15 @@ export class TypesettingService {
         editorEpoch: true,
         typesetHandoffStartedAt: true,
         requiredHandoffVersionId: true,
+        sourceAssetRevision: true,
       },
     });
     if (!work) throw new NotFoundException("作品不存在");
-    if (
-      work.requiredHandoffVersionId &&
-      record.translationVersionId !== work.requiredHandoffVersionId
-    )
-      throw new ConflictException("交接包使用旧文本，请重新生成最新材料");
-    const matchesPendingBaseline =
-      !work.typesetHandoffStartedAt &&
-      work.revision === record.workRevision &&
-      work.editorEpoch === record.editorEpoch;
-    const matchesStartedBaseline =
-      Boolean(work.typesetHandoffStartedAt) &&
-      (work.editorEpoch === record.editorEpoch + 1 ||
-        work.editorEpoch === record.editorEpoch);
-    // A review switches epochs without invalidating an already downloaded package.
-    // Keep strict checks for unused packages and for packages containing old text.
-    let matchesPreservedHandoff = false;
-    if (
-      !matchesStartedBaseline &&
-      work.typesetHandoffStartedAt &&
-      record.translationVersionId
-    ) {
-      const latest = await this.db.translationVersion.findFirst({
-        where: { workId },
-        orderBy: { versionNumber: "desc" },
-        select: { id: true },
-      });
-      matchesPreservedHandoff =
-        latest?.id === record.translationVersionId &&
-        Boolean(
-          await this.db.workEvent.findFirst({
-            where: {
-              workId,
-              action: WorkEventAction.typeset_handoff_started,
-              detail: { path: ["fileId"], equals: record.id },
-            },
-            select: { id: true },
-          }),
-        );
-    }
-    if (
-      !matchesPendingBaseline &&
-      !matchesStartedBaseline &&
-      !matchesPreservedHandoff
-    ) {
-      throw new ConflictException("交接包对应的作品版本已过期，请重新生成");
-    }
+    await assertUnifiedHandoffCurrent(
+      this.db,
+      { id: workId, ...work },
+      record.id,
+    );
     return { record, work };
   }
 
@@ -649,6 +649,8 @@ export class TypesettingService {
     const baselineWork = await tx.work.findUniqueOrThrow({
       where: { id: work.id },
     });
+    if (baselineWork.collaborationMode === "multi")
+      throw new ConflictException("多人批量上传必须按当前页分工保存");
     await assertCurrentHandoff(tx, baselineWork);
     const textVersion =
       baselineWork.requiredHandoffVersionId ??
@@ -716,6 +718,12 @@ export class TypesettingService {
     input: CreateTypesetVersionDto,
     uploadSessionId?: string,
   ): Promise<TypesetVersionListDto> {
+    const mode = await this.db.work.findUniqueOrThrow({
+      where: { id: workId },
+      select: { collaborationMode: true },
+    });
+    if (mode.collaborationMode === "multi")
+      throw new ConflictException("多人作品请使用页映射保存，不能整作覆盖");
     const replay = await this.db.typesetImageVersion.findUnique({
       where: {
         workId_idempotencyKey: { workId, idempotencyKey: input.idempotencyKey },
@@ -834,6 +842,8 @@ export class TypesettingService {
           const current = await tx.work.findUnique({ where: { id: workId } });
           if (!current) throw new NotFoundException("作品不存在");
           assertProductionWritable(current);
+          if (current.collaborationMode === "multi")
+            throw new ConflictException("多人作品不能通过整作版本上传覆盖页稿");
           await assertCurrentHandoff(tx, current);
           if (current.revision !== input.expectedRevision) {
             throw new ConflictException("作品已更新，请刷新后重新上传");
@@ -1153,6 +1163,139 @@ export class TypesettingService {
     return this.files.imageUrl(image.fileObjectId, variant);
   }
 
+  async replaceCurrentImage(
+    actorId: string,
+    workId: string,
+    versionId: string,
+    imageId: string,
+    file: ManualUploadFile | undefined,
+    input: TypesetMutation,
+  ) {
+    if (!file) throw new BadRequestException("请选择一张替换成图");
+    let prepared;
+    try {
+      prepared = prepareTypesetImages([file]).images[0]!;
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error ? error.message : "成图无效",
+      );
+    }
+    await this.db.$transaction((tx) => typesetActorTx(tx, actorId, workId));
+    const stored = await this.files.store({
+      body: prepared.body,
+      contentType: prepared.contentType,
+      bucketScope: "works",
+      kind: "typeset-result",
+      sourceName: prepared.sourceName,
+      createdById: actorId,
+    });
+    try {
+      await this.db.$transaction(async (tx) => {
+        await typesetActorTx(tx, actorId, workId);
+        const { work, replay } = await lockTypesetWorkTx(tx, workId, input);
+        if (replay) {
+          if (
+            replay.actorId !== actorId ||
+            (replay.detail as { imageId?: string }).imageId !== imageId
+          )
+            throw new ConflictException("幂等键冲突");
+          return;
+        }
+        if (work.collaborationMode !== "single")
+          throw new ConflictException("多人修订须经过当前页分工校验");
+        if (
+          work.workflowStatus !== "pending_publish" ||
+          work.currentTypesetVersionId !== versionId
+        )
+          throw new ConflictException("当前完整版本或阶段已变化，请重新查看");
+        const original = await tx.typesetImageVersion.findFirstOrThrow({
+          where: { id: versionId, workId, deletedAt: null },
+          include: {
+            images: {
+              orderBy: { orderIndex: "asc" },
+              include: { fileObject: true },
+            },
+          },
+        });
+        if (
+          !original.images.some((i) => i.id === imageId) ||
+          original.images.some(
+            (i) =>
+              i.fileObject.lifecycleStatus !== "active" ||
+              i.fileObject.deletedAt,
+          )
+        )
+          throw new ConflictException("当前成图条目不存在或文件不可用");
+        const latest = await tx.typesetImageVersion.aggregate({
+          where: { workId },
+          _max: { versionNumber: true },
+        });
+        const version = await tx.typesetImageVersion.create({
+          data: {
+            workId,
+            versionNumber: (latest._max.versionNumber ?? 0) + 1,
+            uploadedById: actorId,
+            idempotencyKey: input.idempotencyKey,
+            sourceTranslationVersionId: original.sourceTranslationVersionId,
+            reviewedTranslationVersionId: original.reviewedTranslationVersionId,
+            textReviewedAt: original.textReviewedAt,
+            images: {
+              create: original.images.map((i) => ({
+                orderIndex: i.orderIndex,
+                workImageId: i.workImageId,
+                supplementId: i.supplementId,
+                supplementPosition: i.supplementPosition,
+                fileObjectId: i.id === imageId ? stored.id : i.fileObjectId,
+                sourceName:
+                  i.id === imageId ? prepared.sourceName : i.sourceName,
+                width: i.id === imageId ? prepared.width : i.width,
+                height: i.id === imageId ? prepared.height : i.height,
+              })),
+            },
+          },
+        });
+        await tx.work.update({
+          where: { id: workId },
+          data: {
+            currentTypesetVersionId: version.id,
+            revision: { increment: 1 },
+          },
+        });
+        await tx.workEvent.create({
+          data: {
+            workId,
+            actorId,
+            action: "typeset_version_uploaded",
+            idempotencyKey: input.idempotencyKey,
+            fromWorkflowStatus: work.workflowStatus,
+            toWorkflowStatus: work.workflowStatus,
+            fromReviewStatus: work.reviewStatus,
+            toReviewStatus: work.reviewStatus,
+            detail: {
+              operation: "typeset-current-image-replace",
+              affectedPageNumbers: [
+                original.images.find((i) => i.id === imageId)!.orderIndex + 1,
+              ],
+              affectsSupplement:
+                original.images.find((i) => i.id === imageId)!.workImageId ===
+                null,
+              imageId,
+              versionId: version.id,
+              previousVersionId: versionId,
+              isRevision: true,
+              imageCount: original.images.length,
+            },
+          },
+        });
+      });
+      await this.files.purgeUnreferenced(stored.id);
+      return this.listVersions(workId);
+    } catch (e) {
+      await this.files.purgeUnreferenced(stored.id).catch(() => undefined);
+      throw e;
+    }
+  }
+
   private async assertCanUploadVersion(actorId: string, workId: string) {
     const user = await this.db.user.findUnique({
       where: { id: actorId },
@@ -1245,6 +1388,7 @@ export class TypesettingService {
       const work = await tx.work.findUnique({
         where: { id: workId },
         select: {
+          collaborationMode: true,
           revision: true,
           workflowStatus: true,
           reviewStatus: true,
@@ -1253,6 +1397,12 @@ export class TypesettingService {
       });
       if (!work) throw new NotFoundException("作品不存在");
       assertProductionWritable(work);
+      if (work.collaborationMode === "multi")
+        throw new ConflictException(
+          "多人作品历史版本仅供查看，请替换本人当前页",
+        );
+      if (work.workflowStatus === WorkflowStatus.published)
+        throw new ConflictException("发布快照不能通过普通历史操作修改");
       if (work.revision !== input.expectedRevision) {
         throw new ConflictException("作品已更新，请刷新后重试");
       }
@@ -1325,6 +1475,8 @@ export class TypesettingService {
       images: {
         id: string;
         workImageId: string | null;
+        supplementId: string | null;
+        supplementPosition: string | null;
         orderIndex: number;
         sourceName: string;
         width: number;
@@ -1353,6 +1505,8 @@ export class TypesettingService {
       images: version.images.map((image) => ({
         id: image.id,
         workImageId: image.workImageId,
+        supplementId: image.supplementId,
+        supplementPosition: image.supplementPosition,
         orderIndex: image.orderIndex,
         sourceName: image.sourceName,
         width: image.width,

@@ -159,18 +159,8 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
     const a = await makeWork(),
       b = await makeWork(false),
       unauthorized = await makeWork(true, other.id);
-    await db.work.update({
-      where: { id: a.id },
-      data: { collaborationMode: "multi" },
-    });
-    await db.workStageParticipant.create({
-      data: {
-        workId: a.id,
-        stage: "typeset",
-        userId: other.id,
-        participationMode: "collaborator",
-      },
-    });
+    // This legacy complete-version flow belongs to single mode. Multi-mode
+    // uploads save only the actor's mapped page drafts and submit separately.
     await db.workCreditAlias.create({
       data: {
         workId: a.id,
@@ -449,7 +439,7 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
     const participants = await db.workStageParticipant.findMany({
       where: { workId: a.id, stage: "typeset", leftAt: null },
     });
-    assert.equal(participants.length, 2);
+    assert.equal(participants.length, 1);
     assert.ok(participants.every((participant) => participant.submittedAt));
     assert.equal(
       participants.find((participant) => participant.userId === user.id)
@@ -479,7 +469,7 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
           leftAt: null,
         },
       }),
-      2,
+      1,
     );
     assert.equal(
       (
@@ -551,6 +541,7 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
       1,
     );
     assert.equal(await db.candidatePost.count({ where: { authorId } }), 3);
+    assert.ok(results[0].versionId);
     const linked = await db.typesetImageVersionImage.findFirstOrThrow({
       where: { versionId: results[0].versionId },
     });

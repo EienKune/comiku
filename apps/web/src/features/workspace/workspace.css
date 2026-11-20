@@ -1160,32 +1160,8 @@
   font-size: var(--text-sm);
   font-weight: var(--font-weight-control);
 }
-.workspace-file-field input {
-  width: 100%;
-  padding: var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font: inherit;
-}
-.workspace-file-field input:focus-visible {
-  outline: 3px solid var(--color-focus-ring);
-  outline-offset: 2px;
-}
-.workspace-file-field input::file-selector-button {
-  margin-right: var(--space-3);
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--color-button-border);
-  border-radius: var(--radius-button);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font: inherit;
-  cursor: pointer;
-}
-.workspace-file-field input::file-selector-button:hover {
-  background: var(--color-surface-soft);
-  border-color: var(--color-button-border-hover);
+.workspace-file-field > .ui-button {
+  justify-self: start;
 }
 .workspace-file-field small {
   color: var(--color-text-muted);
@@ -1773,31 +1749,72 @@
   gap: var(--space-1);
 }
 .workspace-stage-people > div {
-  display: grid;
-  flex: 1 1 20rem;
+  display: flex;
+  flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
   gap: var(--space-2);
 }
 .workspace-stage-people > div > span {
-  display: grid;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
   min-width: 0;
   gap: var(--space-1);
   overflow-wrap: anywhere;
 }
-.workspace-credit-editor {
+.workspace-stage-personal-controls {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.workspace-stage-personal-controls:empty {
+  display: none;
+}
+.workspace-claim-member-select {
   display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.workspace-claim-member-select select {
+  min-width: 0;
+  max-width: 100%;
+}
+.workspace-credit-editor {
   width: 100%;
   min-width: 0;
   max-width: 32rem;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: var(--space-2);
 }
 .workspace-credit-editor .ui-field {
-  flex: 1 1 14rem;
   min-width: 0;
   max-width: 100%;
+}
+.workspace-credit-editor .ui-field__input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.workspace-credit-editor .ui-field__input-row > .ui-field__control {
+  flex: 1 1 8rem;
+}
+.workspace-credit-editor .ui-field__input-row > .ui-button {
+  flex: 0 0 auto;
+}
+.workspace-page-assignment-manage {
+  justify-self: start;
+  max-width: 100%;
+}
+.workspace-page-assignment-leave {
+  margin-inline-end: auto;
+}
+.workspace-editor-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
 }
 .workspace-credit-editor .ui-field__control,
 .workspace-credit-editor input {
@@ -1835,18 +1852,6 @@
 
 .workspace-stage-action > .ui-field__select > button[role="combobox"] {
   min-height: calc(var(--control-height-sm) - 2px);
-}
-.workspace-page-assignment {
-  max-width: 24rem;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
-.workspace-page-assignment summary {
-  cursor: pointer;
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
 }
 .workspace-page-assignment__pages {
   display: flex;
@@ -2330,4 +2335,12 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   margin-block: var(--space-2);
+}
+
+.workspace-image-strip {
+  margin-bottom: var(--space-4);
+}
+.workspace-page-assignment__pages {
+  max-height: 16rem;
+  overflow-y: auto;
 }

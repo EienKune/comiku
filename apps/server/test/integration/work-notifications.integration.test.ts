@@ -1,3 +1,4 @@
+import { translationPageHeads } from "./page-heads.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -30,7 +31,7 @@ const testUrl = process.env.TEST_DATABASE_URL;
 if (testUrl && !new URL(testUrl).pathname.endsWith("_test"))
   throw new Error("Explicit isolated TEST_DATABASE_URL ending _test required");
 
-type Browser = { cookie?: string };
+type Browser = { cookie?: string; userId?: string };
 type WorkView = {
   revision: number;
   editorEpoch: number;
@@ -200,7 +201,8 @@ for (const receiverMode of ["legacy", "templates"] as const) {
         });
         const cookie = response.headers.get("set-cookie");
         if (cookie) browser.cookie = cookie.split(";")[0];
-        const data: unknown = await response.json();
+        const data: unknown =
+          response.status === 204 ? null : await response.json();
         apiDurations.push(performance.now() - startedAt);
         assert.equal(
           response.status,
@@ -225,7 +227,7 @@ for (const receiverMode of ["legacy", "templates"] as const) {
           },
         });
         userIds.push(user.id);
-        const browser: Browser = {};
+        const browser: Browser = { userId: user.id };
         await request(browser, "POST", "/api/auth/login", {
           username: user.username,
           password,
@@ -255,18 +257,6 @@ for (const receiverMode of ["legacy", "templates"] as const) {
         await request(browser, method, `/api/works/${workId}${suffix}`, body);
         return result;
       }
-      async function assign(browser: Browser, stage: string, imageId: string) {
-        await mutate(browser, "POST", "/stages/assignments", {
-          stage,
-          imageIds: [imageId],
-        });
-      }
-      async function complete(browser: Browser, stage: string) {
-        await mutate(browser, "POST", "/stages/contributions/complete", {
-          stage,
-          expectedEditorEpoch: (await view(browser)).editorEpoch,
-        });
-      }
       async function claim(browser: Browser, stage: string) {
         const current = await view(browser);
         const body = {
@@ -295,6 +285,15 @@ for (const receiverMode of ["legacy", "templates"] as const) {
         const current = await view(browser);
         const body = {
           stage,
+          ...(stage === "translate"
+            ? {
+                pageHeads: await translationPageHeads(
+                  db,
+                  workId,
+                  browser.userId,
+                ),
+              }
+            : {}),
           expectedRevision: current.revision,
           expectedEditorEpoch: current.editorEpoch,
           idempotencyKey: randomUUID(),
@@ -420,6 +419,13 @@ for (const receiverMode of ["legacy", "templates"] as const) {
           priority: 88,
           publicationBody: canaries.note,
         });
+        // Exercise both mode transitions while the work has no saved production.
+        await mutate(admin.browser, "PATCH", "/collaboration", {
+          collaborationMode: "multi",
+        });
+        await mutate(admin.browser, "PATCH", "/collaboration", {
+          collaborationMode: "single",
+        });
         await claim(translator.browser, "translate");
         await mutate(translator.browser, "PATCH", "/stages/credit", {
           stage: "translate",
@@ -516,19 +522,25 @@ for (const receiverMode of ["legacy", "templates"] as const) {
         entry = await db.translationEntry.findFirstOrThrow({
           where: { workImageId: image.id },
         });
-        // Whole-document imports in multi mode are admin-only; perform the
-        // import as the claimed single-mode translator before enabling multi.
-        await mutate(admin.browser, "PATCH", "/collaboration", {
-          collaborationMode: "multi",
-        });
-        await assign(translator.browser, "translate", image.id);
-        await complete(translator.browser, "translate");
         assert.equal(
           (await submit(translator.browser, "translate")).workflowStatus,
           "pending_proofread",
         );
         await claim(proofreader.browser, "proofread");
-        await assign(proofreader.browser, "proofread", image.id);
+        const proofEditorInstanceId = randomUUID();
+        const proofLease = await request<{
+          leaseToken: string;
+          editorEpoch: number;
+        }>(
+          proofreader.browser,
+          "POST",
+          `/api/works/${workId}/translations/pages/${image.id}/lease`,
+          {
+            editorInstanceId: proofEditorInstanceId,
+            expectedEditorEpoch: (await view(proofreader.browser)).editorEpoch,
+          },
+        );
+
         await request(
           proofreader.browser,
           "PATCH",
@@ -536,14 +548,25 @@ for (const receiverMode of ["legacy", "templates"] as const) {
           {
             expectedRevision: entry.revision,
             expectedEditorEpoch: (await view(proofreader.browser)).editorEpoch,
+            editorInstanceId: proofEditorInstanceId,
+            leaseToken: proofLease.leaseToken,
             translatedText: `${canaries.text}_proofread`,
           },
+        );
+        await request(
+          proofreader.browser,
+          "DELETE",
+          `/api/works/${workId}/translations/pages/${image.id}/lease`,
+          {
+            editorInstanceId: proofEditorInstanceId,
+            leaseToken: proofLease.leaseToken,
+          },
+          204,
         );
         assert.equal(
           (await view(proofreader.browser)).workflowStatus,
           "proofreading",
         );
-        await complete(proofreader.browser, "proofread");
         assert.equal(
           (await submit(proofreader.browser, "proofread")).workflowStatus,
           "pending_typeset",
@@ -678,7 +701,7 @@ for (const receiverMode of ["legacy", "templates"] as const) {
           "metadata_updated",
           "collaboration_mode_updated",
           "stage_credit_updated",
-          "stage_contribution_completed",
+          "stage_submitted",
           "translation_imported",
           "typeset_version_uploaded",
           "typeset_version_deleted",
@@ -906,6 +929,7 @@ for (const receiverMode of ["legacy", "templates"] as const) {
           await db.workStageAssignment.deleteMany({
             where: { participant: { workId } },
           });
+          await db.workPageAssignment.deleteMany({ where: { workId } });
           await db.workStageParticipant.deleteMany({ where: { workId } });
           await db.translationVersion.deleteMany({ where: { workId } });
           await db.labelPlusFile.deleteMany({ where: { workId } });

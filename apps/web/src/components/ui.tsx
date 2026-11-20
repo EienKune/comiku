@@ -10,6 +10,7 @@ import {
   isValidElement,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -222,6 +223,7 @@ export function SelectControl({
   const controlId = id ?? generatedId;
   const listboxId = `${controlId}-listbox`;
   const rootRef = useRef<HTMLSpanElement>(null);
+  const menuRef = useRef<HTMLSpanElement>(null);
   const options = selectOptions(children);
   const [internalValue, setInternalValue] = useState(() =>
     String(defaultValue ?? options[0]?.value ?? ""),
@@ -235,6 +237,37 @@ export function SelectControl({
   const [activeIndex, setActiveIndex] = useState(() =>
     Math.max(0, selectedIndex),
   );
+
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!open || !menu || typeof menu.showPopover !== "function") return;
+    function position() {
+      const trigger = rootRef.current?.getBoundingClientRect();
+      if (!trigger || !menu) return;
+      const below = window.innerHeight - trigger.bottom - 16;
+      const above = trigger.top - 16;
+      const upwards = below < 200 && above > below;
+      menu.style.position = "fixed";
+      menu.style.inset = "auto";
+      menu.style.margin = "0";
+      menu.style.minWidth = `${Math.min(trigger.width, window.innerWidth - 16)}px`;
+      menu.style.maxWidth = `${window.innerWidth - 16}px`;
+      menu.style.maxHeight = `${Math.max(40, Math.min(320, upwards ? above : below))}px`;
+      const size = menu.getBoundingClientRect();
+      menu.style.left = `${Math.max(8, Math.min(trigger.left, window.innerWidth - size.width - 8))}px`;
+      menu.style.top = `${upwards ? Math.max(8, trigger.top - size.height - 8) : trigger.bottom + 8}px`;
+    }
+    menu.setAttribute("popover", "manual");
+    menu.showPopover();
+    position();
+    window.addEventListener("resize", position);
+    document.addEventListener("scroll", position, true);
+    return () => {
+      window.removeEventListener("resize", position);
+      document.removeEventListener("scroll", position, true);
+      if (menu.matches(":popover-open")) menu.hidePopover();
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -315,7 +348,12 @@ export function SelectControl({
         <ChevronDown size={16} aria-hidden="true" />
       </button>
       {open && (
-        <span className="ui-select-menu" id={listboxId} role="listbox">
+        <span
+          ref={menuRef}
+          className="ui-select-menu"
+          id={listboxId}
+          role="listbox"
+        >
           {options.map((option, index) => {
             const showGroup =
               option.group && options[index - 1]?.group !== option.group;

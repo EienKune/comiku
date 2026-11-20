@@ -14507,6 +14507,122 @@
         ]
       }
     },
+    "/api/works/{id}/stages/proofreaders": {
+      "post": {
+        "operationId": "addWorkProofreader",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddWorkProofreaderDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkDetailDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "works"
+        ]
+      }
+    },
     "/api/works/{id}/stages/leave": {
       "post": {
         "operationId": "leaveWorkStage",
@@ -15692,6 +15808,9 @@
                     "type": "integer",
                     "minimum": 0
                   },
+                  "pageAccess": {
+                    "type": "string"
+                  },
                   "idempotencyKey": {
                     "type": "string",
                     "format": "uuid"
@@ -16173,6 +16292,245 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "translations"
+        ]
+      }
+    },
+    "/api/works/{workId}/translations/pages/{imageId}/lease": {
+      "post": {
+        "operationId": "acquireOrRenewProofreadLease",
+        "parameters": [
+          {
+            "name": "imageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProofreadLeaseRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProofreadLeaseResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "translations"
+        ]
+      },
+      "delete": {
+        "operationId": "releaseProofreadLease",
+        "parameters": [
+          {
+            "name": "imageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseProofreadLeaseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
           },
           "400": {
             "description": "请求字段无效",
@@ -17014,6 +17372,131 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ManageTypesetVersionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TypesetVersionListDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "typesetting"
+        ]
+      }
+    },
+    "/api/works/{workId}/typeset/versions/{versionId}/images/{imageId}/replace": {
+      "post": {
+        "operationId": "replaceCurrentTypesetImage",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expectedRevision",
+                  "idempotencyKey",
+                  "file"
+                ],
+                "properties": {
+                  "expectedRevision": {
+                    "type": "integer"
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
               }
             }
           }
@@ -18658,6 +19141,906 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TypesetUploadConfirmedDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "typesetting"
+        ]
+      }
+    },
+    "/api/works/{workId}/typeset/collaboration": {
+      "get": {
+        "operationId": "getTypesetCollaboration",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TypesetCollaborationStateDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "typesetting"
+        ]
+      }
+    },
+    "/api/works/{workId}/typeset/collaboration/drafts/{draftId}/url": {
+      "get": {
+        "operationId": "getTypesetDraftImageUrl",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageUrlDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "typesetting"
+        ]
+      }
+    },
+    "/api/works/{workId}/typeset/collaboration/preview": {
+      "post": {
+        "operationId": "previewTypesetCollaborationImport",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expectedRevision",
+                  "idempotencyKey",
+                  "files"
+                ],
+                "properties": {
+                  "expectedRevision": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TypesetImportPreviewDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "typesetting"
+        ]
+      }
+    },
+    "/api/works/{workId}/typeset/collaboration/apply": {
+      "post": {
+        "operationId": "applyTypesetCollaborationImport",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyTypesetImportDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TypesetDraftSavedDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "typesetting"
+        ]
+      }
+    },
+    "/api/works/{workId}/typeset/collaboration/drafts/{draftId}/delete": {
+      "post": {
+        "operationId": "deleteTypesetSupplement",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TypesetDraftMutationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "typesetting"
+        ]
+      }
+    },
+    "/api/works/{workId}/images/{imageId}/hd-replacement": {
+      "post": {
+        "operationId": "replaceSourceImageHd",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expectedRevision",
+                  "idempotencyKey",
+                  "sameContentConfirmed",
+                  "file"
+                ],
+                "properties": {
+                  "expectedRevision": {
+                    "type": "integer"
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "sameContentConfirmed": {
+                    "type": "boolean"
+                  },
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TypesetDraftSavedDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "works"
+        ]
+      }
+    },
+    "/api/works/{workId}/typeset/versions/{versionId}/supplements": {
+      "post": {
+        "operationId": "addSingleTypesetSupplement",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expectedRevision",
+                  "idempotencyKey",
+                  "position",
+                  "file"
+                ],
+                "properties": {
+                  "expectedRevision": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "position": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "end"
+                    ]
+                  },
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TypesetVersionListDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求字段无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "登录失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "权限、来源或改密限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "资源不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "数据冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求频率限制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "typesetting"
+        ]
+      }
+    },
+    "/api/works/{workId}/typeset/versions/{versionId}/supplements/{imageId}/delete": {
+      "post": {
+        "operationId": "removeSingleTypesetSupplement",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TypesetDraftMutationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TypesetVersionListDto"
                 }
               }
             }
@@ -30944,6 +32327,70 @@
           "nextCursor"
         ]
       },
+      "WorkPageAssignmentDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workImageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "translate",
+              "typeset"
+            ]
+          },
+          "participantId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "generation": {
+            "type": "number"
+          },
+          "draftRevision": {
+            "type": "number"
+          },
+          "submittedRevision": {
+            "type": "number",
+            "nullable": true
+          },
+          "submittedGeneration": {
+            "type": "number",
+            "nullable": true
+          },
+          "submittedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "isSubmitted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "workImageId",
+          "stage",
+          "participantId",
+          "userId",
+          "generation",
+          "draftRevision",
+          "submittedRevision",
+          "submittedGeneration",
+          "submittedAt",
+          "isSubmitted"
+        ]
+      },
       "WorkImageDto": {
         "type": "object",
         "properties": {
@@ -31292,6 +32739,19 @@
             "type": "string",
             "format": "date-time"
           },
+          "pageAssignments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkPageAssignmentDto"
+            }
+          },
+          "hasProductionProgress": {
+            "type": "boolean"
+          },
+          "collaborationMigrationIssue": {
+            "type": "string",
+            "nullable": true
+          },
           "canSkipProofreading": {
             "type": "boolean"
           },
@@ -31353,6 +32813,9 @@
           "importedAt",
           "publishedAt",
           "updatedAt",
+          "pageAssignments",
+          "hasProductionProgress",
+          "collaborationMigrationIssue",
           "canSkipProofreading",
           "skipProofreadingUnavailableReason",
           "sourceText",
@@ -31612,6 +33075,41 @@
             "type": "string",
             "format": "uuid"
           },
+          "impactSupplementIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "retainedTranslationImageIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "retainedTypesetImageIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "confirmClearDraft": {
+            "type": "boolean"
+          },
+          "impactImageIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
           "collaborationMode": {
             "allOf": [
               {
@@ -31636,6 +33134,14 @@
           "idempotencyKey": {
             "type": "string",
             "format": "uuid"
+          },
+          "imageIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
           },
           "stage": {
             "type": "string",
@@ -31787,6 +33293,28 @@
           "stage"
         ]
       },
+      "AddWorkProofreaderDto": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "idempotencyKey",
+          "userId"
+        ]
+      },
       "LeaveWorkStageDto": {
         "type": "object",
         "properties": {
@@ -31797,6 +33325,25 @@
           "idempotencyKey": {
             "type": "string",
             "format": "uuid"
+          },
+          "impactSupplementIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "confirmClearDraft": {
+            "type": "boolean"
+          },
+          "impactImageIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
           },
           "stage": {
             "type": "string",
@@ -31823,6 +33370,25 @@
           "idempotencyKey": {
             "type": "string",
             "format": "uuid"
+          },
+          "impactSupplementIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "confirmClearDraft": {
+            "type": "boolean"
+          },
+          "impactImageIds": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
           },
           "stage": {
             "type": "string",
@@ -31853,6 +33419,28 @@
           "imageIds"
         ]
       },
+      "WorkSubmissionPageHeadDto": {
+        "type": "object",
+        "properties": {
+          "imageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "generation": {
+            "type": "number",
+            "minimum": 0
+          },
+          "draftRevision": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "imageId",
+          "generation",
+          "draftRevision"
+        ]
+      },
       "CompleteStageContributionDto": {
         "type": "object",
         "properties": {
@@ -31863,6 +33451,13 @@
           "idempotencyKey": {
             "type": "string",
             "format": "uuid"
+          },
+          "pageHeads": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkSubmissionPageHeadDto"
+            }
           },
           "stage": {
             "type": "string",
@@ -31893,6 +33488,13 @@
           "idempotencyKey": {
             "type": "string",
             "format": "uuid"
+          },
+          "pageHeads": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkSubmissionPageHeadDto"
+            }
           },
           "stage": {
             "allOf": [
@@ -31977,6 +33579,60 @@
           "idempotencyKey",
           "stage",
           "expectedEditorEpoch"
+        ]
+      },
+      "TranslationPageAssignmentDto": {
+        "type": "object",
+        "properties": {
+          "workImageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "nullable": true
+          },
+          "generation": {
+            "type": "number"
+          },
+          "draftRevision": {
+            "type": "number"
+          },
+          "submittedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "workImageId",
+          "userId",
+          "generation",
+          "draftRevision",
+          "submittedAt"
+        ]
+      },
+      "ProofreadLeaseViewDto": {
+        "type": "object",
+        "properties": {
+          "workImageId": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "workImageId",
+          "userId",
+          "displayName",
+          "expiresAt"
         ]
       },
       "ReviewRevisionParticipantDto": {
@@ -32476,6 +34132,27 @@
       "TranslationEditorDto": {
         "type": "object",
         "properties": {
+          "editableImageIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pageAssignments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranslationPageAssignmentDto"
+            }
+          },
+          "proofreadRequiresLease": {
+            "type": "boolean"
+          },
+          "proofreadLeases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProofreadLeaseViewDto"
+            }
+          },
           "reviewRevision": {
             "nullable": true,
             "type": "object",
@@ -32871,6 +34548,28 @@
           "expiresInSeconds": {
             "type": "number",
             "minimum": 1
+          },
+          "workRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "editorEpoch": {
+            "type": "number",
+            "minimum": 0
+          },
+          "workflowStatus": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowStatus"
+              }
+            ]
+          },
+          "reviewStatus": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReviewStatus"
+              }
+            ]
           }
         },
         "required": [
@@ -32878,9 +34577,82 @@
           "expiresInSeconds"
         ]
       },
+      "ProofreadLeaseRequestDto": {
+        "type": "object",
+        "properties": {
+          "editorInstanceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedEditorEpoch": {
+            "type": "number",
+            "minimum": 0
+          },
+          "leaseToken": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "editorInstanceId",
+          "expectedEditorEpoch"
+        ]
+      },
+      "ProofreadLeaseResultDto": {
+        "type": "object",
+        "properties": {
+          "leaseToken": {
+            "type": "string"
+          },
+          "editorEpoch": {
+            "type": "number"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "image": {
+            "$ref": "#/components/schemas/TranslationImageDraftDto"
+          }
+        },
+        "required": [
+          "leaseToken",
+          "editorEpoch",
+          "expiresAt"
+        ]
+      },
+      "ReleaseProofreadLeaseDto": {
+        "type": "object",
+        "properties": {
+          "editorInstanceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "leaseToken": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "editorInstanceId",
+          "leaseToken"
+        ]
+      },
       "CreateTranslationEntryDto": {
         "type": "object",
         "properties": {
+          "expectedAssignmentGeneration": {
+            "type": "number",
+            "minimum": 0
+          },
+          "editorInstanceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "leaseToken": {
+            "type": "string",
+            "format": "uuid"
+          },
           "markerX": {
             "type": "number",
             "minimum": 0,
@@ -32923,6 +34695,18 @@
       "UpdateTranslationEntryDto": {
         "type": "object",
         "properties": {
+          "expectedAssignmentGeneration": {
+            "type": "number",
+            "minimum": 0
+          },
+          "editorInstanceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "leaseToken": {
+            "type": "string",
+            "format": "uuid"
+          },
           "expectedRevision": {
             "type": "number",
             "minimum": 0
@@ -32966,6 +34750,18 @@
       "DeleteTranslationEntryDto": {
         "type": "object",
         "properties": {
+          "expectedAssignmentGeneration": {
+            "type": "number",
+            "minimum": 0
+          },
+          "editorInstanceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "leaseToken": {
+            "type": "string",
+            "format": "uuid"
+          },
           "expectedRevision": {
             "type": "number",
             "minimum": 0
@@ -32988,6 +34784,18 @@
       "ReorderTranslationEntryDto": {
         "type": "object",
         "properties": {
+          "expectedAssignmentGeneration": {
+            "type": "number",
+            "minimum": 0
+          },
+          "editorInstanceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "leaseToken": {
+            "type": "string",
+            "format": "uuid"
+          },
           "beforeMarkerId": {
             "type": "string",
             "format": "uuid",
@@ -33010,6 +34818,15 @@
       "TypesetVersionImageDto": {
         "type": "object",
         "properties": {
+          "supplementId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "supplementPosition": {
+            "type": "string",
+            "nullable": true
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -33036,6 +34853,8 @@
           }
         },
         "required": [
+          "supplementId",
+          "supplementPosition",
           "id",
           "workImageId",
           "orderIndex",
@@ -33626,6 +35445,342 @@
           "workId",
           "versionId",
           "stageSubmitted"
+        ]
+      },
+      "TypesetCollaborationAssignmentDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "participantId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "generation": {
+            "type": "number"
+          },
+          "draftRevision": {
+            "type": "number"
+          },
+          "submittedRevision": {
+            "type": "number",
+            "nullable": true
+          },
+          "submittedGeneration": {
+            "type": "number",
+            "nullable": true
+          },
+          "submittedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "participantId",
+          "generation",
+          "draftRevision",
+          "submittedRevision",
+          "submittedGeneration",
+          "submittedAt"
+        ]
+      },
+      "TypesetCollaborationPageDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orderIndex": {
+            "type": "number"
+          },
+          "assignment": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TypesetCollaborationAssignmentDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "orderIndex",
+          "assignment"
+        ]
+      },
+      "TypesetCollaborationUserDto": {
+        "type": "object",
+        "properties": {
+          "displayName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "displayName"
+        ]
+      },
+      "TypesetCollaborationParticipantDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user": {
+            "$ref": "#/components/schemas/TypesetCollaborationUserDto"
+          }
+        },
+        "required": [
+          "id",
+          "userId",
+          "user"
+        ]
+      },
+      "TypesetDraftDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workImageId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "participantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "position": {
+            "type": "string"
+          },
+          "orderIndex": {
+            "type": "number"
+          },
+          "sourceName": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "number"
+          },
+          "submittedRevision": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "workImageId",
+          "participantId",
+          "position",
+          "orderIndex",
+          "sourceName",
+          "revision",
+          "submittedRevision"
+        ]
+      },
+      "TypesetCollaborationStateDto": {
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "number"
+          },
+          "editorEpoch": {
+            "type": "number"
+          },
+          "workflowStatus": {
+            "type": "string"
+          },
+          "collaborationMode": {
+            "type": "string"
+          },
+          "currentTypesetVersionId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "handoffReady": {
+            "type": "boolean"
+          },
+          "pages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TypesetCollaborationPageDto"
+            }
+          },
+          "participants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TypesetCollaborationParticipantDto"
+            }
+          },
+          "drafts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TypesetDraftDto"
+            }
+          }
+        },
+        "required": [
+          "revision",
+          "editorEpoch",
+          "workflowStatus",
+          "collaborationMode",
+          "currentTypesetVersionId",
+          "handoffReady",
+          "pages",
+          "participants",
+          "drafts"
+        ]
+      },
+      "TypesetImportPreviewImageDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceName": {
+            "type": "string"
+          },
+          "suggestedWorkImageId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "sourceName",
+          "suggestedWorkImageId"
+        ]
+      },
+      "TypesetImportPreviewDto": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedRevision": {
+            "type": "number"
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TypesetImportPreviewImageDto"
+            }
+          }
+        },
+        "required": [
+          "sessionId",
+          "expectedRevision",
+          "images"
+        ]
+      },
+      "TypesetImportMappingDto": {
+        "type": "object",
+        "properties": {
+          "imageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workImageId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "draftId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "position": {
+            "type": "string",
+            "enum": [
+              "page",
+              "start",
+              "end",
+              "free"
+            ]
+          }
+        },
+        "required": [
+          "imageId",
+          "position"
+        ]
+      },
+      "ApplyTypesetImportDto": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mappings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TypesetImportMappingDto"
+            }
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "idempotencyKey",
+          "sessionId",
+          "mappings"
+        ]
+      },
+      "TypesetDraftSavedDto": {
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "number"
+          },
+          "versionId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "required": [
+          "revision"
+        ]
+      },
+      "TypesetDraftMutationDto": {
+        "type": "object",
+        "properties": {
+          "expectedRevision": {
+            "type": "number",
+            "minimum": 0
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "expectedRevision",
+          "idempotencyKey"
         ]
       },
       "PublicationRecordDto": {

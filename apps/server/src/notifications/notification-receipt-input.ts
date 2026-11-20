@@ -26,7 +26,15 @@ export function validateNotificationReceiptInput(
 ): NormalizedNotificationEvent {
   const keys = new Set([
     ...sourceKeys,
-    ...(version === 2 || version === 3
+    ...(version === 4
+      ? [
+          "materialChange",
+          "affectedPageNumbers",
+          "affectsSupplement",
+          "addedProofreader",
+        ]
+      : []),
+    ...(version >= 2 && version <= 4
       ? [
           "title",
           "authorName",
@@ -35,10 +43,10 @@ export function validateNotificationReceiptInput(
           "metadataObservedAt",
         ]
       : []),
-    ...(version === 3 ? ["participationKind"] : []),
+    ...(version >= 3 ? ["participationKind"] : []),
   ]);
   if (
-    (version !== 1 && version !== 2 && version !== 3) ||
+    ![1, 2, 3, 4].includes(version) ||
     !value ||
     typeof value !== "object" ||
     Array.isArray(value) ||
@@ -47,7 +55,8 @@ export function validateNotificationReceiptInput(
     throw new Error("notification_event_invalid");
   const input = value as NotificationEventInput;
   if (
-    (version === 2 || version === 3) &&
+    version >= 2 &&
+    version <= 4 &&
     (input.metadataOrigin !== "capture_current" ||
       typeof input.metadataObservedAt !== "string" ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(

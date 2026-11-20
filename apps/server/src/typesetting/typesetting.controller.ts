@@ -13,9 +13,11 @@ import {
   Res,
   StreamableFile,
   UploadedFiles,
+  UploadedFile,
   UseInterceptors,
 } from "@nestjs/common";
-import { FilesInterceptor } from "@nestjs/platform-express";
+import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
+import { TypesetDraftMutationDto } from "./typeset-collaboration.dto.js";
 import type { Response } from "express";
 import {
   ApiBody,
@@ -135,6 +137,47 @@ export class TypesettingController {
       request.actor.userId,
       workId,
       versionId,
+      input,
+    );
+  }
+
+  @Post("versions/:versionId/images/:imageId/replace")
+  @HttpCode(200)
+  @Access({ permission: "works:typeset", contentType: "multipart/form-data" })
+  @UseInterceptors(
+    FileInterceptor("file", {
+      limits: { fileSize: TYPESET_IMAGE_MAX_FILE_BYTES, files: 1 },
+    }),
+  )
+  @ApiOperation({ operationId: "replaceCurrentTypesetImage" })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      required: ["expectedRevision", "idempotencyKey", "file"],
+      properties: {
+        expectedRevision: { type: "integer" },
+        idempotencyKey: { type: "string", format: "uuid" },
+        file: { type: "string", format: "binary" },
+      },
+    },
+  })
+  @ApiOkResponse({ type: TypesetVersionListDto })
+  replaceCurrentImage(
+    @Req() req: AuthRequest,
+    @Param("workId", ParseUUIDPipe) workId: string,
+    @Param("versionId", ParseUUIDPipe) versionId: string,
+    @Param("imageId", ParseUUIDPipe) imageId: string,
+    @UploadedFile() file: ManualUploadFile | undefined,
+    @Body(bodyValidation(TypesetDraftMutationDto))
+    input: TypesetDraftMutationDto,
+  ) {
+    return this.typesetting.replaceCurrentImage(
+      req.actor.userId,
+      workId,
+      versionId,
+      imageId,
+      file,
       input,
     );
   }

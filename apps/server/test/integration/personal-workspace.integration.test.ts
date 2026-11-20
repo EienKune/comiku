@@ -67,6 +67,17 @@ test("personal discovery filters before pagination, preserves stage history and 
           const author = await tx.author.create({
             data: { displayName: "Personal fixture author" },
           });
+          const file = await tx.fileObject.create({
+            data: {
+              objectKey: `test/${randomUUID()}`,
+              bucketScope: "source",
+              kind: "fixture",
+              contentType: "image/png",
+              size: 24n,
+              checksum: "0".repeat(64),
+              createdById: user.id,
+            },
+          });
           const service = new WorksService(
             tx as never,
             {} as never,
@@ -107,12 +118,21 @@ test("personal discovery filters before pagination, preserves stage history and 
                 rawJson: { fixture: true },
               },
             });
-            return tx.work.create({
+            const row = await tx.work.create({
               data: {
                 authorId: author.id,
                 sourceCandidatePostId: candidate.id,
                 importedById: user.id,
                 title: "Personal task",
+                images: {
+                  create: Array.from(
+                    { length: options.multi ? 2 : 1 },
+                    (_, orderIndex) => ({
+                      originalFileObjectId: file.id,
+                      orderIndex,
+                    }),
+                  ),
+                },
                 workflowStatus: status,
                 sourceLanguage: options.language ?? "ja",
                 reviewStatus: options.review ?? "normal",
@@ -131,8 +151,33 @@ test("personal discovery filters before pagination, preserves stage history and 
                     }
                   : {}),
               },
-              include: { stageParticipants: true },
+              include: {
+                stageParticipants: true,
+                images: { orderBy: { orderIndex: "asc" } },
+              },
             });
+            if (stage === "translate" || stage === "typeset") {
+              await tx.workPageAssignment.createMany({
+                data: row.images.map((image, index) => ({
+                  workId: row.id,
+                  workImageId: image.id,
+                  stage,
+                  participantId:
+                    !options.left && index === 0
+                      ? row.stageParticipants[0]?.id
+                      : null,
+                  generation: !options.left && index === 0 ? 1 : 0,
+                  ...(options.submitted && !options.left && index === 0
+                    ? {
+                        submittedAt: new Date(),
+                        submittedGeneration: 1,
+                        submittedRevision: 0,
+                      }
+                    : {}),
+                })),
+              });
+            }
+            return row;
           }
           const todos = [];
           for (let index = 0; index < 26; index++)
@@ -148,24 +193,7 @@ test("personal discovery filters before pagination, preserves stage history and 
             review: "blocked",
           });
           const multi = await work("translating", "translate", { multi: true });
-          const file = await tx.fileObject.create({
-            data: {
-              objectKey: `test/${randomUUID()}`,
-              bucketScope: "source",
-              kind: "fixture",
-              contentType: "image/png",
-              size: 24n,
-              checksum: "0".repeat(64),
-              createdById: user.id,
-            },
-          });
-          const image = await tx.workImage.create({
-            data: {
-              workId: multi.id,
-              originalFileObjectId: file.id,
-              orderIndex: 0,
-            },
-          });
+          const image = multi.images[0];
           const typesetting = new TypesettingService(
             tx as never,
             {} as never,
@@ -174,14 +202,6 @@ test("personal discovery filters before pagination, preserves stage history and 
           const allTypeset = [typeset, blocked];
           for (let index = 0; index < 26; index++)
             allTypeset.push(await work("pending_typeset", "typeset"));
-          for (const row of allTypeset)
-            await tx.workImage.create({
-              data: {
-                workId: row.id,
-                originalFileObjectId: file.id,
-                orderIndex: 0,
-              },
-            });
           const manifest = await typesetting.handoffManifest(user.id);
           assert.equal(manifest.items.length, 28);
           assert.equal(
@@ -228,6 +248,18 @@ test("personal discovery filters before pagination, preserves stage history and 
               pages: { create: { workImageId: image.id, imageRevision: 0 } },
             },
           });
+          await tx.workPageAssignment.updateMany({
+            where: { workId: multi.id, participantId },
+            data: {
+              submittedAt: new Date(),
+              submittedRevision: 0,
+              submittedGeneration: 1,
+            },
+          });
+          await tx.workStageParticipant.update({
+            where: { id: participantId },
+            data: { submittedAt: new Date() },
+          });
           const future = await work("translating", "typeset");
           const submitted = await work("pending_proofread", "translate", {
             submitted: true,
@@ -239,21 +271,21 @@ test("personal discovery filters before pagination, preserves stage history and 
           const published = await work("published", "typeset");
           await work("archived", "typeset");
           const first = await list(WorkView.todo);
-          assert.equal(first.total, 30);
-          assert.equal(first.todoTotal, 30);
+          assert.equal(first.total, 29);
+          assert.equal(first.todoTotal, 29);
           assert.equal(first.items.length, 24);
-          assert.equal(first.items[0].id, multi.id);
           assert.equal(
-            first.items[0].personalTasks?.[0].contributionCurrent,
-            true,
+            first.items.some((item) => item.id === multi.id),
+            false,
+            "own valid delivery has no second confirmation task",
           );
           const second = await list(WorkView.todo, {
             cursor: first.nextCursor!,
           });
-          assert.equal(second.items.length, 6);
+          assert.equal(second.items.length, 5);
           assert.equal(second.nextCursor, null);
           const ids = [...first.items, ...second.items].map(({ id }) => id);
-          assert.equal(new Set(ids).size, 30);
+          assert.equal(new Set(ids).size, 29);
           for (const excluded of [
             future,
             submitted,
@@ -272,6 +304,20 @@ test("personal discovery filters before pagination, preserves stage history and 
             where: { id: image.id },
             data: { translationRevision: 1 },
           });
+          await tx.workStageParticipant.update({
+            where: { id: participantId },
+            data: { submittedAt: null },
+          });
+          await tx.workPageAssignment.updateMany({
+            where: { workId: multi.id, participantId },
+            data: {
+              draftRevision: 1,
+              submittedAt: null,
+              submittedRevision: null,
+              submittedGeneration: null,
+            },
+          });
+
           assert.equal(
             (await list(WorkView.todo)).items[0].personalTasks?.[0]
               .contributionCurrent,
@@ -393,7 +439,10 @@ test("personal discovery filters before pagination, preserves stage history and 
         },
         { timeout: 30000 },
       ),
-      (error) => error === rollback,
+      (error) => {
+        if (error !== rollback) throw error;
+        return true;
+      },
     );
   } finally {
     await db.$disconnect();

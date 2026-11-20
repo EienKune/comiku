@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
@@ -23,7 +24,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function fixture(canEdit = true, seededEntries = 0) {
+async function fixture(canEdit = true, seededEntries = 0, loadImage = true) {
   vi.stubGlobal("PointerEvent", MouseEvent);
   const user: CurrentUser = {
     id: "00000000-0000-4000-8000-000000000001",
@@ -271,6 +272,7 @@ async function fixture(canEdit = true, seededEntries = 0) {
     </QueryClientProvider>,
   );
   const img = await screen.findByAltText("第 1 页");
+  if (loadImage) fireEvent.load(img);
   vi.spyOn(img, "getBoundingClientRect").mockReturnValue({
     left: 0,
     top: 0,
@@ -287,7 +289,7 @@ async function fixture(canEdit = true, seededEntries = 0) {
     expect(
       (screen.getByRole("button", { name: "添加框内" }) as HTMLButtonElement)
         .disabled,
-    ).toBe(!canEdit),
+    ).toBe(!canEdit || !loadImage),
   );
   const point = () =>
     fireEvent.pointerDown(canvas, { clientX: 40, clientY: 60, pointerId: 1 });
@@ -317,6 +319,80 @@ async function fixture(canEdit = true, seededEntries = 0) {
     },
   };
 }
+
+test("waits for the actual image before exposing markers or accepting canvas input", async () => {
+  const f = await fixture(true, 1, false);
+  expect(within(f.canvas).getByRole("status").textContent).toContain(
+    "正在加载第 1 页",
+  );
+  expect(
+    f.img.closest<HTMLElement>(".translation-image-layer")!.style.visibility,
+  ).toBe("hidden");
+  expect(screen.queryByRole("button", { name: "标记 1" })).toBeNull();
+  f.point();
+  expect(f.canvas.setPointerCapture).not.toHaveBeenCalled();
+  for (const name of ["添加框内", "添加框外", "移动标记"])
+    expect(
+      (screen.getByRole("button", { name }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  fireEvent.keyDown(f.canvas, { key: "2" });
+  expect(
+    screen
+      .getByRole("button", { name: "移动画布" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  fireEvent.load(f.img);
+  expect(screen.queryByText("正在加载第 1 页")).toBeNull();
+  expect(screen.getByRole("button", { name: "标记 1" })).toBeTruthy();
+  expect(
+    f.img.closest<HTMLElement>(".translation-image-layer")!.style.visibility,
+  ).toBe("visible");
+});
+
+test("immediately removes the previous image and ignores stale load and error events across rapid navigation", async () => {
+  const f = await fixture(true, 1);
+  fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+  expect(screen.queryByAltText("第 1 页")).toBeNull();
+  expect(within(f.canvas).getByRole("status").textContent).toContain(
+    "正在加载第 2 页",
+  );
+  const second = await screen.findByAltText("第 2 页");
+  fireEvent.load(f.img);
+  fireEvent.error(f.img);
+  expect(within(f.canvas).getByRole("status").textContent).toContain(
+    "正在加载第 2 页",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "上一页" }));
+  const firstAgain = await screen.findByAltText("第 1 页");
+  expect(firstAgain).not.toBe(f.img);
+  fireEvent.load(second);
+  fireEvent.load(f.img);
+  expect(within(f.canvas).getByRole("status").textContent).toContain(
+    "正在加载第 1 页",
+  );
+  expect(screen.queryByRole("button", { name: "标记 1" })).toBeNull();
+  fireEvent.load(firstAgain);
+  expect(screen.getByRole("button", { name: "标记 1" })).toBeTruthy();
+});
+
+test("retries an image failure and keeps it inactive until the replacement loads", async () => {
+  const f = await fixture(true, 1, false);
+  fireEvent.error(f.img);
+  expect(screen.getByRole("alert").textContent).toContain(
+    "第 1 页图片加载失败",
+  );
+  expect(screen.queryByRole("button", { name: "标记 1" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "重试加载图片" }));
+  expect(within(f.canvas).getByRole("status").textContent).toContain(
+    "正在加载第 1 页",
+  );
+  const retry = await screen.findByAltText("第 1 页");
+  expect(retry).not.toBe(f.img);
+  fireEvent.load(f.img);
+  expect(screen.queryByRole("button", { name: "标记 1" })).toBeNull();
+  fireEvent.load(retry);
+  expect(screen.getByRole("button", { name: "标记 1" })).toBeTruthy();
+});
 
 test("defaults to pan, preserves marker selection and removes ordering controls", async () => {
   const f = await fixture();
@@ -549,6 +625,7 @@ test("tool shortcuts leave typing and page-number input alone", async () => {
   const area = await screen.findByPlaceholderText("输入对应译文");
   area.focus();
   fireEvent.keyDown(area, { key: "4" });
+  fireEvent.click(screen.getByRole("button", { name: /预览并跳转页面/ }));
   const page = screen.getByRole("spinbutton", { name: "跳转页码，共 2 页" });
   page.focus();
   const event = new KeyboardEvent("keydown", {
@@ -867,6 +944,7 @@ test("wheel leaves browser gestures, page controls and active drags alone", asyn
     expect(event.defaultPrevented).toBe(false);
     expect(f.img.style.transform).toBe("scale(1)");
   }
+  fireEvent.click(screen.getByRole("button", { name: /预览并跳转页面/ }));
   const input = screen.getByRole("spinbutton", { name: "跳转页码，共 2 页" });
   const event = new WheelEvent("wheel", {
     bubbles: true,

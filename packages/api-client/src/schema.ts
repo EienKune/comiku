@@ -1730,6 +1730,22 @@ export interface paths {
         patch: operations["updateWorkStageCredit"];
         trace?: never;
     };
+    "/api/works/{id}/stages/proofreaders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["addWorkProofreader"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/works/{id}/stages/leave": {
         parameters: {
             query?: never;
@@ -1954,6 +1970,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/works/{workId}/translations/pages/{imageId}/lease": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["acquireOrRenewProofreadLease"];
+        delete: operations["releaseProofreadLease"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/work-images/{imageId}/markers": {
         parameters: {
             query?: never;
@@ -2028,6 +2060,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["selectTypesetVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{workId}/typeset/versions/{versionId}/images/{imageId}/replace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["replaceCurrentTypesetImage"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2252,6 +2300,134 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["confirmTypesetUploadItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{workId}/typeset/collaboration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getTypesetCollaboration"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{workId}/typeset/collaboration/drafts/{draftId}/url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getTypesetDraftImageUrl"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{workId}/typeset/collaboration/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["previewTypesetCollaborationImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{workId}/typeset/collaboration/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["applyTypesetCollaborationImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{workId}/typeset/collaboration/drafts/{draftId}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["deleteTypesetSupplement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{workId}/images/{imageId}/hd-replacement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["replaceSourceImageHd"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{workId}/typeset/versions/{versionId}/supplements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["addSingleTypesetSupplement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{workId}/typeset/versions/{versionId}/supplements/{imageId}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["removeSingleTypesetSupplement"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4521,6 +4697,24 @@ export interface components {
             workTotal: number;
             nextCursor: string | null;
         };
+        WorkPageAssignmentDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            workImageId: string;
+            /** @enum {string} */
+            stage: "translate" | "typeset";
+            /** Format: uuid */
+            participantId: string | null;
+            /** Format: uuid */
+            userId: string | null;
+            generation: number;
+            draftRevision: number;
+            submittedRevision: number | null;
+            submittedGeneration: number | null;
+            submittedAt: string | null;
+            isSubmitted: boolean;
+        };
         WorkImageDto: {
             /** Format: uuid */
             id: string;
@@ -4611,6 +4805,9 @@ export interface components {
             publishedAt: string | null;
             /** Format: date-time */
             updatedAt: string;
+            pageAssignments: components["schemas"]["WorkPageAssignmentDto"][];
+            hasProductionProgress: boolean;
+            collaborationMigrationIssue: string | null;
             canSkipProofreading: boolean;
             skipProofreadingUnavailableReason: string | null;
             sourceText: string | null;
@@ -4679,12 +4876,18 @@ export interface components {
             expectedRevision: number;
             /** Format: uuid */
             idempotencyKey: string;
+            impactSupplementIds?: string[];
+            retainedTranslationImageIds?: string[];
+            retainedTypesetImageIds?: string[];
+            confirmClearDraft?: boolean;
+            impactImageIds?: string[];
             collaborationMode: components["schemas"]["WorkCollaborationMode"];
         };
         JoinWorkStageDto: {
             expectedRevision: number;
             /** Format: uuid */
             idempotencyKey: string;
+            imageIds?: string[];
             /** @enum {string} */
             stage: "translate" | "proofread" | "typeset";
             /** @description 当前用户在本作品对应职责中的临时署名 */
@@ -4722,10 +4925,20 @@ export interface components {
             /** @description 当前作品对应职责的临时署名；null 表示恢复使用成员昵称 */
             creditName?: string | null;
         };
+        AddWorkProofreaderDto: {
+            expectedRevision: number;
+            /** Format: uuid */
+            idempotencyKey: string;
+            /** Format: uuid */
+            userId: string;
+        };
         LeaveWorkStageDto: {
             expectedRevision: number;
             /** Format: uuid */
             idempotencyKey: string;
+            impactSupplementIds?: string[];
+            confirmClearDraft?: boolean;
+            impactImageIds?: string[];
             /** @enum {string} */
             stage: "translate" | "proofread" | "typeset";
         };
@@ -4733,16 +4946,26 @@ export interface components {
             expectedRevision: number;
             /** Format: uuid */
             idempotencyKey: string;
+            impactSupplementIds?: string[];
+            confirmClearDraft?: boolean;
+            impactImageIds?: string[];
             /** @enum {string} */
             stage: "translate" | "proofread" | "typeset";
             /** Format: uuid */
             participantId?: string;
             imageIds: string[];
         };
+        WorkSubmissionPageHeadDto: {
+            /** Format: uuid */
+            imageId: string;
+            generation: number;
+            draftRevision: number;
+        };
         CompleteStageContributionDto: {
             expectedRevision: number;
             /** Format: uuid */
             idempotencyKey: string;
+            pageHeads?: components["schemas"]["WorkSubmissionPageHeadDto"][];
             /** @enum {string} */
             stage: "translate" | "proofread";
             expectedEditorEpoch: number;
@@ -4751,6 +4974,7 @@ export interface components {
             expectedRevision: number;
             /** Format: uuid */
             idempotencyKey: string;
+            pageHeads?: components["schemas"]["WorkSubmissionPageHeadDto"][];
             stage: components["schemas"]["WorkStage"];
             expectedEditorEpoch: number;
         };
@@ -4769,6 +4993,21 @@ export interface components {
             /** @enum {string} */
             stage: "translate" | "proofread" | "typeset";
             expectedEditorEpoch: number;
+        };
+        TranslationPageAssignmentDto: {
+            /** Format: uuid */
+            workImageId: string;
+            userId: string | null;
+            generation: number;
+            draftRevision: number;
+            submittedAt: string | null;
+        };
+        ProofreadLeaseViewDto: {
+            workImageId: string;
+            userId: string;
+            displayName: string;
+            /** Format: date-time */
+            expiresAt: string;
         };
         ReviewRevisionParticipantDto: {
             id: string;
@@ -4889,6 +5128,10 @@ export interface components {
             lastSeenAt: string;
         };
         TranslationEditorDto: {
+            editableImageIds?: string[];
+            pageAssignments?: components["schemas"]["TranslationPageAssignmentDto"][];
+            proofreadRequiresLease?: boolean;
+            proofreadLeases?: components["schemas"]["ProofreadLeaseViewDto"][];
             reviewRevision?: components["schemas"]["ReviewRevisionDto"] | null;
             canSkipProofreading: boolean;
             skipProofreadingUnavailableReason: string | null;
@@ -4971,8 +5214,37 @@ export interface components {
         TranslationPresenceListDto: {
             items: components["schemas"]["TranslationPresenceDto"][];
             expiresInSeconds: number;
+            workRevision?: number;
+            editorEpoch?: number;
+            workflowStatus?: components["schemas"]["WorkflowStatus"];
+            reviewStatus?: components["schemas"]["ReviewStatus"];
+        };
+        ProofreadLeaseRequestDto: {
+            /** Format: uuid */
+            editorInstanceId: string;
+            expectedEditorEpoch: number;
+            /** Format: uuid */
+            leaseToken?: string;
+        };
+        ProofreadLeaseResultDto: {
+            leaseToken: string;
+            editorEpoch: number;
+            /** Format: date-time */
+            expiresAt: string;
+            image?: components["schemas"]["TranslationImageDraftDto"];
+        };
+        ReleaseProofreadLeaseDto: {
+            /** Format: uuid */
+            editorInstanceId: string;
+            /** Format: uuid */
+            leaseToken: string;
         };
         CreateTranslationEntryDto: {
+            expectedAssignmentGeneration?: number;
+            /** Format: uuid */
+            editorInstanceId?: string;
+            /** Format: uuid */
+            leaseToken?: string;
             markerX: number;
             markerY: number;
             markerPositionType: components["schemas"]["MarkerPositionType"];
@@ -4982,6 +5254,11 @@ export interface components {
             expectedEditorEpoch: number;
         };
         UpdateTranslationEntryDto: {
+            expectedAssignmentGeneration?: number;
+            /** Format: uuid */
+            editorInstanceId?: string;
+            /** Format: uuid */
+            leaseToken?: string;
             expectedRevision: number;
             expectedEditorEpoch: number;
             markerX?: number;
@@ -4991,17 +5268,30 @@ export interface components {
             note?: string | null;
         };
         DeleteTranslationEntryDto: {
+            expectedAssignmentGeneration?: number;
+            /** Format: uuid */
+            editorInstanceId?: string;
+            /** Format: uuid */
+            leaseToken?: string;
             expectedRevision: number;
             expectedImageRevision: number;
             expectedEditorEpoch: number;
         };
         ReorderTranslationEntryDto: {
+            expectedAssignmentGeneration?: number;
+            /** Format: uuid */
+            editorInstanceId?: string;
+            /** Format: uuid */
+            leaseToken?: string;
             /** Format: uuid */
             beforeMarkerId?: string | null;
             expectedImageRevision: number;
             expectedEditorEpoch: number;
         };
         TypesetVersionImageDto: {
+            /** Format: uuid */
+            supplementId: string | null;
+            supplementPosition: string | null;
             /** Format: uuid */
             id: string;
             /** Format: uuid */
@@ -5162,6 +5452,100 @@ export interface components {
             versionId: string;
             /** @description 本次确认是否同时提交嵌字；旧会话只返回原有保存结果 */
             stageSubmitted: boolean;
+        };
+        TypesetCollaborationAssignmentDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            participantId: string | null;
+            generation: number;
+            draftRevision: number;
+            submittedRevision: number | null;
+            submittedGeneration: number | null;
+            /** Format: date-time */
+            submittedAt: string | null;
+        };
+        TypesetCollaborationPageDto: {
+            /** Format: uuid */
+            id: string;
+            orderIndex: number;
+            assignment: components["schemas"]["TypesetCollaborationAssignmentDto"] | null;
+        };
+        TypesetCollaborationUserDto: {
+            displayName: string;
+        };
+        TypesetCollaborationParticipantDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            userId: string;
+            user: components["schemas"]["TypesetCollaborationUserDto"];
+        };
+        TypesetDraftDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            workImageId: string | null;
+            /** Format: uuid */
+            participantId: string;
+            position: string;
+            orderIndex: number;
+            sourceName: string;
+            revision: number;
+            submittedRevision: number | null;
+        };
+        TypesetCollaborationStateDto: {
+            revision: number;
+            editorEpoch: number;
+            workflowStatus: string;
+            collaborationMode: string;
+            /** Format: uuid */
+            currentTypesetVersionId: string | null;
+            handoffReady: boolean;
+            pages: components["schemas"]["TypesetCollaborationPageDto"][];
+            participants: components["schemas"]["TypesetCollaborationParticipantDto"][];
+            drafts: components["schemas"]["TypesetDraftDto"][];
+        };
+        TypesetImportPreviewImageDto: {
+            /** Format: uuid */
+            id: string;
+            sourceName: string;
+            /** Format: uuid */
+            suggestedWorkImageId: string | null;
+        };
+        TypesetImportPreviewDto: {
+            /** Format: uuid */
+            sessionId: string;
+            expectedRevision: number;
+            images: components["schemas"]["TypesetImportPreviewImageDto"][];
+        };
+        TypesetImportMappingDto: {
+            /** Format: uuid */
+            imageId: string;
+            /** Format: uuid */
+            workImageId?: string | null;
+            /** Format: uuid */
+            draftId?: string;
+            /** @enum {string} */
+            position: "page" | "start" | "end" | "free";
+        };
+        ApplyTypesetImportDto: {
+            expectedRevision: number;
+            /** Format: uuid */
+            idempotencyKey: string;
+            /** Format: uuid */
+            sessionId: string;
+            mappings: components["schemas"]["TypesetImportMappingDto"][];
+        };
+        TypesetDraftSavedDto: {
+            revision: number;
+            /** Format: uuid */
+            versionId?: string | null;
+        };
+        TypesetDraftMutationDto: {
+            expectedRevision: number;
+            /** Format: uuid */
+            idempotencyKey: string;
         };
         PublicationRecordDto: {
             /** Format: uuid */
@@ -16769,6 +17153,94 @@ export interface operations {
             };
         };
     };
+    addWorkProofreader: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: unknown;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddWorkProofreaderDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkDetailDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
     leaveWorkStage: {
         parameters: {
             query?: never;
@@ -17658,6 +18130,7 @@ export interface operations {
                     stage: "translate" | "proofread";
                     expectedRevision: number;
                     expectedEditorEpoch: number;
+                    pageAccess?: string;
                     /** Format: uuid */
                     idempotencyKey: string;
                 };
@@ -18020,6 +18493,182 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TranslationPresenceListDto"];
                 };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    acquireOrRenewProofreadLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                imageId: unknown;
+                workId: unknown;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProofreadLeaseRequestDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProofreadLeaseResultDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    releaseProofreadLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                imageId: unknown;
+                workId: unknown;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReleaseProofreadLeaseDto"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description 请求字段无效 */
             400: {
@@ -18634,6 +19283,98 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ManageTypesetVersionDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TypesetVersionListDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    replaceCurrentTypesetImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    expectedRevision: number;
+                    /** Format: uuid */
+                    idempotencyKey: string;
+                    /** Format: binary */
+                    file: string;
+                };
             };
         };
         responses: {
@@ -19862,6 +20603,704 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TypesetUploadConfirmedDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    getTypesetCollaboration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TypesetCollaborationStateDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    getTypesetDraftImageUrl: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageUrlDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    previewTypesetCollaborationImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    expectedRevision: number;
+                    /** Format: uuid */
+                    idempotencyKey: string;
+                    files: string[];
+                };
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TypesetImportPreviewDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    applyTypesetCollaborationImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApplyTypesetImportDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TypesetDraftSavedDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    deleteTypesetSupplement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TypesetDraftMutationDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    replaceSourceImageHd: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    expectedRevision: number;
+                    /** Format: uuid */
+                    idempotencyKey: string;
+                    sameContentConfirmed: boolean;
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TypesetDraftSavedDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    addSingleTypesetSupplement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    expectedRevision: number;
+                    /** Format: uuid */
+                    idempotencyKey: string;
+                    /** @enum {string} */
+                    position: "start" | "end";
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TypesetVersionListDto"];
+                };
+            };
+            /** @description 请求字段无效 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 登录失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 权限、来源或改密限制 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 资源不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 数据冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 请求频率限制 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+            /** @description 服务器错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorDto"];
+                };
+            };
+        };
+    };
+    removeSingleTypesetSupplement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TypesetDraftMutationDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TypesetVersionListDto"];
                 };
             };
             /** @description 请求字段无效 */

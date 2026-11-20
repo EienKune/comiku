@@ -1,4 +1,5 @@
 .work-source-record {
+  margin-block-start: var(--space-4);
   min-width: 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -140,4 +141,11 @@
 }
 .work-source-record__error p {
   color: var(--color-status-danger-text);
+}
+
+.workspace-selected-filename {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
 }

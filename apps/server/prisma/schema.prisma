@@ -45,6 +45,8 @@ model OnomatopoeiaEntry {
 }
 
 model User {
+  sourceAssetReplacements WorkSourceAssetReplacement[]
+  proofreadPageLeases ProofreadPageLease[]
   siteBrandAssets SiteBrandAsset[]
   candidateCompositionReceipts CandidateCompositionReceipt[]
   archiveExportRuns ArchiveExportRun[]
@@ -194,6 +196,9 @@ enum FileLifecycleStatus {
 }
 
 model FileObject {
+  oldSourceAssetReplacements WorkSourceAssetReplacement[] @relation("OldSourceAsset")
+  newSourceAssetReplacements WorkSourceAssetReplacement[] @relation("NewSourceAsset")
+  typesetDrafts WorkTypesetDraft[]
   siteBrandIcons SiteBrandAsset[] @relation("SiteBrandIcon")
   siteBrandFavicons SiteBrandAsset[] @relation("SiteBrandFavicon")
   archiveExportEntries ArchiveExportEntry[]
@@ -934,6 +939,13 @@ model CandidateMediaAnalysis {
 }
 
 model Work {
+  sourceAssetReplacements WorkSourceAssetReplacement[]
+  proofreadPageLeases ProofreadPageLease[]
+  sourceAssetRevision Int @default(0) @map("source_asset_revision")
+  collaborationMigrationIssue String? @map("collaboration_migration_issue") @db.VarChar(200)
+  productionStartedAt DateTime? @map("production_started_at") @db.Timestamptz(3)
+  pageAssignments WorkPageAssignment[]
+  typesetDrafts WorkTypesetDraft[]
   seriesEntry WorkSeriesEntry?
   candidateImportSeriesIntent Json? @map("candidate_import_series_intent")
   reviewRevisions                   WorkReviewRevision[]
@@ -1256,6 +1268,11 @@ model CandidateActionLog {
 }
 
 model WorkImage {
+  sourceAssetReplacements WorkSourceAssetReplacement[]
+  @@unique([id,workId])
+  proofreadLease ProofreadPageLease?
+  pageAssignments WorkPageAssignment[]
+  typesetDraft WorkTypesetDraft?
   id                        String                     @id @default(uuid()) @db.Uuid
   workId                    String                     @map("work_id") @db.Uuid
   work                      Work                       @relation(fields: [workId], references: [id], onDelete: Cascade)
@@ -1385,6 +1402,7 @@ model LabelPlusFile {
 }
 
 model TypesetHandoffPackage {
+  sourceAssetRevision Int @default(0) @map("source_asset_revision")
   translationVersionId String?                   @map("translation_version_id") @db.Uuid
   translationVersion   TranslationVersion?       @relation(fields: [translationVersionId], references: [id], onDelete: Restrict)
   id             String                    @id @default(uuid()) @db.Uuid
@@ -1491,6 +1509,8 @@ model PublishRecord {
 }
 
 model TypesetImageVersionImage {
+  supplementId String? @map("supplement_id") @db.Uuid
+  supplementPosition String? @map("supplement_position") @db.VarChar(8)
   id           String              @id @default(uuid()) @db.Uuid
   versionId    String              @map("version_id") @db.Uuid
   version      TypesetImageVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
@@ -1512,6 +1532,8 @@ model TypesetImageVersionImage {
 }
 
 model WorkStageParticipant {
+  @@unique([id,workId,stage])
+  pageAssignments WorkPageAssignment[]
   id                      String                        @id @default(uuid()) @db.Uuid
   workId                  String                        @map("work_id") @db.Uuid
   work                    Work                          @relation(fields: [workId], references: [id], onDelete: Cascade)
@@ -2488,4 +2510,83 @@ model SiteBrandAsset {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   @@index([expiresAt, id])
   @@map("site_brand_assets")
+}
+
+// Current ownership is independent for each production role; historical facts stay in events/snapshots.
+model ProofreadPageLease {
+  workImageId String @id @map("work_image_id") @db.Uuid
+  workImage WorkImage @relation(fields:[workImageId], references:[id], onDelete:Cascade)
+  workId String @map("work_id") @db.Uuid
+  work Work @relation(fields:[workId], references:[id], onDelete:Cascade)
+  userId String @map("user_id") @db.Uuid
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  sessionId String @map("session_id") @db.Uuid
+  editorInstanceId String @map("editor_instance_id") @db.Uuid
+  leaseToken String @map("lease_token") @db.Uuid
+  editorEpoch Int @map("editor_epoch")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  @@index([workId, editorEpoch, expiresAt])
+  @@map("proofread_page_leases")
+}
+
+model WorkPageAssignment {
+  id String @id @default(uuid()) @db.Uuid
+  workId String @map("work_id") @db.Uuid
+  work Work @relation(fields:[workId],references:[id],onDelete:Cascade)
+  workImageId String @map("work_image_id") @db.Uuid
+  workImage WorkImage @relation(fields:[workImageId,workId],references:[id,workId],onDelete:Cascade)
+  stage WorkStage
+  participantId String? @map("participant_id") @db.Uuid
+  participant WorkStageParticipant? @relation(fields:[participantId,workId,stage],references:[id,workId,stage],onDelete:Restrict)
+  generation Int @default(0)
+  draftRevision Int @default(0) @map("draft_revision")
+  submittedRevision Int? @map("submitted_revision")
+  submittedGeneration Int? @map("submitted_generation")
+  submittedAt DateTime? @map("submitted_at") @db.Timestamptz(3)
+  @@unique([workImageId,stage])
+  @@index([workId,stage,participantId])
+  @@map("work_page_assignments")
+}
+
+model WorkTypesetDraft {
+  assignmentGeneration Int @default(0) @map("assignment_generation")
+  id String @id @default(uuid()) @db.Uuid
+  workId String @map("work_id") @db.Uuid
+  work Work @relation(fields:[workId],references:[id],onDelete:Cascade)
+  workImageId String? @unique @map("work_image_id") @db.Uuid
+  workImage WorkImage? @relation(fields:[workImageId],references:[id],onDelete:Restrict)
+  participantId String @map("participant_id") @db.Uuid
+  fileObjectId String @map("file_object_id") @db.Uuid
+  fileObject FileObject @relation(fields:[fileObjectId],references:[id],onDelete:Restrict)
+  sourceName String @map("source_name") @db.VarChar(255)
+  width Int?
+  height Int?
+  position String @default("page") @db.VarChar(16)
+  orderIndex Int @map("order_index")
+  revision Int @default(1)
+  submittedRevision Int? @map("submitted_revision")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  @@index([workId,participantId])
+  @@index([fileObjectId])
+  @@map("work_typeset_drafts")
+}
+
+// HD asset history retains old files without changing stable manuscript page identity.
+model WorkSourceAssetReplacement {
+  id String @id @default(uuid()) @db.Uuid
+  workId String @map("work_id") @db.Uuid
+  work Work @relation(fields:[workId],references:[id],onDelete:Restrict)
+  workImageId String @map("work_image_id") @db.Uuid
+  workImage WorkImage @relation(fields:[workImageId],references:[id],onDelete:Restrict)
+  oldFileObjectId String @map("old_file_object_id") @db.Uuid
+  oldFileObject FileObject @relation("OldSourceAsset",fields:[oldFileObjectId],references:[id],onDelete:Restrict)
+  newFileObjectId String @map("new_file_object_id") @db.Uuid
+  newFileObject FileObject @relation("NewSourceAsset",fields:[newFileObjectId],references:[id],onDelete:Restrict)
+  actorId String @map("actor_id") @db.Uuid
+  actor User @relation(fields:[actorId],references:[id],onDelete:Restrict)
+  assetRevision Int @map("asset_revision")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  @@index([workId,createdAt])
+  @@map("work_source_asset_replacements")
 }

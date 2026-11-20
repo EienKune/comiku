@@ -400,6 +400,7 @@ test("LabelPlus preview, atomic import, export and download round trip", async (
       await db.translationEntry.deleteMany({
         where: { workImage: { workId } },
       });
+      await db.workPageAssignment.deleteMany({ where: { workId } });
       await db.workStageParticipant.deleteMany({ where: { workId } });
       await db.workImage.deleteMany({ where: { workId } });
       await db.work.deleteMany({ where: { id: workId } });

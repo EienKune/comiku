@@ -43,6 +43,10 @@ export interface NotificationSafeSnapshot {
   metadataOrigin?: "capture_current";
   stage?: WorkStage;
   participationKind?: "claim" | "join";
+  materialChange?: "source" | "typeset";
+  affectedPageNumbers?: number[];
+  affectsSupplement?: boolean;
+  addedProofreader?: string;
   fromWorkflowStatus?: WorkflowStatus;
   toWorkflowStatus?: WorkflowStatus;
   fromReviewStatus?: ReviewStatus;
@@ -63,6 +67,10 @@ export interface NotificationEventInput {
   metadataOrigin?: "capture_current";
   stage?: WorkStage;
   participationKind?: "claim" | "join";
+  materialChange?: "source" | "typeset";
+  affectedPageNumbers?: number[];
+  affectsSupplement?: boolean;
+  addedProofreader?: string;
   fromWorkflowStatus?: WorkflowStatus;
   toWorkflowStatus?: WorkflowStatus;
   fromReviewStatus?: ReviewStatus;
