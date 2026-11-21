@@ -68,10 +68,29 @@ test("current material identity rejects superseded downloads and the handoff tra
         username: `admin_${randomUUID()}`,
         displayName: "Reader",
         passwordHash: "fixture",
+        mustChangePassword: false,
         roles: { create: { role: "admin" } },
       },
     });
     users.push(admin.id);
+    const outsider = await db.user.create({
+      data: {
+        username: `outsider_${randomUUID()}`,
+        displayName: "Unassigned typesetter",
+        passwordHash: "fixture",
+        mustChangePassword: false,
+        roles: { create: { role: "typesetter" } },
+      },
+    });
+    users.push(outsider.id);
+    const outsiderToken = randomBytes(32).toString("base64url");
+    await db.authSession.create({
+      data: {
+        userId: outsider.id,
+        tokenHash: tokenHash(outsiderToken),
+        expiresAt: new Date(Date.now() + 3600000),
+      },
+    });
     const token = randomBytes(32).toString("base64url");
     const authenticatedSession = await db.authSession.create({
       data: {
@@ -223,6 +242,27 @@ test("current material identity rejects superseded downloads and the handoff tra
       idempotencyKey: randomUUID(),
     });
     assert.notEqual(fresh.packageId, old.packageId);
+    const denied = await fetch(
+      `${base}/api/works/${work.id}/typeset/handoff-packages/${fresh.packageId}`,
+      { headers: { Cookie: `comiku_session=${outsiderToken}` } },
+    );
+    assert.equal(denied.status, 403);
+    const deniedBody = (await denied.json()) as { message: string };
+    assert.match(deniedBody.message, /没有导出此作品交接材料的权限/);
+    assert.equal((await current()).typesetHandoffStartedAt, null);
+    // Administrative inspection also requires a completed password change.
+    await db.user.update({
+      where: { id: admin.id },
+      data: { mustChangePassword: true },
+    });
+    await assert.rejects(
+      typeset.readHandoffPackage(admin.id, work.id, fresh.packageId),
+      /没有导出此作品交接材料的权限/,
+    );
+    await db.user.update({
+      where: { id: admin.id },
+      data: { mustChangePassword: false },
+    });
     await typeset.readHandoffPackage(admin.id, work.id, fresh.packageId);
     assert.equal((await current()).typesetHandoffStartedAt, null);
     await db.work.update({
@@ -236,7 +276,14 @@ test("current material identity rejects superseded downloads and the handoff tra
       idempotencyKey: randomUUID(),
     });
     assert.equal(reused.packageId, fresh.packageId);
-    await typeset.readHandoffPackage(actor.id, work.id, reused.packageId);
+    // The ordinary participant can download without an administrator role.
+    const allowed = await fetch(
+      `${base}/api/works/${work.id}/typeset/handoff-packages/${reused.packageId}`,
+      { headers: { Cookie: `comiku_session=${token}` } },
+    );
+    assert.equal(allowed.status, 200);
+    assert.equal(allowed.headers.get("content-type"), "application/zip");
+    assert.ok((await allowed.arrayBuffer()).byteLength > 0);
     state = await current();
     assert.ok(state.typesetHandoffStartedAt);
     const ordinary = await db.typesetImageVersion.create({
