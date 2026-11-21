@@ -12,6 +12,11 @@ import type { components, CurrentUser } from "@comiku/api-client";
 import { client, queryClient } from "../account/api";
 import { WorkDetailPage } from "./BusinessPages";
 import { downloadPrepared } from "./transfers-api";
+import { File as NodeFile } from "node:buffer";
+import { zipSync } from "fflate";
+import { uploadTypesetFiles } from "./typeset-upload-transfer";
+
+vi.mock("./typeset-upload-transfer", () => ({ uploadTypesetFiles: vi.fn() }));
 
 vi.mock("./transfers-api", async (original) => ({
   ...(await original<typeof import("./transfers-api")>()),
@@ -90,9 +95,14 @@ function fixture(joined: boolean): Work {
   } as unknown as Work;
 }
 async function show(read: () => Work) {
-  vi.spyOn(client, "GET").mockImplementation(
-    async () => ({ data: read(), response: new Response() }) as never,
-  );
+  vi.spyOn(client, "GET").mockImplementation(async (path) => {
+    const work = read();
+    const data =
+      path === "/api/works/{workId}/typeset/versions"
+        ? { items: [], currentVersionId: null, workRevision: work.revision }
+        : work;
+    return { data, response: new Response() } as never;
+  });
   render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={["/works/work"]}>
@@ -108,9 +118,99 @@ async function show(read: () => Work) {
 }
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.clearAllMocks();
   queryClient.clear();
+});
+
+test("single typesetting previews images and ZIPs in one form and retries the ordered version without submitting the stage", async () => {
+  const work = {
+    ...fixture(true),
+    collaborationMode: "single",
+    workflowStatus: "typesetting",
+    typesetHandoffStartedAt: "2026-11-21T01:00:00Z",
+  } as Work;
+  vi.stubGlobal("File", NodeFile);
+  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:local");
+  vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  const session = {
+    id: "session",
+    files: [{ images: [{ id: "a" }] }, { images: [{ id: "b" }] }],
+  } as Awaited<ReturnType<typeof uploadTypesetFiles>>;
+  vi.mocked(uploadTypesetFiles).mockImplementation(async (_, options) => {
+    options?.onSession?.(session);
+    return session;
+  });
+  const saves: Record<string, unknown>[] = [];
+  const server = vi.fn(async (url: string, init?: RequestInit) => {
+    if (!url.endsWith("/typeset/versions/from-session"))
+      return Response.json({});
+    saves.push(JSON.parse(String(init?.body)));
+    return saves.length === 1
+      ? new Response("Gateway timeout", { status: 504 })
+      : Response.json({
+          items: [
+            {
+              versionNumber: 1,
+              id: "v",
+              images: [],
+              createdAt: work.updatedAt,
+            },
+          ],
+          currentVersionId: "v",
+          workRevision: 4,
+        });
+  });
+  vi.stubGlobal("fetch", server);
+  await show(() => work);
+  const picker = await screen.findByRole("button", { name: "选择成图或 ZIP" });
+  const input = screen.getByLabelText("成图图片");
+  expect(
+    picker.closest("form")?.querySelectorAll("input[type=file]"),
+  ).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: /导入.*ZIP/ })).toBeNull();
+  fireEvent.change(input, {
+    target: { files: [new File(["single"], "single.png")] },
+  });
+  await screen.findByText("1. single.png");
+  fireEvent.change(input, {
+    target: {
+      files: [
+        new File(
+          [
+            zipSync({
+              "a.png": new Uint8Array([1]),
+              "b.png": new Uint8Array([2]),
+            }) as BlobPart,
+          ],
+          "整卷.zip",
+        ),
+      ],
+    },
+  });
+  await screen.findByText("2. b.png");
+  expect(screen.queryByText("1. single.png")).toBeNull();
+  expect(uploadTypesetFiles).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "上移 b.png" }));
+  const saveButton = screen.getByRole("button", { name: "上传成图版本" });
+  fireEvent.click(saveButton);
+  await screen.findByText(/服务器响应超时/);
+  fireEvent.click(saveButton);
+  await waitFor(() => expect(saves).toHaveLength(2));
+  await screen.findByText("已上传成图版本 v1");
+  expect(saves[0]).toMatchObject({
+    imageIds: ["b", "a"],
+    sourceImageIds: [null, null],
+    mode: "new_version",
+  });
+  expect(saves[1]).toEqual(saves[0]);
+  expect(vi.mocked(uploadTypesetFiles).mock.calls[1][1]?.sessionId).toBe(
+    "session",
+  );
+  expect(
+    server.mock.calls.some(([url]) => url.includes("/stages/submit")),
+  ).toBe(false);
 });
 
 test("an inspection download before claiming stays an inspection and explains the next step", async () => {

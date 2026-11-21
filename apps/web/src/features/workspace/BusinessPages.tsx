@@ -14,7 +14,6 @@ import {
 import { PageWorkflowDialog } from "./PageWorkflowOverview";
 import { useWorkImageUrl } from "./use-work-image-url";
 import { SourceHdReplacement } from "./SourceHdReplacement";
-import { SingleTypesetArchiveImport } from "./SingleTypesetArchiveImport";
 import {
   prepareLocalTypesetImages,
   releaseLocalTypesetImages,
@@ -4834,7 +4833,6 @@ function TypesetVersionPanel({
         sourceImageIds: files.map(
           (file) => sourceImageIds[typesetFileKey(file)] || null,
         ),
-        expectedRevision: versions.workRevision,
         mode,
         ...(note.trim() ? { note: note.trim() } : {}),
       };
@@ -4842,18 +4840,17 @@ function TypesetVersionPanel({
       const key =
         singleUploadKeys.current.get(signature) ?? crypto.randomUUID();
       singleUploadKeys.current.set(signature, key);
-      await collaborationRequest(
+      const result = await collaborationRequest<TypesetVersionList>(
         `/api/works/${work.id}/typeset/versions/from-session`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ ...body, idempotencyKey: key }),
+          body: JSON.stringify({
+            ...body,
+            expectedRevision: versions.workRevision,
+            idempotencyKey: key,
+          }),
         },
-      );
-      const result = await unwrap(
-        await client.GET("/api/works/{workId}/typeset/versions", {
-          params: { path: { workId: work.id } },
-        }),
       );
       setFiles([]);
       releaseLocalTypesetImages(localTypesetFiles.current);
@@ -5038,9 +5035,9 @@ function TypesetVersionPanel({
       {awaitingHandoff && (
         <div className="workspace-file-field">
           <FilePickerButton
-            label="选择成图图片"
+            label="选择成图或 ZIP"
             inputLabel="成图图片"
-            accept="image/png,image/jpeg,image/webp"
+            accept="image/png,image/jpeg,image/webp,.zip"
             disabled
             onFiles={() => {}}
           />
@@ -5050,24 +5047,13 @@ function TypesetVersionPanel({
         </div>
       )}
       {canUpload && (
-        <SingleTypesetArchiveImport
-          workId={work.id}
-          revision={work.revision}
-          images={work.images}
-          onChanged={async () => {
-            await Promise.all([query.refetch(), onUpdated()]);
-          }}
-        />
-      )}
-      {canUpload && (
         <form
           className="workspace-typeset-upload"
           onSubmit={(event) => void uploadVersion(event)}
         >
           <div className="workspace-file-field">
-            <strong>成图图片</strong>
             <FilePickerButton
-              label="选择成图图片"
+              label="选择成图或 ZIP"
               inputLabel="成图图片"
               accept="image/png,image/jpeg,image/webp,.zip"
               multiple
@@ -5086,8 +5072,8 @@ function TypesetVersionPanel({
               }
             />
             <small>
-              可上传与原图数量或尺寸不同的结果，也可加入说明图；至少 1 张、最多
-              100 张，每张不超过 25 MiB，版本合计不超过 250 MiB。
+              可加入说明图，成图数量和尺寸可与原图不同。每版 1–100 张，每张最多
+              25 MiB，合计最多 250 MiB。
             </small>
           </div>
           <SelectField
@@ -5127,7 +5113,6 @@ function TypesetVersionPanel({
                       }
                       alt={file.name}
                       loading="lazy"
-                      style={{ width: 96, height: 96, objectFit: "contain" }}
                     />
                     <span>
                       {index + 1}. {file.name}
