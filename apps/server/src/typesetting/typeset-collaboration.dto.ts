@@ -28,6 +28,19 @@ export class AddSingleTypesetSupplementDto extends TypesetDraftMutationDto {
 }
 export class TypesetSessionPreviewDto extends TypesetDraftMutationDto {
   @ApiProperty({ type: String, format: "uuid" }) @IsUUID() sessionId!: string;
+  @ApiPropertyOptional({ type: Boolean })
+  @IsOptional()
+  @IsBoolean()
+  rebind?: boolean;
+}
+export class AdoptTypesetImageDto extends TypesetSessionPreviewDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  @IsUUID()
+  uploadImageId!: string;
+}
+export class AdoptTypesetSupplementDto extends AdoptTypesetImageDto {
+  @ApiProperty({ enum: ["start", "end"] }) @IsIn(["start", "end"]) position!:
+    "start" | "end";
 }
 export class TypesetImportMappingDto {
   @ApiProperty({ type: String, format: "uuid" }) @IsUUID() imageId!: string;

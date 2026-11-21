@@ -15,6 +15,13 @@ import { PageWorkflowDialog } from "./PageWorkflowOverview";
 import { useWorkImageUrl } from "./use-work-image-url";
 import { SourceHdReplacement } from "./SourceHdReplacement";
 import { SingleTypesetArchiveImport } from "./SingleTypesetArchiveImport";
+import {
+  prepareLocalTypesetImages,
+  releaseLocalTypesetImages,
+  type LocalTypesetImage,
+} from "./typeset-local-files";
+import { uploadTypesetFiles } from "./typeset-upload-transfer";
+import { collaborationRequest } from "./collaboration-request";
 import { TypesetCurrentImageTools } from "./TypesetCurrentImageTools";
 import { TypesetCollaborationPanel } from "./TypesetCollaborationPanel";
 import { PageClaimControl } from "./PageClaimControl";
@@ -72,7 +79,7 @@ import {
   CANDIDATE_SELECTION_LIMIT,
   canCancelLoadedCandidates,
 } from "./candidate-selection";
-import { downloadPrepared, uploadDirect, pollTransfer } from "./transfers-api";
+import { downloadPrepared, pollTransfer } from "./transfers-api";
 import { useImageUrl } from "../../components/use-image-url";
 import { refreshReviewViews } from "./review-cache";
 import { refreshTypesetWork } from "./typeset-batch-api";
@@ -4612,10 +4619,6 @@ function orderTypesetFiles(files: File[]) {
   return files;
 }
 
-function typesetFileKey(file: File) {
-  return `${file.name}:${file.size}:${file.lastModified}`;
-}
-
 function TypesetVersionImage({
   workId,
   versionId,
@@ -4717,6 +4720,17 @@ function TypesetVersionPanel({
         !participant.submittedAt,
     );
   const [files, setFiles] = useState<File[]>([]);
+  const localTypesetFiles = useRef<LocalTypesetImage[]>([]);
+  const typesetFileKey = (file: File) =>
+    localTypesetFiles.current.find((image) => image.file === file)?.id ?? "";
+  const singleUpload = useRef<{ files: File[]; sessionId?: string } | null>(
+    null,
+  );
+  const singleUploadKeys = useRef(new Map<string, string>());
+  useEffect(
+    () => () => releaseLocalTypesetImages(localTypesetFiles.current),
+    [],
+  );
   const [sourceImageIds, setSourceImageIds] = useState<Record<string, string>>(
     {},
   );
@@ -4787,18 +4801,54 @@ function TypesetVersionPanel({
       return;
     }
     await action.run(async () => {
-      await uploadDirect(
-        {
-          purpose: "typeset_single",
-          resourceId: work.id,
-          expectedRevision: versions.workRevision,
-          mode,
-          ...(note.trim() ? { note: note.trim() } : {}),
-          sourceImageIds: JSON.stringify(
-            files.map((file) => sourceImageIds[typesetFileKey(file)] || null),
-          ),
+      const selected = localTypesetFiles.current.filter((image) =>
+        files.includes(image.file),
+      );
+      if (!selected.length) throw new Error("请重新选择本地成图");
+      const stableFiles = selected.map((image) => image.file);
+      if (
+        !singleUpload.current ||
+        singleUpload.current.files.length !== stableFiles.length ||
+        singleUpload.current.files.some(
+          (file, index) => file !== stableFiles[index],
+        )
+      )
+        singleUpload.current = { files: stableFiles };
+      const pending = singleUpload.current;
+      const session = await uploadTypesetFiles(pending.files, {
+        requireComplete: true,
+        sessionId: pending.sessionId,
+        onSession: (session) => {
+          pending.sessionId = session.id;
         },
-        files,
+      });
+      const remote = session.files.flatMap((file) => file.images);
+      if (remote.length !== selected.length)
+        throw new Error("文件校验结果不完整，请重试保存");
+      const orderedIds = files.map(
+        (file) => remote[selected.findIndex((image) => image.file === file)].id,
+      );
+      const body = {
+        sessionId: session.id,
+        imageIds: orderedIds,
+        sourceImageIds: files.map(
+          (file) => sourceImageIds[typesetFileKey(file)] || null,
+        ),
+        expectedRevision: versions.workRevision,
+        mode,
+        ...(note.trim() ? { note: note.trim() } : {}),
+      };
+      const signature = JSON.stringify(body);
+      const key =
+        singleUploadKeys.current.get(signature) ?? crypto.randomUUID();
+      singleUploadKeys.current.set(signature, key);
+      await collaborationRequest(
+        `/api/works/${work.id}/typeset/versions/from-session`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...body, idempotencyKey: key }),
+        },
       );
       const result = await unwrap(
         await client.GET("/api/works/{workId}/typeset/versions", {
@@ -4806,6 +4856,9 @@ function TypesetVersionPanel({
         }),
       );
       setFiles([]);
+      releaseLocalTypesetImages(localTypesetFiles.current);
+      localTypesetFiles.current = [];
+      singleUpload.current = null;
       setSourceImageIds({});
       setNote("");
       formElement.reset();
@@ -5016,12 +5069,21 @@ function TypesetVersionPanel({
             <FilePickerButton
               label="选择成图图片"
               inputLabel="成图图片"
-              accept="image/png,image/jpeg,image/webp"
+              accept="image/png,image/jpeg,image/webp,.zip"
               multiple
-              onFiles={(files) => {
-                setFiles(orderTypesetFiles(files));
-                setSourceImageIds({});
-              }}
+              disabled={action.busy}
+              onFiles={(chosen) =>
+                void action.run(async () => {
+                  const images = await prepareLocalTypesetImages(chosen);
+                  releaseLocalTypesetImages(localTypesetFiles.current);
+                  localTypesetFiles.current = images;
+                  setFiles(
+                    orderTypesetFiles(images.map((image) => image.file)),
+                  );
+                  singleUpload.current = null;
+                  setSourceImageIds({});
+                })
+              }
             />
             <small>
               可上传与原图数量或尺寸不同的结果，也可加入说明图；至少 1 张、最多
@@ -5057,6 +5119,16 @@ function TypesetVersionPanel({
               <ol>
                 {files.map((file, index) => (
                   <li key={`${file.name}-${file.lastModified}-${index}`}>
+                    <img
+                      src={
+                        localTypesetFiles.current.find(
+                          (image) => image.file === file,
+                        )?.localUrl
+                      }
+                      alt={file.name}
+                      loading="lazy"
+                      style={{ width: 96, height: 96, objectFit: "contain" }}
+                    />
                     <span>
                       {index + 1}. {file.name}
                     </span>
@@ -5106,6 +5178,20 @@ function TypesetVersionPanel({
                       >
                         <ArrowDown size={15} />
                       </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`移除 ${file.name}`}
+                        disabled={action.busy}
+                        onClick={() =>
+                          setFiles((current) =>
+                            current.filter((item) => item !== file),
+                          )
+                        }
+                      >
+                        移除
+                      </Button>
                     </div>
                   </li>
                 ))}
@@ -5120,6 +5206,22 @@ function TypesetVersionPanel({
           >
             上传成图版本
           </Button>
+          {action.error && files.length > 0 && (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={action.busy}
+              onClick={() =>
+                void action.run(async () => {
+                  await query.refetch();
+                  await onUpdated();
+                  action.setSuccess("状态已刷新，请核对当前页序后保存现有文件");
+                })
+              }
+            >
+              刷新状态并重新确认
+            </Button>
+          )}
         </form>
       )}
       {!canUpload && work.workflowStatus === "typesetting" && (

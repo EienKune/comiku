@@ -220,7 +220,7 @@ export class TypesetCollaborationService {
   async previewSession(
     actorId: string,
     workId: string,
-    input: TypesetMutation & { sessionId: string },
+    input: TypesetMutation & { sessionId: string; rebind?: boolean },
   ) {
     return this.db.$transaction(async (tx) => {
       await tx.$queryRaw(
@@ -268,18 +268,7 @@ export class TypesetCollaborationService {
         throw new BadRequestException(
           "单作品须包含 1–100 张成图且总量不超过 250 MiB",
         );
-      for (const file of session.files) {
-        const named = typesetName(
-          file.sourceName,
-          file.contentType === "application/zip",
-        );
-        if (named.workNumber && named.workNumber !== work.workNumber)
-          throw new BadRequestException("文件明确指向其他作品，已停止导入");
-      }
       for (const image of images) {
-        const named = typesetName(image.sourceName);
-        if (named.workNumber && named.workNumber !== work.workNumber)
-          throw new BadRequestException("ZIP 中包含其他作品的图片，已停止导入");
         if (
           image.fileObject.lifecycleStatus !== "active" ||
           image.fileObject.deletedAt
@@ -289,17 +278,30 @@ export class TypesetCollaborationService {
       const existing = await tx.typesetUploadPreview.findUnique({
         where: { sessionId_workId: { sessionId: session.id, workId } },
       });
-      if (
-        existing &&
-        (existing.workRevision !== work.revision ||
+      if (existing) {
+        if (existing.appliedAt || existing.versionId)
+          throw new ConflictException("上传预览已采用，请先核对保存结果");
+        if (
           existing.editorEpoch !== work.editorEpoch ||
           existing.handoffStartedAt.getTime() !==
-            work.typesetHandoffStartedAt!.getTime() ||
-          existing.versionId)
-      )
-        throw new ConflictException(
-          "上传预览或作品已更新，请重新选择文件并确认",
-        );
+            work.typesetHandoffStartedAt!.getTime()
+        )
+          throw new ConflictException("交接基线已更新，请重新选择文件并确认");
+        if (existing.workRevision !== work.revision) {
+          if (!input.rebind)
+            throw new ConflictException(
+              "上传预览或作品已更新，请明确重新预览现有文件",
+            );
+          await tx.typesetUploadPreview.update({
+            where: { id: existing.id },
+            data: {
+              workRevision: work.revision,
+              imageIds: [],
+              idempotencyKey: randomUUID(),
+            },
+          });
+        }
+      }
       if (!existing)
         await tx.typesetUploadPreview.create({
           data: {
@@ -349,10 +351,10 @@ export class TypesetCollaborationService {
       )
       .digest("hex");
     return this.db.$transaction(async (tx) => {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM typeset_upload_sessions WHERE id = ${input.sessionId}::uuid FOR UPDATE`,
+      );
       if (batch) {
-        await tx.$queryRaw(
-          Prisma.sql`SELECT id FROM typeset_upload_sessions WHERE id = ${input.sessionId}::uuid FOR UPDATE`,
-        );
         const preview = await tx.typesetUploadPreview.findFirst({
           where: { id: batch.previewId, sessionId: input.sessionId, workId },
         });
@@ -543,6 +545,10 @@ export class TypesetCollaborationService {
             },
           },
         });
+        await tx.typesetUploadPreview.updateMany({
+          where: { sessionId: session.id, workId },
+          data: { appliedAt: new Date() },
+        });
         return { revision: work.revision + 1, versionId: version.id };
       }
       for (const [index, m] of input.mappings.entries()) {
@@ -682,6 +688,10 @@ export class TypesetCollaborationService {
               : {}),
           },
         },
+      });
+      await tx.typesetUploadPreview.updateMany({
+        where: { sessionId: session.id, workId },
+        data: { appliedAt: new Date() },
       });
       if (batch) {
         await submitTypesetPagesTx(tx, actorId, workId, {

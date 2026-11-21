@@ -27,8 +27,17 @@ export class PrefixedObjectStorage implements ObjectStorage {
   async readStream(key: string, signal?: AbortSignal) {
     return this.storage.readStream(this.key(key), signal);
   }
-  async head(key: string) {
-    return this.storage.head(this.key(key));
+  async head(key: string, signal?: AbortSignal) {
+    return this.storage.head(this.key(key), signal);
+  }
+  async copy(sourceKey: string, destinationKey: string, signal?: AbortSignal) {
+    if (!this.storage.copy)
+      throw new Error("Object storage does not support server-side snapshots");
+    return this.storage.copy(
+      this.key(sourceKey),
+      this.key(destinationKey),
+      signal,
+    );
   }
   async signedReadUrl(key: string, expires: number, fileName?: string) {
     return this.storage.signedReadUrl(this.key(key), expires, fileName);

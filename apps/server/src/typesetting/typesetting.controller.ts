@@ -17,7 +17,10 @@ import {
   UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
-import { TypesetDraftMutationDto } from "./typeset-collaboration.dto.js";
+import {
+  TypesetDraftMutationDto,
+  AdoptTypesetImageDto,
+} from "./typeset-collaboration.dto.js";
 import type { Response } from "express";
 import {
   ApiBody,
@@ -34,6 +37,7 @@ import { Access, type AuthRequest } from "../common/access.js";
 import { bodyValidation } from "../common/http.js";
 import {
   CreateTypesetHandoffPackageDto,
+  AdoptTypesetVersionDto,
   CreateTypesetVersionDto,
   DeleteTypesetVersionDto,
   ManageTypesetVersionDto,
@@ -118,6 +122,24 @@ export class TypesettingController {
     );
   }
 
+  @Post("versions/from-session")
+  @Access({ permission: "works:typeset" })
+  @ApiOperation({ operationId: "adoptVerifiedTypesetVersion" })
+  @ApiParam({ name: "workId", format: "uuid" })
+  @ApiBody({ type: AdoptTypesetVersionDto })
+  @ApiCreatedResponse({ type: TypesetVersionListDto })
+  adoptVersion(
+    @Req() request: AuthRequest,
+    @Param("workId", ParseUUIDPipe) workId: string,
+    @Body(bodyValidation(AdoptTypesetVersionDto)) input: AdoptTypesetVersionDto,
+  ) {
+    return this.typesetting.adoptVerifiedVersion(
+      request.actor.userId,
+      workId,
+      input,
+    );
+  }
+
   @Post("versions/:versionId/select")
   @HttpCode(200)
   @Access({ permission: "works:typeset" })
@@ -182,6 +204,28 @@ export class TypesettingController {
     );
   }
 
+  @Post("versions/:versionId/images/:imageId/replace/from-session")
+  @HttpCode(200)
+  @Access({ permission: "works:typeset" })
+  @ApiOperation({ operationId: "replaceCurrentTypesetImageFromSession" })
+  @ApiBody({ type: AdoptTypesetImageDto })
+  @ApiOkResponse({ type: TypesetVersionListDto })
+  replaceVerified(
+    @Req() req: AuthRequest,
+    @Param("workId", ParseUUIDPipe) workId: string,
+    @Param("versionId", ParseUUIDPipe) versionId: string,
+    @Param("imageId", ParseUUIDPipe) imageId: string,
+    @Body(bodyValidation(AdoptTypesetImageDto)) input: AdoptTypesetImageDto,
+  ) {
+    return this.typesetting.replaceVersionImage(
+      req.actor.userId,
+      workId,
+      versionId,
+      imageId,
+      input,
+      { sessionId: input.sessionId, uploadImageId: input.uploadImageId },
+    );
+  }
   @Post("versions/:versionId/delete")
   @HttpCode(200)
   @Access({ permission: "works:typeset" })

@@ -1,3 +1,4 @@
+import { downloadBrowserMaterials } from "./typeset-materials-download";
 import type { components } from "@comiku/api-client";
 import { apiBaseUrl, authenticatedFetch, client, unwrap } from "../account/api";
 import {
@@ -98,6 +99,10 @@ export async function downloadPrepared(
   input: PrepareDownload,
   signal?: AbortSignal,
 ) {
+  if (input.purpose === "handoff") {
+    const result = await downloadBrowserMaterials(input, signal);
+    if (result) return result;
+  }
   const task = await unwrap(
     await client.POST("/api/transfers/downloads", {
       body: {

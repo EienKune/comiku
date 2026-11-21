@@ -1,5 +1,6 @@
 import { Readable } from "node:stream";
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -99,11 +100,29 @@ export class R2ObjectStorage implements ObjectStorage {
     );
   }
 
-  async head(key: string): Promise<StoredObjectMetadata | null> {
+  async copy(sourceKey: string, destinationKey: string, signal?: AbortSignal) {
+    validateObjectKey(sourceKey);
+    validateObjectKey(destinationKey);
+    await this.client.send(
+      new CopyObjectCommand({
+        Bucket: this.bucket,
+        Key: destinationKey,
+        CopySource: `${this.bucket}/${sourceKey.split("/").map(encodeURIComponent).join("/")}`,
+        MetadataDirective: "COPY",
+      }),
+      { abortSignal: signal },
+    );
+  }
+
+  async head(
+    key: string,
+    signal?: AbortSignal,
+  ): Promise<StoredObjectMetadata | null> {
     validateObjectKey(key);
     try {
       const result = await this.client.send(
         new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+        { abortSignal: signal },
       );
       return {
         contentType: result.ContentType,

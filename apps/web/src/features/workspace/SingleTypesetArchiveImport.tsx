@@ -1,5 +1,5 @@
 import { FilePickerButton } from "../../components/ImagePicker";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button, SelectControl } from "../../components/ui";
 import { collaborationRequest } from "./collaboration-request";
@@ -9,6 +9,7 @@ type Item = {
   id: string;
   sourceName: string;
   suggestedWorkImageId: string | null;
+  localUrl?: string;
 };
 type Preview = {
   sessionId: string;
@@ -19,12 +20,15 @@ type Preview = {
 function StagedImage({ sessionId, item }: { sessionId: string; item: Item }) {
   const query = useQuery({
     queryKey: ["single-typeset-import-image", sessionId, item.id],
+    enabled: !item.localUrl,
     queryFn: () =>
       collaborationRequest<{ url: string }>(
         `/api/typeset/upload-sessions/${sessionId}/images/${item.id}/url?variant=thumbnail`,
       ),
   });
-  return query.data ? (
+  return item.localUrl ? (
+    <img src={item.localUrl} alt={item.sourceName} />
+  ) : query.data ? (
     <img src={query.data.url} alt={item.sourceName} />
   ) : (
     <span>加载预览…</span>
@@ -43,17 +47,21 @@ export function SingleTypesetArchiveImport({
 }) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [sources, setSources] = useState<Record<string, string>>({});
+  const [rebind, setRebind] = useState(false);
+  const saveKeys = useRef(new Map<string, string>());
   const [mutationBusy, setBusy] = useState(false);
   const upload = useTypesetDetailUpload(workId, revision);
   const busy = mutationBusy || upload.busy;
   const [message, setMessage] = useState("");
+  const [mutationError, setMutationError] = useState("");
   const run = async (operation: () => Promise<void>) => {
     setBusy(true);
     setMessage("");
+    setMutationError("");
     try {
       await operation();
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "导入失败");
+      setMutationError(e instanceof Error ? e.message : "导入失败");
     } finally {
       setBusy(false);
     }
@@ -62,6 +70,7 @@ export function SingleTypesetArchiveImport({
     if (!file || busy) return;
     setPreview(null);
     setSources({});
+    setRebind(false);
     upload.choose([file], (result) => {
       setMessage("");
       setPreview({ ...result, key: crypto.randomUUID() });
@@ -71,20 +80,33 @@ export function SingleTypesetArchiveImport({
   const save = () =>
     run(async () => {
       if (!preview) return;
+      const staged = await upload.prepare(
+        preview.images.map((image) => image.id),
+        { rebind },
+      );
+      setRebind(false);
+      const mappings = preview.images.map((i) => ({
+        imageId: staged.imageIds[i.id],
+        workImageId: sources[i.id] || null,
+        position: sources[i.id] ? "page" : "free",
+      }));
+      const signature = JSON.stringify({
+        sessionId: staged.sessionId,
+        revision: staged.expectedRevision,
+        mappings,
+      });
+      const key = saveKeys.current.get(signature) ?? crypto.randomUUID();
+      saveKeys.current.set(signature, key);
       await collaborationRequest(
         `/api/works/${workId}/typeset/collaboration/apply`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            sessionId: preview.sessionId,
-            expectedRevision: preview.expectedRevision,
-            idempotencyKey: preview.key,
-            mappings: preview.images.map((i) => ({
-              imageId: i.id,
-              workImageId: sources[i.id] || null,
-              position: sources[i.id] ? "page" : "free",
-            })),
+            sessionId: staged.sessionId,
+            expectedRevision: staged.expectedRevision,
+            idempotencyKey: key,
+            mappings,
           }),
         },
       );
@@ -117,16 +139,15 @@ export function SingleTypesetArchiveImport({
           onFiles={([file]) => void choose(file)}
         />
       </div>
-      {(upload.progress || upload.error || message) && (
+      {(upload.progress || upload.error || mutationError || message) && (
         <div className="typeset-collaboration-feedback" aria-live="polite">
           {upload.progress && <p role="status">{upload.progress}</p>}
-          {upload.error && <p role="alert">{upload.error}</p>}
-          {message && <p role="status">{message}</p>}
-          {upload.retryable && (
-            <Button variant="secondary" disabled={busy} onClick={upload.retry}>
-              重试上传
-            </Button>
+          {(upload.error || mutationError) && (
+            <p role="alert" className="account-error">
+              {upload.error || mutationError}
+            </p>
           )}
+          {message && <p role="status">{message}</p>}
         </div>
       )}
       {preview && (
@@ -194,6 +215,20 @@ export function SingleTypesetArchiveImport({
           <div className="typeset-collaboration-actions">
             <Button disabled={busy || !preview.images.length} onClick={save}>
               保存整份成图版本
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={() =>
+                run(async () => {
+                  await refreshTypesetWork(workId);
+                  await onChanged?.();
+                  setRebind(true);
+                  setMessage("状态已刷新，请重新核对现有文件后保存");
+                })
+              }
+            >
+              刷新状态并重新确认
             </Button>
             <Button
               variant="secondary"

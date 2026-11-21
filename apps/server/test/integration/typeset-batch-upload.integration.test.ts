@@ -139,6 +139,7 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
           sourceCandidatePostId: candidate.id,
           importedById: user.id,
           sourceLanguage: "ja",
+          editorEpoch: 1,
           workflowStatus: started ? "typesetting" : "pending_typeset",
           typesetHandoffStartedAt: started ? new Date() : null,
           images: {
@@ -485,6 +486,17 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
       ).items[0].previewId,
       null,
     );
+    await db.translationVersion.create({
+      data: {
+        workId: b.id,
+        versionNumber: 1,
+        kind: "proofread_submission",
+        stage: "proofread",
+        workRevision: b.revision,
+        editorEpoch: b.editorEpoch,
+        createdById: user.id,
+      },
+    });
     const packageInput = {
       expectedRevision: b.revision,
       expectedEditorEpoch: b.editorEpoch,

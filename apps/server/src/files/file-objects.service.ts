@@ -431,12 +431,70 @@ export class FileObjectsService {
     return this.storage.signedWriteUrl(input, expiresInSeconds);
   }
 
-  headStagingObject(key: string) {
-    return this.storage.head(key);
+  headStagingObject(key: string, signal?: AbortSignal) {
+    return this.storage.head(key, signal);
   }
 
   readStagingObject(key: string) {
     return this.storage.read(key);
+  }
+
+  async copyStagingObject(
+    sourceKey: string,
+    destinationKey: string,
+    signal?: AbortSignal,
+  ) {
+    if (!this.storage.copy)
+      throw new Error("Object storage does not support server-side snapshots");
+    await this.storage.copy(sourceKey, destinationKey, signal);
+  }
+
+  async readStagingObjectLimited(
+    key: string,
+    maximumBytes: number,
+    signal?: AbortSignal,
+  ) {
+    const stream = await this.storage.readStream(key, signal);
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const abort = () => stream.destroy(new Error("上传验证超时"));
+    signal?.addEventListener("abort", abort, { once: true });
+    try {
+      signal?.throwIfAborted();
+      for await (const chunk of stream) {
+        signal?.throwIfAborted();
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        size += bytes.length;
+        if (size > maximumBytes) throw new Error("上传内容超过会话大小上限");
+        chunks.push(bytes);
+      }
+      return Buffer.concat(chunks, size);
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      stream.destroy();
+    }
+  }
+
+  async adoptCopiedObjectTx(
+    tx: Prisma.TransactionClient,
+    input: {
+      objectKey: string;
+      contentType: string;
+      size: number;
+      checksum: string;
+      createdById: string;
+    },
+  ) {
+    const file = await tx.fileObject.create({
+      data: {
+        ...input,
+        size: BigInt(input.size),
+        bucketScope: "works",
+        kind: "typeset-upload-preview",
+      },
+    });
+    await this.registerThumbnail(file, tx);
+    return file;
   }
 
   deleteStagingObject(key: string) {
@@ -455,6 +513,7 @@ export class FileObjectsService {
           candidateMedia: { none: {} },
           workImages: { none: {} },
           downloadPreparations: { none: {} },
+          typesetMaterialImages: { none: {} },
           derivativeOutputs: { none: {} },
           authorAvatars: { none: {} },
           accountAvatars: { none: {} },

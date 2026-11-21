@@ -673,33 +673,23 @@ test("refreshes the typeset upload revision after downloading a handoff package"
       response: new Response(null, { status: 200 }),
     } as never;
   });
-  vi.spyOn(client, "POST").mockImplementation(
-    async (path: string) =>
-      ({
-        data: path.endsWith("/deliver")
-          ? {
-              url: "https://storage.invalid/signed.zip",
-              fileName: "10_嵌字交接.zip",
-              expiresInSeconds: 300,
-            }
-          : {
-              id: "download",
-              status: "succeeded",
-              fileName: "10_嵌字交接.zip",
-              error: null,
-            },
-        response: new Response(),
-      }) as never,
+  const materialFetch = vi.fn<
+    (url: string, init?: RequestInit) => Promise<Response>
+  >(async () =>
+    Response.json({
+      id: "material",
+      fileName: "10_嵌字交接.zip",
+      translationVersionId: "formal",
+      sourceAssetRevision: 1,
+      workRevision: 4,
+      editorEpoch: 2,
+      totalBytes: 0,
+      translationFileName: "10_翻译.txt",
+      translationBase64: "",
+      images: [],
+    }),
   );
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockResolvedValue(
-      new Response(new Blob(["handoff"]), {
-        status: 200,
-        headers: { "Content-Type": "application/zip" },
-      }),
-    ),
-  );
+  vi.stubGlobal("fetch", materialFetch);
   vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:handoff");
   vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
@@ -727,11 +717,14 @@ test("refreshes the typeset upload revision after downloading a handoff package"
     ).toBe(false),
   );
   expect(await screen.findByText("嵌字交接包已交付浏览器下载")).toBeTruthy();
-  expect(client.POST).toHaveBeenCalledWith(
-    "/api/transfers/downloads",
-    expect.objectContaining({
-      body: expect.objectContaining({ requireCurrentParticipation: true }),
-    }),
+  expect(materialFetch.mock.calls[0][0]).toBe(
+    `/api/works/${workId}/typeset/materials`,
+  );
+  expect(
+    JSON.parse(String(materialFetch.mock.calls[0][1]?.body)),
+  ).toMatchObject({ requireCurrentParticipation: true });
+  expect(materialFetch.mock.calls[1][0]).toBe(
+    `/api/works/${workId}/typeset/materials/material/deliver`,
   );
   expect(versionRequests).toBeGreaterThanOrEqual(2);
   expect(queryClient.getQueryData(["typeset-versions", workId])).toMatchObject({

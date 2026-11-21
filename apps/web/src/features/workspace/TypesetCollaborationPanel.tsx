@@ -39,6 +39,8 @@ type Preview = {
     id: string;
     sourceName: string;
     suggestedWorkImageId: string | null;
+    pageNumber?: number | null;
+    localUrl?: string;
   }[];
 };
 type Mapping = {
@@ -124,10 +126,12 @@ export function TypesetCollaborationPanel({
   };
   const [preview, setPreview] = useState<Preview | null>(null);
   const [mappings, setMappings] = useState<Mapping[]>([]);
+  const [rebind, setRebind] = useState(false);
   const [mutationBusy, setBusy] = useState(false);
   const upload = useTypesetDetailUpload(workId, workRevision, actorId);
   const busy = mutationBusy || upload.busy;
   const [message, setMessage] = useState("");
+  const [mutationError, setMutationError] = useState("");
   const [view, setView] = useState<string | null>(null);
   const [comparePage, setComparePage] = useState("");
   const [zoom, setZoom] = useState(1);
@@ -167,10 +171,11 @@ export function TypesetCollaborationPanel({
   const run = async (operation: () => Promise<void>) => {
     setBusy(true);
     setMessage("");
+    setMutationError("");
     try {
       await operation();
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "操作失败");
+      setMutationError(e instanceof Error ? e.message : "操作失败");
     } finally {
       setBusy(false);
     }
@@ -205,21 +210,23 @@ export function TypesetCollaborationPanel({
     if (!files.length || busy) return;
     setPreview(null);
     setMappings([]);
+    setRebind(false);
     upload.choose(files, (result) => {
       setMessage("");
       setPreview({ ...result, idempotencyKey: crypto.randomUUID() });
       setMappings(
         result.images.map((image) => {
           const page = state.pages.find(
-            (p) => p.id === image.suggestedWorkImageId,
+            (p) =>
+              p.id === image.suggestedWorkImageId ||
+              p.orderIndex + 1 === image.pageNumber,
           );
           return {
             imageId: image.id,
             position: replace
               ? (replace.position as Mapping["position"])
               : "page",
-            workImageId:
-              replace?.workImageId ?? image.suggestedWorkImageId ?? undefined,
+            workImageId: replace?.workImageId ?? page?.id ?? undefined,
             draftId: replace?.id,
             ignored:
               !replace &&
@@ -246,13 +253,37 @@ export function TypesetCollaborationPanel({
         valid.some((m) => m.position === "page" && !m.workImageId)
       )
         throw new Error("请明确映射本人原稿页，或选择补充图首尾位置");
+      if (
+        valid.some(
+          (m) =>
+            m.position === "page" &&
+            !mine.some((page) => page.id === m.workImageId),
+        )
+      )
+        throw new Error("本批仅可保存本人认领的原稿页");
+      const pages = valid
+        .filter((mapping) => mapping.position === "page")
+        .map((mapping) => mapping.workImageId);
+      if (new Set(pages).size !== pages.length)
+        throw new Error("同一原稿页只能选择一张成图");
+      const staged = await upload.prepare(
+        valid.map((mapping) => mapping.imageId),
+        { rebind },
+      );
+      setRebind(false);
       await collaborationRequest(
         `${base}/apply`,
         json({
-          sessionId: preview.sessionId,
-          expectedRevision: preview.expectedRevision,
-          idempotencyKey: preview.idempotencyKey,
-          mappings: valid,
+          sessionId: staged.sessionId,
+          expectedRevision: staged.expectedRevision,
+          idempotencyKey: mutationKey(
+            `apply:${JSON.stringify(valid)}`,
+            staged.expectedRevision,
+          ),
+          mappings: valid.map((mapping) => ({
+            ...mapping,
+            imageId: staged.imageIds[mapping.imageId],
+          })),
         }),
       );
       setPreview(null);
@@ -317,16 +348,15 @@ export function TypesetCollaborationPanel({
           )}
         </div>
       )}
-      {(upload.progress || upload.error || message) && (
+      {(upload.progress || upload.error || mutationError || message) && (
         <div className="typeset-collaboration-feedback" aria-live="polite">
           {upload.progress && <p role="status">{upload.progress}</p>}
-          {upload.error && <p role="alert">{upload.error}</p>}
-          {message && <p role="status">{message}</p>}
-          {upload.retryable && (
-            <Button variant="secondary" disabled={busy} onClick={upload.retry}>
-              重试上传
-            </Button>
+          {(upload.error || mutationError) && (
+            <p role="alert" className="account-error">
+              {upload.error || mutationError}
+            </p>
           )}
+          {message && <p role="status">{message}</p>}
         </div>
       )}
       {preview && (
@@ -337,10 +367,18 @@ export function TypesetCollaborationPanel({
               const mapping = mappings[index]!;
               return (
                 <article key={image.id}>
-                  <Image
-                    path={`/api/typeset/upload-sessions/${preview.sessionId}/images/${image.id}/url?variant=thumbnail`}
-                    alt={image.sourceName}
-                  />
+                  {image.localUrl ? (
+                    <img
+                      src={image.localUrl}
+                      alt={image.sourceName}
+                      loading="lazy"
+                    />
+                  ) : (
+                    <Image
+                      path={`/api/typeset/upload-sessions/${preview.sessionId}/images/${image.id}/url?variant=thumbnail`}
+                      alt={image.sourceName}
+                    />
+                  )}
                   <span>{image.sourceName}</span>
                   <SelectControl
                     disabled={busy}
@@ -398,6 +436,19 @@ export function TypesetCollaborationPanel({
           <div className="typeset-collaboration-actions">
             <Button disabled={busy} onClick={save}>
               {pending ? "确认完整修订" : "保存本批草稿"}
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={() =>
+                run(async () => {
+                  await changed();
+                  setRebind(true);
+                  setMessage("状态已刷新，请重新核对本人页映射后保存现有文件");
+                })
+              }
+            >
+              刷新状态并重新确认
             </Button>
             <Button
               variant="secondary"

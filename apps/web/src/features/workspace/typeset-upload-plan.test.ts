@@ -51,7 +51,7 @@ test("batch preview sorts unique numeric pages and retains arbitrary explanation
     initialTypesetUploadImages(input).map((image) => image.sourceName),
   ).toEqual(["139-10成图.png", "说明.png"]);
 });
-test("batch preview requires explicit merge and catches original/rendered page duplication", () => {
+test("batch preview requires explicit merge while names remain hints rather than mapping constraints", () => {
   const images = initialTypesetUploadImages(session());
   images[1].uploadFileId = "zip2";
   expect(typesetUploadGroupProblem(images, false)).toMatch(/合并/);
@@ -59,7 +59,7 @@ test("batch preview requires explicit merge and catches original/rendered page d
   images[1].archive = false;
   expect(typesetUploadGroupProblem(images, false)).toMatch(/合并/);
   images[1].pageNumber = images[0].pageNumber;
-  expect(typesetUploadGroupProblem(images, true)).toMatch(/重复/);
+  expect(typesetUploadGroupProblem(images, true)).toBeNull();
 });
 
 test("mapping uses stable page ids, preserves explicit choices and supports unnumbered ordered batches", () => {

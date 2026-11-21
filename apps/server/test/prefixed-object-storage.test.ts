@@ -65,9 +65,16 @@ test("prefix isolates put/read/stream/head/delete and both signed URL operations
       body,
     );
     assert.deepEqual(Buffer.from(await raw.read("trial/staging/upload")), body);
+    await storage.copy(input.key, "works/sealed.png");
+    assert.deepEqual(
+      Buffer.from(await raw.read("trial/works/sealed.png")),
+      body,
+    );
+    assert.equal(await raw.head("works/sealed.png"), null);
     await storage.delete(input.key);
     assert.equal(await storage.head(input.key), null);
     assert.equal(Buffer.from(await raw.read(input.key)).toString(), "old");
+    assert.deepEqual(Buffer.from(await storage.read("works/sealed.png")), body);
     assert.throws(() => new PrefixedObjectStorage(raw, "../"));
     await assert.rejects(storage.read("../source/example.png"));
   } finally {

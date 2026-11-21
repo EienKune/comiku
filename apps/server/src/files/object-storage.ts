@@ -27,10 +27,16 @@ export interface SignedWriteTarget {
 }
 
 export interface ObjectStorage {
+  /** Server-only snapshot. Destination must never have a client write URL. */
+  copy?(
+    sourceKey: string,
+    destinationKey: string,
+    signal?: AbortSignal,
+  ): Promise<void>;
   put(input: PutObjectInput): Promise<void>;
   read(key: string): Promise<Uint8Array>;
   readStream(key: string, signal?: AbortSignal): Promise<Readable>;
-  head(key: string): Promise<StoredObjectMetadata | null>;
+  head(key: string, signal?: AbortSignal): Promise<StoredObjectMetadata | null>;
   signedReadUrl(
     key: string,
     expiresInSeconds: number,

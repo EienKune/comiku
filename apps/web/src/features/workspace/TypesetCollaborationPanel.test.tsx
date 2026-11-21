@@ -10,12 +10,33 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { uploadTypesetFiles } from "./typeset-upload-transfer";
 import { TypesetCollaborationPanel } from "./TypesetCollaborationPanel";
+import { File as NodeFile } from "node:buffer";
+import { zipSync } from "fflate";
 vi.mock("./typeset-upload-transfer", () => ({ uploadTypesetFiles: vi.fn() }));
 beforeEach(() => {
-  vi.mocked(uploadTypesetFiles).mockResolvedValue({
-    id: "session",
-    status: "previewed",
-  } as never);
+  vi.stubGlobal("File", NodeFile);
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static createObjectURL = vi.fn(() => "blob:fixture");
+      static revokeObjectURL = vi.fn();
+    },
+  );
+  vi.mocked(uploadTypesetFiles).mockImplementation(
+    async (files) =>
+      ({
+        id: "session",
+        status: "previewed",
+        files: files.map((file) => ({
+          images: [
+            {
+              id: `i${Number(file.name.match(/-(\d+)/)?.[1])}`,
+              sourceName: file.name,
+            },
+          ],
+        })),
+      }) as never,
+  );
 });
 vi.mock("./typeset-batch-api", () => ({
   refreshTypesetWork: vi.fn(async () => undefined),
@@ -95,13 +116,25 @@ test("previews current-work files, ignores other owners and saves only explicit 
   ).toBe(true);
   fireEvent.change(screen.getByLabelText("上传成图或 ZIP"), {
     target: {
-      files: [new File(["zip"], "10_成图.zip", { type: "application/zip" })],
+      files: [
+        new File(
+          [
+            zipSync({
+              "10-002.png": new Uint8Array([1, 2, 3]),
+              "10-003.png": new Uint8Array([1, 2, 3]),
+            }) as BlobPart,
+          ],
+          "10_成图.zip",
+          { type: "application/zip" },
+        ),
+      ],
     },
   });
   expect(
     await screen.findByRole("heading", { name: "确认保存映射" }),
   ).toBeTruthy();
   expect(screen.getByText("该文件将被忽略，不覆盖他人页")).toBeTruthy();
+  expect(uploadTypesetFiles).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "保存本批草稿" }));
   await waitFor(() =>
     expect(calls.some((c) => c.url.endsWith("/apply"))).toBe(true),
@@ -118,6 +151,58 @@ test("previews current-work files, ignores other owners and saves only explicit 
   ]);
   expect(new Headers(apply.init?.headers).get("X-Comiku-Request")).toBe("1");
   expect(calls.some((c) => c.url.includes("/stages/submit"))).toBe(false);
+  expect(
+    vi.mocked(uploadTypesetFiles).mock.calls[0][0].map((file) => file.name),
+  ).toEqual(["10-002.png"]);
+});
+
+test("replays a committed multi-page apply after a lost response without uploading, verifying or binding again", async () => {
+  let bound = 0;
+  const applies: unknown[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/preview-session")) {
+        bound++;
+        return applies.length
+          ? Response.json(
+              { message: "上传预览已采用，请先核对保存结果" },
+              { status: 409 },
+            )
+          : Response.json({
+              sessionId: "session",
+              expectedRevision: 5,
+              images: [],
+            });
+      }
+      if (url.endsWith("/apply")) {
+        applies.push(JSON.parse(String(init?.body)));
+        // The first request committed; only its transport receipt was lost.
+        return applies.length === 1
+          ? new Response("<!DOCTYPE html>Gateway timeout", { status: 504 })
+          : Response.json({ revision: 6, savedDraftIds: ["adopted"] });
+      }
+      return Response.json(
+        url.includes("/url") ? { url: "/fixture.png" } : state,
+      );
+    }),
+  );
+  mount();
+  const input = await screen.findByLabelText("上传成图或 ZIP");
+  fireEvent.change(input, {
+    target: { files: [new File(["png"], "21-002.png", { type: "image/png" })] },
+  });
+  await screen.findByRole("heading", { name: "确认保存映射" });
+  fireEvent.click(screen.getByRole("button", { name: "保存本批草稿" }));
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "服务器响应超时",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "保存本批草稿" }));
+  await screen.findByText("成图草稿已保存");
+  expect(uploadTypesetFiles).toHaveBeenCalledOnce();
+  expect(bound).toBe(1);
+  expect(applies).toHaveLength(2);
+  expect(applies[1]).toEqual(applies[0]);
 });
 
 test("published output remains viewable with no upload or self-submission mutations", async () => {
@@ -166,7 +251,7 @@ test("keeps the own-page upload entry discoverable before handoff starts", async
   expect(screen.getByText("本人认领：第 1、2 页")).toBeTruthy();
 });
 
-test("shows failed uploads next to the picker and retries the same files before mapping", async () => {
+test("retains local mapping after failed uploads and retries the same selected file on save", async () => {
   vi.mocked(uploadTypesetFiles).mockRejectedValueOnce(
     new Error("21-002.png：上传失败（HTTP 502）"),
   );
@@ -196,14 +281,16 @@ test("shows failed uploads next to the picker and retries the same files before 
   const input = await screen.findByLabelText("上传成图或 ZIP");
   const files = [new File(["png"], "21-002.png", { type: "image/png" })];
   fireEvent.change(input, { target: { files } });
-  const alert = await screen.findByRole("alert");
+  await screen.findByRole("heading", { name: "确认保存映射" });
+  fireEvent.click(screen.getByRole("button", { name: "保存本批草稿" }));
+  const alert = await screen.findByText(/HTTP 502/);
   expect(alert.textContent).toContain("HTTP 502");
   const firstPage = screen.getByRole("button", { name: "第 1 页成图" });
   expect(
     alert.compareDocumentPosition(firstPage) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "重试上传" }));
-  await screen.findByRole("heading", { name: "确认保存映射" });
+  fireEvent.click(screen.getByRole("button", { name: "保存本批草稿" }));
+  await screen.findByText("成图草稿已保存");
   expect(vi.mocked(uploadTypesetFiles).mock.calls[1][0][0]).toBe(files[0]);
   expect(screen.queryByRole("alert")).toBeNull();
 });

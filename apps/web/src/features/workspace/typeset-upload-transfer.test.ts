@@ -41,7 +41,7 @@ const session = (status: string, failed = false) => ({
     },
   ],
 });
-test("uploads bytes before queueing extraction and reuses the bounded background poll", async () => {
+test("verifies a page immediately after its PUT and fetches the complete session once", async () => {
   vi.mocked(client.POST).mockImplementation(
     async (path) =>
       ({
@@ -53,14 +53,20 @@ test("uploads bytes before queueing extraction and reuses the bounded background
   vi.mocked(client.GET).mockResolvedValue({
     data: session("previewed"),
   } as never);
-  const direct = vi.fn(async () => new Response(null, { status: 200 }));
+  const direct = vi.fn(async (url: string) =>
+    url.endsWith("/verify")
+      ? Response.json(session("previewed").files[0])
+      : new Response(null, { status: 200 }),
+  );
   vi.stubGlobal("fetch", direct);
   vi.useFakeTimers();
   try {
     const pending = uploadTypesetFiles([new File(["x"], "21-001.png")]);
     await vi.advanceTimersByTimeAsync(2100);
     expect((await pending).status).toBe("previewed");
-    expect(direct).toHaveBeenCalledOnce();
+    expect(direct).toHaveBeenCalledTimes(2);
+    expect(direct.mock.calls[1][0]).toContain("/files/f/verify");
+    expect(client.POST).toHaveBeenCalledOnce();
     expect(client.GET).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();
@@ -114,7 +120,7 @@ test("keeps business conflicts and cancellation intact", async () => {
   }
 });
 
-test("bounds object uploads to three and settles all bodies before extraction", async () => {
+test("bounds independent object uploads to three and verification requests to two", async () => {
   const names = Array.from({ length: 7 }, (_, i) => `21-${i + 1}.png`);
   const makeSession = (processed: boolean) => ({
     ...session(processed ? "previewed" : "pending"),
@@ -130,9 +136,20 @@ test("bounds object uploads to three and settles all bodies before extraction", 
     if (String(path).endsWith("extract")) expect(active).toBe(0);
     return { data: makeSession(String(path).endsWith("extract")) } as never;
   });
+  vi.mocked(client.GET).mockResolvedValue({ data: makeSession(true) } as never);
+  let verifying = 0,
+    peakVerification = 0;
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => {
+    vi.fn(async (url: string) => {
+      if (url.endsWith("/verify")) {
+        verifying++;
+        peakVerification = Math.max(peakVerification, verifying);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        verifying--;
+        const id = url.split("/").at(-2)!;
+        return Response.json(makeSession(true).files[Number(id)]);
+      }
       active++;
       peak = Math.max(peak, active);
       await new Promise((resolve) => setTimeout(resolve, 1));
@@ -143,6 +160,7 @@ test("bounds object uploads to three and settles all bodies before extraction", 
   await uploadTypesetFiles(names.map((name) => new File(["x"], name)));
   expect(peak).toBe(3);
   expect(active).toBe(0);
+  expect(peakVerification).toBe(2);
 });
 
 test("restores a fully extracted session without creating another session or retransmitting bytes", async () => {
@@ -158,4 +176,184 @@ test("restores a fully extracted session without creating another session or ret
   expect(direct).not.toHaveBeenCalled();
   expect(client.POST).not.toHaveBeenCalled();
   expect(client.GET).toHaveBeenCalledTimes(1);
+});
+
+test("resumes verification without retransmitting its active object and skips already verified neighbours", async () => {
+  const ready = session("previewed");
+  ready.files.push({
+    ...ready.files[0],
+    id: "second",
+    sourceName: "21-002.png",
+  });
+  const pending = {
+    ...ready,
+    files: ready.files.map((file, index) =>
+      index === 0 ? { ...file, status: "verifying", upload: null } : file,
+    ),
+  };
+  vi.mocked(client.GET)
+    .mockResolvedValueOnce({ data: pending } as never)
+    .mockResolvedValue({ data: ready } as never);
+  const direct = vi.fn(async () => Response.json(ready.files[0]));
+  vi.stubGlobal("fetch", direct);
+  await uploadTypesetFiles(
+    [new File(["x"], "21-001.png"), new File(["x"], "21-002.png")],
+    { sessionId: "session", requireComplete: true },
+  );
+  expect(direct).toHaveBeenCalledOnce();
+  expect(direct.mock.calls[0]).toBeDefined();
+  expect(client.POST).not.toHaveBeenCalled();
+});
+
+test("a blocked verification pool does not hold any of the three upload slots", async () => {
+  const names = Array.from({ length: 7 }, (_, index) => `21-${index + 1}.png`);
+  const files = names.map((sourceName, index) => ({
+    ...session("pending").files[0],
+    id: String(index),
+    sourceName,
+  }));
+  vi.mocked(client.POST).mockResolvedValue({
+    data: { ...session("pending"), files },
+  } as never);
+  vi.mocked(client.GET).mockResolvedValue({
+    data: {
+      ...session("previewed"),
+      files: files.map((file) => ({ ...file, status: "processed" })),
+    },
+  } as never);
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let puts = 0,
+    verifications = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url.endsWith("/verify")) {
+        verifications++;
+        await barrier;
+        const index = Number(url.split("/").at(-2));
+        return Response.json({ ...files[index], status: "processed" });
+      }
+      puts++;
+      return new Response(null, { status: 200 });
+    }),
+  );
+  const pending = uploadTypesetFiles(
+    names.map((name) => new File(["x"], name)),
+  );
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(puts).toBe(7);
+    expect(verifications).toBe(2);
+  } finally {
+    release();
+    await pending;
+  }
+});
+
+test("only retransmits a failed file when its neighbouring page is already verified", async () => {
+  const ready = session("previewed");
+  ready.files.push({
+    ...ready.files[0],
+    id: "second",
+    sourceName: "21-002.png",
+  });
+  vi.mocked(client.GET)
+    .mockResolvedValueOnce({
+      data: {
+        ...ready,
+        files: ready.files.map((file, index) =>
+          index ? { ...file, status: "failed" } : file,
+        ),
+      },
+    } as never)
+    .mockResolvedValue({ data: ready } as never);
+  const direct = vi.fn(async (url: string) =>
+    url.endsWith("/verify")
+      ? Response.json(ready.files[1])
+      : new Response(null, { status: 200 }),
+  );
+  vi.stubGlobal("fetch", direct);
+  await uploadTypesetFiles(
+    [new File(["x"], "21-001.png"), new File(["x"], "21-002.png")],
+    { sessionId: "session", requireComplete: true },
+  );
+  expect(direct).toHaveBeenCalledTimes(2);
+  expect(direct.mock.calls[1][0]).toContain("/files/second/verify");
+});
+
+test("retries a busy verification slot without repeating its successful PUT", async () => {
+  vi.mocked(client.POST).mockResolvedValue({
+    data: session("pending"),
+  } as never);
+  vi.mocked(client.GET).mockResolvedValue({
+    data: session("previewed"),
+  } as never);
+  let puts = 0,
+    checks = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (!url.endsWith("/verify")) {
+        puts++;
+        return new Response(null, { status: 200 });
+      }
+      checks++;
+      return checks === 1
+        ? Response.json(
+            { message: "当前图片验证繁忙，请稍后重试" },
+            { status: 409 },
+          )
+        : Response.json(session("previewed").files[0]);
+    }),
+  );
+  vi.useFakeTimers();
+  try {
+    const pending = uploadTypesetFiles([new File(["x"], "21-001.png")]);
+    await vi.advanceTimersByTimeAsync(1100);
+    await pending;
+    expect(puts).toBe(1);
+    expect(checks).toBe(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("cancellation aborts active validation and settles the queue without requesting a save-ready session", async () => {
+  vi.mocked(client.POST).mockResolvedValue({
+    data: session("pending"),
+  } as never);
+  const controller = new AbortController();
+  let active = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (!url.endsWith("/verify")) return new Response(null, { status: 200 });
+      active++;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            active--;
+            reject(init.signal?.reason);
+          },
+          { once: true },
+        );
+      });
+    }),
+  );
+  const pending = uploadTypesetFiles([new File(["x"], "21-001.png")], {
+    signal: controller.signal,
+  });
+  const rejected = expect(pending).rejects.toMatchObject({
+    name: "AbortError",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(active).toBe(1);
+  controller.abort();
+  await rejected;
+  expect(active).toBe(0);
+  expect(client.GET).not.toHaveBeenCalled();
 });

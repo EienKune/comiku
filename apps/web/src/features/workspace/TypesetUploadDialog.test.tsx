@@ -14,6 +14,7 @@ import { TypesetUploadDialog } from "./TypesetUploadDialog";
 import { createComikuClient } from "@comiku/api-client";
 import * as batchApi from "./typeset-batch-api";
 import * as transferApi from "./typeset-upload-transfer";
+import * as localApi from "./typeset-local-files";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -45,7 +46,7 @@ function showUploadDialog() {
   );
 }
 
-test.each(["upload", "resume"] as const)(
+test.each(["resume"] as const)(
   "keeps successful batch images visible alongside a failed ZIP after %s",
   async (entry) => {
     const result = {
@@ -117,7 +118,7 @@ test.each(["upload", "resume"] as const)(
   },
 );
 
-test("a failed file transfer keeps the selection and retries its existing upload session", async () => {
+test("local previews send no bytes and a failed selected transfer retries its existing session", async () => {
   const file = new File(["synthetic"], "11.png", { type: "image/png" });
   const session = { id: "retry-session", files: [] } as unknown as Awaited<
     ReturnType<typeof transferApi.uploadTypesetFiles>
@@ -128,17 +129,64 @@ test("a failed file transfer keeps the selection and retries its existing upload
       options?.onSession?.(session);
       throw new Error("11.png：上传失败（HTTP 502）。请重试上传");
     });
+  vi.spyOn(localApi, "prepareLocalTypesetImages").mockResolvedValue([
+    {
+      id: "local",
+      uploadFileId: "container",
+      sourceName: file.name,
+      width: 10,
+      height: 10,
+      size: file.size,
+      workNumber: 11,
+      pageNumber: 1,
+      warnings: [],
+      target: "11",
+      included: true,
+      archive: false,
+      file,
+      localUrl: "blob:fixture",
+    },
+  ]);
+  vi.spyOn(localApi, "releaseLocalTypesetImages").mockImplementation(
+    () => undefined,
+  );
+  vi.spyOn(client, "GET").mockImplementation(
+    async (path) =>
+      ({
+        data: String(path).includes("handoff-manifest")
+          ? { items: [{ workId: "work", workNumber: 11, title: "Work" }] }
+          : { collaborationMode: "single", pages: [], participants: [] },
+        response: new Response(),
+      }) as never,
+  );
   const { container } = showUploadDialog();
   fireEvent.change(container.querySelector('input[type="file"]')!, {
     target: { files: [file] },
   });
-  fireEvent.click(screen.getByRole("button", { name: "上传并解析预览" }));
+  fireEvent.click(screen.getByRole("button", { name: "本地解析预览" }));
+  await screen.findByText("11.png");
+  expect(upload).not.toHaveBeenCalled();
+  await waitFor(() =>
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "检查提交条件",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(
+    screen.getByRole("checkbox", {
+      name: "已预览核对，所选图片为成图（包含说明页）",
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "检查提交条件" }));
   await screen.findByText("11.png：上传失败（HTTP 502）。请重试上传");
   expect(localStorage.getItem("comiku:typeset-upload-session:user")).toBe(
     "retry-session",
   );
-  expect(screen.getByText(/已选 1 个文件/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "上传并解析预览" }));
+  expect(screen.getByText("11.png")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "检查提交条件" }));
   await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
   expect(upload.mock.calls[1][0]).toEqual([file]);
   expect(upload.mock.calls[1][1]?.sessionId).toBe("retry-session");
@@ -703,7 +751,6 @@ test("restores frozen multi-page mapping, submits only own pages, and shows pers
           workNumber: 16,
           pageMappings: [
             { imageId: "image1", workImageId: "p1" },
-            { imageId: "image2", workImageId: "p2" },
             { imageId: "image3", workImageId: "p3" },
           ],
         },

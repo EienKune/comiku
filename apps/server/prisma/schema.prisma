@@ -225,6 +225,7 @@ model FileObject {
   candidateMedia       CandidateMedia[]
   workImages           WorkImage[]
   labelPlusFiles       LabelPlusFile[]
+  typesetMaterialImages TypesetMaterialImage[]
   typesetPackages      TypesetHandoffPackage[]
   typesetUploadImages  TypesetUploadImage[]
   typesetImages        TypesetImageVersionImage[]
@@ -939,6 +940,7 @@ model CandidateMediaAnalysis {
 }
 
 model Work {
+  typesetMaterials TypesetMaterial[]
   sourceAssetReplacements WorkSourceAssetReplacement[]
   proofreadPageLeases ProofreadPageLease[]
   sourceAssetRevision Int @default(0) @map("source_asset_revision")
@@ -1324,6 +1326,7 @@ model TranslationEntry {
 }
 
 model TranslationVersion {
+  typesetMaterials TypesetMaterial[]
   reviewRevisionId           String?                   @map("review_revision_id") @db.Uuid
   reviewRevision             WorkReviewRevision?       @relation(fields: [reviewRevisionId], references: [id], onDelete: Restrict)
   requiredForWorks           Work[]                    @relation("RequiredHandoff")
@@ -1710,8 +1713,23 @@ model TypesetUploadFile {
   status String @default("pending") @db.VarChar(32)
   error String? @db.VarChar(500)
   images TypesetUploadImage[]
+  verifications TypesetUploadVerification[]
 
   @@map("typeset_upload_files")
+}
+
+model TypesetUploadVerification {
+  id String @id @default(uuid()) @db.Uuid
+  uploadFileId String @map("upload_file_id") @db.Uuid
+  uploadFile TypesetUploadFile @relation(fields: [uploadFileId], references: [id], onDelete: Cascade)
+  objectKey String @unique @map("object_key") @db.Text
+  status String @default("processing") @db.VarChar(32)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  cleanedAt DateTime? @map("cleaned_at") @db.Timestamptz(3)
+  @@index([status, expiresAt])
+  @@index([uploadFileId, status])
+  @@map("typeset_upload_verifications")
 }
 
 model TypesetUploadImage {
@@ -1741,6 +1759,7 @@ model TypesetUploadPreview {
   imageIds Json @map("image_ids")
   idempotencyKey String @unique @map("idempotency_key") @db.Uuid
   versionId String? @map("version_id") @db.Uuid
+  appliedAt DateTime? @map("applied_at") @db.Timestamptz(3)
   version TypesetImageVersion? @relation(fields: [versionId], references: [id], onDelete: Restrict)
 
   @@unique([sessionId, workId])
@@ -2589,4 +2608,39 @@ model WorkSourceAssetReplacement {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   @@index([workId,createdAt])
   @@map("work_source_asset_replacements")
+}
+
+model TypesetMaterial {
+  id String @id @default(uuid()) @db.Uuid
+  workId String @map("work_id") @db.Uuid
+  work Work @relation(fields: [workId], references: [id], onDelete: Restrict)
+  actorId String @map("actor_id") @db.Uuid
+  translationVersionId String @map("translation_version_id") @db.Uuid
+  translationVersion TranslationVersion @relation(fields: [translationVersionId], references: [id], onDelete: Restrict)
+  sourceAssetRevision Int @map("source_asset_revision")
+  workRevision Int @map("work_revision")
+  editorEpoch Int @map("editor_epoch")
+  idempotencyKey String @map("idempotency_key") @db.Uuid
+  requireCurrentParticipation Boolean @map("require_current_participation")
+  fileName String @map("file_name") @db.VarChar(255)
+  translationFileName String @map("translation_file_name") @db.VarChar(255)
+  translationBase64 String @map("translation_base64") @db.Text
+  deliveredAt DateTime? @map("delivered_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  images TypesetMaterialImage[]
+  @@unique([actorId, idempotencyKey])
+  @@index([workId, createdAt])
+  @@map("typeset_materials")
+}
+model TypesetMaterialImage {
+  materialId String @map("material_id") @db.Uuid
+  material TypesetMaterial @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  workImageId String @map("work_image_id") @db.Uuid
+  fileObjectId String @map("file_object_id") @db.Uuid
+  fileObject FileObject @relation(fields: [fileObjectId], references: [id], onDelete: Restrict)
+  orderIndex Int @map("order_index")
+  fileName String @map("file_name") @db.VarChar(255)
+  @@id([materialId, orderIndex])
+  @@index([fileObjectId])
+  @@map("typeset_material_images")
 }

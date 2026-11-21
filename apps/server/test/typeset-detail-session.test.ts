@@ -63,6 +63,10 @@ function fixture() {
         preview = data;
         return data;
       },
+      update: async ({ data }: { data: Record<string, unknown> }) => {
+        preview = { ...preview, ...data };
+        return preview;
+      },
     },
     $transaction: async (run: (tx: unknown) => Promise<unknown>) => run(db),
   };
@@ -132,19 +136,55 @@ test("never rebinds an existing preview to a newer work version", async () => {
   );
   assert.equal(f.creates, 0);
 });
-test("keeps explicit other-work filenames and expired sessions out of detail imports", async () => {
+test("explicit rebind reuses unadopted images only while epoch and handoff are unchanged", async () => {
+  const f = fixture();
+  f.setPreview({
+    id: "preview",
+    workRevision: 4,
+    editorEpoch: 2,
+    handoffStartedAt: f.work.typesetHandoffStartedAt,
+    versionId: null,
+    appliedAt: null,
+  });
+  const result = await f.service.previewSession("actor", "work", {
+    ...f.input,
+    rebind: true,
+  });
+  assert.equal(result.images[0].id, "image");
+  assert.equal(result.expectedRevision, 5);
+  assert.equal(f.creates, 0);
+  f.setPreview({
+    id: "preview",
+    workRevision: 4,
+    editorEpoch: 2,
+    handoffStartedAt: f.work.typesetHandoffStartedAt,
+    versionId: null,
+    appliedAt: new Date(),
+  });
+  await assert.rejects(
+    f.service.previewSession("actor", "work", { ...f.input, rebind: true }),
+    /采用|使用|更新/,
+  );
+  f.setPreview({
+    id: "preview",
+    workRevision: 4,
+    editorEpoch: 1,
+    handoffStartedAt: f.work.typesetHandoffStartedAt,
+    versionId: null,
+    appliedAt: null,
+  });
+  await assert.rejects(
+    f.service.previewSession("actor", "work", { ...f.input, rebind: true }),
+    /基线|更新/,
+  );
+});
+test("treats filenames as mapping suggestions while rejecting expired sessions", async () => {
   const f = fixture();
   f.session.files[0].sourceName = "22_成图.zip";
-  await assert.rejects(
-    f.service.previewSession("actor", "work", f.input),
-    /其他作品/,
-  );
+  await f.service.previewSession("actor", "work", f.input);
   f.session.files[0].sourceName = "21_成图.zip";
   f.session.files[0].images[0].sourceName = "22-002.png";
-  await assert.rejects(
-    f.service.previewSession("actor", "work", f.input),
-    /其他作品/,
-  );
+  await f.service.previewSession("actor", "work", f.input);
   f.session.expiresAt = new Date(0);
   await assert.rejects(
     f.service.previewSession("actor", "work", f.input),

@@ -9,6 +9,8 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TypesetCurrentImageTools } from "./TypesetCurrentImageTools";
+import { uploadTypesetFiles } from "./typeset-upload-transfer";
+vi.mock("./typeset-upload-transfer", () => ({ uploadTypesetFiles: vi.fn() }));
 vi.mock("./typeset-batch-api", () => ({
   refreshTypesetWork: vi.fn(async () => undefined),
 }));
@@ -18,6 +20,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 test("single pending-publication tools add an explicit cover and confirm removal using the current immutable version", async () => {
+  vi.mocked(uploadTypesetFiles).mockResolvedValue({
+    id: "session",
+    files: [{ images: [{ id: "verified-image" }] }],
+  } as never);
   HTMLDialogElement.prototype.showModal = function () {
     this.setAttribute("open", "");
   };
@@ -76,16 +82,23 @@ test("single pending-publication tools add an explicit cover and confirm removal
   await waitFor(() =>
     expect(
       requests.some(
-        (r) => r.url.endsWith("/supplements") && r.init?.method === "POST",
+        (r) =>
+          r.url.endsWith("/supplements/from-session") &&
+          r.init?.method === "POST",
       ),
     ).toBe(true),
   );
   const add = requests.find(
-    (r) => r.url.endsWith("/supplements") && r.init?.method === "POST",
+    (r) =>
+      r.url.endsWith("/supplements/from-session") && r.init?.method === "POST",
   )!;
-  const body = add.init?.body as FormData;
-  expect(body.get("position")).toBe("end");
-  expect(body.get("expectedRevision")).toBe("9");
+  const body = JSON.parse(String(add.init?.body));
+  expect(body).toMatchObject({
+    position: "end",
+    expectedRevision: 9,
+    sessionId: "session",
+    uploadImageId: "verified-image",
+  });
   await waitFor(() =>
     expect(
       (
