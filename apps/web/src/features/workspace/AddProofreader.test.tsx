@@ -88,13 +88,11 @@ function show(
 test("administrator delegation excludes self and refreshes cached workflow permissions", async () => {
   queryClient.setQueryData(["translation-editor", "work"], { canEdit: false });
   const invalidate = vi.spyOn(queryClient, "invalidateQueries");
-  const response = vi
-    .fn()
-    .mockResolvedValue(
-      new Response(JSON.stringify({ id: "work", revision: 8 }), {
-        status: 200,
-      }),
-    );
+  const response = vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ id: "work", revision: 8 }), {
+      status: 200,
+    }),
+  );
   vi.stubGlobal("fetch", response);
   const { updated } = show(actor(["admin", "translator", "proofreader"]));
   expect(screen.queryByRole("button", { name: "加入校对" })).toBeNull();

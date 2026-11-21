@@ -300,16 +300,17 @@ test("dual views enforce stage/language qualifications before counts and priorit
             0,
           );
           assert.deepEqual((await list(admin.id)).claimCounts, []);
+          const operatorPublish = await list(operator.id, {
+            view: WorkView.publish,
+          });
           assert.deepEqual(
-            (await list(operator.id, { view: WorkView.publish })).items.map(
-              (item) => item.id,
-            ),
+            operatorPublish.items.map((item) => item.id),
             [publishKo.id, publishJa.id],
           );
-          assert.equal(
-            (await list(admin.id, { view: WorkView.publish })).publishTotal,
-            2,
-          );
+          assert.equal(operatorPublish.publishTotal, 2);
+          const adminPublish = await list(admin.id, { view: WorkView.publish });
+          assert.equal(adminPublish.publishTotal, 0);
+          assert.deepEqual(adminPublish.items, []);
           assert.equal(
             (await list(source.id, { view: WorkView.publish })).total,
             0,
