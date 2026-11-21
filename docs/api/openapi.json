@@ -19234,7 +19234,17 @@
     "/api/works/{workId}/typeset/collaboration": {
       "get": {
         "operationId": "getTypesetCollaboration",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "workId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -35302,6 +35312,44 @@
           "images"
         ]
       },
+      "TypesetUploadReceiptDto": {
+        "type": "object",
+        "properties": {
+          "workNumber": {
+            "type": "number"
+          },
+          "workId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "versionId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "stageSubmitted": {
+            "type": "boolean"
+          },
+          "workCompleted": {
+            "type": "boolean"
+          },
+          "imageIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "workNumber",
+          "workId",
+          "versionId",
+          "stageSubmitted",
+          "workCompleted",
+          "imageIds"
+        ]
+      },
       "TypesetUploadSessionDto": {
         "type": "object",
         "properties": {
@@ -35327,6 +35375,12 @@
             "items": {
               "$ref": "#/components/schemas/TypesetUploadFileDto"
             }
+          },
+          "receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TypesetUploadReceiptDto"
+            }
           }
         },
         "required": [
@@ -35336,6 +35390,23 @@
           "maxWorks",
           "maxTotalBytes",
           "files"
+        ]
+      },
+      "TypesetBatchPageMappingDto": {
+        "type": "object",
+        "properties": {
+          "imageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workImageId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "imageId",
+          "workImageId"
         ]
       },
       "TypesetUploadGroupInputDto": {
@@ -35352,6 +35423,12 @@
             "items": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          "pageMappings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TypesetBatchPageMappingDto"
             }
           },
           "mergeConfirmed": {
@@ -35427,6 +35504,15 @@
           "error": {
             "type": "string",
             "nullable": true
+          },
+          "ignored": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "savedImageCount": {
+            "type": "number"
           }
         },
         "required": [
@@ -35476,7 +35562,17 @@
           },
           "versionId": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "nullable": true
+          },
+          "workCompleted": {
+            "type": "boolean"
+          },
+          "ignored": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "stageSubmitted": {
             "type": "boolean",

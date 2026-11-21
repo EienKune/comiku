@@ -87,7 +87,7 @@ export class PublishingService {
   ) {}
 
   async view(actorId: string, workId: string): Promise<PublishingViewDto> {
-    await this.assertCanPrepare(actorId, workId);
+    await this.assertCanPrepare(actorId);
     return this.buildView(this.db, workId);
   }
 
@@ -102,7 +102,7 @@ export class PublishingService {
   }
 
   private async validateDownload(task: DownloadPreparation) {
-    await this.assertCanPrepare(task.actorId, task.workId);
+    await this.assertCanPrepare(task.actorId);
     const prepared = await this.prepare(this.db, task.workId, false);
     assertProductionWritable(prepared.work);
     if (
@@ -172,6 +172,7 @@ export class PublishingService {
 
   // Retained compatibility route uses the same streamed archive, never a batch buffer.
   async readCurrentImages(actorId: string, workId: string) {
+    await this.assertCanPrepare(actorId);
     const prepared = await this.prepare(this.db, workId, false);
     const result = await this.prepareImageDownload(
       {
@@ -194,6 +195,9 @@ export class PublishingService {
     input: ConfirmPublicationDto,
   ): Promise<PublishingViewDto> {
     await this.db.$transaction(async (tx) => {
+      // Keep the operator role stable until publication commits, before locking work.
+      await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock_shared(20260905, 2)`;
+      await this.assertCanPrepare(actorId, tx);
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
       );
@@ -479,24 +483,24 @@ export class PublishingService {
     };
   }
 
-  private async assertCanPrepare(actorId: string, workId: string) {
-    const user = await this.db.user.findUnique({
+  private async assertCanPrepare(
+    actorId: string,
+    client: Prisma.TransactionClient = this.db,
+  ) {
+    const user = await client.user.findUnique({
       where: { id: actorId },
       select: {
+        isActive: true,
+        mustChangePassword: true,
         roles: { select: { role: true } },
-        workParticipations: {
-          where: { workId, stage: "typeset", leftAt: null },
-          select: { id: true },
-        },
       },
     });
     const roles = new Set(user?.roles.map(({ role }) => role) ?? []);
     if (
       !user ||
-      (!roles.has(Role.admin) &&
-        !roles.has(Role.operator) &&
-        !roles.has(Role.reviewer) &&
-        (!roles.has(Role.typesetter) || !user.workParticipations.length))
+      !user.isActive ||
+      user.mustChangePassword ||
+      !roles.has(Role.operator)
     ) {
       throw new ForbiddenException("没有整理此作品发布内容的权限");
     }

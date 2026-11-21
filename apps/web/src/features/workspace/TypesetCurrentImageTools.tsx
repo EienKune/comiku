@@ -1,3 +1,5 @@
+import { TypesetComparePane, TypesetZoom } from "./TypesetCompareControls";
+import { workImageKey } from "./use-work-image-url";
 import { FilePickerButton } from "../../components/ImagePicker";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -76,7 +78,7 @@ export function TypesetCurrentImageTools({
     removeKey.current = crypto.randomUUID();
   }, [imageId, workImageId]);
   const original = useQuery({
-    queryKey: ["typeset-single-compare", workId, sourceId],
+    queryKey: [...workImageKey(workId, sourceId), "typeset-compare"],
     queryFn: () =>
       collaborationRequest<{ url: string }>(
         `/api/works/${workId}/images/${sourceId}/url`,
@@ -171,18 +173,7 @@ export function TypesetCurrentImageTools({
             ))}
           </SelectControl>
         </label>
-        <label>
-          缩放
-          <input
-            aria-label="成图对比缩放"
-            type="range"
-            min=".5"
-            max="3"
-            step=".25"
-            value={zoom}
-            onChange={(e) => setZoom(Number(e.target.value))}
-          />
-        </label>
+        <TypesetZoom label="成图对比缩放" value={zoom} onChange={setZoom} />
         <SelectControl
           className="typeset-compare-side"
           aria-label="窄屏查看"
@@ -267,13 +258,13 @@ export function TypesetCurrentImageTools({
         style={{ "--typeset-zoom": zoom } as React.CSSProperties}
       >
         {original.data && (
-          <div className="typeset-compare-source">
+          <TypesetComparePane side="source">
             <img src={original.data.url} alt="对比原图" />
-          </div>
+          </TypesetComparePane>
         )}
-        <div className="typeset-compare-output">
+        <TypesetComparePane side="output">
           {output.data && <img src={output.data.url} alt="当前成图" />}
-        </div>
+        </TypesetComparePane>
       </div>
       {message && <p role="status">{message}</p>}
       {confirmation.dialog}

@@ -129,7 +129,7 @@ export function workingTabs(
     )
       tabs.push({ value: stage, label });
   }
-  if (member.roles.some((role) => role === "operator" || role === "admin"))
+  if (member.roles.includes("operator"))
     tabs.push({ value: "pending_publish", label: "待发布" });
   return tabs;
 }

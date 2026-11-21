@@ -12,6 +12,7 @@ import {
   type RetainedPages,
 } from "./CollaborationModePreview";
 import { PageWorkflowDialog } from "./PageWorkflowOverview";
+import { useWorkImageUrl } from "./use-work-image-url";
 import { SourceHdReplacement } from "./SourceHdReplacement";
 import { SingleTypesetArchiveImport } from "./SingleTypesetArchiveImport";
 import { TypesetCurrentImageTools } from "./TypesetCurrentImageTools";
@@ -74,6 +75,7 @@ import {
 import { downloadPrepared, uploadDirect, pollTransfer } from "./transfers-api";
 import { useImageUrl } from "../../components/use-image-url";
 import { refreshReviewViews } from "./review-cache";
+import { refreshTypesetWork } from "./typeset-batch-api";
 import { useCandidateAnalysisRefresh } from "./use-candidate-analysis-refresh";
 import { SourceSyncControl } from "./SourceSyncControl";
 import { MemberAvatar } from "../account/MemberAvatar";
@@ -4248,19 +4250,7 @@ export function WorksPage() {
 
 function WorkCover({ work }: { work: Work }) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const query = useImageUrl(
-    ["thumbnail", "work-cover", work.id, work.coverImageId],
-    async () =>
-      unwrap(
-        await client.GET("/api/works/{workId}/images/{imageId}/url", {
-          params: {
-            path: { workId: work.id, imageId: work.coverImageId! },
-            query: { variant: "thumbnail" },
-          },
-        }),
-      ),
-    Boolean(work.coverImageId),
-  );
+  const query = useWorkImageUrl(work.id, work.coverImageId);
   const detail = useApiQuery(
     ["work-lightbox", work.id],
     async () =>
@@ -4273,18 +4263,7 @@ function WorkCover({ work }: { work: Work }) {
   );
   const lightboxImage =
     lightboxIndex === null ? undefined : detail.data?.images[lightboxIndex];
-  const lightboxQuery = useImageUrl(
-    ["work-image", work.id, lightboxImage?.id],
-    async () =>
-      unwrap(
-        await client.GET("/api/works/{workId}/images/{imageId}/url", {
-          params: {
-            path: { workId: work.id, imageId: lightboxImage!.id },
-          },
-        }),
-      ),
-    Boolean(lightboxImage),
-  );
+  const lightboxQuery = useWorkImageUrl(work.id, lightboxImage?.id, "original");
   const safe = isDisplayableImageUrl(query.data?.url);
   return (
     <>
@@ -4724,6 +4703,19 @@ function TypesetVersionPanel({
 }) {
   const action = useAction();
   const currentUser = useAccount();
+  const awaitingHandoff =
+    canManage &&
+    !canUpload &&
+    !work.typesetHandoffStartedAt &&
+    ["pending_typeset", "typesetting"].includes(work.workflowStatus) &&
+    currentUser.roles.includes("typesetter") &&
+    work.participants.some(
+      (participant) =>
+        participant.userId === currentUser.id &&
+        participant.stage === "typeset" &&
+        !participant.leftAt &&
+        !participant.submittedAt,
+    );
   const [files, setFiles] = useState<File[]>([]);
   const [sourceImageIds, setSourceImageIds] = useState<Record<string, string>>(
     {},
@@ -4990,6 +4982,20 @@ function TypesetVersionPanel({
         work={work}
         message="可以继续上传和整理修正版供复核；审核解决前不能确认嵌字完成。"
       />
+      {awaitingHandoff && (
+        <div className="workspace-file-field">
+          <FilePickerButton
+            label="选择成图图片"
+            inputLabel="成图图片"
+            accept="image/png,image/jpeg,image/webp"
+            disabled
+            onFiles={() => {}}
+          />
+          <p className="workspace-muted">
+            先下载交接包并开始嵌字，再到这里上传成图。
+          </p>
+        </div>
+      )}
       {canUpload && (
         <SingleTypesetArchiveImport
           workId={work.id}
@@ -5451,9 +5457,7 @@ function PublishingPanel({
           <div className="workspace-publish-summary">
             <span>当前成图 v{query.data.currentTypesetVersionNumber}</span>
             <span>{query.data.imageCount} 页</span>
-            <span>
-              {query.data.templateName} r{query.data.templateRevision}
-            </span>
+            <span>{query.data.templateName}</span>
             {query.data.sourcePostUrl && (
               <a
                 href={query.data.sourcePostUrl}
@@ -5848,26 +5852,32 @@ export function WorkDetailPage() {
   }
   async function downloadTypesetHandoffPackage(work: WorkDetail) {
     await action.run(async () => {
-      await downloadPrepared({
-        purpose: "handoff",
-        requireCurrentParticipation: false,
-        workId: work.id,
-        expectedRevision: work.revision,
-        expectedEditorEpoch: work.editorEpoch,
-        idempotencyKey: crypto.randomUUID(),
-      });
-      discardEditorCache();
-      await Promise.all([
-        query.refetch(),
-        queryClient.refetchQueries({
-          queryKey: ["typeset-versions", work.id],
-          type: "active",
-        }),
-        invalidateWorkViews(),
-      ]);
-      action.setSuccess("嵌字交接包已交付浏览器下载");
+      try {
+        await downloadPrepared({
+          purpose: "handoff",
+          requireCurrentParticipation:
+            user.roles.includes("typesetter") &&
+            work.participants.some(
+              (participant) =>
+                participant.userId === user.id &&
+                participant.stage === "typeset" &&
+                !participant.leftAt &&
+                !participant.submittedAt,
+            ),
+          workId: work.id,
+          expectedRevision: work.revision,
+          expectedEditorEpoch: work.editorEpoch,
+          idempotencyKey: crypto.randomUUID(),
+        });
+        action.setSuccess("嵌字交接包已交付浏览器下载");
+      } finally {
+        // Delivery may have committed even when the response was interrupted.
+        discardEditorCache();
+        await refreshTypesetWork(work.id);
+      }
     });
   }
+
   return (
     <PermissionGate permission="works:read">
       {confirmation.dialog}
@@ -5902,6 +5912,16 @@ export function WorkDetailPage() {
               participant.stage === "typeset" &&
               !participant.leftAt,
           );
+          const canStartTypesetHandoff =
+            productionWritable &&
+            user.roles.includes("typesetter") &&
+            work.participants.some(
+              (participant) =>
+                participant.userId === user.id &&
+                participant.stage === "typeset" &&
+                !participant.leftAt &&
+                !participant.submittedAt,
+            );
           const canManageTypesetVersions =
             productionWritable &&
             (user.permissions.includes("works:admin") ||
@@ -5946,13 +5966,9 @@ export function WorkDetailPage() {
                 participant.submittedAt === latestTypesetSubmittedAt &&
                 !participant.leftAt,
             );
-          const canPreparePublishing =
-            user.roles.some((role) =>
-              ["admin", "operator", "reviewer"].includes(role),
-            ) ||
-            (user.roles.includes("typesetter") && hasTypesetParticipation);
+          const canPreparePublishing = user.roles.includes("operator");
           const canConfirmPublication =
-            user.permissions.includes("works:publish");
+            canPreparePublishing && user.permissions.includes("works:publish");
           return (
             <>
               <SectionHeading title={workDisplayTitle(work)}>
@@ -6000,7 +6016,7 @@ export function WorkDetailPage() {
 
               <div className="workspace-detail-grid">
                 <Surface className="workspace-panel">
-                  <div className="workspace-panel-heading">
+                  <div className="workspace-panel-heading workspace-current-work-heading">
                     <div>
                       <h2>当前工作</h2>
                       <p>
@@ -6009,19 +6025,36 @@ export function WorkDetailPage() {
                           : "当前没有可加入的工作阶段"}
                       </p>
                     </div>
-                    <Link
-                      className="account-link workspace-editor-entry"
-                      to={`/works/${work.id}/editor`}
-                    >
-                      <ScanText size={14} />
-                      {stage === "proofread"
-                        ? "进入校对工作区"
-                        : "进入翻译工作区"}
-                    </Link>
+                    <div className="workspace-inline-actions workspace-current-work-actions">
+                      {stage === "typeset" && (
+                        <a
+                          className="account-link workspace-editor-entry"
+                          href="#typeset-output"
+                        >
+                          <Upload size={14} />
+                          {canStartTypesetHandoff
+                            ? "上传与提交成图"
+                            : "查看成图"}
+                        </a>
+                      )}
+                      <Link
+                        className="account-link workspace-editor-entry"
+                        to={`/works/${work.id}/editor`}
+                      >
+                        <ScanText size={14} />
+                        {stage === "proofread"
+                          ? "进入校对工作区"
+                          : stage === "typeset" || stage === "publish"
+                            ? "查看翻译稿"
+                            : "进入翻译工作区"}
+                      </Link>
+                    </div>
                   </div>
                   {stage === "publish" && (
                     <p className="workspace-notice">
-                      当前成图已经就绪，请在下方整理发布内容并确认发布。
+                      {canPreparePublishing
+                        ? "当前成图已经就绪，请在下方整理发布内容并确认发布。"
+                        : "当前成图已经就绪，等待运营确认发布。"}
                     </p>
                   )}
                   {productionWritable &&
@@ -6093,7 +6126,11 @@ export function WorkDetailPage() {
                             }
                           >
                             <Download size={16} />
-                            下载嵌字交接包
+                            {work.typesetHandoffStartedAt
+                              ? "重新下载嵌字交接包"
+                              : canStartTypesetHandoff
+                                ? "下载交接包并开始嵌字"
+                                : "下载嵌字交接包"}
                           </Button>
                         </div>
                       ) : (
@@ -6104,7 +6141,9 @@ export function WorkDetailPage() {
                       <small>
                         {work.typesetHandoffStartedAt
                           ? `交接已于 ${dateTime(work.typesetHandoffStartedAt)} 开始，校对内容已冻结。`
-                          : "本轮嵌字成员首次成功下载统一交接包后，将冻结校对最终版本；检查用途下载不会推进流程。"}
+                          : canStartTypesetHandoff
+                            ? "下载成功即开始本轮嵌字并冻结校对稿，随后到成图区上传本人认领页。此前的检查下载不代表已开始。"
+                            : "检查下载不会开始嵌字。请先在任务组协调中认领嵌字页，再下载交接包并开始。"}
                       </small>
                     </section>
                   )}
@@ -6466,39 +6505,45 @@ export function WorkDetailPage() {
                 "pending_publish",
                 "published",
                 "archived",
-              ].includes(work.workflowStatus) &&
-                (work.collaborationMode === "multi" ? (
-                  <TypesetCollaborationPanel
-                    workId={work.id}
-                    actorId={user.id}
-                    workRevision={work.revision}
-                    onChanged={async () => {
-                      await Promise.all([
-                        query.refetch(),
-                        invalidateWorkViews(work.id),
-                      ]);
-                    }}
-                  />
-                ) : (
-                  <TypesetVersionPanel
-                    work={work}
-                    canManage={canManageTypesetVersions}
-                    canUpload={canUploadTypesetVersion}
-                    canCancelSubmission={canCancelTypesetSubmission}
-                    onUpdated={() =>
-                      Promise.all([
-                        query.refetch(),
-                        invalidateWorkViews(work.id),
-                      ])
-                    }
-                    onWorkUpdated={() =>
-                      Promise.all([
-                        query.refetch(),
-                        invalidateWorkViews(work.id),
-                      ])
-                    }
-                  />
-                ))}
+              ].includes(work.workflowStatus) && (
+                <div id="typeset-output" className="workspace-detail-output">
+                  {work.collaborationMode === "multi" ? (
+                    <TypesetCollaborationPanel
+                      workId={work.id}
+                      actorId={user.id}
+                      workRevision={work.revision}
+                      canEdit={
+                        productionWritable && user.roles.includes("typesetter")
+                      }
+                      onChanged={async () => {
+                        await Promise.all([
+                          query.refetch(),
+                          invalidateWorkViews(work.id),
+                        ]);
+                      }}
+                    />
+                  ) : (
+                    <TypesetVersionPanel
+                      work={work}
+                      canManage={canManageTypesetVersions}
+                      canUpload={canUploadTypesetVersion}
+                      canCancelSubmission={canCancelTypesetSubmission}
+                      onUpdated={() =>
+                        Promise.all([
+                          query.refetch(),
+                          invalidateWorkViews(work.id),
+                        ])
+                      }
+                      onWorkUpdated={() =>
+                        Promise.all([
+                          query.refetch(),
+                          invalidateWorkViews(work.id),
+                        ])
+                      }
+                    />
+                  )}
+                </div>
+              )}
               {["pending_publish", "published"].includes(work.workflowStatus) &&
                 canPreparePublishing && (
                   <PublishingPanel
@@ -6548,30 +6593,10 @@ function WorkImage({
   index: number;
 }) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const query = useImageUrl(
-    ["thumbnail", "work-image", workId, image.id],
-    async () =>
-      unwrap(
-        await client.GET("/api/works/{workId}/images/{imageId}/url", {
-          params: {
-            path: { workId, imageId: image.id },
-            query: { variant: "thumbnail" },
-          },
-        }),
-      ),
-  );
+  const query = useWorkImageUrl(workId, image.id);
   const lightboxImage =
     lightboxIndex === null ? undefined : images[lightboxIndex];
-  const lightboxQuery = useImageUrl(
-    ["work-image", workId, lightboxImage?.id],
-    async () =>
-      unwrap(
-        await client.GET("/api/works/{workId}/images/{imageId}/url", {
-          params: { path: { workId, imageId: lightboxImage!.id } },
-        }),
-      ),
-    Boolean(lightboxImage),
-  );
+  const lightboxQuery = useWorkImageUrl(workId, lightboxImage?.id, "original");
   const safe = isDisplayableImageUrl(query.data?.url);
   return (
     <>
@@ -6699,6 +6724,7 @@ function ReviewEvidencePanel({ review }: { review: Review }) {
       review.openedFromWorkflowStatus,
     );
   const showsPublishingEvidence =
+    user.roles.includes("operator") &&
     user.permissions.includes("reviews:resolve") &&
     ["pending_publish", "published"].includes(review.workflowStatus);
 

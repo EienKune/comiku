@@ -85,6 +85,7 @@ test("proofread exemption preserves versions, explicit claim consent, qualificat
           );
           const typesetter = await member(["typesetter"]);
           const admin = await member(["admin"], true);
+          const operator = await member(["operator"]);
           const session = await tx.authSession.create({
             data: {
               userId: admin.id,
@@ -555,13 +556,13 @@ test("proofread exemption preserves versions, explicit claim consent, qualificat
             data: { currentTypesetVersionId: resultVersion.id },
           });
           await submit(typesetter.id, first.id, "typeset");
-          const publication = await publishing.view(typesetter.id, first.id);
+          const publication = await publishing.view(operator.id, first.id);
           assert.deepEqual(publication.proofreadCredits, []);
           assert.doesNotMatch(publication.generatedText, /^校对：/m);
           assert.match(publication.generatedText, /翻译：翻译昵称/);
           assert.match(publication.generatedText, /嵌字：/);
           const beforePublish = await works.get(first.id);
-          await publishing.confirm(admin.id, first.id, {
+          await publishing.confirm(operator.id, first.id, {
             expectedRevision: beforePublish.revision,
             idempotencyKey: randomUUID(),
           });

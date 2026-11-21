@@ -1,7 +1,9 @@
+import { TypesetComparePane, TypesetZoom } from "./TypesetCompareControls";
+import { workImageKey } from "./use-work-image-url";
 import { FilePickerButton } from "../../components/ImagePicker";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Button, SelectControl } from "../../components/ui";
+import { Button, SelectControl, Surface } from "../../components/ui";
 import { collaborationRequest } from "./collaboration-request";
 import { refreshTypesetWork } from "./typeset-batch-api";
 import "./typeset-collaboration.css";
@@ -50,13 +52,15 @@ function Image({
   path,
   alt,
   revision,
+  sourceKey,
 }: {
   path: string;
   alt: string;
   revision?: number;
+  sourceKey?: readonly unknown[];
 }) {
   const query = useQuery({
-    queryKey: ["typeset-collaboration-image", path, revision],
+    queryKey: sourceKey ?? ["typeset-collaboration-image", path, revision],
     queryFn: () => collaborationRequest<{ url: string }>(path),
     staleTime: 120000,
   });
@@ -71,11 +75,13 @@ export function TypesetCollaborationPanel({
   workId,
   actorId,
   workRevision,
+  canEdit = true,
   onChanged,
 }: {
   workId: string;
   actorId: string;
   workRevision: number;
+  canEdit?: boolean;
   onChanged?: () => void | Promise<void>;
 }) {
   const base = `/api/works/${workId}/typeset/collaboration`;
@@ -123,9 +129,12 @@ export function TypesetCollaborationPanel({
     (p) => !state.drafts.some((d) => d.workImageId === p.id),
   );
   const editable =
+    canEdit &&
     !!participant &&
     mine.length > 0 &&
-    ["typesetting", "pending_publish"].includes(state.workflowStatus);
+    ["pending_typeset", "typesetting", "pending_publish"].includes(
+      state.workflowStatus,
+    );
   const pending = state.workflowStatus === "pending_publish";
   const activeDraft = state.drafts.find((d) => d.id === view);
   const selectedPage = state.pages.find((p) => p.id === comparePage);
@@ -229,9 +238,17 @@ export function TypesetCollaborationPanel({
       setMessage(pending ? "成图已更新，请重新查看或下载" : "成图草稿已保存");
     });
   return (
-    <section className="typeset-collaboration" aria-label="成图协作">
+    <Surface
+      className="workspace-panel typeset-collaboration"
+      aria-label="成图协作"
+    >
       <div className="typeset-collaboration-actions">
-        <strong>当前成图</strong>
+        <h2>当前成图</h2>
+        {!!mine.length && (
+          <span>
+            本人认领：第 {mine.map((p) => p.orderIndex + 1).join("、")} 页
+          </span>
+        )}
         <span>
           本人缺页：
           {missing.length
@@ -240,7 +257,42 @@ export function TypesetCollaborationPanel({
         </span>
       </div>
       {!state.handoffReady && editable && (
-        <p>请先领取当前完整嵌字材料，再保存成图。</p>
+        <p className="workspace-notice">
+          先下载交接包并开始嵌字，再上传本人认领页的成图。
+        </p>
+      )}
+      {editable && (
+        <div className="typeset-collaboration-actions">
+          <FilePickerButton
+            label="选择成图或 ZIP"
+            inputLabel="上传成图或 ZIP"
+            multiple
+            accept="image/png,image/jpeg,image/webp,.zip"
+            disabled={busy || !state.handoffReady}
+            onFiles={(files) => void loadPreview(files)}
+          />
+          <Button
+            disabled={
+              busy ||
+              !state.handoffReady ||
+              !!preview ||
+              !!missing.length ||
+              !ownDrafts.length
+            }
+            onClick={() => submit(false)}
+          >
+            提交本人全部成图
+          </Button>
+          {ownDrafts.some((d) => d.submittedRevision === d.revision) && (
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={() => submit(true)}
+            >
+              取消本人提交
+            </Button>
+          )}
+        </div>
       )}
       <div className="typeset-collaboration-grid">
         {state.pages.map((page) => {
@@ -249,7 +301,15 @@ export function TypesetCollaborationPanel({
             (p) => p.id === page.assignment?.participantId,
           );
           return (
-            <article key={page.id}>
+            <article
+              key={page.id}
+              className={
+                page.assignment?.participantId === participant?.id &&
+                participant
+                  ? "is-own-page"
+                  : undefined
+              }
+            >
               {draft ? (
                 <button
                   aria-label={`第 ${page.orderIndex + 1} 页成图`}
@@ -341,35 +401,6 @@ export function TypesetCollaborationPanel({
             </article>
           ))}
       </div>
-      {editable && (
-        <div className="typeset-collaboration-actions">
-          <FilePickerButton
-            label="选择成图或 ZIP"
-            inputLabel="上传成图或 ZIP"
-            multiple
-            accept="image/png,image/jpeg,image/webp,.zip"
-            disabled={busy || !state.handoffReady}
-            onFiles={(files) => void loadPreview(files)}
-          />
-          <Button
-            disabled={
-              busy || !!preview || !!missing.length || !ownDrafts.length
-            }
-            onClick={() => submit(false)}
-          >
-            提交本人全部成图
-          </Button>
-          {ownDrafts.some((d) => d.submittedRevision === d.revision) && (
-            <Button
-              variant="secondary"
-              disabled={busy}
-              onClick={() => submit(true)}
-            >
-              取消本人提交
-            </Button>
-          )}
-        </div>
-      )}
       {preview && (
         <div aria-label="成图映射预览">
           <h3>确认保存映射</h3>
@@ -480,18 +511,7 @@ export function TypesetCollaborationPanel({
             >
               下一张
             </Button>
-            <label>
-              缩放
-              <input
-                aria-label="对比缩放"
-                type="range"
-                min="0.5"
-                max="3"
-                step="0.25"
-                value={zoom}
-                onChange={(e) => setZoom(Number(e.target.value))}
-              />
-            </label>
+            <TypesetZoom label="对比缩放" value={zoom} onChange={setZoom} />
             <label>
               对比原图
               <SelectControl value={comparePage} onValueChange={setComparePage}>
@@ -536,24 +556,28 @@ export function TypesetCollaborationPanel({
             style={{ "--typeset-zoom": zoom } as React.CSSProperties}
           >
             {selectedPage && (
-              <div className="typeset-compare-source">
+              <TypesetComparePane side="source">
                 <Image
+                  sourceKey={[
+                    ...workImageKey(workId, selectedPage.id),
+                    "typeset-compare",
+                  ]}
                   path={`/api/works/${workId}/images/${selectedPage.id}/url`}
                   alt={`第 ${selectedPage.orderIndex + 1} 页原图`}
                 />
-              </div>
+              </TypesetComparePane>
             )}
-            <div className="typeset-compare-output">
+            <TypesetComparePane side="output">
               <Image
                 revision={activeDraft.revision}
                 path={`${base}/drafts/${activeDraft.id}/url`}
                 alt={activeDraft.sourceName}
               />
-            </div>
+            </TypesetComparePane>
           </div>
         </div>
       )}
       {message && <p role="status">{message}</p>}
-    </section>
+    </Surface>
   );
 }

@@ -1,3 +1,7 @@
+import {
+  planTypesetPageMappings,
+  type BatchPageMapping,
+} from "./typeset-batch-mapping.js";
 import { JobsService } from "../jobs/jobs.service.js";
 import { assertCurrentHandoff } from "../workflow/revision-policy.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -216,7 +220,60 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async dto(session: Session): Promise<TypesetUploadSessionDto> {
+    const previews =
+      session.status === "previewed"
+        ? await this.db.typesetUploadPreview.findMany({
+            where: { sessionId: session.id },
+            select: {
+              id: true,
+              workId: true,
+              versionId: true,
+              imageIds: true,
+              work: { select: { workNumber: true } },
+            },
+          })
+        : [];
+    const submissions = previews.length
+      ? await this.db.workEvent.findMany({
+          where: {
+            workId: { in: previews.map((p) => p.workId) },
+            idempotencyKey: { in: previews.map((p) => p.id) },
+            action: "stage_submitted",
+            actorId: session.actorId,
+            detail: { path: ["operation"], equals: "submit:typeset" },
+          },
+          select: {
+            workId: true,
+            idempotencyKey: true,
+            toWorkflowStatus: true,
+            detail: true,
+          },
+        })
+      : [];
+    const receipts = previews.flatMap((preview) => {
+      const submitted = submissions.find(
+        (event) =>
+          event.workId === preview.workId &&
+          event.idempotencyKey === preview.id,
+      );
+      if (!preview.versionId && !submitted) return [];
+      const detail = submitted?.detail as { versionId?: string } | undefined;
+      const imageIds = Array.isArray(preview.imageIds)
+        ? (preview.imageIds as string[])
+        : (preview.imageIds as { imageIds: string[] }).imageIds;
+      return [
+        {
+          workNumber: preview.work.workNumber,
+          workId: preview.workId,
+          versionId: detail?.versionId ?? preview.versionId,
+          stageSubmitted: !!submitted,
+          workCompleted: submitted?.toWorkflowStatus === "pending_publish",
+          imageIds,
+        },
+      ];
+    });
     return {
+      receipts,
       id: session.id,
       status: session.status,
       expiresAt: session.expiresAt.toISOString(),
@@ -415,23 +472,37 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
             throw new Error("解包后的整批图片超过容量或数量上限");
           const images: Prisma.TypesetUploadImageUncheckedCreateWithoutUploadFileInput[] =
             [];
-          for (const [index, image] of group.images.entries()) {
-            const stored = await this.files.store({
-              body: image.body,
-              contentType: image.contentType,
-              bucketScope: "works",
-              kind: "typeset-upload-preview",
-              sourceName: image.sourceName,
-              createdById: actorId,
-            });
-            storedIds.push(stored.id);
-            images.push({
-              sourceName: image.sourceName,
-              fileObjectId: stored.id,
-              width: image.width!,
-              height: image.height!,
-              orderIndex: index,
-            });
+          // Bound object-storage/DB writes without allowing failed siblings to outlive cleanup.
+          for (let offset = 0; offset < group.images.length; offset += 3) {
+            signal?.throwIfAborted();
+            const stored = await Promise.allSettled(
+              group.images
+                .slice(offset, offset + 3)
+                .map(async (image, localIndex) => {
+                  const file = await this.files.store({
+                    body: image.body,
+                    contentType: image.contentType,
+                    bucketScope: "works",
+                    kind: "typeset-upload-preview",
+                    sourceName: image.sourceName,
+                    createdById: actorId,
+                  });
+                  storedIds.push(file.id);
+                  return {
+                    sourceName: image.sourceName,
+                    fileObjectId: file.id,
+                    width: image.width!,
+                    height: image.height!,
+                    orderIndex: offset + localIndex,
+                  };
+                }),
+            );
+            const failure = stored.find(
+              (result) => result.status === "rejected",
+            );
+            if (failure?.status === "rejected") throw failure.reason;
+            for (const result of stored)
+              if (result.status === "fulfilled") images.push(result.value);
           }
           await this.db.$transaction(async (tx) => {
             await this.assertActor(actorId, tx);
@@ -456,10 +527,12 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
             .deleteStagingObject(file.objectKey)
             .catch(() => undefined);
         } catch (error) {
-          signal?.throwIfAborted();
-          await this.jobs?.assertCurrentLease(this.db);
+          // Only this attempt's settled stores are candidates. Reference guards
+          // preserve a completed file even if a later heartbeat/lease check fails.
           for (const fileId of storedIds)
             await this.files.purgeUnreferenced(fileId).catch(() => undefined);
+          signal?.throwIfAborted();
+          await this.jobs?.assertCurrentLease(this.db);
           await this.db.typesetUploadFile.update({
             where: { id: file.id },
             data: {
@@ -489,7 +562,17 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
     imageId: string,
     variant: "original" | "thumbnail" = "original",
   ) {
-    await this.find(actorId, id);
+    await this.assertActor(actorId);
+    const session = await this.db.typesetUploadSession.findFirst({
+      where: { id, actorId },
+      select: { id: true, status: true, expiresAt: true },
+    });
+    if (!session) throw new NotFoundException("成图上传会话不存在");
+    if (
+      session.status === "expired" ||
+      session.expiresAt.getTime() <= Date.now()
+    )
+      throw new ConflictException("成图上传会话已过期，请重新选择文件");
     const image = await this.db.typesetUploadImage.findFirst({
       where: {
         id: imageId,
@@ -576,22 +659,92 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
             where: { workNumber: group.workNumber },
           });
           if (!work) throw new NotFoundException("作品编号不存在");
+          await tx.$queryRaw(
+            Prisma.sql`SELECT id FROM works WHERE id = ${work.id}::uuid FOR UPDATE`,
+          );
           result.workId = work.id;
           result.title = work.title;
-          await this.assertWork(actorId, work.id, tx);
+          const currentWork = await this.assertWork(actorId, work.id, tx);
           const existing = await tx.typesetUploadPreview.findUnique({
             where: { sessionId_workId: { sessionId: id, workId: work.id } },
           });
-          if (existing?.versionId)
+          const submitted =
+            existing &&
+            (await tx.workEvent.findUnique({
+              where: {
+                workId_idempotencyKey: {
+                  workId: work.id,
+                  idempotencyKey: existing.id,
+                },
+              },
+            }));
+          if (existing?.versionId || submitted)
             throw new ConflictException(
               "本批次已经为该作品创建成图版本，请勿重复上传",
             );
+          let selection: Prisma.InputJsonValue = group.imageIds;
+          if (currentWork.collaborationMode === "multi") {
+            const participant = await tx.workStageParticipant.findFirst({
+              where: {
+                workId: work.id,
+                stage: "typeset",
+                userId: actorId,
+                leftAt: null,
+              },
+              select: { id: true },
+            });
+            const pages = await tx.workImage.findMany({
+              where: { workId: work.id },
+              select: { id: true },
+            });
+            const assignments = await tx.workPageAssignment.findMany({
+              where: { workId: work.id, stage: "typeset" },
+            });
+            const mapped = planTypesetPageMappings(
+              images,
+              group.pageMappings,
+              pages.map((page) => ({
+                id: page.id,
+                participantId:
+                  assignments.find((a) => a.workImageId === page.id)
+                    ?.participantId ?? null,
+              })),
+              participant?.id,
+            );
+            const currentDrafts = await tx.workTypesetDraft.findMany({
+              where: { workId: work.id, participantId: participant!.id },
+            });
+            if (
+              assignments.some(
+                (a) =>
+                  a.participantId === participant!.id &&
+                  !mapped.mappings.some(
+                    (m) => m.workImageId === a.workImageId,
+                  ) &&
+                  !currentDrafts.some(
+                    (d) =>
+                      d.workImageId === a.workImageId &&
+                      d.assignmentGeneration === a.generation,
+                  ),
+              )
+            )
+              throw new ConflictException(
+                "本人负责页尚有缺图，请补齐对应页后检查提交条件",
+              );
+            result.ignored = mapped.ignored;
+            result.savedImageCount = mapped.mappings.length;
+            selection = {
+              imageIds: group.imageIds,
+              mappings: mapped.mappings,
+              ignored: mapped.ignored,
+            };
+          }
           const data = {
             id: randomUUID(),
-            workRevision: work.revision,
-            editorEpoch: work.editorEpoch,
-            handoffStartedAt: work.typesetHandoffStartedAt!,
-            imageIds: group.imageIds,
+            workRevision: currentWork.revision,
+            editorEpoch: currentWork.editorEpoch,
+            handoffStartedAt: currentWork.typesetHandoffStartedAt!,
+            imageIds: selection,
             idempotencyKey: existing?.idempotencyKey ?? randomUUID(),
           };
           const preview = await tx.typesetUploadPreview.upsert({
@@ -657,46 +810,30 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
     if (multiPreview?.work.collaborationMode === "multi") {
       if (!this.collaboration)
         throw new ConflictException("请在作品详情完成多人页映射");
-      const state = await this.collaboration.state(multiPreview.workId);
-      const participant = state.participants.find((p) => p.userId === actorId);
-      const ids = multiPreview.imageIds as string[];
-      const images = await this.db.typesetUploadImage.findMany({
-        where: { id: { in: ids }, uploadFile: { sessionId: id } },
-      });
-      const ignored: string[] = [];
-      const mappings = ids.flatMap((imageId) => {
-        const image = images.find((i) => i.id === imageId);
-        const number = image ? typesetName(image.sourceName).pageNumber : null;
-        const page = number ? state.pages[number - 1] : undefined;
-        if (!image || !page)
-          throw new ConflictException(
-            "存在未明确映射或越界成图，请在作品详情核对页映射",
-          );
-        if (page.assignment?.participantId !== participant?.id) {
-          ignored.push(image.sourceName);
-          return [];
-        }
-        return [{ imageId, workImageId: page.id, position: "page" as const }];
-      });
-      if (!mappings.length)
-        throw new ConflictException("本批没有本人有权保存的成图");
-      const result = await this.collaboration.apply(
+      const selection = multiPreview.imageIds as unknown as {
+        mappings?: (BatchPageMapping & { position: "page" })[];
+        ignored?: string[];
+      };
+      if (!selection.mappings?.length)
+        throw new ConflictException("旧预览缺少明确页映射，请重新检查提交条件");
+      return this.collaboration.apply(
         actorId,
         multiPreview.workId,
         {
           sessionId: id,
           expectedRevision: multiPreview.workRevision,
+          expectedEditorEpoch: multiPreview.editorEpoch,
           idempotencyKey: multiPreview.idempotencyKey,
-          mappings,
+          mappings: selection.mappings,
+        },
+        {
+          previewId,
+          submissionKey: multiPreview.id,
+          ignored: selection.ignored ?? [],
         },
       );
-      return {
-        workId: multiPreview.workId,
-        versionId: result?.versionId ?? null,
-        stageSubmitted: false,
-        ignored,
-      };
     }
+
     return this.db.$transaction(async (tx) => {
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM typeset_upload_sessions WHERE id = ${id}::uuid FOR UPDATE`,
@@ -768,7 +905,12 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
         where: { id: preview.id },
         data: { versionId },
       });
-      return { workId: work.id, versionId, stageSubmitted: true };
+      return {
+        workId: work.id,
+        versionId,
+        stageSubmitted: true,
+        workCompleted: true,
+      };
     });
   }
 

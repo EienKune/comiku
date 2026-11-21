@@ -1,3 +1,4 @@
+import { workImageKey } from "../workspace/use-work-image-url";
 import { EditorPagePreview } from "./EditorPagePreview";
 import { EditorSubmissionCancelAction } from "./EditorSubmissionCancelAction";
 import { useConfirmation } from "../../components/use-confirmation";
@@ -315,7 +316,7 @@ export function TranslationEditorPage() {
   const currentImage = images[pageIndex];
   const pageNumber = currentImage ? pageIndex + 1 : 0;
   const imageUrl = useQuery({
-    queryKey: ["work-image", workId, currentImage?.id],
+    queryKey: [...workImageKey(workId, currentImage?.id), "editor"],
     queryFn: async () =>
       unwrap(
         await client.GET("/api/works/{workId}/images/{imageId}/url", {

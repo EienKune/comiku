@@ -1396,6 +1396,24 @@
 .workspace-handoff-panel small {
   color: var(--color-text-muted);
 }
+.workspace-detail-output {
+  max-width: var(--content-max);
+  margin: 0 auto var(--space-6);
+  scroll-margin-top: 6rem;
+}
+.workspace-detail-output > .workspace-typeset-versions {
+  margin-bottom: 0;
+}
+.workspace-current-work-actions {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+.workspace-current-work-heading {
+  flex-wrap: wrap;
+}
+.workspace-current-work-heading > div:first-child {
+  flex-shrink: 0;
+}
 .workspace-typeset-versions {
   display: grid;
   max-width: var(--content-max);

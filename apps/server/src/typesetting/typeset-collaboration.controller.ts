@@ -20,6 +20,7 @@ import {
   ApiCookieAuth,
   ApiOkResponse,
   ApiOperation,
+  ApiParam,
   ApiTags,
 } from "@nestjs/swagger";
 import { Access, type AuthRequest } from "../common/access.js";
@@ -44,6 +45,7 @@ export class TypesetCollaborationController {
   @Get()
   @Access({ permission: "works:read" })
   @ApiOperation({ operationId: "getTypesetCollaboration" })
+  @ApiParam({ name: "workId", format: "uuid", type: String })
   @ApiOkResponse({ type: TypesetCollaborationStateDto })
   state(@Param("workId", ParseUUIDPipe) workId: string) {
     return this.service.state(workId);

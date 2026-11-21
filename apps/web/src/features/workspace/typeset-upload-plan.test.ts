@@ -2,6 +2,8 @@ import { expect, test } from "vitest";
 import {
   initialTypesetUploadImages,
   typesetUploadGroupProblem,
+  suggestedTypesetPageId,
+  orderedTypesetPageMappings,
 } from "./typeset-upload-plan";
 import type { components } from "@comiku/api-client";
 
@@ -58,4 +60,24 @@ test("batch preview requires explicit merge and catches original/rendered page d
   expect(typesetUploadGroupProblem(images, false)).toMatch(/合并/);
   images[1].pageNumber = images[0].pageNumber;
   expect(typesetUploadGroupProblem(images, true)).toMatch(/重复/);
+});
+
+test("mapping uses stable page ids, preserves explicit choices and supports unnumbered ordered batches", () => {
+  const images = initialTypesetUploadImages(session());
+  const pages = [
+    { id: "p2", orderIndex: 1 },
+    { id: "p10", orderIndex: 9 },
+  ];
+  expect(suggestedTypesetPageId(images[0], pages)).toBe("p2");
+  expect(
+    suggestedTypesetPageId({ ...images[0], workImageId: "p10" }, pages),
+  ).toBe("p10");
+  expect(
+    suggestedTypesetPageId({ ...images[0], pageNumber: null }, pages),
+  ).toBe("");
+  expect(orderedTypesetPageMappings(images, pages)).toEqual({
+    image2: "p2",
+    image10: "p10",
+  });
+  expect(orderedTypesetPageMappings(images, pages.slice(0, 1))).toBeNull();
 });

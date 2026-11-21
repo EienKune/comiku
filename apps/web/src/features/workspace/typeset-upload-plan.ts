@@ -5,6 +5,7 @@ export type UploadImage = components["schemas"]["TypesetUploadImageDto"] & {
   target: string;
   included: boolean;
   archive: boolean;
+  workImageId?: string;
 };
 
 export function initialTypesetUploadImages(session: Session): UploadImage[] {
@@ -76,4 +77,24 @@ export function typesetUploadContentType(
   )[extension as "png"];
   if (!type) throw new Error(`不支持的文件格式：${file.name}`);
   return type;
+}
+
+export function suggestedTypesetPageId(
+  image: Pick<UploadImage, "workImageId" | "pageNumber">,
+  pages: { id: string; orderIndex: number }[],
+) {
+  return (
+    image.workImageId ??
+    pages.find((page) => page.orderIndex + 1 === image.pageNumber)?.id ??
+    ""
+  );
+}
+export function orderedTypesetPageMappings(
+  images: Pick<UploadImage, "id">[],
+  pages: { id: string }[],
+) {
+  if (images.length !== pages.length) return null;
+  return Object.fromEntries(
+    images.map((image, index) => [image.id, pages[index].id]),
+  );
 }

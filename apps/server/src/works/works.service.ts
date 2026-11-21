@@ -286,11 +286,7 @@ export class WorksService {
       AND: [
         statisticsScope,
         {
-          ...(actor.roles.some(
-            (role) => role === Role.operator || role === Role.admin,
-          )
-            ? {}
-            : { id: { in: [] } }),
+          ...(actor.roles.includes(Role.operator) ? {} : { id: { in: [] } }),
           workflowStatus: WorkflowStatus.pending_publish,
           reviewStatus: ReviewStatus.normal,
         },

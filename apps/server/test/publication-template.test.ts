@@ -5,7 +5,7 @@ import {
   renderPublicationText,
 } from "../src/publishing/publication-template.js";
 
-const template = `**{{title}}**
+const template = `{{title}}
 {{body}}作者：{{author}}
 
 翻译：{{translation_credits}}
@@ -49,7 +49,7 @@ test("renders the confirmed default copy without an empty body artifact", () => 
   });
   assert.equal(
     text,
-    `**示例作品标题**
+    `示例作品标题
 作者：@_demo_artist_
 
 翻译：示例翻译
@@ -69,8 +69,22 @@ test("includes body text and joins collaborative credits in submission order", (
     proofreadCredits: ["C"],
     typesetCredits: ["D", "E"],
   });
-  assert.match(text, /^\*\*标题\*\*\n第一行\n第二行\n作者：@artist/);
+  assert.match(text, /^标题\n第一行\n第二行\n作者：@artist/);
   assert.match(text, /翻译：A、B/);
   assert.match(text, /嵌字：D、E/);
   assert.equal(normalizeAuthorCredit(null, "作者名"), "作者名");
+});
+
+test("custom templates keep their explicit Markdown title decoration", () => {
+  assert.equal(
+    renderPublicationText("**{{title}}**", {
+      title: "自定义标题",
+      body: null,
+      author: "作者",
+      translationCredits: [],
+      proofreadCredits: [],
+      typesetCredits: [],
+    }),
+    "**自定义标题**",
+  );
 });

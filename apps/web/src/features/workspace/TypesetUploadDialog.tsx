@@ -12,6 +12,8 @@ import { useAction } from "../account/use-action";
 import { Feedback } from "../account/forms";
 import {
   initialTypesetUploadImages,
+  suggestedTypesetPageId,
+  orderedTypesetPageMappings,
   typesetUploadGroupProblem,
   uploadFileChecksum,
   typesetUploadContentType,
@@ -24,6 +26,7 @@ type Plan = components["schemas"]["TypesetUploadPlanDto"] & {
   status?: "uploaded" | "failed";
   message?: string;
 };
+type Collaboration = components["schemas"]["TypesetCollaborationStateDto"];
 type Target = components["schemas"]["TypesetHandoffManifestItemDto"];
 
 function PreviewImage({
@@ -35,6 +38,24 @@ function PreviewImage({
   image: UploadImage;
   onPreview: () => void;
 }) {
+  const thumb = useRef<HTMLButtonElement>(null);
+  const [visible, setVisible] = useState(
+    typeof IntersectionObserver === "undefined",
+  );
+  useEffect(() => {
+    if (visible || !thumb.current) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "160px" },
+    );
+    observer.observe(thumb.current);
+    return () => observer.disconnect();
+  }, [visible]);
   const query = useImageUrl(
     ["thumbnail", "typeset-upload-image", sessionId, image.id],
     async () =>
@@ -49,11 +70,13 @@ function PreviewImage({
           },
         ),
       ),
+    visible,
   );
   const src = query.data?.url;
   return (
     <button
       type="button"
+      ref={thumb}
       className="workspace-upload-thumb"
       aria-label={`预览 ${image.sourceName}`}
       onClick={onPreview}
@@ -135,6 +158,9 @@ export function TypesetUploadDialog({
   const [session, setSession] = useState<Session | null>(null);
   const [images, setImages] = useState<UploadImage[]>([]);
   const [targets, setTargets] = useState<Target[]>([]);
+  const [states, setStates] = useState<Record<string, Collaboration>>({});
+  const [stateErrors, setStateErrors] = useState<Record<string, string>>({});
+  const confirming = useRef(false);
   const [checks, setChecks] = useState<
     Record<string, { merge: boolean; content: boolean; manual: boolean }>
   >({});
@@ -171,10 +197,79 @@ export function TypesetUploadDialog({
 
   function applySession(result: Session) {
     setSession(result);
-    setImages(initialTypesetUploadImages(result));
-    setPlans([]);
+    setStates({});
+    setStateErrors({});
+    const receipts = result.receipts ?? [];
+    setImages(
+      initialTypesetUploadImages(result).map((image) => {
+        const receipt = receipts.find((item) =>
+          item.imageIds.includes(image.id),
+        );
+        return receipt
+          ? { ...image, target: String(receipt.workNumber) }
+          : image;
+      }),
+    );
+    setUploaded(receipts.map((item) => item.workNumber));
+    setPlans(
+      receipts.map((item) => ({
+        workNumber: item.workNumber,
+        workId: item.workId,
+        title: null,
+        previewId: null,
+        workRevision: null,
+        editorEpoch: null,
+        handoffStartedAt: null,
+        imageCount: item.imageIds.length,
+        error: null,
+        status: "uploaded",
+        message: item.stageSubmitted
+          ? item.workCompleted
+            ? "已上传成图并提交嵌字，进入待发布"
+            : "已保存成图并提交本人负责页，等待其他成员"
+          : "此会话已保存成图版本，未提交嵌字；请到作品详情处理",
+      })),
+    );
     setChecks({});
   }
+  const targetKeys = groups
+    .map(([target]) => target)
+    .filter(Boolean)
+    .join(",");
+  useEffect(() => {
+    if (!open || !session) return;
+    let cancelled = false;
+    void (async () => {
+      for (const number of targetKeys.split(",")) {
+        const target = targets.find(
+          (item) => String(item.workNumber) === number,
+        );
+        if (!target || cancelled) continue;
+        try {
+          const state = await unwrap(
+            await client.GET("/api/works/{workId}/typeset/collaboration", {
+              params: { path: { workId: target.workId } },
+            }),
+          );
+          if (!cancelled) {
+            setStates((previous) => ({ ...previous, [number]: state }));
+            setStateErrors((previous) => ({ ...previous, [number]: "" }));
+          }
+        } catch (error) {
+          if (!cancelled)
+            setStateErrors((previous) => ({
+              ...previous,
+              [number]:
+                error instanceof Error ? error.message : "页映射加载失败",
+            }));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, session, targets, targetKeys]);
+
   async function getTargets() {
     const result = await unwrap(
       await client.GET("/api/typeset/handoff-manifest"),
@@ -288,14 +383,20 @@ export function TypesetUploadDialog({
         }),
       );
       setUploaded([]);
-      if (previous.status === "extracting")
-        throw new Error("服务端仍在解析，可稍后再次恢复");
-      await extract(previous.id);
+      if (
+        previous.status === "previewed" &&
+        previous.files.every((file) => file.status === "processed")
+      ) {
+        applySession(previous);
+        await getTargets();
+        setProgress("");
+      } else await extract(previous.id);
     });
   }
   async function previewPlans() {
     if (!session) return;
     await action.run(async () => {
+      setProgress("正在检查作品状态与本人页映射…");
       const configured = groups.filter(
         ([target]) => target && !uploaded.includes(Number(target)),
       );
@@ -310,6 +411,17 @@ export function TypesetUploadDialog({
               mergeConfirmed: checks[target]?.merge ?? false,
               contentConfirmed: checks[target]?.content ?? false,
               manualTargetConfirmed: checks[target]?.manual ?? false,
+              ...(states[target]?.collaborationMode === "multi"
+                ? {
+                    pageMappings: rows.map((image) => ({
+                      imageId: image.id,
+                      workImageId: suggestedTypesetPageId(
+                        image,
+                        states[target].pages,
+                      ),
+                    })),
+                  }
+                : {}),
             })),
           },
         }),
@@ -319,56 +431,63 @@ export function TypesetUploadDialog({
     });
   }
   async function confirm(rows: Plan[]) {
-    if (!session) return;
-    await action.run(async () => {
-      for (const plan of rows) {
-        if (!active.current) break;
-        if (!plan.previewId) continue;
-        setProgress(`正在确认 #${plan.workNumber}`);
-        onStatus(`成图上传 · 正在处理 #${plan.workNumber}`);
-        try {
-          const result = await unwrap(
-            await client.POST("/api/typeset/upload-sessions/{id}/confirm", {
-              params: { path: { id: session.id } },
-              body: { previewId: plan.previewId },
-            }),
-          );
-          setPlans((previous) =>
-            previous.map((row) =>
-              row.workNumber === plan.workNumber
-                ? {
-                    ...row,
-                    status: "uploaded",
-                    message: result.stageSubmitted
-                      ? "已上传成图并提交嵌字，进入待发布"
-                      : "此会话已保存成图版本，未提交嵌字；请到作品详情处理",
-                  }
-                : row,
-            ),
-          );
-          setUploaded((previous) => [
-            ...new Set([...previous, plan.workNumber]),
-          ]);
-          await refreshTypesetWork(result.workId);
-        } catch (error) {
-          setPlans((previous) =>
-            previous.map((row) =>
-              row.workNumber === plan.workNumber
-                ? {
-                    ...row,
-                    status: "failed",
-                    message:
-                      error instanceof Error ? error.message : "确认失败",
-                  }
-                : row,
-            ),
-          );
-          if (plan.workId) await refreshTypesetWork(plan.workId);
+    if (!session || confirming.current) return;
+    confirming.current = true;
+    try {
+      await action.run(async () => {
+        for (const plan of rows) {
+          if (!active.current) break;
+          if (!plan.previewId) continue;
+          setProgress(`正在确认 #${plan.workNumber}`);
+          onStatus(`成图上传 · 正在处理 #${plan.workNumber}`);
+          try {
+            const result = await unwrap(
+              await client.POST("/api/typeset/upload-sessions/{id}/confirm", {
+                params: { path: { id: session.id } },
+                body: { previewId: plan.previewId },
+              }),
+            );
+            setPlans((previous) =>
+              previous.map((row) =>
+                row.workNumber === plan.workNumber
+                  ? {
+                      ...row,
+                      status: "uploaded",
+                      message: result.stageSubmitted
+                        ? result.workCompleted === false
+                          ? "已保存成图并提交本人负责页，等待其他成员"
+                          : "已上传成图并提交嵌字，进入待发布"
+                        : "此会话已保存成图版本，未提交嵌字；请到作品详情处理",
+                    }
+                  : row,
+              ),
+            );
+            setUploaded((previous) => [
+              ...new Set([...previous, plan.workNumber]),
+            ]);
+            await refreshTypesetWork(result.workId);
+          } catch (error) {
+            setPlans((previous) =>
+              previous.map((row) =>
+                row.workNumber === plan.workNumber
+                  ? {
+                      ...row,
+                      status: "failed",
+                      message:
+                        error instanceof Error ? error.message : "确认失败",
+                    }
+                  : row,
+              ),
+            );
+            if (plan.workId) await refreshTypesetWork(plan.workId);
+          }
         }
-      }
-      setProgress("");
-      onStatus("成图批量上传已处理，请查看逐项结果");
-    });
+        setProgress("");
+        onStatus("成图批量上传已处理，请查看逐项结果");
+      });
+    } finally {
+      confirming.current = false;
+    }
   }
   function move(imageId: string, delta: number, rows: UploadImage[]) {
     const position = rows.findIndex((image) => image.id === imageId),
@@ -482,6 +601,22 @@ export function TypesetUploadDialog({
             checks[target]?.merge ?? false,
           );
           const isUploaded = uploaded.includes(Number(target));
+          const state = states[target];
+          const isMulti = state?.collaborationMode === "multi";
+          const participantId = state?.participants?.find(
+            (p) => p.userId === user.id,
+          )?.id;
+          const ownPages =
+            state?.pages?.filter(
+              (page) =>
+                !!participantId &&
+                page.assignment?.participantId === participantId,
+            ) ?? [];
+          const orderPages =
+            state?.pages?.length === rows.length ? state.pages : ownPages;
+          const orderMapping = isMulti
+            ? orderedTypesetPageMappings(rows, orderPages)
+            : null;
           const archiveCount = new Set(
             rows
               .filter((image) => image.archive)
@@ -501,6 +636,55 @@ export function TypesetUploadDialog({
               {problem && (
                 <p className="account-error" role="alert">
                   {problem}
+                </p>
+              )}
+              <div className="workspace-dialog-actions">
+                <SelectField
+                  label="本组成图目标"
+                  value={target}
+                  disabled={action.busy || isUploaded}
+                  onValueChange={(value) =>
+                    updateImages((previous) =>
+                      previous.map((row) =>
+                        rows.some((image) => image.id === row.id)
+                          ? { ...row, target: value, workImageId: undefined }
+                          : row,
+                      ),
+                    )
+                  }
+                >
+                  <option value="">待指定</option>
+                  {targets.map((work) => (
+                    <option key={work.workId} value={String(work.workNumber)}>
+                      #{work.workNumber} · {work.title || "待定标题"}
+                    </option>
+                  ))}
+                </SelectField>
+                {isMulti && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={action.busy || isUploaded || !orderMapping}
+                    onClick={() =>
+                      updateImages((previous) =>
+                        previous.map((image) =>
+                          orderMapping?.[image.id]
+                            ? { ...image, workImageId: orderMapping[image.id] }
+                            : image,
+                        ),
+                      )
+                    }
+                  >
+                    按当前顺序对应
+                    {orderPages.length === state.pages.length
+                      ? "全部原稿"
+                      : "本人负责页"}
+                  </Button>
+                )}
+              </div>
+              {stateErrors[target] && (
+                <p role="alert" className="account-error">
+                  {stateErrors[target]}
                 </p>
               )}
               <div className="workspace-upload-image-grid">
@@ -528,7 +712,11 @@ export function TypesetUploadDialog({
                         updateImages((previous) =>
                           previous.map((row) =>
                             row.id === image.id
-                              ? { ...row, target: value }
+                              ? {
+                                  ...row,
+                                  target: value,
+                                  workImageId: undefined,
+                                }
                               : row,
                           ),
                         )
@@ -549,6 +737,33 @@ export function TypesetUploadDialog({
                         </option>
                       ))}
                     </SelectField>
+                    {isMulti && (
+                      <SelectField
+                        label="对应原稿"
+                        value={suggestedTypesetPageId(image, state.pages)}
+                        disabled={action.busy || isUploaded}
+                        onValueChange={(value) =>
+                          updateImages((previous) =>
+                            previous.map((row) =>
+                              row.id === image.id
+                                ? { ...row, workImageId: value }
+                                : row,
+                            ),
+                          )
+                        }
+                      >
+                        <option value="">请选择原稿页</option>
+                        {state.pages.map((page) => (
+                          <option key={page.id} value={page.id}>
+                            第 {page.orderIndex + 1} 页
+                            {page.assignment?.participantId === participantId &&
+                            !!participantId
+                              ? " · 本人"
+                              : " · 将忽略"}
+                          </option>
+                        ))}
+                      </SelectField>
+                    )}
                     <div className="workspace-dialog-actions">
                       <Button
                         size="sm"
@@ -645,7 +860,7 @@ export function TypesetUploadDialog({
                   >
                     {plan.message ||
                       plan.error ||
-                      `检查通过：${plan.imageCount} 张，可上传并提交嵌字`}
+                      `检查通过：保存 ${plan.savedImageCount ?? plan.imageCount} 张并提交${isMulti ? "本人负责页" : "嵌字"}${plan.ignored?.length ? `，忽略非本人负责的 ${plan.ignored.length} 张` : ""}`}
                   </p>
                   {plan.status === "failed" && (
                     <Button
@@ -712,7 +927,18 @@ export function TypesetUploadDialog({
           <div className="workspace-dialog-actions">
             <Button
               variant="secondary"
-              disabled={action.busy || !groups.length}
+              disabled={
+                action.busy ||
+                !groups.some(
+                  ([target]) => target && !uploaded.includes(Number(target)),
+                ) ||
+                groups.some(
+                  ([target]) =>
+                    target &&
+                    !uploaded.includes(Number(target)) &&
+                    (!states[target] || !!stateErrors[target]),
+                )
+              }
               onClick={() => void previewPlans()}
             >
               检查提交条件

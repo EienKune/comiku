@@ -178,3 +178,59 @@ test("batch entry visibility changes only inside the topbar, leaving the list bo
       .closest("header"),
   ).toBeTruthy();
 });
+
+test("refreshes the handoff baseline whenever the checklist is reopened after detail changes", async () => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.removeAttribute("open");
+  };
+  let revision = 3;
+  const get = vi.spyOn(client, "GET").mockImplementation(
+    async () =>
+      ({
+        data: {
+          items: [
+            {
+              workId: "work",
+              workNumber: 16,
+              title: `版本 ${revision}`,
+              imageCount: 2,
+              workRevision: revision,
+              editorEpoch: 1,
+              canDownload: true,
+              unavailableReason: null,
+            },
+          ],
+        },
+        response: new Response(),
+      }) as never,
+  );
+  render(
+    <MemoryRouter>
+      <Routes>
+        <Route
+          element={
+            <Outlet
+              context={{
+                id: "user",
+                roles: ["typesetter"],
+                permissions: ["works:typeset"],
+              }}
+            />
+          }
+        >
+          <Route path="/" element={<ToolsShell />} />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "批量下载嵌字交接包" }));
+  await screen.findByText("#16 · 版本 3");
+  fireEvent.click(screen.getByRole("button", { name: "关闭下载清单" }));
+  revision = 4;
+  fireEvent.click(screen.getByRole("button", { name: "批量下载嵌字交接包" }));
+  await screen.findByText("#16 · 版本 4");
+  expect(get).toHaveBeenCalledTimes(2);
+});
