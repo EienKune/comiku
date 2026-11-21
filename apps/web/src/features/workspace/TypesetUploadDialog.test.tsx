@@ -15,11 +15,15 @@ import { createComikuClient } from "@comiku/api-client";
 import * as batchApi from "./typeset-batch-api";
 import * as transferApi from "./typeset-upload-transfer";
 import * as localApi from "./typeset-local-files";
+import * as planApi from "./typeset-upload-plan";
+import { File as NodeFile } from "node:buffer";
+import { zipSync } from "fflate";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   localStorage.clear();
   queryClient.clear();
+  vi.unstubAllGlobals();
 });
 
 function showUploadDialog() {
@@ -46,6 +50,256 @@ function showUploadDialog() {
   );
 }
 
+test("restores an incomplete direct session through exact original-file reselection and retains completed pages", async () => {
+  localStorage.setItem("comiku:typeset-upload-session:user", "session");
+  const file = (id: string, processed: boolean) => ({
+    id,
+    sourceName: `21-00${id}.png`,
+    size: 1,
+    contentType: "image/png",
+    checksum: "a".repeat(64),
+    uploadMissing: false,
+    archive: false,
+    status: processed ? "processed" : "pending",
+    error: null,
+    upload: processed
+      ? null
+      : {
+          url: "https://storage.invalid/pending",
+          method: "PUT",
+          headers: { "If-None-Match": "*" },
+        },
+    images: processed
+      ? [
+          {
+            id: `image${id}`,
+            uploadFileId: id,
+            sourceName: `21-00${id}.png`,
+            width: 640,
+            height: 960,
+            size: 1,
+            workNumber: 21,
+            pageNumber: Number(id),
+            warnings: [],
+          },
+        ]
+      : [],
+  });
+  const previous = {
+    id: "session",
+    status: "previewed",
+    maxWorks: 20,
+    maxTotalBytes: 512 * 1024 * 1024,
+    files: [file("1", true), file("2", false)],
+  };
+  const ready = { ...previous, files: [file("1", true), file("2", true)] };
+  let confirmed = false;
+  vi.spyOn(client, "GET").mockImplementation(
+    async (path) =>
+      ({
+        data: String(path).includes("handoff-manifest")
+          ? { items: [] }
+          : confirmed
+            ? ready
+            : previous,
+        response: new Response(),
+      }) as never,
+  );
+  const post = vi.spyOn(client, "POST").mockImplementation(async () => {
+    throw new Error(
+      "Must neither create another session nor extract direct images",
+    );
+  });
+  vi.spyOn(planApi, "uploadFileChecksum").mockImplementation(async (file) =>
+    (file.lastModified === 1 ? "b" : "a").repeat(64),
+  );
+  vi.stubGlobal(
+    "createImageBitmap",
+    vi.fn(async () => ({ width: 640, height: 960, close: vi.fn() })),
+  );
+  const network = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith("/files/2/verify")) {
+      expect(JSON.parse(String(init?.body))).toEqual({
+        width: 640,
+        height: 960,
+      });
+      confirmed = true;
+      return Response.json(ready.files[1]);
+    }
+    expect(url).toBe("https://storage.invalid/pending");
+    expect(new Headers(init?.headers).get("If-None-Match")).toBe("*");
+    return new Response(null, { status: 412 });
+  });
+  vi.stubGlobal("fetch", network);
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static createObjectURL = vi.fn(() => "blob:reselected");
+      static revokeObjectURL = vi.fn();
+    },
+  );
+  const { container } = showUploadDialog();
+  fireEvent.click(screen.getByRole("button", { name: "恢复上次会话" }));
+  await screen.findByText(/重新选择此会话的全部原文件/);
+  expect(screen.getByText("21-001.png")).toBeTruthy();
+  expect(network).not.toHaveBeenCalled();
+  expect(post).not.toHaveBeenCalled();
+  fireEvent.change(container.querySelector('input[type="file"]')!, {
+    target: {
+      files: [
+        new File(["z"], "21-002.png", { lastModified: 1 }),
+        new File(["x"], "21-001.png"),
+      ],
+    },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "继续恢复上传" }));
+  await screen.findByText("重试文件与上传会话不匹配，请重新选择文件");
+  expect(network).not.toHaveBeenCalled();
+  expect(screen.getByText("21-001.png")).toBeTruthy();
+  fireEvent.change(container.querySelector('input[type="file"]')!, {
+    target: {
+      files: [new File(["y"], "21-002.png"), new File(["x"], "21-001.png")],
+    },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "继续恢复上传" }));
+  await screen.findByText("21-002.png");
+  await waitFor(() =>
+    expect(screen.queryByText(/重新选择此会话的全部原文件/)).toBeNull(),
+  );
+  expect(screen.getByText("21-001.png")).toBeTruthy();
+  expect(network).toHaveBeenCalledTimes(2);
+  expect(post).not.toHaveBeenCalled();
+  expect(localStorage.getItem("comiku:typeset-upload-session:user")).toBe(
+    "session",
+  );
+});
+
+test("restores only exact owned session files from the original ZIP, releasing every local preview on failure and success", async () => {
+  vi.stubGlobal("File", NodeFile);
+  vi.stubGlobal(
+    "createImageBitmap",
+    vi.fn(async () => ({ width: 640, height: 960, close: vi.fn() })),
+  );
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static createObjectURL = vi.fn(() => "blob:reselected");
+      static revokeObjectURL = vi.fn();
+    },
+  );
+  localStorage.setItem("comiku:typeset-upload-session:user", "session");
+  const file = (id: number, processed: boolean) => ({
+    id: String(id),
+    sourceName: "page.png",
+    size: 1,
+    contentType: "image/png",
+    checksum: (id === 1 ? "a" : "b").repeat(64),
+    uploadMissing: false,
+    archive: false,
+    status: processed ? "processed" : "pending",
+    error: null,
+    upload: processed
+      ? null
+      : {
+          url: "https://storage.invalid/owned",
+          method: "PUT",
+          headers: { "If-None-Match": "*" },
+        },
+    images: processed
+      ? [
+          {
+            id: `image${id}`,
+            uploadFileId: String(id),
+            sourceName: `done${id}.png`,
+            width: 640,
+            height: 960,
+            size: 1,
+            workNumber: 21,
+            pageNumber: id,
+            warnings: [],
+          },
+        ]
+      : [],
+  });
+  const previous = {
+    id: "session",
+    status: "previewed",
+    maxWorks: 20,
+    maxTotalBytes: 512 * 1024 * 1024,
+    files: [file(1, true), file(2, false)],
+  };
+  const ready = { ...previous, files: [file(1, true), file(2, true)] };
+  let confirmed = false,
+    checks = 0;
+  vi.spyOn(client, "GET").mockImplementation(
+    async (path) =>
+      ({
+        data: String(path).includes("handoff-manifest")
+          ? { items: [] }
+          : confirmed
+            ? ready
+            : previous,
+        response: new Response(),
+      }) as never,
+  );
+  const post = vi.spyOn(client, "POST").mockImplementation(async () => {
+    throw new Error("Must retain original session and avoid extraction");
+  });
+  vi.spyOn(planApi, "uploadFileChecksum").mockImplementation(async (file) =>
+    (({ X: "a", Y: "b", Z: "c" })[(await file.text()) as "X"] ?? "d").repeat(
+      64,
+    ),
+  );
+  const network = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith("/files/2/verify")) {
+      if (++checks === 1) throw new TypeError("Verification reply lost");
+      confirmed = true;
+      return Response.json(ready.files[1]);
+    }
+    expect(url).toBe("https://storage.invalid/owned");
+    expect(await (init?.body as File).text()).toBe("Y");
+    return new Response(null, { status: 412 });
+  });
+  vi.stubGlobal("fetch", network);
+  const { container } = showUploadDialog();
+  fireEvent.click(screen.getByRole("button", { name: "恢复上次会话" }));
+  await screen.findByText("done1.png");
+  fireEvent.click(screen.getByRole("button", { name: "改为新建上传" }));
+  expect(screen.queryByText("done1.png")).toBeNull();
+  expect(screen.queryByText(/重新选择此会话的全部原文件/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "恢复上次会话" }));
+  await screen.findByText(/重新选择此会话的全部原文件/);
+  const original = new File(
+    [
+      zipSync({
+        "foreign/page.png": new Uint8Array([90]),
+        "own1/page.png": new Uint8Array([88]),
+        "own2/page.png": new Uint8Array([89]),
+      }) as BlobPart,
+    ],
+    "21_成图.zip",
+  );
+  fireEvent.change(container.querySelector('input[type="file"]')!, {
+    target: { files: [original] },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "继续恢复上传" }));
+  await screen.findByText(/上传连接中断/);
+  expect(URL.createObjectURL).toHaveBeenCalledTimes(3);
+  expect(URL.revokeObjectURL).toHaveBeenCalledTimes(3);
+  expect(screen.getByText("done1.png")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "继续恢复上传" }));
+  await screen.findByText("done2.png");
+  await waitFor(() =>
+    expect(screen.queryByText(/重新选择此会话的全部原文件/)).toBeNull(),
+  );
+  expect(
+    network.mock.calls.filter(([url]) => !url.endsWith("/verify")),
+  ).toHaveLength(1);
+  expect(createImageBitmap).toHaveBeenCalledTimes(3);
+  expect(URL.revokeObjectURL).toHaveBeenCalledTimes(3);
+  expect(post).not.toHaveBeenCalled();
+});
+
 test.each(["resume"] as const)(
   "keeps successful batch images visible alongside a failed ZIP after %s",
   async (entry) => {
@@ -58,6 +312,10 @@ test.each(["resume"] as const)(
       files: [
         {
           id: "good",
+          size: 12,
+          checksum: "a".repeat(64),
+          contentType: "application/zip",
+          uploadMissing: false,
           sourceName: "21.zip",
           archive: true,
           status: "processed",
@@ -79,6 +337,10 @@ test.each(["resume"] as const)(
         },
         {
           id: "bad",
+          size: 12,
+          checksum: "b".repeat(64),
+          contentType: "application/zip",
+          uploadMissing: false,
           sourceName: "22.zip",
           archive: true,
           status: "failed",

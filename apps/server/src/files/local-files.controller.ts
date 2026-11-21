@@ -7,6 +7,7 @@ import {
   NotFoundException,
   Param,
   PayloadTooLargeException,
+  PreconditionFailedException,
   Put,
   Req,
   Res,
@@ -18,7 +19,11 @@ import type { Response } from "express";
 import { Access } from "../common/access.js";
 import { LocalObjectStorage } from "./local-object-storage.js";
 import { MemoryObjectStorage } from "./memory-object-storage.js";
-import { OBJECT_STORAGE, type ObjectStorage } from "./object-storage.js";
+import {
+  OBJECT_STORAGE,
+  ObjectWritePreconditionError,
+  type ObjectStorage,
+} from "./object-storage.js";
 
 @Controller("local-files")
 export class LocalFilesController {
@@ -43,6 +48,9 @@ export class LocalFilesController {
     } catch {
       throw new BadRequestException("上传签名无效或已过期");
     }
+    const ifNoneMatch = request.headers?.["if-none-match"];
+    if (signed.immutable && ifNoneMatch !== "*")
+      throw new PreconditionFailedException("上传需要一次写入条件");
     const limit =
       signed.key.startsWith("staging/typeset-upload/") &&
       signed.contentType === "application/zip"
@@ -61,9 +69,15 @@ export class LocalFilesController {
       chunks.push(buffer);
     }
     try {
-      await this.storage.writeSigned(token, Buffer.concat(chunks, size));
+      await this.storage.writeSigned(
+        token,
+        Buffer.concat(chunks, size),
+        typeof ifNoneMatch === "string" ? ifNoneMatch : undefined,
+      );
       return { ok: true };
     } catch (error) {
+      if (error instanceof ObjectWritePreconditionError)
+        throw new PreconditionFailedException("文件已上传，请继续验证");
       throw new BadRequestException(
         error instanceof Error ? error.message : "上传签名无效",
       );

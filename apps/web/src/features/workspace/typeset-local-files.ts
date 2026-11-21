@@ -1,4 +1,5 @@
 import { Unzip, UnzipInflate } from "fflate";
+import { typesetImageDimensions } from "./typeset-image-dimensions";
 import {
   typesetUploadContentType,
   type UploadImage,
@@ -156,14 +157,7 @@ export async function prepareLocalTypesetImages(
           throw new Error("解压后超过整批 200 张或 512 MiB 容量上限");
         if (!file.size || file.size > 25 * MiB || file.name.length > 255)
           throw new Error(`${file.name} 为空、名称过长或超过单图容量上限`);
-        let width = 0,
-          height = 0;
-        if (typeof createImageBitmap === "function") {
-          const bitmap = await createImageBitmap(file);
-          width = bitmap.width;
-          height = bitmap.height;
-          bitmap.close();
-        }
+        const { width, height } = await typesetImageDimensions(file);
         const hints = nameHints(file.name);
         const workNumber =
           hints.workNumber ??

@@ -84,9 +84,9 @@ df -h
 
 ## 5. 私有文件与生命周期
 
-业务 Bucket 保持私有，精确允许前端 Origin 的 GET/PUT/HEAD 及 content-type、x-amz-meta-sha256，暴露所需响应头。预签名 PUT/GET 使用 R2 S3 域名，不通过 Pages/API 代理。不要启用公开 r2.dev 或对正式对象统一短期删除。
+业务 Bucket 保持私有，精确允许前端 Origin 的 GET/PUT/HEAD 及 Content-Type、x-amz-meta-sha256、If-None-Match，暴露所需响应头。预签名 PUT/GET 使用 R2 S3 域名，不通过 Pages/API 代理。不要启用公开 r2.dev 或对正式对象统一短期删除。
 
-一日 staging 清理只覆盖 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/`。`staging/direct-upload/` 必须排除在按对象年龄自动删除的规则之外，由应用按终态清理；已确认的排队任务可能超过 24 小时。升级前先调整既有桶生命周期规则，否则外部清理会破坏任务恢复。应用完成权威校验和采用事务；缩略图随原文件引用、成图随版本恢复期、交接历史及发布来源保持可追溯，24 小时临时发布 ZIP 缓存按未引用条件清理。清理失败保留恢复点。
+一日 staging 清理只覆盖 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/`。`staging/direct-upload/` 必须排除在按对象年龄自动删除的规则之外，由应用按终态清理；已确认的排队任务可能超过 24 小时。升级前先调整既有桶生命周期规则，否则外部清理会破坏任务恢复。成图文件保存在 `typeset-uploads/immutable/`，须排除按年龄清理。应用用 HEAD 确认直传成图存在且实际大小匹配，再登记文件引用；缩略图随原文件引用、成图随版本恢复期、交接历史及发布来源保持可追溯，24 小时临时发布 ZIP 缓存按未引用条件清理。清理失败保留恢复点。
 
 数据库备份不是图片备份。演练必须核对恢复库的 FileObject key 是否仍存在，以及版本、发布快照、任务与软件版本。制作对象历史恢复期和备份保留窗口需一起确认；切勿尝试恢复时间跨度过大的历史数据库备份，并假设已被云存储生命周期规则清理的对象能自动找回。
 

@@ -1,5 +1,6 @@
 import {
   extractTypesetSession,
+  matchTypesetSessionFiles,
   uploadTypesetFiles,
 } from "./typeset-upload-transfer";
 import { useImageUrl } from "../../components/use-image-url";
@@ -169,6 +170,11 @@ export function TypesetUploadDialog({
   const active = useRef(true);
   const transfer = useRef<AbortController | null>(null);
   const uploadRetry = useRef<{ files: File[]; sessionId: string } | null>(null);
+  const recoverySelection = useRef<{
+    original: File[];
+    files: File[];
+    sessionId: string;
+  } | null>(null);
   const localImages = useRef<LocalTypesetImage[]>([]);
   const selectedKey = useRef("");
   useEffect(() => {
@@ -182,6 +188,9 @@ export function TypesetUploadDialog({
   const action = useAction();
   const [files, setFiles] = useState<File[]>([]);
   const [session, setSession] = useState<Session | null>(null);
+  const [recoverySessionId, setRecoverySessionId] = useState<string | null>(
+    null,
+  );
   const [images, setImages] = useState<UploadImage[]>([]);
   const [targets, setTargets] = useState<Target[]>([]);
   const [states, setStates] = useState<Record<string, Collaboration>>({});
@@ -393,6 +402,56 @@ export function TypesetUploadDialog({
   async function upload() {
     await action.run(async () => {
       transfer.current = new AbortController();
+      if (recoverySessionId) {
+        let prepared: LocalTypesetImage[] = [];
+        try {
+          let selected = recoverySelection.current;
+          if (
+            !selected ||
+            selected.sessionId !== recoverySessionId ||
+            selected.original.length !== files.length ||
+            selected.original.some((file, index) => file !== files[index])
+          ) {
+            let candidates = files;
+            if (session?.files.every((file) => !file.archive)) {
+              prepared = await prepareLocalTypesetImages(files, {
+                signal: transfer.current.signal,
+                onProgress: setProgress,
+              });
+              candidates = await matchTypesetSessionFiles(
+                session,
+                prepared.map((image) => image.file),
+                {
+                  allowExtraFiles: true,
+                  signal: transfer.current.signal,
+                },
+              );
+            }
+            selected = {
+              original: files,
+              files: candidates,
+              sessionId: recoverySessionId,
+            };
+            recoverySelection.current = selected;
+          }
+          const result = await uploadTypesetFiles(selected.files, {
+            sessionId: recoverySessionId,
+            signal: transfer.current.signal,
+            onProgress: setProgress,
+            onSession: applySession,
+          });
+          applySession(result);
+          setRecoverySessionId(null);
+          setFiles([]);
+          if (fileInput.current) fileInput.current.value = "";
+          await getTargets();
+          setProgress("");
+          recoverySelection.current = null;
+          return;
+        } finally {
+          releaseLocalTypesetImages(prepared);
+        }
+      }
       const result = await prepareLocalTypesetImages(files, {
         signal: transfer.current.signal,
         onProgress: setProgress,
@@ -406,6 +465,7 @@ export function TypesetUploadDialog({
       setChecks({});
       setStates({});
       uploadRetry.current = null;
+      recoverySelection.current = null;
       selectedKey.current = "";
       setFiles([]);
       await getTargets();
@@ -421,7 +481,28 @@ export function TypesetUploadDialog({
           params: { path: { id: savedId } },
         }),
       );
+      releaseLocalTypesetImages(localImages.current);
+      localImages.current = [];
+      uploadRetry.current = null;
+      recoverySelection.current = null;
+      selectedKey.current = "";
+      setFiles([]);
+      if (fileInput.current) fileInput.current.value = "";
       setUploaded([]);
+      setRecoverySessionId(null);
+      if (
+        previous.files.some(
+          (file) => !file.archive && file.status !== "processed",
+        )
+      ) {
+        // Browser dimensions and original bytes are deliberately not persisted.
+        // Keep the owned session and completed subset while asking for exact files.
+        applySession(previous);
+        setRecoverySessionId(previous.id);
+        await getTargets();
+        setProgress("");
+        return;
+      }
       if (
         previous.status === "previewed" &&
         previous.files.every((file) => file.status === "processed")
@@ -691,7 +772,7 @@ export function TypesetUploadDialog({
             disabled={action.busy}
             onClick={() => fileInput.current?.click()}
           >
-            选择成图与 ZIP
+            {recoverySessionId ? "选择会话原文件" : "选择成图与 ZIP"}
           </Button>
           <input
             ref={fileInput}
@@ -707,8 +788,34 @@ export function TypesetUploadDialog({
             loading={action.busy}
             onClick={() => void upload()}
           >
-            本地解析预览
+            {recoverySessionId ? "继续恢复上传" : "本地解析预览"}
           </Button>
+          {recoverySessionId && (
+            <Button
+              variant="ghost"
+              disabled={action.busy}
+              onClick={() => {
+                setRecoverySessionId(null);
+                recoverySelection.current = null;
+                releaseLocalTypesetImages(localImages.current);
+                localImages.current = [];
+                uploadRetry.current = null;
+                selectedKey.current = "";
+                setSession(null);
+                setImages([]);
+                setPlans([]);
+                setUploaded([]);
+                setChecks({});
+                setStates({});
+                setStateErrors({});
+                setPreview(null);
+                setFiles([]);
+                if (fileInput.current) fileInput.current.value = "";
+              }}
+            >
+              改为新建上传
+            </Button>
+          )}
           {savedId && (
             <Button
               variant="ghost"
@@ -719,6 +826,12 @@ export function TypesetUploadDialog({
             </Button>
           )}
         </div>
+        {recoverySessionId && (
+          <p role="status">
+            重新选择此会话的全部原文件或原 ZIP 以继续校验：
+            {session?.files.map((file) => file.sourceName).join("、")}
+          </p>
+        )}
         {!!files.length && (
           <p>
             已选 {files.length} 个文件，共{" "}

@@ -5566,6 +5566,10 @@ export interface components {
             warnings: string[];
         };
         TypesetUploadFileDto: {
+            size: number;
+            checksum: string;
+            contentType: string;
+            uploadMissing: boolean;
             /** Format: uuid */
             id: string;
             sourceName: string;
@@ -5595,6 +5599,10 @@ export interface components {
             maxTotalBytes: number;
             files: components["schemas"]["TypesetUploadFileDto"][];
             receipts?: components["schemas"]["TypesetUploadReceiptDto"][];
+        };
+        VerifyTypesetUploadFileDto: {
+            width: number;
+            height: number;
         };
         TypesetBatchPageMappingDto: {
             /** Format: uuid */
@@ -20984,7 +20992,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": components["schemas"]["VerifyTypesetUploadFileDto"];
             };
         };
         responses: {

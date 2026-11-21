@@ -62,6 +62,18 @@ export class CreateTypesetUploadSessionDto {
   @Type(() => TypesetUploadFileInputDto)
   files!: TypesetUploadFileInputDto[];
 }
+export class VerifyTypesetUploadFileDto {
+  @ApiProperty({ type: Number, minimum: 1, maximum: 2147483647 })
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  width!: number;
+  @ApiProperty({ type: Number, minimum: 1, maximum: 2147483647 })
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  height!: number;
+}
 export class TypesetUploadImageDto {
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: String, format: "uuid" }) uploadFileId!: string;
@@ -74,6 +86,10 @@ export class TypesetUploadImageDto {
   @ApiProperty({ type: String, isArray: true }) warnings!: string[];
 }
 export class TypesetUploadFileDto {
+  @ApiProperty({ type: Number }) size!: number;
+  @ApiProperty({ type: String }) checksum!: string;
+  @ApiProperty({ type: String }) contentType!: string;
+  @ApiProperty({ type: Boolean }) uploadMissing!: boolean;
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: String }) sourceName!: string;
   @ApiProperty({ type: Boolean }) archive!: boolean;

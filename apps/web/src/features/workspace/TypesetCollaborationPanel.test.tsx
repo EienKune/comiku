@@ -14,6 +14,14 @@ import { File as NodeFile } from "node:buffer";
 import { zipSync } from "fflate";
 vi.mock("./typeset-upload-transfer", () => ({ uploadTypesetFiles: vi.fn() }));
 beforeEach(() => {
+  vi.stubGlobal(
+    "createImageBitmap",
+    vi.fn(async () => ({
+      width: 640,
+      height: 960,
+      close: vi.fn(),
+    })),
+  );
   vi.stubGlobal("File", NodeFile);
   vi.stubGlobal(
     "URL",

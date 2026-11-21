@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   uploadTypesetFiles,
   extractTypesetSession,
@@ -14,6 +14,16 @@ vi.mock("./typeset-upload-plan", async (original) => ({
   ...(await original<object>()),
   uploadFileChecksum: vi.fn(async () => "a".repeat(64)),
 }));
+beforeEach(() => {
+  vi.stubGlobal(
+    "createImageBitmap",
+    vi.fn(async () => ({
+      width: 1200,
+      height: 1800,
+      close: vi.fn(),
+    })),
+  );
+});
 afterEach(() => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
@@ -26,6 +36,11 @@ const session = (status: string, failed = false) => ({
     {
       id: "f",
       sourceName: "21-001.png",
+      contentType: "image/png",
+      size: 1,
+      checksum: "a".repeat(64),
+      archive: false,
+      uploadMissing: false,
       status: failed
         ? "failed"
         : status === "previewed"
@@ -35,7 +50,7 @@ const session = (status: string, failed = false) => ({
       upload: {
         url: "https://storage.invalid/file",
         method: "PUT",
-        headers: {},
+        headers: { "If-None-Match": "*" },
       },
       images: [],
     },
@@ -66,11 +81,168 @@ test("verifies a page immediately after its PUT and fetches the complete session
     expect((await pending).status).toBe("previewed");
     expect(direct).toHaveBeenCalledTimes(2);
     expect(direct.mock.calls[1][0]).toContain("/files/f/verify");
+    expect(
+      JSON.parse(
+        String(
+          (direct.mock.calls[1] as unknown as [string, RequestInit])[1].body,
+        ),
+      ),
+    ).toEqual({ width: 1200, height: 1800 });
     expect(client.POST).toHaveBeenCalledOnce();
     expect(client.GET).toHaveBeenCalledOnce();
+    expect(createImageBitmap).toHaveBeenCalledOnce();
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("confirms an immutable 412 through the owned session instead of overwriting it", async () => {
+  vi.mocked(client.POST).mockResolvedValue({
+    data: session("pending"),
+  } as never);
+  vi.mocked(client.GET).mockResolvedValue({
+    data: session("previewed"),
+  } as never);
+  const direct = vi.fn(async (url: string) =>
+    url.endsWith("/verify")
+      ? Response.json(session("previewed").files[0])
+      : new Response(null, { status: 412 }),
+  );
+  vi.stubGlobal("fetch", direct);
+  await expect(
+    uploadTypesetFiles([new File(["x"], "21-001.png")]),
+  ).resolves.toMatchObject({ status: "previewed" });
+  expect(direct).toHaveBeenCalledTimes(2);
+});
+
+test("rejects a same-named different file before adopting an existing session", async () => {
+  const existing = session("previewed");
+  existing.files[0].checksum = "b".repeat(64);
+  vi.mocked(client.GET).mockResolvedValue({ data: existing } as never);
+  const direct = vi.fn();
+  vi.stubGlobal("fetch", direct);
+  await expect(
+    uploadTypesetFiles([new File(["x"], "21-001.png")], {
+      sessionId: "session",
+    }),
+  ).rejects.toThrow("重试文件与上传会话不匹配");
+  expect(direct).not.toHaveBeenCalled();
+});
+
+test("retries a lost verification reply against the same session without another PUT", async () => {
+  vi.mocked(client.POST).mockResolvedValue({
+    data: session("pending"),
+  } as never);
+  vi.mocked(client.GET).mockResolvedValue({
+    data: session("pending"),
+  } as never);
+  let checks = 0;
+  const direct = vi.fn(async (url: string) => {
+    if (!url.endsWith("/verify")) return new Response(null, { status: 200 });
+    if (++checks === 1) throw new TypeError("Lost confirmation reply");
+    return Response.json(session("previewed").files[0]);
+  });
+  vi.stubGlobal("fetch", direct);
+  const file = new File(["x"], "21-001.png");
+  await expect(uploadTypesetFiles([file])).rejects.toThrow("重试");
+  vi.mocked(client.GET)
+    .mockResolvedValueOnce({ data: session("pending") } as never)
+    .mockResolvedValue({ data: session("previewed") } as never);
+  await uploadTypesetFiles([file], { sessionId: "session" });
+  expect(
+    direct.mock.calls.filter(([url]) => !url.endsWith("/verify")),
+  ).toHaveLength(1);
+  expect(checks).toBe(2);
+});
+
+test("confirms an uncertain PUT before sending bytes again and only retries after explicit missing HEAD", async () => {
+  vi.mocked(client.POST).mockResolvedValue({
+    data: session("pending"),
+  } as never);
+  vi.mocked(client.GET).mockResolvedValue({
+    data: session("pending"),
+  } as never);
+  let puts = 0,
+    checks = 0;
+  const missing = {
+    ...session("pending").files[0],
+    status: "failed",
+    uploadMissing: true,
+    error: "文件尚未上传，请重试上传",
+  };
+  const direct = vi.fn(async (url: string) => {
+    if (!url.endsWith("/verify")) {
+      if (++puts === 1) throw new TypeError("PUT reply lost");
+      return new Response(null, { status: 200 });
+    }
+    return Response.json(
+      ++checks === 1 ? missing : session("previewed").files[0],
+    );
+  });
+  vi.stubGlobal("fetch", direct);
+  const file = new File(["x"], "21-001.png");
+  await expect(uploadTypesetFiles([file])).rejects.toThrow("重试");
+  await expect(
+    uploadTypesetFiles([file], { sessionId: "session" }),
+  ).rejects.toThrow("文件尚未上传");
+  expect(puts).toBe(1);
+  vi.mocked(client.GET)
+    .mockResolvedValueOnce({
+      data: { ...session("pending"), files: [missing] },
+    } as never)
+    .mockResolvedValue({ data: session("previewed") } as never);
+  await uploadTypesetFiles([file], { sessionId: "session" });
+  expect(puts).toBe(2);
+  expect(checks).toBe(2);
+});
+
+test("does not accept an immutable 412 without successful authenticated verification", async () => {
+  vi.mocked(client.POST).mockResolvedValue({
+    data: session("pending"),
+  } as never);
+  const direct = vi.fn(async (url: string) =>
+    url.endsWith("/verify")
+      ? Response.json({ message: "上传会话不存在" }, { status: 404 })
+      : new Response(null, { status: 412 }),
+  );
+  vi.stubGlobal("fetch", direct);
+  await expect(
+    uploadTypesetFiles([new File(["x"], "21-001.png")]),
+  ).rejects.toThrow("上传会话不存在");
+  expect(client.GET).not.toHaveBeenCalled();
+  expect(direct).toHaveBeenCalledTimes(2);
+});
+
+test("retains backend ZIP extraction without browser dimensions or per-image confirmation", async () => {
+  const pending = {
+    ...session("pending"),
+    files: [
+      {
+        ...session("pending").files[0],
+        sourceName: "21.zip",
+        archive: true,
+        contentType: "application/zip",
+      },
+    ],
+  };
+  const ready = {
+    ...pending,
+    status: "previewed",
+    files: pending.files.map((file) => ({ ...file, status: "processed" })),
+  };
+  vi.mocked(client.POST)
+    .mockResolvedValueOnce({ data: pending } as never)
+    .mockResolvedValue({ data: ready } as never);
+  const direct = vi.fn(async () => new Response(null, { status: 200 }));
+  vi.stubGlobal("fetch", direct);
+  await expect(
+    uploadTypesetFiles([new File(["x"], "21.zip")]),
+  ).resolves.toMatchObject({ status: "previewed" });
+  expect(createImageBitmap).not.toHaveBeenCalled();
+  expect(direct).toHaveBeenCalledOnce();
+  expect(vi.mocked(client.POST).mock.calls[1][0]).toBe(
+    "/api/typeset/upload-sessions/{id}/extract",
+  );
 });
 test("does not extract after a failed object upload and exposes a retryable filename", async () => {
   vi.mocked(client.POST).mockResolvedValue({
