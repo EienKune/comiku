@@ -25,12 +25,16 @@ import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiNoContentResponse,
   ApiParam,
   ApiTags,
 } from "@nestjs/swagger";
 import { Access, type AuthRequest } from "../common/access.js";
 import { bodyValidation } from "../common/http.js";
 import {
+  ProofreadLeaseRequestDto,
+  ProofreadLeaseResultDto,
+  ReleaseProofreadLeaseDto,
   CreateTranslationEntryDto,
   DeleteTranslationEntryDto,
   ExportLabelPlusDto,
@@ -129,6 +133,8 @@ export class TranslationsController {
         stage: { type: "string", enum: ["translate", "proofread"] },
         expectedRevision: { type: "integer", minimum: 0 },
         expectedEditorEpoch: { type: "integer", minimum: 0 },
+        expectedContentBaseline: { type: "string", maxLength: 64 },
+        pageAccess: { type: "string" },
         idempotencyKey: { type: "string", format: "uuid" },
       },
     },
@@ -237,6 +243,54 @@ export class TranslationsController {
     );
   }
 
+  @Post("works/:workId/translations/pages/:imageId/lease")
+  @HttpCode(200)
+  @Access({ permission: "works:read" })
+  @ApiOperation({ operationId: "acquireOrRenewProofreadLease" })
+  @ApiParam({ name: "workId", format: "uuid" })
+  @ApiParam({ name: "imageId", format: "uuid" })
+  @ApiBody({ type: ProofreadLeaseRequestDto })
+  @ApiOkResponse({ type: ProofreadLeaseResultDto })
+  lease(
+    @Req() request: AuthRequest,
+    @Param("workId", ParseUUIDPipe) workId: string,
+    @Param("imageId", ParseUUIDPipe) imageId: string,
+    @Body(bodyValidation(ProofreadLeaseRequestDto))
+    input: ProofreadLeaseRequestDto,
+  ) {
+    return this.translations.leasePage(
+      request.actor.userId,
+      request.actor.sessionId,
+      workId,
+      imageId,
+      input,
+    );
+  }
+
+  @Delete("works/:workId/translations/pages/:imageId/lease")
+  @HttpCode(204)
+  @Access({ permission: "works:read" })
+  @ApiOperation({ operationId: "releaseProofreadLease" })
+  @ApiParam({ name: "workId", format: "uuid" })
+  @ApiParam({ name: "imageId", format: "uuid" })
+  @ApiBody({ type: ReleaseProofreadLeaseDto })
+  @ApiNoContentResponse()
+  releaseLease(
+    @Req() request: AuthRequest,
+    @Param("workId", ParseUUIDPipe) workId: string,
+    @Param("imageId", ParseUUIDPipe) imageId: string,
+    @Body(bodyValidation(ReleaseProofreadLeaseDto))
+    input: ReleaseProofreadLeaseDto,
+  ) {
+    return this.translations.releaseLease(
+      request.actor.userId,
+      request.actor.sessionId,
+      workId,
+      imageId,
+      input,
+    );
+  }
+
   @Post("work-images/:imageId/markers")
   @Access({ permission: "works:read" })
   @ApiOperation({ operationId: "createTranslationEntry" })
@@ -249,7 +303,12 @@ export class TranslationsController {
     @Body(bodyValidation(CreateTranslationEntryDto))
     input: CreateTranslationEntryDto,
   ) {
-    return this.translations.createEntry(request.actor.userId, imageId, input);
+    return this.translations.createEntry(
+      request.actor.userId,
+      imageId,
+      input,
+      request.actor.sessionId,
+    );
   }
 
   @Patch("translation-entries/:entryId")
@@ -264,7 +323,12 @@ export class TranslationsController {
     @Body(bodyValidation(UpdateTranslationEntryDto))
     input: UpdateTranslationEntryDto,
   ) {
-    return this.translations.updateEntry(request.actor.userId, entryId, input);
+    return this.translations.updateEntry(
+      request.actor.userId,
+      entryId,
+      input,
+      request.actor.sessionId,
+    );
   }
 
   @Delete("translation-entries/:entryId")
@@ -280,7 +344,12 @@ export class TranslationsController {
     @Body(bodyValidation(DeleteTranslationEntryDto))
     input: DeleteTranslationEntryDto,
   ) {
-    return this.translations.deleteEntry(request.actor.userId, entryId, input);
+    return this.translations.deleteEntry(
+      request.actor.userId,
+      entryId,
+      input,
+      request.actor.sessionId,
+    );
   }
 
   @Post("work-images/:imageId/markers/:entryId/reorder")
@@ -303,6 +372,7 @@ export class TranslationsController {
       imageId,
       entryId,
       input,
+      request.actor.sessionId,
     );
   }
 }

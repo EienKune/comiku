@@ -684,22 +684,30 @@ export function DesignSystemPlayground() {
                     label="搜索作品"
                     placeholder="标题、作者或成员"
                   />
-                  <SelectField
-                    label="工作状态"
-                    defaultValue="proofreading"
-                    hint="自定义弹层统一圆角、分组、选中、悬停与键盘焦点"
+                  <div
+                    style={{
+                      height: "6rem",
+                      overflow: "auto",
+                      padding: "var(--space-2)",
+                    }}
                   >
-                    <option value="all">全部状态</option>
-                    <optgroup label="进行中">
-                      <option value="translation">翻译中</option>
-                      <option value="proofreading">校对中</option>
-                      <option value="typesetting">嵌字中</option>
-                    </optgroup>
-                    <option value="published">已发布</option>
-                    <option value="archived" disabled>
-                      已归档（不可选）
-                    </option>
-                  </SelectField>
+                    <SelectField
+                      label="工作状态"
+                      defaultValue="proofreading"
+                      hint="自定义弹层统一圆角、分组、选中、悬停与键盘焦点"
+                    >
+                      <option value="all">全部状态</option>
+                      <optgroup label="进行中">
+                        <option value="translation">翻译中</option>
+                        <option value="proofreading">校对中</option>
+                        <option value="typesetting">嵌字中</option>
+                      </optgroup>
+                      <option value="published">已发布</option>
+                      <option value="archived" disabled>
+                        已归档（不可选）
+                      </option>
+                    </SelectField>
+                  </div>
                   <TextField
                     label="署名"
                     defaultValue="星野"

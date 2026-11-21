@@ -30,6 +30,22 @@ export function mapWorkEventNotification(
     !Array.isArray(source.detail)
       ? (source.detail as Record<string, unknown>)
       : {};
+  if (
+    source.action === "typeset_version_uploaded" &&
+    ["typeset-page-save", "typeset-supplement-delete"].includes(
+      String(detail.operation),
+    ) &&
+    detail.isRevision !== true
+  )
+    return null;
+  const materialChange =
+    source.action === "metadata_updated" &&
+    detail.operation === "source-hd-replaced"
+      ? "source"
+      : source.action === "typeset_version_uploaded" &&
+          detail.isRevision === true
+        ? "typeset"
+        : undefined;
   const allowedStages = allowedNotificationStages(source.action);
   const stage =
     source.action === "publish_confirmed"
@@ -71,6 +87,23 @@ export function mapWorkEventNotification(
     occurredAt: source.createdAt,
     ...(stage !== undefined && { stage }),
     ...(participationKind !== undefined && { participationKind }),
+    ...(stage === "proofread" &&
+      source.action === "stage_joined" &&
+      typeof detail.operation === "string" &&
+      detail.operation.startsWith("assign:proofread:") &&
+      typeof detail.addedProofreader === "string" && {
+        addedProofreader: detail.addedProofreader,
+      }),
+    ...(materialChange && {
+      materialChange,
+      ...(materialChange === "source" && Number.isInteger(detail.pageNumber)
+        ? { affectedPageNumbers: [detail.pageNumber] }
+        : Array.isArray(detail.affectedPageNumbers) &&
+            detail.affectedPageNumbers.length
+          ? { affectedPageNumbers: detail.affectedPageNumbers }
+          : {}),
+      ...(detail.affectsSupplement === true && { affectsSupplement: true }),
+    }),
     ...(source.fromWorkflowStatus !== null && {
       fromWorkflowStatus: source.fromWorkflowStatus,
     }),

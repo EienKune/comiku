@@ -58,6 +58,25 @@ export function personalTodoWhere(actor: WorkActor): Prisma.WorkWhereInput {
   };
 }
 
+/** Multi-page roles stay discoverable until all original pages have an owner. */
+export function availableStageWhere(stage: WorkStage): Prisma.WorkWhereInput {
+  const vacantRole = { stageParticipants: { none: { stage, leftAt: null } } };
+  if (stage !== "translate" && stage !== "typeset") return vacantRole;
+  return {
+    OR: [
+      { collaborationMode: "single", ...vacantRole },
+      {
+        collaborationMode: "multi",
+        images: {
+          some: {
+            pageAssignments: { none: { stage, participantId: { not: null } } },
+          },
+        },
+      },
+    ],
+  };
+}
+
 export function personalRecommendationWhere(
   actor: WorkActor,
   immediateOnly = false,
@@ -68,6 +87,7 @@ export function personalRecommendationWhere(
   );
   if (!scopes.length) return { id: { in: [] } };
   return {
+    collaborationMigrationIssue: null,
     reviewStatus: ReviewStatus.normal,
     OR: scopes.map(({ stage, sourceLanguage }) => {
       const opposite: WorkStage | null =
@@ -85,17 +105,7 @@ export function personalRecommendationWhere(
             : claimableWorkStatuses(stage),
         },
         AND: [
-          {
-            stageParticipants: {
-              none: { stage, leftAt: null, submittedAt: null },
-            },
-          },
-          // Submitted ownership remains traceable and is not a vacant future task.
-          {
-            stageParticipants: {
-              none: { stage, userId: actor.id, leftAt: null },
-            },
-          },
+          availableStageWhere(stage),
           ...(opposite
             ? [
                 {

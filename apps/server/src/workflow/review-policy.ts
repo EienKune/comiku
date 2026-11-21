@@ -3,9 +3,16 @@ import { ReviewStatus, WorkflowStatus } from "../generated/prisma/client.js";
 
 /** Invoke after taking the work row lock, before every production mutation. */
 export function assertProductionWritable(work: {
+  collaborationMigrationIssue?: string | null;
   reviewStatus: ReviewStatus;
   workflowStatus: WorkflowStatus;
 }) {
+  if (work.collaborationMigrationIssue) {
+    throw new ConflictException({
+      code: "COLLABORATION_MIGRATION_REVIEW",
+      message: "旧任务的页分工需要核对后继续制作",
+    });
+  }
   if (work.reviewStatus !== ReviewStatus.normal) {
     throw new ConflictException({
       code: "WORK_REVIEW_PAUSED",

@@ -1,3 +1,4 @@
+import { publishedCreditNames } from "./published-credit-names.js";
 import { assertProductionWritable } from "../workflow/review-policy.js";
 import { DownloadsService } from "../transfers/downloads.service.js";
 import { createTypesetHandoffArchive } from "../typesetting/handoff-package.js";
@@ -55,7 +56,12 @@ const publicationDetails = {
   },
   creditAliases: { select: { userId: true, stage: true, creditName: true } },
   stageParticipants: {
-    select: { userId: true, user: { select: { displayName: true } } },
+    select: {
+      userId: true,
+      stage: true,
+      leftAt: true,
+      user: { select: { displayName: true } },
+    },
   },
   publishRecords: {
     orderBy: { publishedAt: "desc" },
@@ -81,7 +87,7 @@ export class PublishingService {
   ) {}
 
   async view(actorId: string, workId: string): Promise<PublishingViewDto> {
-    await this.assertCanPrepare(actorId, workId);
+    await this.assertCanPrepare(actorId);
     return this.buildView(this.db, workId);
   }
 
@@ -96,7 +102,7 @@ export class PublishingService {
   }
 
   private async validateDownload(task: DownloadPreparation) {
-    await this.assertCanPrepare(task.actorId, task.workId);
+    await this.assertCanPrepare(task.actorId);
     const prepared = await this.prepare(this.db, task.workId, false);
     assertProductionWritable(prepared.work);
     if (
@@ -166,6 +172,7 @@ export class PublishingService {
 
   // Retained compatibility route uses the same streamed archive, never a batch buffer.
   async readCurrentImages(actorId: string, workId: string) {
+    await this.assertCanPrepare(actorId);
     const prepared = await this.prepare(this.db, workId, false);
     const result = await this.prepareImageDownload(
       {
@@ -188,6 +195,9 @@ export class PublishingService {
     input: ConfirmPublicationDto,
   ): Promise<PublishingViewDto> {
     await this.db.$transaction(async (tx) => {
+      // Keep the operator role stable until publication commits, before locking work.
+      await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock_shared(20260905, 2)`;
+      await this.assertCanPrepare(actorId, tx);
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
       );
@@ -279,10 +289,6 @@ export class PublishingService {
       prepared.work.workflowStatus === WorkflowStatus.published
         ? prepared.work.publishRecords[0]
         : undefined;
-    const publishedCredits = (value: Prisma.JsonValue | null | undefined) =>
-      Array.isArray(value) && value.every((item) => typeof item === "string")
-        ? (value as string[])
-        : null;
     return {
       workId,
       workRevision: prepared.work.revision,
@@ -292,13 +298,13 @@ export class PublishingService {
       authorCredit: prepared.authorCredit,
       sourcePostUrl: prepared.work.sourcePostUrl,
       translationCredits:
-        publishedCredits(publishedRecord?.translationCreditsSnapshot) ??
+        publishedCreditNames(publishedRecord?.translationCreditsSnapshot) ??
         prepared.credits.translate,
       proofreadCredits:
-        publishedCredits(publishedRecord?.proofreadCreditsSnapshot) ??
+        publishedCreditNames(publishedRecord?.proofreadCreditsSnapshot) ??
         prepared.credits.proofread,
       typesetCredits:
-        publishedCredits(publishedRecord?.typesetCreditsSnapshot) ??
+        publishedCreditNames(publishedRecord?.typesetCreditsSnapshot) ??
         prepared.credits.typeset,
       generatedText:
         publishedRecord?.generatedTextSnapshot ?? prepared.generatedText,
@@ -356,12 +362,16 @@ export class PublishingService {
       throw new ConflictException("默认发布模板不可用");
     }
     const credits = this.submissionCredits(work);
+    const hasPublishedSnapshot =
+      work.workflowStatus === WorkflowStatus.published &&
+      work.publishRecords.length > 0;
     if (
-      !credits.translate.length ||
-      (!work.proofreadSkippedVersionId && !credits.proofread.length) ||
-      !credits.typeset.length
+      !hasPublishedSnapshot &&
+      (!credits.translate.length ||
+        (!work.proofreadSkippedVersionId && !credits.proofread.length) ||
+        !credits.typeset.length)
     ) {
-      throw new ConflictException("作品缺少已冻结的翻译、校对或嵌字署名");
+      throw new ConflictException("作品缺少翻译、校对或嵌字署名");
     }
     const authorCredit = normalizeAuthorCredit(
       work.sourceCandidatePost.authorExternalAccount?.handle,
@@ -391,17 +401,24 @@ export class PublishingService {
         creditName,
       ]),
     );
-    const displayNames = new Map(
-      work.stageParticipants.map(({ userId, user }) => [
-        userId,
-        user.displayName,
-      ]),
-    );
+    const participants = new Map<
+      string,
+      PublicationWork["stageParticipants"][number]
+    >();
+    for (const participant of work.stageParticipants) {
+      const key = `${participant.stage}:${participant.userId}`;
+      const previous = participants.get(key);
+      // Rejoining creates a new membership; physical row order must not let
+      // an earlier departed membership hide the same user's current duty.
+      if (!previous || (previous.leftAt && !participant.leftAt))
+        participants.set(key, participant);
+    }
     const result = {
       translate: [] as string[],
       proofread: [] as string[],
       typeset: [] as string[],
     };
+    const seen = new Set<string>();
     for (const event of work.events) {
       const detail = event.detail;
       if (!detail || Array.isArray(detail) || typeof detail !== "object") {
@@ -415,7 +432,8 @@ export class PublishingService {
       )) {
         continue;
       }
-      if (result[stage].length || !Array.isArray(detail.credits)) continue;
+      if (seen.has(stage) || !Array.isArray(detail.credits)) continue;
+      seen.add(stage);
       result[stage] = [
         ...new Set(
           detail.credits.flatMap((credit) => {
@@ -430,10 +448,14 @@ export class PublishingService {
             }
             const userId =
               typeof credit.userId === "string" ? credit.userId : null;
+            const participant = userId
+              ? participants.get(`${stage}:${userId}`)
+              : undefined;
+            if (participant?.leftAt) return [];
             return [
               (userId
                 ? (aliases.get(`${stage}:${userId}`) ??
-                  displayNames.get(userId))
+                  participant?.user.displayName)
                 : undefined) ?? credit.creditName.trim(),
             ];
           }),
@@ -461,24 +483,24 @@ export class PublishingService {
     };
   }
 
-  private async assertCanPrepare(actorId: string, workId: string) {
-    const user = await this.db.user.findUnique({
+  private async assertCanPrepare(
+    actorId: string,
+    client: Prisma.TransactionClient = this.db,
+  ) {
+    const user = await client.user.findUnique({
       where: { id: actorId },
       select: {
+        isActive: true,
+        mustChangePassword: true,
         roles: { select: { role: true } },
-        workParticipations: {
-          where: { workId, stage: "typeset", leftAt: null },
-          select: { id: true },
-        },
       },
     });
     const roles = new Set(user?.roles.map(({ role }) => role) ?? []);
     if (
       !user ||
-      (!roles.has(Role.admin) &&
-        !roles.has(Role.operator) &&
-        !roles.has(Role.reviewer) &&
-        (!roles.has(Role.typesetter) || !user.workParticipations.length))
+      !user.isActive ||
+      user.mustChangePassword ||
+      !roles.has(Role.operator)
     ) {
       throw new ForbiddenException("没有整理此作品发布内容的权限");
     }

@@ -1,3 +1,14 @@
+import { publishedCreditNames } from "../publishing/published-credit-names.js";
+import { matchesSourceAssetLineage } from "./source-asset-lineage.js";
+import {
+  submitTypesetPagesTx,
+  cancelTypesetPagesTx,
+  clearTypesetPagesTx,
+} from "../typesetting/typeset-page-workflow.js";
+import {
+  ensurePageAssignments,
+  pageSubmissionCurrent,
+} from "./page-ownership.js";
 import { toSourceAccountSummary } from "../authors/source-account-summary.js";
 import {
   assertSourceFilterAccount,
@@ -39,6 +50,7 @@ import {
   stageTransitions,
 } from "../workflow/workflow-policy.js";
 import type {
+  AddWorkProofreaderDto,
   CancelWorkStageSubmissionDto,
   ClaimWorkStagesDto,
   CompleteStageContributionDto,
@@ -68,6 +80,7 @@ import {
   personalStageScopes,
   personalTodoWhere,
   personalRecommendationWhere,
+  availableStageWhere,
   type WorkActor,
 } from "./personal-work-policy.js";
 
@@ -114,9 +127,9 @@ const listDetails = {
   },
   stageParticipants: {
     where: { leftAt: null },
-    select: { stage: true },
+    select: { stage: true, userId: true, leftAt: true },
   },
-  _count: { select: { images: true, stageParticipants: true } },
+  _count: { select: { images: true } },
 } as const;
 const fullDetails = {
   ...listDetails,
@@ -132,6 +145,10 @@ const fullDetails = {
       },
     },
     orderBy: { joinedAt: "asc" },
+  },
+  pageAssignments: {
+    include: { participant: { select: { userId: true } } },
+    orderBy: { workImage: { orderIndex: "asc" } },
   },
   creditAliases: true,
   events: {
@@ -150,6 +167,19 @@ type WorkFullRow = Prisma.WorkGetPayload<{ include: typeof fullDetails }>;
 
 const personalDetails = {
   ...listDetails,
+  pageAssignments: {
+    select: {
+      workImageId: true,
+      stage: true,
+      participantId: true,
+      generation: true,
+      draftRevision: true,
+      submittedAt: true,
+      submittedRevision: true,
+      submittedGeneration: true,
+    },
+  },
+
   images: {
     select: { id: true, translationRevision: true },
     orderBy: { orderIndex: "asc" },
@@ -158,7 +188,9 @@ const personalDetails = {
     where: { leftAt: null },
     select: {
       stage: true,
+      id: true,
       userId: true,
+      leftAt: true,
       submittedAt: true,
       assignments: { select: { workImageId: true } },
       contributionSubmissions: {
@@ -234,32 +266,8 @@ export class WorksService {
         : {}),
       ...(query.unassignedStage
         ? {
-            AND: [
-              {
-                OR: [
-                  {
-                    workflowStatus: {
-                      in: currentStageStatuses(query.unassignedStage),
-                    },
-                    stageParticipants: {
-                      none: {
-                        stage: query.unassignedStage,
-                        submittedAt: null,
-                        leftAt: null,
-                      },
-                    },
-                  },
-                  {
-                    workflowStatus: {
-                      notIn: currentStageStatuses(query.unassignedStage),
-                    },
-                    stageParticipants: {
-                      none: { stage: query.unassignedStage, leftAt: null },
-                    },
-                  },
-                ],
-              },
-            ],
+            collaborationMigrationIssue: null,
+            AND: [availableStageWhere(query.unassignedStage)],
           }
         : {}),
     };
@@ -278,11 +286,7 @@ export class WorksService {
       AND: [
         statisticsScope,
         {
-          ...(actor.roles.some(
-            (role) => role === Role.operator || role === Role.admin,
-          )
-            ? {}
-            : { id: { in: [] } }),
+          ...(actor.roles.includes(Role.operator) ? {} : { id: { in: [] } }),
           workflowStatus: WorkflowStatus.pending_publish,
           reviewStatus: ReviewStatus.normal,
         },
@@ -555,25 +559,21 @@ export class WorksService {
             );
             if (query.view === WorkView.todo) {
               if (!participant || !readyToStart) return [];
-              const latest = participant.contributionSubmissions[0];
+              const assigned = work.pageAssignments.filter(
+                (p) => p.stage === stage && p.participantId === participant.id,
+              );
               return [
                 {
                   stage,
                   readyToStart,
-                  contributionCurrent: Boolean(
-                    work.collaborationMode === WorkCollaborationMode.multi &&
-                    latest &&
-                    participant.assignments.length &&
-                    participant.assignments.every(({ workImageId }) =>
-                      latest.pages.some(
-                        (page) =>
-                          page.workImageId === workImageId &&
-                          page.imageRevision ===
-                            work.images.find(({ id }) => id === workImageId)
-                              ?.translationRevision,
-                      ),
+                  contributionCurrent:
+                    assigned.length > 0 &&
+                    assigned.every(
+                      (p) =>
+                        p.submittedAt !== null &&
+                        p.submittedRevision === p.draftRevision &&
+                        p.submittedGeneration === p.generation,
                     ),
-                  ),
                 },
               ];
             }
@@ -585,11 +585,20 @@ export class WorksService {
                   : null;
             if (
               !claimableWorkStatuses(stage).includes(work.workflowStatus) ||
-              work.stageParticipants.some(
-                (item) =>
-                  item.stage === stage &&
-                  (item.submittedAt === null || item.userId === actorId),
-              ) ||
+              (work.collaborationMode === "multi" &&
+              (stage === "translate" || stage === "typeset")
+                ? !work.images.some(
+                    (i) =>
+                      !work.pageAssignments.some(
+                        (p) =>
+                          p.stage === stage &&
+                          p.workImageId === i.id &&
+                          p.participantId,
+                      ),
+                  )
+                : work.stageParticipants.some(
+                    (item) => item.stage === stage,
+                  )) ||
               (work.collaborationMode === WorkCollaborationMode.single &&
                 opposite &&
                 work.stageParticipants.some(
@@ -660,8 +669,27 @@ export class WorksService {
     const capability = actorId
       ? await proofreadSkipAvailability(this.db, actorId, id)
       : { canSkipProofreading: false, skipProofreadingUnavailableReason: null };
+    const record =
+      work.workflowStatus === WorkflowStatus.published
+        ? await this.db.publishRecord.findFirst({
+            where: { workId: id },
+            orderBy: { publishedAt: "desc" },
+            select: {
+              translationCreditsSnapshot: true,
+              proofreadCreditsSnapshot: true,
+              typesetCreditsSnapshot: true,
+            },
+          })
+        : null;
     return {
       ...this.detailDto(work),
+      ...(record && {
+        publishedCredits: {
+          translate: publishedCreditNames(record.translationCreditsSnapshot),
+          proofread: publishedCreditNames(record.proofreadCreditsSnapshot),
+          typeset: publishedCreditNames(record.typesetCreditsSnapshot),
+        },
+      }),
       canSkipProofreading: capability.canSkipProofreading,
       skipProofreadingUnavailableReason:
         capability.skipProofreadingUnavailableReason,
@@ -727,6 +755,13 @@ export class WorksService {
                         id: true,
                         workId: true,
                         originalFileObjectId: true,
+                        sourceAssetReplacements: {
+                          select: {
+                            oldFileObjectId: true,
+                            newFileObjectId: true,
+                          },
+                          orderBy: { assetRevision: "asc" },
+                        },
                         orderIndex: true,
                         work: {
                           select: { id: true, workNumber: true, title: true },
@@ -757,7 +792,12 @@ export class WorksService {
         mappingKnown: source.mappingKnown,
         media: candidate.media.map((media) => {
           const image =
-            media.workImage?.originalFileObjectId === media.fileObjectId
+            media.workImage &&
+            matchesSourceAssetLineage(
+              media.fileObjectId,
+              media.workImage.originalFileObjectId,
+              media.workImage.sourceAssetReplacements,
+            )
               ? media.workImage
               : null;
           const disposition = image
@@ -919,13 +959,12 @@ export class WorksService {
     input: UpdateWorkCollaborationDto,
   ): Promise<WorkDetailDto> {
     const action = WorkEventAction.collaboration_mode_updated;
-    const operation = `collaboration:${input.collaborationMode}`;
-    if (await this.isReplay(workId, input.idempotencyKey, action, operation)) {
-      return this.get(workId, actorId);
-    }
+    const operation = `collaboration:${input.collaborationMode}:${[...(input.retainedTranslationImageIds ?? [])].sort().join(",")}:${[...(input.retainedTypesetImageIds ?? [])].sort().join(",")}`;
     await this.db.$transaction(async (tx) => {
+      await lockAccountMembership(tx);
+      await this.assertAdmin(tx, actorId);
       await tx.$queryRaw(
-        Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
+        Prisma.sql`SELECT id FROM works WHERE id=${workId}::uuid FOR UPDATE`,
       );
       if (
         await this.isReplayTx(
@@ -935,74 +974,192 @@ export class WorksService {
           action,
           operation,
         )
-      ) {
+      )
         return;
-      }
-      const work = await tx.work.findUnique({ where: { id: workId } });
-      if (!work) throw new NotFoundException("作品不存在");
+      const work = await tx.work.findUniqueOrThrow({ where: { id: workId } });
       assertProductionWritable(work);
-      if (work.workflowStatus === WorkflowStatus.archived) {
-        throw new ConflictException("归档作品不能修改协作模式");
-      }
-      if (input.collaborationMode === WorkCollaborationMode.single) {
-        const active = await tx.workStageParticipant.findMany({
-          where: { workId, submittedAt: null, leftAt: null },
-          select: { stage: true, userId: true },
-        });
-        for (const stage of ["translate", "proofread", "typeset"] as const) {
-          if (
-            active.filter((participant) => participant.stage === stage).length >
-            1
-          ) {
-            throw new ConflictException("请先将每个阶段整理为至多一名参与者");
-          }
-        }
-        const preserved = await tx.workStageParticipant.findMany({
-          where: {
-            workId,
-            stage: { in: ["translate", "proofread"] },
-            leftAt: null,
-          },
-          select: { stage: true, userId: true },
-        });
-        const translated = new Set(
-          preserved
-            .filter(({ stage }) => stage === "translate")
-            .map(({ userId }) => userId),
+      if (work.workflowStatus === "published")
+        throw new ConflictException("已发布作品不能修改模式");
+      if (work.revision !== input.expectedRevision) this.stale();
+      if (work.collaborationMode === input.collaborationMode) return;
+      await ensurePageAssignments(tx, workId, "translate");
+      await ensurePageAssignments(tx, workId, "typeset");
+      const members = await tx.workStageParticipant.findMany({
+        where: { workId, leftAt: null },
+        orderBy: [{ joinedAt: "asc" }, { id: "asc" }],
+      });
+      const pages = await tx.workPageAssignment.findMany({ where: { workId } });
+      const cleared: string[] = [];
+      if (input.collaborationMode === "single") {
+        const progress =
+          work.productionStartedAt ||
+          work.typesetHandoffStartedAt ||
+          (await tx.translationEntry.count({
+            where: { workImage: { workId } },
+          })) ||
+          (await tx.workTypesetDraft.count({ where: { workId } })) ||
+          (await tx.translationVersion.count({ where: { workId } })) ||
+          (await tx.typesetImageVersion.count({ where: { workId } }));
+        if (progress)
+          throw new ConflictException("曾有实际进展的作品不能切回单人模式");
+        const keep = (["translate", "proofread", "typeset"] as const).flatMap(
+          (stage) => members.filter((p) => p.stage === stage).slice(0, 1),
         );
+        const translator = keep.find((p) => p.stage === "translate");
+        const proofreader = keep.find((p) => p.stage === "proofread");
         if (
-          preserved.some(
-            ({ stage, userId }) =>
-              stage === "proofread" && translated.has(userId),
-          )
-        ) {
+          translator &&
+          proofreader &&
+          translator.userId === proofreader.userId
+        )
           throw new ConflictException(
-            "当前参与历史包含同一用户翻译并校对，不能切换为单人模式",
+            "最早成员同时承担翻译与校对，请先调整职责",
+          );
+        for (const member of keep)
+          await this.assertStagePermission(
+            member.userId,
+            member.stage,
+            workId,
+            tx,
+          );
+        const keepIds = new Set(keep.map((p) => p.id));
+        const removed = members.filter((p) => !keepIds.has(p.id));
+        await tx.workStageParticipant.updateMany({
+          where: { id: { in: removed.map((p) => p.id) } },
+          data: { leftAt: new Date() },
+        });
+        await tx.workStageAssignment.deleteMany({
+          where: { participantId: { in: removed.map((p) => p.id) } },
+        });
+        await tx.proofreadPageLease.deleteMany({ where: { workId } });
+        for (const stage of ["translate", "typeset"] as const) {
+          const owner = keep.find((p) => p.stage === stage);
+          await tx.workPageAssignment.updateMany({
+            where: { workId, stage },
+            data: {
+              participantId: owner?.id ?? null,
+              generation: { increment: 1 },
+              submittedAt: null,
+              submittedGeneration: null,
+              submittedRevision: null,
+            },
+          });
+          if (owner)
+            await tx.workStageAssignment.createMany({
+              data: pages
+                .filter((p) => p.stage === stage)
+                .map((p) => ({
+                  participantId: owner.id,
+                  workImageId: p.workImageId,
+                  assignedById: actorId,
+                })),
+              skipDuplicates: true,
+            });
+        }
+      } else {
+        for (const stage of ["translate", "typeset"] as const) {
+          const mutable = claimableWorkStatuses(stage).includes(
+            work.workflowStatus,
+          );
+          const owner = members.find((p) => p.stage === stage);
+          if (!owner || !mutable) continue;
+          const owned = pages.filter(
+            (p) => p.stage === stage && p.participantId === owner.id,
+          );
+          const requested =
+            stage === "translate"
+              ? input.retainedTranslationImageIds
+              : input.retainedTypesetImageIds;
+          const hasDraft =
+            stage === "translate"
+              ? await tx.translationEntry.count({
+                  where: {
+                    workImageId: { in: owned.map((p) => p.workImageId) },
+                  },
+                })
+              : Boolean(work.currentTypesetVersionId) ||
+                (await tx.workTypesetDraft.count({
+                  where: { workId, participantId: owner.id },
+                }));
+          if (hasDraft && requested === undefined)
+            throw new ConflictException("有稿转多人须由原负责人明确选择保留页");
+          const retain = requested ?? owned.map((p) => p.workImageId);
+          if (retain.some((id) => !owned.some((p) => p.workImageId === id)))
+            throw new ConflictException("保留范围包含不属于原负责人的页面");
+          const release = owned
+            .filter((p) => !retain.includes(p.workImageId))
+            .map((p) => p.workImageId);
+          cleared.push(...release);
+          if (stage === "typeset" && work.currentTypesetVersionId) {
+            const version = await tx.typesetImageVersion.findUniqueOrThrow({
+              where: { id: work.currentTypesetVersionId },
+              include: { images: true },
+            });
+            const mapped = version.images.map((i) => i.workImageId);
+            if (
+              mapped.some((id) => !id) ||
+              new Set(mapped).size !== mapped.length
+            )
+              throw new ConflictException(
+                "当前单人成图映射不明确，请先整理后转换；不会猜测页码或删除稿件",
+              );
+            for (const image of version.images) {
+              const assignment = owned.find(
+                (p) => p.workImageId === image.workImageId,
+              );
+              if (!assignment)
+                throw new ConflictException("成图映射不属于当前负责人");
+              await tx.workTypesetDraft.upsert({
+                where: { workImageId: image.workImageId! },
+                create: {
+                  workId,
+                  workImageId: image.workImageId,
+                  participantId: owner.id,
+                  assignmentGeneration: assignment.generation,
+                  fileObjectId: image.fileObjectId,
+                  sourceName: image.sourceName,
+                  width: image.width,
+                  height: image.height,
+                  orderIndex: image.orderIndex,
+                },
+                update: {},
+              });
+            }
+          }
+          await this.releasePagesTx(
+            tx,
+            actorId,
+            workId,
+            owner.id,
+            stage,
+            release,
+            input,
           );
         }
+        this.assertClearConfirmation([...new Set(cleared)], input);
       }
-      const changed = await tx.work.updateMany({
-        where: { id: workId, revision: input.expectedRevision },
+      await tx.work.update({
+        where: { id: workId },
         data: {
           collaborationMode: input.collaborationMode,
           revision: { increment: 1 },
         },
       });
-      if (!changed.count) this.stale();
       await tx.workEvent.create({
         data: {
           workId,
           actorId,
           action,
+          idempotencyKey: input.idempotencyKey,
           fromWorkflowStatus: work.workflowStatus,
           toWorkflowStatus: work.workflowStatus,
           fromReviewStatus: work.reviewStatus,
           toReviewStatus: work.reviewStatus,
-          idempotencyKey: input.idempotencyKey,
           detail: {
             operation,
             from: work.collaborationMode,
             to: input.collaborationMode,
+            clearedImageIds: [...new Set(cleared)],
           },
         },
       });
@@ -1015,129 +1172,7 @@ export class WorksService {
     workId: string,
     input: JoinWorkStageDto,
   ): Promise<WorkDetailDto> {
-    this.assertCoordinatedStage(input.stage);
-    await this.assertStagePermission(actorId, input.stage, workId);
-    const transition = stageTransitions[input.stage];
-    const operation = `join:${input.stage}:${input.creditName ?? ""}`;
-    if (
-      await this.isReplay(
-        workId,
-        input.idempotencyKey,
-        WorkEventAction.stage_joined,
-        operation,
-      )
-    )
-      return this.get(workId, actorId);
-
-    await this.db.$transaction(async (tx) => {
-      await lockAccountMembership(tx);
-      await this.assertStagePermission(actorId, input.stage, workId, tx);
-      await tx.$queryRaw(
-        Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
-      );
-      if (
-        await this.isReplayTx(
-          tx,
-          workId,
-          input.idempotencyKey,
-          WorkEventAction.stage_joined,
-          operation,
-        )
-      )
-        return;
-      const work = await tx.work.findUnique({ where: { id: workId } });
-      if (!work) throw new NotFoundException("作品不存在");
-      assertProductionWritable(work);
-      if (
-        ![transition.pending, transition.active].includes(work.workflowStatus)
-      )
-        throw new ConflictException("作品当前阶段不允许加入此项工作");
-      if (input.stage === "proofread" && work.proofreadSkippedVersionId)
-        throw new ConflictException("本轮已跳过校对");
-      const existing = await tx.workStageParticipant.findFirst({
-        where: {
-          workId,
-          stage: input.stage,
-          userId: actorId,
-          submittedAt: null,
-          leftAt: null,
-        },
-      });
-      if (existing) return;
-      const activeCount = await tx.workStageParticipant.count({
-        where: {
-          workId,
-          stage: input.stage,
-          submittedAt: null,
-          leftAt: null,
-        },
-      });
-      if (
-        work.collaborationMode === WorkCollaborationMode.single &&
-        activeCount &&
-        !existing
-      ) {
-        throw new ConflictException("单人模式下该职责已有参与者，只能查看");
-      }
-      await this.assertSingleStageSeparation(
-        tx,
-        work.collaborationMode,
-        workId,
-        actorId,
-        input.stage,
-      );
-      const changed = await tx.work.updateMany({
-        where: { id: workId, revision: input.expectedRevision },
-        data: { revision: { increment: 1 } },
-      });
-      if (!changed.count) this.stale();
-      if (!existing) {
-        await tx.workStageParticipant.create({
-          data: {
-            workId,
-            stage: input.stage,
-            userId: actorId,
-            participationMode: activeCount ? "collaborator" : "owner",
-          },
-        });
-      }
-      if (input.creditName) {
-        await tx.workCreditAlias.upsert({
-          where: {
-            workId_userId_stage: {
-              workId,
-              userId: actorId,
-              stage: input.stage,
-            },
-          },
-          create: {
-            workId,
-            userId: actorId,
-            stage: input.stage,
-            creditName: input.creditName,
-          },
-          update: { creditName: input.creditName },
-        });
-      }
-      await tx.workEvent.create({
-        data: {
-          workId,
-          actorId,
-          action: WorkEventAction.stage_joined,
-          fromWorkflowStatus: work.workflowStatus,
-          toWorkflowStatus: work.workflowStatus,
-          fromReviewStatus: work.reviewStatus,
-          toReviewStatus: work.reviewStatus,
-          idempotencyKey: input.idempotencyKey,
-          detail: {
-            operation,
-            stage: input.stage,
-            participationRegistered: true,
-          },
-        },
-      });
-    });
-    return this.get(workId, actorId);
+    return this.claimStage(actorId, workId, input);
   }
 
   async claimStage(
@@ -1192,7 +1227,7 @@ export class WorksService {
         work.workflowStatus === WorkflowStatus.archived ||
         work.workflowStatus === WorkflowStatus.published
       ) {
-        throw new ConflictException("作品发布或归档后不能修改临时署名");
+        throw new ConflictException("作品发布或归档后不能修改署名");
       }
       const participant = await tx.workStageParticipant.findFirst({
         where: {
@@ -1203,7 +1238,7 @@ export class WorksService {
         },
       });
       if (!participant) {
-        throw new ConflictException("只有当前阶段的参与者可以设置作品临时署名");
+        throw new ConflictException("只有当前阶段的参与者可以设置作品署名");
       }
       const previous = await tx.workCreditAlias.findUnique({
         where: {
@@ -1260,6 +1295,11 @@ export class WorksService {
     input: LeaveWorkStageDto,
   ): Promise<WorkDetailDto> {
     this.assertCoordinatedStage(input.stage);
+    if (input.stage !== "proofread")
+      return this.updateStageAssignments(actorId, workId, {
+        ...input,
+        imageIds: [],
+      });
     const action = WorkEventAction.stage_left;
     const operation = `leave:${input.stage}:${actorId}`;
     if (await this.isReplay(workId, input.idempotencyKey, action, operation)) {
@@ -1322,6 +1362,13 @@ export class WorksService {
         !remaining.length &&
         (work.workflowStatus === transition.active ||
           work.workflowStatus === transition.pending);
+      if (resetsTextDraft && !input.confirmClearDraft)
+        throw new ConflictException(
+          "最后一名校对退出将放弃本轮校对改动，请确认",
+        );
+      await tx.proofreadPageLease.deleteMany({
+        where: { workId, userId: actorId },
+      });
       if (resetsTextDraft) {
         await this.translations.resetDraftForStage(
           tx,
@@ -1391,10 +1438,7 @@ export class WorksService {
     action: WorkEventAction,
     actionName: "claim" | "assign",
   ): Promise<WorkDetailDto> {
-    const operation = `${actionName}:${input.stage}:${targetUserId}:${input.creditName ?? ""}`;
-    if (await this.isReplay(workId, input.idempotencyKey, action, operation)) {
-      return this.get(workId, actorId);
-    }
+    const operation = `${actionName}:${input.stage}:${targetUserId}:${input.creditName ?? ""}:${[...(input.imageIds ?? [])].sort().join(",")}`;
     await this.db.$transaction(async (tx) => {
       await lockAccountMembership(tx);
       await this.assertStagePermission(targetUserId, input.stage, workId, tx);
@@ -1409,34 +1453,48 @@ export class WorksService {
           action,
           operation,
         )
-      ) {
+      )
         return;
-      }
       const work = await tx.work.findUnique({ where: { id: workId } });
       if (!work) throw new NotFoundException("作品不存在");
       assertProductionWritable(work);
-      if (!claimableWorkStatuses(input.stage).includes(work.workflowStatus)) {
-        throw new ConflictException("只能认领当前或尚未开始的后续职责");
+      if (actionName === "assign") {
+        if (work.collaborationMode !== "multi")
+          throw new ConflictException("单人模式不支持独立添加二校");
+        const manager = await tx.user.findUniqueOrThrow({
+          where: { id: actorId },
+          include: { roles: true },
+        });
+        if (!manager.roles.some((r) => r.role === Role.admin)) {
+          await this.assertStagePermission(actorId, "proofread", workId, tx);
+          if (
+            !(await tx.workStageParticipant.findFirst({
+              where: {
+                workId,
+                stage: "proofread",
+                userId: actorId,
+                leftAt: null,
+              },
+            }))
+          )
+            throw new ForbiddenException("只有当前校对或管理员可以添加校对");
+        }
       }
+
+      if (!claimableWorkStatuses(input.stage).includes(work.workflowStatus))
+        throw new ConflictException("只能认领当前或尚未开始的后续职责");
       if (input.stage === "proofread" && work.proofreadSkippedVersionId)
         throw new ConflictException("本轮已跳过校对");
-      if (work.reviewStatus !== ReviewStatus.normal) {
-        throw new ConflictException("请先处理作品审核，再认领职责");
-      }
-      const existing = await tx.workStageParticipant.findFirst({
-        where: {
-          workId,
-          stage: input.stage,
-          submittedAt: null,
-          leftAt: null,
-        },
-        select: { id: true },
+      const current = await tx.workStageParticipant.findMany({
+        where: { workId, stage: input.stage, leftAt: null },
+        orderBy: [{ joinedAt: "asc" }, { id: "asc" }],
       });
-      if (existing) {
-        throw new ConflictException(
-          "该职责已有负责人；需要多人处理时请加入协作",
-        );
-      }
+      let participant = current.find((p) => p.userId === targetUserId);
+      if (
+        work.collaborationMode === "single" &&
+        current.some((p) => p.userId !== targetUserId)
+      )
+        throw new ConflictException("单人模式下该职责已有负责人");
       await this.assertSingleStageSeparation(
         tx,
         work.collaborationMode,
@@ -1444,20 +1502,86 @@ export class WorksService {
         targetUserId,
         input.stage,
       );
+      let selected: string[] = [];
+      if (input.stage !== "proofread") {
+        await ensurePageAssignments(tx, workId, input.stage);
+        const pages = await tx.workPageAssignment.findMany({
+          where: { workId, stage: input.stage },
+          include: { workImage: { select: { orderIndex: true } } },
+          orderBy: { workImage: { orderIndex: "asc" } },
+        });
+        selected =
+          input.imageIds ??
+          pages.filter((p) => !p.participantId).map((p) => p.workImageId);
+        if (
+          !selected.length &&
+          work.collaborationMode === "single" &&
+          participant &&
+          !input.imageIds &&
+          pages.length
+        ) {
+          if (!participant.submittedAt) return;
+          // A historic, explicitly reopened single stage retains its previous owner's pages.
+          const previousOwnerId = participant.id;
+          selected = pages
+            .filter((page) => page.participantId === previousOwnerId)
+            .map((page) => page.workImageId);
+        }
+        if (!selected.length) throw new ConflictException("没有可认领的空闲页");
+        if (work.collaborationMode === "single")
+          selected = pages.map((p) => p.workImageId);
+        const conflicts = selected.filter(
+          (id) =>
+            !pages.some(
+              (p) =>
+                p.workImageId === id &&
+                (!p.participantId || p.participantId === participant?.id),
+            ),
+        );
+        if (conflicts.length)
+          throw new ConflictException({
+            message: "部分页面已被认领，请重新选择",
+            conflictImageIds: conflicts,
+          });
+      }
       const changed = await tx.work.updateMany({
         where: { id: workId, revision: input.expectedRevision },
         data: { revision: { increment: 1 } },
       });
       if (!changed.count) this.stale();
-      const participant = await tx.workStageParticipant.create({
-        data: {
-          workId,
-          stage: input.stage,
-          userId: targetUserId,
-          participationMode: "owner",
-        },
-      });
-      if (input.creditName) {
+      if (!participant)
+        participant = await tx.workStageParticipant.create({
+          data: {
+            workId,
+            stage: input.stage,
+            userId: targetUserId,
+            participationMode: current.length ? "collaborator" : "owner",
+          },
+        });
+      if (selected.length) {
+        await tx.workStageParticipant.update({
+          where: { id: participant.id },
+          data: { submittedAt: null },
+        });
+        await tx.workPageAssignment.updateMany({
+          where: {
+            workId,
+            stage: input.stage,
+            workImageId: { in: selected },
+            participantId: null,
+          },
+          data: { participantId: participant.id, generation: { increment: 1 } },
+        });
+        await tx.workStageAssignment.createMany({
+          data: selected.map((workImageId) => ({
+            participantId: participant!.id,
+            workImageId,
+            assignedById: actorId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+      if (input.creditName)
         await tx.workCreditAlias.upsert({
           where: {
             workId_userId_stage: {
@@ -1474,7 +1598,6 @@ export class WorksService {
           },
           update: { creditName: input.creditName },
         });
-      }
       await tx.workEvent.create({
         data: {
           workId,
@@ -1490,6 +1613,16 @@ export class WorksService {
             stage: input.stage,
             userId: targetUserId,
             participantId: participant.id,
+            imageIds: selected,
+            ...(actionName === "assign" &&
+              input.stage === "proofread" && {
+                addedProofreader: (
+                  await tx.user.findUniqueOrThrow({
+                    where: { id: targetUserId },
+                    select: { displayName: true },
+                  })
+                ).displayName,
+              }),
             participationRegistered: true,
           },
         },
@@ -1498,20 +1631,138 @@ export class WorksService {
     return this.get(workId, actorId);
   }
 
+  async addProofreader(
+    actorId: string,
+    workId: string,
+    input: AddWorkProofreaderDto,
+  ): Promise<WorkDetailDto> {
+    const actor = await this.db.user.findUniqueOrThrow({
+      where: { id: actorId },
+      include: { roles: true },
+    });
+    const current = await this.db.workStageParticipant.findFirst({
+      where: { workId, userId: actorId, stage: "proofread", leftAt: null },
+    });
+    if (!actor.roles.some((r) => r.role === Role.admin)) {
+      if (!current)
+        throw new ForbiddenException("只有当前校对或管理员可以添加校对");
+      await this.assertStagePermission(actorId, "proofread", workId);
+    }
+    const work = await this.db.work.findUniqueOrThrow({
+      where: { id: workId },
+    });
+    if (work.collaborationMode !== "multi")
+      throw new ConflictException("单人模式不支持独立添加二校");
+    return this.reserveStage(
+      actorId,
+      input.userId,
+      workId,
+      { ...input, stage: "proofread" },
+      WorkEventAction.stage_joined,
+      "assign",
+    );
+  }
+
+  private assertClearConfirmation(
+    ids: string[],
+    input: { confirmClearDraft?: boolean; impactImageIds?: string[] },
+  ) {
+    const expected = [...ids].sort();
+    const confirmed = [...(input.impactImageIds ?? [])].sort();
+    if (
+      ids.length &&
+      (!input.confirmClearDraft ||
+        expected.length !== confirmed.length ||
+        expected.some((id, i) => id !== confirmed[i]))
+    )
+      throw new ConflictException({
+        code: "CLEAR_DRAFT_CONFIRMATION_REQUIRED",
+        message: "取消认领将清空这些页的当前稿件，请确认影响范围",
+        impactImageIds: ids,
+      });
+  }
+
+  private async releasePagesTx(
+    tx: Prisma.TransactionClient,
+    actorId: string,
+    workId: string,
+    participantId: string,
+    stage: WorkStage,
+    ids: string[],
+    confirmation: { impactSupplementIds?: string[] } = {},
+  ) {
+    if (!ids.length) return;
+    const remaining = await tx.workPageAssignment.count({
+      where: { workId, stage, participantId, workImageId: { notIn: ids } },
+    });
+    const pages = await tx.workPageAssignment.findMany({
+      where: { workId, stage, participantId, workImageId: { in: ids } },
+    });
+    if (pages.some(pageSubmissionCurrent))
+      throw new ConflictException("请先取消本人提交，再取消认领");
+    if (stage === "translate") {
+      await tx.translationEntry.deleteMany({
+        where: { workImageId: { in: ids } },
+      });
+      await tx.workImage.updateMany({
+        where: { id: { in: ids }, workId },
+        data: { translationRevision: { increment: 1 } },
+      });
+    } else {
+      if (!remaining) {
+        const supplements = await tx.workTypesetDraft.findMany({
+          where: { workId, participantId, workImageId: null },
+          select: { id: true, sourceName: true },
+        });
+        const expected = supplements.map((p) => p.id).sort(),
+          confirmed = [...(confirmation.impactSupplementIds ?? [])].sort();
+        if (
+          expected.length !== confirmed.length ||
+          expected.some((id, i) => id !== confirmed[i])
+        )
+          throw new ConflictException({
+            code: "CLEAR_SUPPLEMENTS_CONFIRMATION_REQUIRED",
+            message: "取消最后原稿页认领将同时清除本人补充图，请确认完整范围",
+            impactSupplementIds: expected,
+            supplements,
+          });
+      }
+      await clearTypesetPagesTx(tx, participantId, ids, {
+        lastPage: remaining === 0,
+      });
+    }
+    await tx.workPageAssignment.updateMany({
+      where: { workId, stage, participantId, workImageId: { in: ids } },
+      data: {
+        participantId: null,
+        generation: { increment: 1 },
+        draftRevision: { increment: 1 },
+        submittedAt: null,
+        submittedGeneration: null,
+        submittedRevision: null,
+      },
+    });
+    await tx.workStageAssignment.deleteMany({
+      where: { participantId, workImageId: { in: ids } },
+    });
+    if (!remaining)
+      await tx.workStageParticipant.update({
+        where: { id: participantId },
+        data: { leftAt: new Date() },
+      });
+  }
+
   async updateStageAssignments(
     actorId: string,
     workId: string,
     input: UpdateStageAssignmentsDto,
   ): Promise<WorkDetailDto> {
-    if (input.stage !== "translate" && input.stage !== "proofread") {
-      throw new BadRequestException("当前只支持翻译和校对的页码分工");
-    }
+    if (input.stage === "proofread")
+      throw new BadRequestException("校对共享全篇，无需分配页码");
     const operation = `stage-assignment:${input.stage}:${input.participantId ?? actorId}:${[...input.imageIds].sort().join(",")}`;
     const action = WorkEventAction.stage_assignment_updated;
-    if (await this.isReplay(workId, input.idempotencyKey, action, operation)) {
-      return this.get(workId, actorId);
-    }
     await this.db.$transaction(async (tx) => {
+      await lockAccountMembership(tx);
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
       );
@@ -1523,76 +1774,142 @@ export class WorksService {
           action,
           operation,
         )
-      ) {
+      )
         return;
-      }
-      const work = await tx.work.findUnique({ where: { id: workId } });
-      if (!work) throw new NotFoundException("作品不存在");
+      const work = await tx.work.findUniqueOrThrow({ where: { id: workId } });
       assertProductionWritable(work);
-      if (work.collaborationMode !== WorkCollaborationMode.multi) {
-        throw new ConflictException("单人模式不需要设置页码分工");
-      }
-      const participant = input.participantId
-        ? await tx.workStageParticipant.findFirst({
-            where: {
-              id: input.participantId,
-              workId,
-              stage: input.stage,
-              submittedAt: null,
-              leftAt: null,
-            },
-          })
-        : await tx.workStageParticipant.findFirst({
-            where: {
-              workId,
-              userId: actorId,
-              stage: input.stage,
-              submittedAt: null,
-              leftAt: null,
-            },
-          });
-      if (!participant)
-        throw new ConflictException("没有可分配页面的活跃参与者");
+      if (!claimableWorkStatuses(input.stage).includes(work.workflowStatus))
+        throw new ConflictException(
+          "当前阶段不能修改页归属；已提交页须先合法取消提交",
+        );
+      await ensurePageAssignments(tx, workId, input.stage);
+      const participant = await tx.workStageParticipant.findFirst({
+        where: {
+          workId,
+          stage: input.stage,
+          leftAt: null,
+          ...(input.participantId
+            ? { id: input.participantId }
+            : { userId: actorId }),
+        },
+      });
+      if (!participant) throw new ConflictException("当前没有可调整的职责");
       if (participant.userId !== actorId) await this.assertAdmin(tx, actorId);
-      const imageCount = await tx.workImage.count({
-        where: { workId, id: { in: input.imageIds } },
+      else await this.assertStagePermission(actorId, input.stage, workId, tx);
+      const pages = await tx.workPageAssignment.findMany({
+        where: { workId, stage: input.stage },
       });
-      if (imageCount !== input.imageIds.length) {
-        throw new BadRequestException("页码分工包含不属于该作品的图片");
-      }
-      const changed = await tx.work.updateMany({
-        where: { id: workId, revision: input.expectedRevision },
-        data: { revision: { increment: 1 } },
-      });
-      if (!changed.count) this.stale();
-      await tx.workStageAssignment.deleteMany({
-        where: { participantId: participant.id },
-      });
-      if (input.imageIds.length) {
+      const owned = pages.filter((p) => p.participantId === participant.id);
+      const released = owned
+        .filter((p) => !input.imageIds.includes(p.workImageId))
+        .map((p) => p.workImageId);
+      const selected = new Set(input.imageIds);
+      const conflicts = input.imageIds.filter(
+        (id) =>
+          !pages.some(
+            (p) =>
+              p.workImageId === id &&
+              (!p.participantId || p.participantId === participant.id),
+          ),
+      );
+      if (
+        work.collaborationMode === "single" &&
+        selected.size > 0 &&
+        selected.size !== pages.length
+      )
+        throw new ConflictException(
+          "单人职责须保留整作，请先开启多人协作再分配部分页",
+        );
+      if (
+        participant.userId !== actorId &&
+        input.imageIds.some((id) => !owned.some((p) => p.workImageId === id))
+      )
+        throw new ForbiddenException("管理员代释放只可减少该成员的负责页");
+      if (conflicts.length)
+        throw new ConflictException({
+          message: "页面已由其他成员负责，不能替换归属",
+          conflictImageIds: conflicts,
+        });
+      this.assertClearConfirmation(released, input);
+      if (work.revision !== input.expectedRevision) this.stale();
+      await this.releasePagesTx(
+        tx,
+        actorId,
+        workId,
+        participant.id,
+        input.stage,
+        released,
+        input,
+      );
+      const added = pages
+        .filter((p) => !p.participantId && selected.has(p.workImageId))
+        .map((p) => p.workImageId);
+      if (added.length) {
+        await tx.workPageAssignment.updateMany({
+          where: {
+            workId,
+            stage: input.stage,
+            workImageId: { in: added },
+            participantId: null,
+          },
+          data: { participantId: participant.id, generation: { increment: 1 } },
+        });
         await tx.workStageAssignment.createMany({
-          data: input.imageIds.map((workImageId) => ({
+          data: added.map((workImageId) => ({
             participantId: participant.id,
             workImageId,
             assignedById: actorId,
           })),
+          skipDuplicates: true,
+        });
+        await tx.workStageParticipant.update({
+          where: { id: participant.id },
+          data: { leftAt: null, submittedAt: null },
         });
       }
+      const transition = stageTransitions[input.stage];
+      const lastOwnerLeft =
+        !selected.size &&
+        released.length > 0 &&
+        !pages.some(
+          (page) => page.participantId && page.participantId !== participant.id,
+        );
+      const nextWorkflowStatus =
+        lastOwnerLeft && work.workflowStatus === transition.active
+          ? transition.pending
+          : work.workflowStatus;
+      if (!selected.size && released.length)
+        await tx.workCreditAlias.deleteMany({
+          where: { workId, stage: input.stage, userId: participant.userId },
+        });
+      await tx.work.update({
+        where: { id: workId },
+        data: {
+          workflowStatus: nextWorkflowStatus,
+          revision: { increment: 1 },
+          ...(lastOwnerLeft &&
+            input.stage === "translate" &&
+            work.collaborationMode === "single" && {
+              editorEpoch: { increment: 1 },
+            }),
+        },
+      });
       await tx.workEvent.create({
         data: {
           workId,
           actorId,
           action,
+          idempotencyKey: input.idempotencyKey,
           fromWorkflowStatus: work.workflowStatus,
-          toWorkflowStatus: work.workflowStatus,
+          toWorkflowStatus: nextWorkflowStatus,
           fromReviewStatus: work.reviewStatus,
           toReviewStatus: work.reviewStatus,
-          idempotencyKey: input.idempotencyKey,
           detail: {
             operation,
             stage: input.stage,
             participantId: participant.id,
-            userId: participant.userId,
             imageIds: input.imageIds,
+            clearedImageIds: released,
           },
         },
       });
@@ -1605,105 +1922,8 @@ export class WorksService {
     workId: string,
     input: CompleteStageContributionDto,
   ): Promise<WorkDetailDto> {
-    const action = WorkEventAction.stage_contribution_completed;
-    const operation = `stage-contribution:${input.stage}:${actorId}`;
-    if (await this.isReplay(workId, input.idempotencyKey, action, operation)) {
-      return this.get(workId, actorId);
-    }
-    await this.db.$transaction(async (tx) => {
-      await tx.$queryRaw(
-        Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
-      );
-      if (
-        await this.isReplayTx(
-          tx,
-          workId,
-          input.idempotencyKey,
-          action,
-          operation,
-        )
-      ) {
-        return;
-      }
-      const work = await tx.work.findUnique({ where: { id: workId } });
-      if (!work) throw new NotFoundException("作品不存在");
-      assertProductionWritable(work);
-      if (work.collaborationMode !== WorkCollaborationMode.multi) {
-        throw new ConflictException("单人模式直接提交完整阶段");
-      }
-      if (!canSubmitWorkStage(input.stage, work.workflowStatus)) {
-        throw new ConflictException("当前不是可完成分工的活动阶段");
-      }
-      if (work.reviewStatus !== ReviewStatus.normal) {
-        throw new ConflictException("作品存在未解决的审核事项");
-      }
-      if (
-        work.revision !== input.expectedRevision ||
-        work.editorEpoch !== input.expectedEditorEpoch
-      ) {
-        this.stale();
-      }
-      const participant = await tx.workStageParticipant.findFirst({
-        where: {
-          workId,
-          userId: actorId,
-          stage: input.stage,
-          submittedAt: null,
-          leftAt: null,
-        },
-        include: { assignments: true },
-      });
-      if (!participant) throw new ForbiddenException("需要先加入当前阶段");
-      if (!participant.assignments.length) {
-        throw new ConflictException("请先选择本人负责的页码");
-      }
-      const images = await tx.workImage.findMany({
-        where: {
-          workId,
-          id: {
-            in: participant.assignments.map(({ workImageId }) => workImageId),
-          },
-        },
-        select: { id: true, translationRevision: true },
-      });
-      const submission = await tx.stageContributionSubmission.create({
-        data: {
-          participantId: participant.id,
-          createdById: actorId,
-          idempotencyKey: input.idempotencyKey,
-          pages: {
-            create: images.map((image) => ({
-              workImageId: image.id,
-              imageRevision: image.translationRevision,
-            })),
-          },
-        },
-      });
-      await tx.work.update({
-        where: { id: workId },
-        data: { revision: { increment: 1 } },
-      });
-      await tx.workEvent.create({
-        data: {
-          workId,
-          actorId,
-          action,
-          fromWorkflowStatus: work.workflowStatus,
-          toWorkflowStatus: work.workflowStatus,
-          fromReviewStatus: work.reviewStatus,
-          toReviewStatus: work.reviewStatus,
-          idempotencyKey: input.idempotencyKey,
-          detail: {
-            operation,
-            stage: input.stage,
-            participantId: participant.id,
-            submissionId: submission.id,
-            imageIds: images.map(({ id }) => id),
-          },
-        },
-      });
-    });
-    return this.get(workId, actorId);
+    // Compatibility endpoint follows the unified submit path; there is no second completion gate.
+    return this.submitStage(actorId, workId, input);
   }
 
   async submitStage(
@@ -1731,6 +1951,191 @@ export class WorksService {
     return this.get(workId, actorId);
   }
 
+  private async submitTranslationTx(
+    tx: Prisma.TransactionClient,
+    actorId: string,
+    workId: string,
+    input: SubmitWorkStageDto,
+  ): Promise<void> {
+    await tx.$queryRaw(
+      Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
+    );
+    const operation = "submit:translate";
+    if (
+      await this.isReplayTx(
+        tx,
+        workId,
+        input.idempotencyKey,
+        WorkEventAction.stage_submitted,
+        operation,
+      )
+    )
+      return;
+    const work = await tx.work.findUniqueOrThrow({ where: { id: workId } });
+    assertProductionWritable(work);
+    if (
+      ![WorkflowStatus.pending_translate, WorkflowStatus.translating].some(
+        (s) => s === work.workflowStatus,
+      )
+    )
+      throw new ConflictException("作品当前阶段不允许提交翻译");
+    if (
+      work.revision !== input.expectedRevision ||
+      work.editorEpoch !== input.expectedEditorEpoch
+    )
+      this.stale();
+    await ensurePageAssignments(tx, workId, "translate");
+    const participant = await tx.workStageParticipant.findFirst({
+      where: { workId, stage: "translate", userId: actorId, leftAt: null },
+    });
+    if (!participant) throw new ForbiddenException("需要先认领本人翻译页");
+    const pages = await tx.workPageAssignment.findMany({
+      where: { workId, stage: "translate" },
+      orderBy: { workImage: { orderIndex: "asc" } },
+    });
+    const own = pages.filter((p) => p.participantId === participant.id);
+    if (!own.length) throw new ConflictException("至少负责一页才能提交");
+    const pending = own.filter((p) => !pageSubmissionCurrent(p));
+    const heads = input.pageHeads ?? [];
+    if (
+      heads.length !== pending.length ||
+      new Set(heads.map((h) => h.imageId)).size !== heads.length ||
+      pending.some(
+        (p) =>
+          !heads.some(
+            (h) =>
+              h.imageId === p.workImageId &&
+              h.generation === p.generation &&
+              h.draftRevision === p.draftRevision,
+          ),
+      )
+    ) {
+      throw new ConflictException({
+        code: "SUBMISSION_PAGE_HEADS_STALE",
+        message: "待提交页内容或归属已变化，请刷新后重新确认确切内容",
+        pageHeads: pending.map((p) => ({
+          imageId: p.workImageId,
+          generation: p.generation,
+          draftRevision: p.draftRevision,
+        })),
+      });
+    }
+    if (!pending.length) throw new ConflictException("本人页面均已提交");
+    const now = new Date();
+    for (const page of pending)
+      await tx.workPageAssignment.update({
+        where: { id: page.id },
+        data: {
+          submittedAt: now,
+          submittedGeneration: page.generation,
+          submittedRevision: page.draftRevision,
+        },
+      });
+    const complete =
+      pages.length > 0 &&
+      pages.every(
+        (p) => p.participantId === participant.id || pageSubmissionCurrent(p),
+      );
+    const active = await tx.workStageParticipant.findMany({
+      where: { workId, stage: "translate", leftAt: null },
+      include: { user: { select: { displayName: true } } },
+      orderBy: [{ joinedAt: "asc" }, { id: "asc" }],
+    });
+    const credited = active
+      .filter((p) => pages.some((page) => page.participantId === p.id))
+      .sort(
+        (a, b) =>
+          pages.findIndex((p) => p.participantId === a.id) -
+          pages.findIndex((p) => p.participantId === b.id),
+      );
+    const credit = await tx.workCreditAlias.findUnique({
+      where: {
+        workId_userId_stage: { workId, userId: actorId, stage: "translate" },
+      },
+    });
+    const ownUser = active.find((p) => p.id === participant.id)!;
+    await tx.workStageParticipant.update({
+      where: { id: participant.id },
+      data: {
+        submittedAt: now,
+        creditNameSnapshot: credit?.creditName ?? ownUser.user.displayName,
+      },
+    });
+    await tx.stageContributionSubmission.create({
+      data: {
+        participantId: participant.id,
+        createdById: actorId,
+        idempotencyKey: input.idempotencyKey,
+        pages: {
+          create: pending.map((p) => ({
+            workImageId: p.workImageId,
+            imageRevision: p.draftRevision,
+          })),
+        },
+      },
+    });
+    const status = complete
+      ? WorkflowStatus.pending_proofread
+      : work.workflowStatus;
+    await tx.work.update({
+      where: { id: workId },
+      data: {
+        workflowStatus: status,
+        revision: { increment: 1 },
+        productionStartedAt: work.productionStartedAt ?? now,
+        ...(complete
+          ? {
+              editorEpoch: { increment: 1 },
+              translationAttentionStage: null,
+              translationAttentionVersionNumber: null,
+            }
+          : {}),
+      },
+    });
+    const version = complete
+      ? await this.translations.createStageVersion(tx, {
+          actorId,
+          workId,
+          stage: "translate",
+          workRevision: work.revision + 1,
+          editorEpoch: work.editorEpoch + 1,
+          contributorUserIds: [...new Set(credited.map((p) => p.userId))],
+        })
+      : null;
+    await tx.workEvent.create({
+      data: {
+        workId,
+        actorId,
+        action: WorkEventAction.stage_submitted,
+        idempotencyKey: input.idempotencyKey,
+        fromWorkflowStatus: work.workflowStatus,
+        toWorkflowStatus: status,
+        fromReviewStatus: work.reviewStatus,
+        toReviewStatus: work.reviewStatus,
+        detail: {
+          operation,
+          stage: "translate",
+          participantIds: complete
+            ? credited.map((p) => p.id)
+            : [participant.id],
+          imageIds: pending.map((p) => p.workImageId),
+          editorEpoch: work.editorEpoch + (complete ? 1 : 0),
+          ...(version
+            ? {
+                translationVersionId: version.id,
+                translationVersionNumber: version.versionNumber,
+                translationVersionKind: version.kind,
+              }
+            : {}),
+          credits: credited.map((p) => ({
+            userId: p.userId,
+            creditName: p.creditNameSnapshot ?? p.user.displayName,
+          })),
+        },
+      },
+    });
+  }
+
   // Shared transaction entry for explicit submissions and atomic batch upload/submit.
   async submitStageTx(
     tx: Prisma.TransactionClient,
@@ -1738,9 +2143,23 @@ export class WorksService {
     workId: string,
     input: SubmitWorkStageDto,
   ): Promise<void> {
+    await lockAccountMembership(tx);
     await this.assertStagePermission(actorId, input.stage, workId, tx);
     if (input.stage === "publish")
       throw new ConflictException("发布记录模块接入后才能确认发布");
+    await tx.$queryRaw(
+      Prisma.sql`SELECT id FROM works WHERE id=${workId}::uuid FOR UPDATE`,
+    );
+    if (input.stage === "translate")
+      return this.submitTranslationTx(tx, actorId, workId, input);
+    if (input.stage === "typeset") {
+      const target = await tx.work.findUniqueOrThrow({
+        where: { id: workId },
+        select: { collaborationMode: true },
+      });
+      if (target.collaborationMode === "multi")
+        return submitTypesetPagesTx(tx, actorId, workId, input);
+    }
     const transition = stageTransitions[input.stage];
     const operation = `submit:${input.stage}`;
     await tx.$queryRaw(
@@ -1821,7 +2240,6 @@ export class WorksService {
       where: {
         workId,
         stage: input.stage,
-        submittedAt: null,
         leftAt: null,
       },
       include: {
@@ -1842,56 +2260,10 @@ export class WorksService {
     }
     if (!active.some((participant) => participant.userId === actorId))
       throw new ForbiddenException("需要先加入该阶段才能提交");
-    let creditedParticipants = active;
-    if (
-      work.collaborationMode === WorkCollaborationMode.multi &&
-      (input.stage === "translate" || input.stage === "proofread")
-    ) {
-      const images = await tx.workImage.findMany({
-        where: { workId },
-        select: { id: true, translationRevision: true },
-      });
-      const currentContributors = active.filter((participant) => {
-        const submission = participant.contributionSubmissions[0];
-        return Boolean(
-          submission &&
-          participant.assignments.length > 0 &&
-          participant.assignments.every(({ workImageId }) =>
-            submission.pages.some(
-              (page) =>
-                page.workImageId === workImageId &&
-                page.imageRevision ===
-                  images.find(({ id }) => id === workImageId)
-                    ?.translationRevision,
-            ),
-          ),
-        );
-      });
-      const uncovered = images.filter(
-        (image) =>
-          !currentContributors.some(
-            (participant) =>
-              participant.assignments.some(
-                ({ workImageId }) => workImageId === image.id,
-              ) &&
-              participant.contributionSubmissions[0]?.pages.some(
-                (page) =>
-                  page.workImageId === image.id &&
-                  page.imageRevision === image.translationRevision,
-              ),
-          ),
-      );
-      if (uncovered.length) {
-        throw new ConflictException(
-          `多人协作还有 ${uncovered.length} 页未分配、未完成或完成后又被修改`,
-        );
-      }
-      creditedParticipants = currentContributors;
-    }
+    const creditedParticipants = active;
     const now = new Date();
     const nextWorkRevision = work.revision + 1;
-    const changesTextVersion =
-      input.stage === "translate" || input.stage === "proofread";
+    const changesTextVersion = input.stage === "proofread";
     const nextEditorEpoch = work.editorEpoch + (changesTextVersion ? 1 : 0);
     const changed = await tx.work.updateMany({
       where: {
@@ -1908,6 +2280,7 @@ export class WorksService {
         ...(input.stage === "proofread"
           ? { typesetHandoffStartedAt: null }
           : {}),
+        productionStartedAt: work.productionStartedAt ?? now,
         revision: { increment: 1 },
         ...(changesTextVersion ? { editorEpoch: { increment: 1 } } : {}),
         ...(work.translationAttentionStage === input.stage
@@ -1926,15 +2299,7 @@ export class WorksService {
           stage: input.stage,
           workRevision: nextWorkRevision,
           editorEpoch: nextEditorEpoch,
-          contributorUserIds:
-            input.stage === "translate"
-              ? [
-                  ...new Set([
-                    ...work.translationContributorIds,
-                    ...creditedParticipants.map(({ userId }) => userId),
-                  ]),
-                ]
-              : [],
+          contributorUserIds: [],
         })
       : null;
     const credits: { userId: string; creditName: string }[] = [];
@@ -2054,6 +2419,7 @@ export class WorksService {
         throw new ConflictException("校对认领已变化，请刷新并重新确认");
       if (claims.length && !input.confirmCancelClaims)
         throw new ConflictException("请明确确认取消已有校对认领");
+      await tx.proofreadPageLease.deleteMany({ where: { workId } });
       const now = new Date();
       const version = await this.translations.createSkippedProofreadVersion(
         tx,
@@ -2112,12 +2478,132 @@ export class WorksService {
     return this.get(workId, actorId);
   }
 
+  private async cancelTranslationTx(
+    tx: Prisma.TransactionClient,
+    actorId: string,
+    workId: string,
+    input: CancelWorkStageSubmissionDto,
+  ) {
+    await lockAccountMembership(tx);
+    await this.assertStagePermission(actorId, "translate", workId, tx);
+    await tx.$queryRaw(
+      Prisma.sql`SELECT id FROM works WHERE id=${workId}::uuid FOR UPDATE`,
+    );
+    const operation = "cancel-submission:translate";
+    const action = WorkEventAction.stage_submission_cancelled;
+    if (
+      await this.isReplayTx(tx, workId, input.idempotencyKey, action, operation)
+    )
+      return;
+    const work = await tx.work.findUniqueOrThrow({
+      where: { id: workId },
+      include: { proofreadSkippedVersion: true },
+    });
+    assertProductionWritable(work);
+    const early = [
+      WorkflowStatus.pending_translate,
+      WorkflowStatus.translating,
+      WorkflowStatus.pending_proofread,
+    ].some((s) => s === work.workflowStatus);
+    const skipped =
+      work.workflowStatus === "pending_typeset" &&
+      !!work.proofreadSkippedVersionId;
+    if (!early && !skipped)
+      throw new ConflictException("下游已开始处理，不能取消翻译提交");
+    if (
+      skipped &&
+      (work.typesetHandoffStartedAt ||
+        work.proofreadSkippedVersion?.handoffStartedAt)
+    )
+      throw new ConflictException("嵌字已经承接材料，不能取消翻译提交");
+    if (
+      work.revision !== input.expectedRevision ||
+      work.editorEpoch !== input.expectedEditorEpoch
+    )
+      this.stale();
+    const participant = await tx.workStageParticipant.findFirst({
+      where: { workId, stage: "translate", userId: actorId, leftAt: null },
+    });
+    if (!participant)
+      throw new ForbiddenException("只有当前译者可以取消本人提交");
+    const pages = await tx.workPageAssignment.findMany({
+      where: {
+        workId,
+        stage: "translate",
+        participantId: participant.id,
+        submittedAt: { not: null },
+      },
+    });
+    if (!pages.length) throw new ConflictException("本人没有可取消的提交");
+    await tx.workPageAssignment.updateMany({
+      where: { id: { in: pages.map((p) => p.id) } },
+      data: {
+        submittedAt: null,
+        submittedRevision: null,
+        submittedGeneration: null,
+      },
+    });
+    await tx.workStageParticipant.update({
+      where: { id: participant.id },
+      data: { submittedAt: null },
+    });
+    const rollback = work.workflowStatus === "pending_proofread" || skipped;
+    if (rollback) await tx.proofreadPageLease.deleteMany({ where: { workId } });
+    await tx.work.update({
+      where: { id: workId },
+      data: {
+        workflowStatus: "translating",
+        revision: { increment: 1 },
+        ...(rollback
+          ? { editorEpoch: { increment: 1 }, proofreadSkippedVersionId: null }
+          : {}),
+      },
+    });
+    await tx.workEvent.create({
+      data: {
+        workId,
+        actorId,
+        action,
+        idempotencyKey: input.idempotencyKey,
+        fromWorkflowStatus: work.workflowStatus,
+        toWorkflowStatus: "translating",
+        fromReviewStatus: work.reviewStatus,
+        toReviewStatus: work.reviewStatus,
+        detail: {
+          operation,
+          stage: "translate",
+          restoredParticipantIds: [participant.id],
+          imageIds: pages.map((p) => p.workImageId),
+          editorEpoch: work.editorEpoch + (rollback ? 1 : 0),
+        },
+      },
+    });
+  }
+
   async cancelStageSubmission(
     actorId: string,
     workId: string,
     input: CancelWorkStageSubmissionDto,
   ): Promise<WorkDetailDto> {
     await this.assertStagePermission(actorId, input.stage, workId);
+    if (input.stage === "translate") {
+      await this.db.$transaction((tx) =>
+        this.cancelTranslationTx(tx, actorId, workId, input),
+      );
+      return this.get(workId, actorId);
+    }
+    if (input.stage === "typeset") {
+      const target = await this.db.work.findUniqueOrThrow({
+        where: { id: workId },
+        select: { collaborationMode: true },
+      });
+      if (target.collaborationMode === "multi") {
+        await this.db.$transaction((tx) =>
+          cancelTypesetPagesTx(tx, actorId, workId, input),
+        );
+        return this.get(workId, actorId);
+      }
+    }
     const action = WorkEventAction.stage_submission_cancelled;
     const operation = `cancel-submission:${input.stage}`;
     if (await this.isReplay(workId, input.idempotencyKey, action, operation)) {
@@ -2148,6 +2634,11 @@ export class WorksService {
       });
       if (!work) throw new NotFoundException("作品不存在");
       assertProductionWritable(work);
+      if (input.stage === "typeset" && work.collaborationMode === "multi") {
+        await cancelTypesetPagesTx(tx, actorId, workId, input);
+        return;
+      }
+
       const cancellingSkippedTranslation =
         input.stage === "translate" && Boolean(work.proofreadSkippedVersionId);
       const expectedStatus =
@@ -2205,7 +2696,9 @@ export class WorksService {
         where: {
           workId,
           stage: input.stage,
-          submittedAt: latest.submittedAt,
+          ...(input.stage === "proofread"
+            ? {}
+            : { submittedAt: latest.submittedAt }),
           leftAt: null,
         },
         select: { id: true, userId: true },
@@ -2254,6 +2747,8 @@ export class WorksService {
         },
       });
       if (!changed.count) this.stale();
+      if (input.stage === "proofread")
+        await tx.proofreadPageLease.deleteMany({ where: { workId } });
       await tx.workStageParticipant.updateMany({
         where: { id: { in: submittedRound.map(({ id }) => id) } },
         data: { submittedAt: null },
@@ -2522,9 +3017,15 @@ export class WorksService {
       translationAttentionVersionNumber: work.translationAttentionVersionNumber,
       imageCount: work._count.images,
       coverImageId: work.images[0]?.id ?? null,
-      participantCount: work._count.stageParticipants,
+      participantCount: new Set(
+        work.stageParticipants.filter((p) => !p.leftAt).map((p) => p.userId),
+      ).size,
       assignedStages: [
-        ...new Set(work.stageParticipants.map(({ stage }) => stage)),
+        ...new Set(
+          work.stageParticipants
+            .filter((p) => !p.leftAt)
+            .map(({ stage }) => stage),
+        ),
       ],
       importedAt: work.importedAt.toISOString(),
       publishedAt: work.publishedAt?.toISOString() ?? null,
@@ -2551,11 +3052,26 @@ export class WorksService {
         width: image.width,
         height: image.height,
       })),
+      hasProductionProgress: Boolean(
+        work.productionStartedAt || work.typesetHandoffStartedAt,
+      ),
+      collaborationMigrationIssue: work.collaborationMigrationIssue,
+      pageAssignments: (work.pageAssignments ?? []).map((page) => ({
+        id: page.id,
+        workImageId: page.workImageId,
+        stage: page.stage,
+        participantId: page.participantId,
+        userId: page.participant?.userId ?? null,
+        generation: page.generation,
+        draftRevision: page.draftRevision,
+        submittedRevision: page.submittedRevision,
+        submittedGeneration: page.submittedGeneration,
+        submittedAt: pageSubmissionCurrent(page)
+          ? page.submittedAt!.toISOString()
+          : null,
+        isSubmitted: pageSubmissionCurrent(page),
+      })),
       participants: work.stageParticipants.map((participant) => {
-        const latestContribution = participant.contributionSubmissions[0];
-        const currentRevisions = new Map(
-          work.images.map((image) => [image.id, image.translationRevision]),
-        );
         return {
           id: participant.id,
           userId: participant.userId,
@@ -2573,22 +3089,23 @@ export class WorksService {
           joinedAt: participant.joinedAt.toISOString(),
           submittedAt: participant.submittedAt?.toISOString() ?? null,
           leftAt: participant.leftAt?.toISOString() ?? null,
-          assignedImageIds: participant.assignments.map(
-            ({ workImageId }) => workImageId,
-          ),
+          assignedImageIds:
+            participant.stage === "translate" || participant.stage === "typeset"
+              ? (work.pageAssignments ?? [])
+                  .filter((p) => p.participantId === participant.id)
+                  .map((p) => p.workImageId)
+              : [],
           contributionSubmittedAt:
-            latestContribution?.createdAt.toISOString() ?? null,
-          contributionCurrent: Boolean(
-            latestContribution &&
-            participant.assignments.length > 0 &&
-            participant.assignments.every(({ workImageId }) =>
-              latestContribution.pages.some(
-                (page) =>
-                  page.workImageId === workImageId &&
-                  page.imageRevision === currentRevisions.get(workImageId),
-              ),
-            ),
-          ),
+            participant.submittedAt?.toISOString() ?? null,
+          contributionCurrent:
+            participant.stage === "proofread"
+              ? Boolean(participant.submittedAt && !participant.leftAt)
+              : (work.pageAssignments ?? []).some(
+                  (p) => p.participantId === participant.id,
+                ) &&
+                (work.pageAssignments ?? [])
+                  .filter((p) => p.participantId === participant.id)
+                  .every(pageSubmissionCurrent),
         };
       }),
       events: work.events.map((event) => ({

@@ -22,6 +22,59 @@ function LocalImage({ file, fallback }: { file: File; fallback?: ReactNode }) {
   );
 }
 
+export function FilePickerButton({
+  label,
+  inputLabel,
+  buttonLabel,
+  describedBy,
+  accept,
+  multiple = false,
+  disabled = false,
+  onFiles,
+}: {
+  label: string;
+  inputLabel: string;
+  buttonLabel?: string;
+  describedBy?: string;
+  accept: string;
+  multiple?: boolean;
+  disabled?: boolean;
+  onFiles: (files: File[]) => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <input
+        ref={input}
+        hidden
+        type="file"
+        aria-label={inputLabel}
+        aria-describedby={describedBy}
+        accept={accept}
+        multiple={multiple}
+        disabled={disabled}
+        onChange={(event) => {
+          const files = Array.from(event.currentTarget.files ?? []);
+          event.currentTarget.value = "";
+          if (!disabled && files.length) onFiles(files);
+        }}
+      />
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        disabled={disabled}
+        leadingIcon={<ImagePlus size={16} aria-hidden="true" />}
+        aria-label={buttonLabel}
+        aria-describedby={describedBy}
+        onClick={() => input.current?.click()}
+      >
+        {label}
+      </Button>
+    </>
+  );
+}
+
 export function ImagePicker({
   label,
   files,
@@ -59,74 +112,74 @@ export function ImagePicker({
   const imageFormats = avatarFiles ? "PNG、JPEG、WebP、GIF" : "PNG、JPEG、WebP";
   const noun = sourceFiles ? "文件" : "图片";
   const sizeLimit = `${maxFileSize / 1024 / 1024} MiB`;
+  const accepted = sourceFiles
+    ? ".zip,image/png,image/jpeg,image/webp,image/gif"
+    : avatarFiles
+      ? `${accept},image/gif`
+      : accept;
+  const describedBy = `${id}-hint${error ? ` ${id}-error` : ""}`;
+  function choose(selected: File[]) {
+    if (disabled || !selected.length) return;
+    if (
+      selected.some((file) => {
+        if (avatarFiles)
+          return file.type
+            ? !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
+                file.type,
+              )
+            : !/\.(png|jpe?g|webp|gif)$/i.test(file.name);
+        return !(
+          sourceFiles ? /\.(zip|png|jpe?g|webp|gif)$/i : /\.(png|jpe?g|webp)$/i
+        ).test(file.name);
+      })
+    ) {
+      setError(
+        sourceFiles
+          ? "请选择图片或 ZIP 文件"
+          : avatarFiles
+            ? "请选择 PNG、JPEG、WebP 或 GIF 图片"
+            : "请选择 PNG、JPEG 或 WebP 图片",
+      );
+      return;
+    }
+    if (selected.some((file) => file.size > maxFileSize)) {
+      setError(`每个${noun}不能超过 ${sizeLimit}`);
+      return;
+    }
+    const next = multiple
+      ? [
+          ...new Map(
+            [...files, ...selected].map((file) => [fileKey(file), file]),
+          ).values(),
+        ]
+      : selected.slice(0, 1);
+    if (next.length > maxFiles) {
+      setError(`最多选择 ${maxFiles} 个${noun}`);
+      return;
+    }
+    setError("");
+    onChange(next);
+  }
   return (
     <fieldset className={`ui-image-picker ui-image-picker--${variant}`}>
       <legend>{label}</legend>
-      <input
-        ref={input}
-        type="file"
-        hidden
-        aria-label={label}
-        aria-describedby={`${id}-hint${error ? ` ${id}-error` : ""}`}
-        accept={
-          sourceFiles
-            ? ".zip,image/png,image/jpeg,image/webp,image/gif"
-            : avatarFiles
-              ? `${accept},image/gif`
-              : accept
-        }
-        multiple={multiple}
-        disabled={disabled}
-        onChange={(event) => {
-          const selected = Array.from(event.currentTarget.files ?? []);
-          event.currentTarget.value = "";
-          if (disabled || !selected.length) return;
-          if (
-            selected.some((file) => {
-              if (avatarFiles)
-                return file.type
-                  ? ![
-                      "image/png",
-                      "image/jpeg",
-                      "image/webp",
-                      "image/gif",
-                    ].includes(file.type)
-                  : !/\.(png|jpe?g|webp|gif)$/i.test(file.name);
-              return !(
-                sourceFiles
-                  ? /\.(zip|png|jpe?g|webp|gif)$/i
-                  : /\.(png|jpe?g|webp)$/i
-              ).test(file.name);
-            })
-          ) {
-            setError(
-              sourceFiles
-                ? "请选择图片或 ZIP 文件"
-                : avatarFiles
-                  ? "请选择 PNG、JPEG、WebP 或 GIF 图片"
-                  : "请选择 PNG、JPEG 或 WebP 图片",
-            );
-            return;
-          }
-          if (selected.some((file) => file.size > maxFileSize)) {
-            setError(`每个${noun}不能超过 ${sizeLimit}`);
-            return;
-          }
-          const next = multiple
-            ? [
-                ...new Map(
-                  [...files, ...selected].map((file) => [fileKey(file), file]),
-                ).values(),
-              ]
-            : selected.slice(0, 1);
-          if (next.length > maxFiles) {
-            setError(`最多选择 ${maxFiles} 个${noun}`);
-            return;
-          }
-          setError("");
-          onChange(next);
-        }}
-      />
+      {variant === "avatar" && (
+        <input
+          ref={input}
+          hidden
+          type="file"
+          aria-label={label}
+          aria-describedby={describedBy}
+          accept={accepted}
+          multiple={multiple}
+          disabled={disabled}
+          onChange={(event) => {
+            const files = Array.from(event.currentTarget.files ?? []);
+            event.currentTarget.value = "";
+            choose(files);
+          }}
+        />
+      )}
       {variant === "avatar" ? (
         <div
           className={`ui-image-picker__avatar-row${avatarField ? " ui-image-picker__avatar-row--field" : ""}`}
@@ -173,22 +226,23 @@ export function ImagePicker({
         </div>
       ) : (
         <div className="ui-image-picker__controls">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
+          <FilePickerButton
+            label={
+              files.length
+                ? multiple
+                  ? `添加${noun}`
+                  : `更换${noun}`
+                : `选择${noun}`
+            }
+            inputLabel={label}
+            buttonLabel={`${files.length ? (multiple ? "添加" : "更换") : "选择"}${label}`}
+            describedBy={describedBy}
+            accept={accepted}
+            multiple={multiple}
             disabled={disabled}
-            leadingIcon={<ImagePlus size={16} aria-hidden="true" />}
-            aria-label={`${files.length ? (multiple ? "添加" : "更换") : "选择"}${label}`}
-            aria-describedby={`${id}-hint${error ? ` ${id}-error` : ""}`}
-            onClick={() => input.current?.click()}
-          >
-            {files.length
-              ? multiple
-                ? `添加${noun}`
-                : `更换${noun}`
-              : `选择${noun}`}
-          </Button>
+            onFiles={choose}
+          />
+
           <small id={`${id}-hint`}>
             {sourceFiles ? "图片或 ZIP" : imageFormats} ·{" "}
             {multiple ? `最多 ${maxFiles} 个 · ` : ""}每个 {sizeLimit}

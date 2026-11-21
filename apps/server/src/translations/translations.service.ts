@@ -1,3 +1,6 @@
+import { lockAccountMembership } from "../users/account-membership-lock.js";
+import { assertMaterialCurrent } from "../typesetting/typeset-materials-identity.js";
+import { assertUnifiedHandoffCurrent } from "../typesetting/typeset-material-identity.js";
 import { assertProductionWritable } from "../workflow/review-policy.js";
 import {
   BadRequestException,
@@ -8,7 +11,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { proofreadSkipAvailability } from "../workflow/proofread-exemption.js";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import {
   Prisma,
   ReviewStatus,
@@ -44,6 +47,10 @@ import type {
   LabelPlusImportPreviewDto,
   ReorderTranslationEntryDto,
   TranslationEditorDto,
+  PageWriteAccessDto,
+  ProofreadLeaseRequestDto,
+  ReleaseProofreadLeaseDto,
+  ProofreadLeaseResultDto,
   TranslationEntryDto,
   TranslationImageDraftDto,
   TranslationPresenceListDto,
@@ -54,13 +61,21 @@ import type {
 type DatabaseClient = PrismaService | Prisma.TransactionClient;
 type TypesetHandoffDetail = {
   downloadTaskId?: string;
-  material: "translation_package" | "source_images" | "unified_handoff";
+  material:
+    | "translation_package"
+    | "source_images"
+    | "unified_handoff"
+    | "browser_materials";
   fileId: string;
   expectedRevision?: number;
   expectedEditorEpoch?: number;
   requireCurrentParticipation?: boolean;
 };
 type TranslationEntryRow = Prisma.TranslationEntryGetPayload<object>;
+type EditParticipationWorkState = Pick<
+  Prisma.WorkGetPayload<object>,
+  "workflowStatus" | "reviewStatus" | "sourceLanguage"
+>;
 type EditableWorkState = {
   id: string;
   revision: number;
@@ -68,6 +83,8 @@ type EditableWorkState = {
   reviewStatus: ReviewStatus;
   editorEpoch: number;
   stage: WorkStage;
+  collaborationMode: WorkCollaborationMode;
+  productionStartedAt: Date | null;
 };
 
 const entryOrder = { orderIndex: "asc" } as const;
@@ -109,6 +126,17 @@ export class TranslationsService {
       where: { id: workId },
       include: {
         proofreadSkippedVersion: true,
+        pageAssignments: {
+          where: { stage: "translate" },
+          select: {
+            workImageId: true,
+            participantId: true,
+            generation: true,
+            draftRevision: true,
+            submittedAt: true,
+            participant: { select: { userId: true, leftAt: true } },
+          },
+        },
         images: {
           include: { translationEntries: { orderBy: entryOrder } },
           orderBy: { orderIndex: "asc" },
@@ -138,6 +166,7 @@ export class TranslationsService {
       workId,
     );
     const canEdit =
+      !work.collaborationMigrationIssue &&
       work.workflowStatus !== WorkflowStatus.archived &&
       work.reviewStatus === ReviewStatus.normal &&
       participationStages.length > 0;
@@ -201,6 +230,12 @@ export class TranslationsService {
             }),
           )
         : false;
+    const assignments = work.pageAssignments;
+    const assignedPages = new Set(
+      assignments
+        .filter((page) => page.participantId)
+        .map((page) => page.workImageId),
+    );
     const joinableStage =
       currentStage &&
       !activeParticipation &&
@@ -213,25 +248,47 @@ export class TranslationsService {
         work.sourceLanguage,
       ) &&
       !violatesSingleSeparation &&
-      (work.collaborationMode === WorkCollaborationMode.multi ||
+      ((work.collaborationMode === WorkCollaborationMode.multi &&
+        currentStage === "translate" &&
+        work.images.some((i) => !assignedPages.has(i.id))) ||
         activeParticipantCount === 0)
         ? currentStage
         : null;
+    const pageAssignments = assignments.map((p) => ({
+      workImageId: p.workImageId,
+      generation: p.generation,
+      draftRevision: p.draftRevision,
+      userId:
+        p.participant?.leftAt == null ? (p.participant?.userId ?? null) : null,
+      submittedAt: p.submittedAt?.toISOString() ?? null,
+    }));
+    const editableImageIds = !canEdit
+      ? []
+      : currentStage === "translate" &&
+          (work.collaborationMode === "multi" || assignments.length > 0)
+        ? pageAssignments
+            .filter((p) => p.userId === actorId && !p.submittedAt)
+            .map((p) => p.workImageId)
+        : work.images.map((i) => i.id);
     const assignedImageIds =
       activeParticipation?.assignments.map(({ workImageId }) => workImageId) ??
       [];
-    const contributionCurrent = this.contributionCurrent(
-      activeParticipation,
-      work.images,
-    );
+    const myPages = pageAssignments.filter((p) => p.userId === actorId);
+    const contributionCurrent =
+      currentStage === "translate" &&
+      myPages.length > 0 &&
+      myPages.every((p) => p.submittedAt);
     const multiStageReady =
-      work.collaborationMode === WorkCollaborationMode.multi && currentStage
-        ? await this.multiStageReady(workId, currentStage)
-        : false;
-    const cancelableSubmissionStage = await this.cancelableSubmissionStage(
-      actorId,
-      work,
-    );
+      currentStage === "proofread" ||
+      (currentStage === "translate" &&
+        work.images.length > 0 &&
+        pageAssignments.length === work.images.length &&
+        pageAssignments.every((p) => p.userId && p.submittedAt));
+    const partiallySubmitted =
+      currentStage === "translate" && myPages.some((p) => p.submittedAt);
+    const cancelableSubmissionStage = partiallySubmitted
+      ? WorkStage.translate
+      : await this.cancelableSubmissionStage(actorId, work);
     const skipAvailability = await proofreadSkipAvailability(
       this.db,
       actorId,
@@ -276,7 +333,16 @@ export class TranslationsService {
           ? submissionStage
           : null,
       cancelableSubmissionStage,
-      assignedImageIds,
+      assignedImageIds:
+        currentStage === "translate" && assignments.length
+          ? pageAssignments
+              .filter((p) => p.userId === actorId)
+              .map((p) => p.workImageId)
+          : assignedImageIds,
+      editableImageIds,
+      pageAssignments,
+      proofreadRequiresLease: false,
+      proofreadLeases: [],
       contributionCurrent,
       multiStageReady,
       hasUnsubmittedChanges: latest
@@ -310,8 +376,15 @@ export class TranslationsService {
   ): Promise<LabelPlusImportPreviewDto> {
     await this.assertCanImportLabelPlus(actorId, workId);
     const parsed = this.parseLabelPlusUpload(upload);
-    const images = await this.labelPlusTargetImages(workId);
-    return this.labelPlusPreview(parsed, images);
+    // Bind the preview to a consistent draft while ordinary writes take the
+    // exclusive work lock. Read only IDs/revisions, never duplicate text bodies.
+    return this.db.$transaction(async (tx) => {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR SHARE`,
+      );
+      const target = await this.labelPlusTargetImages(workId, tx);
+      return this.labelPlusPreview(parsed, target);
+    });
   }
 
   async importLabelPlus(
@@ -403,9 +476,59 @@ export class TranslationsService {
         const target = await this.labelPlusTargetImages(workId, tx);
         const images = target.images;
         const preview = this.labelPlusPreview(parsed, target);
+        if (input.expectedContentBaseline !== preview.contentBaseline) {
+          throw new ConflictException(
+            "当前稿已变化或缺少预览基线，请重新预览导入",
+          );
+        }
         if (!preview.canImport) {
           throw new BadRequestException(preview.blockingIssues);
         }
+
+        if (
+          (editableWork.stage === "translate" &&
+            editableWork.collaborationMode === "multi") ||
+          input.pageAccess
+        ) {
+          let scopes: (PageWriteAccessDto & { imageId: string })[];
+          try {
+            scopes = JSON.parse(input.pageAccess ?? "[]");
+            if (
+              !Array.isArray(scopes) ||
+              scopes.some((p) => !p || typeof p.imageId !== "string")
+            )
+              throw Error();
+          } catch {
+            throw new BadRequestException("请重新预览并核对每页的归属");
+          }
+          const byId = new Map(scopes.map((p) => [p.imageId, p]));
+          if (byId.size !== images.length)
+            throw new ConflictException(
+              "全篇导入要求每页均有编辑资格，请重新核对页范围",
+            );
+          for (const image of images)
+            await this.assertPageWritable(
+              tx,
+              editableWork,
+              actorId,
+              image.id,
+              byId.get(image.id) ?? {},
+            );
+        } else {
+          for (const image of images)
+            await this.assertPageWritable(
+              tx,
+              editableWork,
+              actorId,
+              image.id,
+              {},
+            );
+        }
+        if (editableWork.stage === "translate")
+          await tx.workPageAssignment.updateMany({
+            where: { workId, stage: "translate" },
+            data: { draftRevision: { increment: 1 } },
+          });
 
         const startedWork = await this.startStageForMutation(
           tx,
@@ -659,9 +782,64 @@ export class TranslationsService {
     detail: TypesetHandoffDetail,
   ) {
     await this.db.$transaction(async (tx) => {
+      if (detail.material === "browser_materials")
+        await lockAccountMembership(tx);
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
       );
+      if (detail.material === "browser_materials") {
+        const material = await assertMaterialCurrent(tx, workId, detail.fileId);
+        if (
+          material.actorId !== actorId ||
+          material.requireCurrentParticipation !==
+            Boolean(detail.requireCurrentParticipation)
+        )
+          throw new ForbiddenException("不能领取其他成员的材料");
+        const work = await tx.work.findUniqueOrThrow({ where: { id: workId } });
+        assertProductionWritable(work);
+        if (
+          work.workflowStatus !== WorkflowStatus.pending_typeset &&
+          work.workflowStatus !== WorkflowStatus.typesetting
+        )
+          throw new ConflictException("作品当前不在嵌字交接阶段");
+        const actor = await tx.user.findFirst({
+          where: { id: actorId, isActive: true, mustChangePassword: false },
+          select: { id: true },
+        });
+        if (
+          !actor ||
+          !(await this.canExportHandoffMaterials(actorId, workId, tx))
+        )
+          throw new ForbiddenException("当前账号不可领取材料");
+        // Inspection never freezes text, even when the reader already owns pages.
+        if (!material.requireCurrentParticipation) {
+          await tx.typesetMaterial.update({
+            where: { id: material.id },
+            data: { deliveredAt: material.deliveredAt ?? new Date() },
+          });
+          return;
+        }
+        await this.beginTypesetHandoffTx(tx, actorId, workId, {
+          ...detail,
+          expectedRevision: material.deliveredAt
+            ? work.revision
+            : material.workRevision,
+          expectedEditorEpoch: material.deliveredAt
+            ? work.editorEpoch
+            : material.editorEpoch,
+        });
+        await tx.typesetMaterial.update({
+          where: { id: material.id },
+          data: { deliveredAt: material.deliveredAt ?? new Date() },
+        });
+        return;
+      }
+      if (detail.material === "unified_handoff") {
+        const currentMaterial = await tx.work.findUniqueOrThrow({
+          where: { id: workId },
+        });
+        await assertUnifiedHandoffCurrent(tx, currentMaterial, detail.fileId);
+      }
       const delivered = detail.downloadTaskId
         ? await tx.downloadPreparation.findFirst({
             where: {
@@ -792,13 +970,45 @@ export class TranslationsService {
     }
     const nextWorkRevision = work.revision + 1;
     const nextEditorEpoch = work.editorEpoch + 1;
-    const version = await this.createStageVersionIfChanged(tx, {
-      actorId,
-      workId,
-      stage: WorkStage.proofread,
-      workRevision: nextWorkRevision,
-      editorEpoch: nextEditorEpoch,
-    });
+    // Both browser manifests and fallback packages name an immutable formal
+    // snapshot. Delivery freezes that version without recapturing mutable drafts.
+    const fixedVersionId =
+      detail.material === "browser_materials"
+        ? (
+            await tx.typesetMaterial.findUniqueOrThrow({
+              where: { id: detail.fileId },
+            })
+          ).translationVersionId
+        : detail.material === "unified_handoff"
+          ? (
+              await tx.typesetHandoffPackage.findUniqueOrThrow({
+                where: { id: detail.fileId },
+              })
+            ).translationVersionId
+          : null;
+    if (
+      (detail.material === "browser_materials" ||
+        detail.material === "unified_handoff") &&
+      !fixedVersionId
+    )
+      throw new ConflictException("材料缺少正式译文版本，请重新生成");
+    const version = fixedVersionId
+      ? await tx.translationVersion.findUniqueOrThrow({
+          where: { id: fixedVersionId },
+          select: { id: true, versionNumber: true, kind: true },
+        })
+      : await this.createStageVersionIfChanged(tx, {
+          actorId,
+          workId,
+          stage: WorkStage.proofread,
+          workRevision: nextWorkRevision,
+          editorEpoch: nextEditorEpoch,
+        });
+    if (fixedVersionId)
+      await tx.translationVersion.update({
+        where: { id: fixedVersionId },
+        data: { handoffStartedAt: new Date() },
+      });
     const changed = await tx.work.updateMany({
       where: {
         id: workId,
@@ -855,15 +1065,11 @@ export class TranslationsService {
     workId: string,
     input: UpdateTranslationPresenceDto,
   ): Promise<TranslationPresenceListDto> {
-    const work = await this.db.work.findUnique({
-      where: { id: workId },
-      select: { workflowStatus: true },
-    });
-    if (!work) throw new NotFoundException("作品不存在");
+    const work = await this.presenceWork(workId);
     if (
       input.mode === TranslationPresenceMode.edit &&
       (work.workflowStatus === WorkflowStatus.archived ||
-        !(await this.hasEditParticipation(this.db, actorId, workId)))
+        !(await this.hasEditParticipation(this.db, actorId, workId, work)))
     ) {
       throw new ForbiddenException("需要先加入翻译或校对协作才能进入编辑模式");
     }
@@ -892,6 +1098,10 @@ export class TranslationsService {
     return {
       items: await this.activePresence(workId, sessionId, now),
       expiresInSeconds: presenceExpiresInSeconds,
+      workRevision: work.revision,
+      editorEpoch: work.editorEpoch,
+      workflowStatus: work.workflowStatus,
+      reviewStatus: work.reviewStatus,
     };
   }
 
@@ -900,12 +1110,17 @@ export class TranslationsService {
     sessionId: string,
     workId: string,
   ): Promise<TranslationPresenceListDto> {
+    const work = await this.presenceWork(workId);
     await this.db.translationEditorPresence.deleteMany({
       where: { workId, sessionId, userId: actorId },
     });
     return {
       items: await this.activePresence(workId, sessionId),
       expiresInSeconds: presenceExpiresInSeconds,
+      workRevision: work.revision,
+      editorEpoch: work.editorEpoch,
+      workflowStatus: work.workflowStatus,
+      reviewStatus: work.reviewStatus,
     };
   }
 
@@ -913,7 +1128,9 @@ export class TranslationsService {
     actorId: string,
     imageId: string,
     input: CreateTranslationEntryDto,
+    sessionId?: string,
   ): Promise<TranslationImageDraftDto> {
+    void sessionId; // Retained for compatibility with existing callers.
     return this.db.$transaction(async (tx) => {
       const workId = await this.getImageWorkId(tx, imageId);
       const work = await this.lockEditableWork(
@@ -922,6 +1139,7 @@ export class TranslationsService {
         workId,
         input.expectedEditorEpoch,
       );
+      await this.assertPageWritable(tx, work, actorId, imageId, input);
       const image = await this.lockImage(tx, imageId);
       const replay = await tx.translationEntry.findUnique({
         where: {
@@ -944,6 +1162,7 @@ export class TranslationsService {
       const orderIndex = await tx.translationEntry.count({
         where: { workImageId: imageId },
       });
+      await this.bumpOwnedDraft(tx, work, imageId);
       const started = await this.startStageForMutation(tx, actorId, work);
       await tx.translationEntry.create({
         data: {
@@ -971,7 +1190,9 @@ export class TranslationsService {
     actorId: string,
     entryId: string,
     input: UpdateTranslationEntryDto,
+    sessionId?: string,
   ): Promise<TranslationEntryDto> {
+    void sessionId; // Retained for compatibility with existing callers.
     if (
       input.markerX === undefined &&
       input.markerY === undefined &&
@@ -997,6 +1218,13 @@ export class TranslationsService {
         where: { id: entryId },
       });
       if (!entry) throw new NotFoundException("翻译条目不存在");
+      await this.assertPageWritable(
+        tx,
+        work,
+        actorId,
+        entry.workImageId,
+        input,
+      );
       if (entry.revision !== input.expectedRevision) this.entryStale();
       const markerX = normalizeMarkerCoordinate(input.markerX);
       const markerY = normalizeMarkerCoordinate(input.markerY);
@@ -1012,6 +1240,7 @@ export class TranslationsService {
         const saved = await this.getEntry(tx, entryId);
         return { ...saved, mutation: this.mutationMeta(work) };
       }
+      await this.bumpOwnedDraft(tx, work, entry.workImageId);
       const started = await this.startStageForMutation(tx, actorId, work);
       const changed = await tx.translationEntry.updateMany({
         where: { id: entryId, revision: input.expectedRevision },
@@ -1035,7 +1264,9 @@ export class TranslationsService {
     actorId: string,
     entryId: string,
     input: DeleteTranslationEntryDto,
+    sessionId?: string,
   ): Promise<TranslationImageDraftDto> {
+    void sessionId; // Retained for compatibility with existing callers.
     return this.db.$transaction(async (tx) => {
       const entry = await tx.translationEntry.findUnique({
         where: { id: entryId },
@@ -1051,10 +1282,18 @@ export class TranslationsService {
         entry.workImage.workId,
         input.expectedEditorEpoch,
       );
+      await this.assertPageWritable(
+        tx,
+        work,
+        actorId,
+        entry.workImageId,
+        input,
+      );
       const image = await this.lockImage(tx, entry.workImageId);
       if (image.translationRevision !== input.expectedImageRevision) {
         this.imageStale();
       }
+      await this.bumpOwnedDraft(tx, work, entry.workImageId);
       const started = await this.startStageForMutation(tx, actorId, work);
       const removed = await tx.translationEntry.deleteMany({
         where: { id: entryId, revision: input.expectedRevision },
@@ -1085,7 +1324,9 @@ export class TranslationsService {
     imageId: string,
     entryId: string,
     input: ReorderTranslationEntryDto,
+    sessionId?: string,
   ): Promise<TranslationImageDraftDto> {
+    void sessionId; // Retained for compatibility with existing callers.
     return this.db.$transaction(async (tx) => {
       const workId = await this.getImageWorkId(tx, imageId);
       const work = await this.lockEditableWork(
@@ -1094,6 +1335,7 @@ export class TranslationsService {
         workId,
         input.expectedEditorEpoch,
       );
+      await this.assertPageWritable(tx, work, actorId, imageId, input);
       const image = await this.lockImage(tx, imageId);
       if (image.translationRevision !== input.expectedImageRevision) {
         this.imageStale();
@@ -1123,6 +1365,7 @@ export class TranslationsService {
       if (original.every((id, index) => id === next[index])) {
         return this.getImageDraft(tx, imageId);
       }
+      await this.bumpOwnedDraft(tx, work, imageId);
       const started = await this.startStageForMutation(tx, actorId, work);
       await this.writeOrder(tx, imageId, next);
       await this.incrementImageRevision(
@@ -1133,6 +1376,139 @@ export class TranslationsService {
       const draft = await this.getImageDraft(tx, imageId);
       return { ...draft, mutation: this.mutationMeta(started) };
     });
+  }
+
+  async leasePage(
+    actorId: string,
+    sessionId: string,
+    workId: string,
+    imageId: string,
+    input: ProofreadLeaseRequestDto,
+  ): Promise<ProofreadLeaseResultDto> {
+    return this.db.$transaction(async (tx) => {
+      const work = await this.lockEditableWork(
+        tx,
+        actorId,
+        workId,
+        input.leaseToken ? undefined : input.expectedEditorEpoch,
+      );
+      if (work.stage !== "proofread")
+        throw new ConflictException("当前阶段无需校对页锁");
+      const image = await this.lockImage(tx, imageId);
+      if (image.workId !== workId)
+        throw new NotFoundException("图片不属于当前作品");
+      const now = new Date();
+      const existing = await tx.proofreadPageLease.findUnique({
+        where: { workImageId: imageId },
+        include: { user: { select: { displayName: true } } },
+      });
+      const active =
+        existing &&
+        existing.editorEpoch === work.editorEpoch &&
+        existing.expiresAt > now;
+      const mine =
+        active &&
+        existing.userId === actorId &&
+        existing.sessionId === sessionId &&
+        existing.editorInstanceId === input.editorInstanceId;
+      if (
+        input.leaseToken &&
+        (!mine || input.leaseToken !== existing.leaseToken)
+      )
+        throw new ConflictException("页锁已失效，请重新编辑本页");
+      if (active && !mine)
+        throw new ConflictException(
+          existing.user.displayName + " 正在编辑本页",
+        );
+      const leaseToken = mine ? existing.leaseToken : randomUUID();
+      const expiresAt = new Date(now.getTime() + 60_000);
+      const data = {
+        workId,
+        userId: actorId,
+        sessionId,
+        editorEpoch: work.editorEpoch,
+        editorInstanceId: input.editorInstanceId,
+        leaseToken,
+        expiresAt,
+      };
+      await tx.proofreadPageLease.upsert({
+        where: { workImageId: imageId },
+        create: { ...data, workImageId: imageId },
+        update: data,
+      });
+      return {
+        leaseToken,
+        editorEpoch: work.editorEpoch,
+        expiresAt: expiresAt.toISOString(),
+        ...(!input.leaseToken && {
+          image: await this.getImageDraft(tx, imageId),
+        }),
+      };
+    });
+  }
+
+  async releaseLease(
+    actorId: string,
+    sessionId: string,
+    workId: string,
+    imageId: string,
+    input: ReleaseProofreadLeaseDto,
+  ) {
+    await this.db.proofreadPageLease.deleteMany({
+      where: {
+        userId: actorId,
+        sessionId,
+        workId,
+        workImageId: imageId,
+        editorInstanceId: input.editorInstanceId,
+        leaseToken: input.leaseToken,
+      },
+    });
+  }
+
+  private async assertPageWritable(
+    tx: Prisma.TransactionClient,
+    work: EditableWorkState,
+    actorId: string,
+    imageId: string,
+    access: PageWriteAccessDto,
+  ) {
+    // Participation and epoch were checked under the work lock. Entry/page
+    // revisions provide conflict detection; legacy leases do not grant authority.
+    if (work.stage === "proofread") return;
+    const page = await tx.workPageAssignment.findUnique({
+      where: {
+        workImageId_stage: { workImageId: imageId, stage: "translate" },
+      },
+      include: { participant: { select: { userId: true, leftAt: true } } },
+    });
+    if (!page && work.collaborationMode === "single") return;
+    if (
+      !page ||
+      page.workId !== work.id ||
+      page.participant?.userId !== actorId ||
+      page.participant.leftAt ||
+      page.submittedAt
+    )
+      throw new ForbiddenException("只能编辑本人当前负责且未提交的翻译页");
+    if (
+      (work.collaborationMode === "multi" ||
+        access.expectedAssignmentGeneration !== undefined) &&
+      access.expectedAssignmentGeneration !== page.generation
+    )
+      throw new ConflictException("页归属已变化，请刷新后核对草稿");
+  }
+
+  private async bumpOwnedDraft(
+    tx: Prisma.TransactionClient,
+    work: EditableWorkState,
+    imageId: string,
+  ) {
+    if (work.stage === "translate")
+      await tx.workPageAssignment.updateMany({
+        where: { workImageId: imageId, stage: "translate" },
+        data: { draftRevision: { increment: 1 } },
+      });
   }
 
   private async lockImage(tx: Prisma.TransactionClient, imageId: string) {
@@ -1162,7 +1538,7 @@ export class TranslationsService {
     tx: Prisma.TransactionClient,
     actorId: string,
     workId: string,
-    expectedEditorEpoch: number,
+    expectedEditorEpoch: number | undefined,
   ): Promise<EditableWorkState> {
     const rows = await tx.$queryRaw<
       {
@@ -1171,6 +1547,9 @@ export class TranslationsService {
         workflowStatus: WorkflowStatus;
         reviewStatus: ReviewStatus;
         editorEpoch: number;
+        collaborationMode: WorkCollaborationMode;
+        collaborationMigrationIssue: string | null;
+        productionStartedAt: Date | null;
       }[]
     >(
       Prisma.sql`
@@ -1179,7 +1558,7 @@ export class TranslationsService {
           revision,
           workflow_status AS "workflowStatus",
           review_status AS "reviewStatus",
-          editor_epoch AS "editorEpoch"
+          production_started_at AS "productionStartedAt", editor_epoch AS "editorEpoch", collaboration_mode AS "collaborationMode", collaboration_migration_issue AS "collaborationMigrationIssue"
         FROM works
         WHERE id = ${workId}::uuid
         FOR UPDATE
@@ -1193,7 +1572,10 @@ export class TranslationsService {
       Prisma.sql`SELECT id FROM users WHERE id = ${actorId}::uuid FOR SHARE`,
     );
     assertProductionWritable(rows[0]);
-    if (rows[0].editorEpoch !== expectedEditorEpoch) {
+    if (
+      expectedEditorEpoch !== undefined &&
+      rows[0].editorEpoch !== expectedEditorEpoch
+    ) {
       throw new ConflictException({
         code: "EDITOR_EPOCH_STALE",
         message: "作品已产生新的正式版本，请重新确认本地草稿",
@@ -1257,12 +1639,25 @@ export class TranslationsService {
       },
       data: {
         workflowStatus,
+        ...(work.productionStartedAt === null && {
+          productionStartedAt: new Date(),
+        }),
         revision: { increment: 1 },
         ...(incrementsEpoch ? { editorEpoch: { increment: 1 } } : {}),
       },
     });
     if (!changed.count) {
       throw new ConflictException("作品状态已变化，请刷新后重试");
+    }
+    if (incrementsEpoch) {
+      await tx.proofreadPageLease.updateMany({
+        where: {
+          workId: work.id,
+          editorEpoch: work.editorEpoch,
+          expiresAt: { gt: new Date() },
+        },
+        data: { editorEpoch: next.editorEpoch },
+      });
     }
     await tx.workEvent.create({
       data: {
@@ -1539,6 +1934,11 @@ export class TranslationsService {
       select: {
         id: true,
         orderIndex: true,
+        translationRevision: true,
+        translationEntries: {
+          orderBy: entryOrder,
+          select: { id: true, revision: true },
+        },
         originalFileObject: { select: { contentType: true } },
       },
     });
@@ -1552,6 +1952,8 @@ export class TranslationsService {
       images: {
         id: string;
         orderIndex: number;
+        translationRevision: number;
+        translationEntries: { id: string; revision: number }[];
         originalFileObject: { contentType: string };
       }[];
     },
@@ -1572,6 +1974,21 @@ export class TranslationsService {
       blockingIssues.push("文件包含暂不支持的标记类型，请改为框内或框外。");
     }
     return {
+      contentBaseline: createHash("sha256")
+        .update(
+          JSON.stringify(
+            images.map((image) => [
+              image.id,
+              image.orderIndex,
+              image.translationRevision,
+              image.translationEntries.map((entry) => [
+                entry.id,
+                entry.revision,
+              ]),
+            ]),
+          ),
+        )
+        .digest("hex"),
       formatVersion: parsed.document.formatVersion,
       imageCount: parsed.document.images.length,
       markerCount: parsed.document.images.reduce(
@@ -1625,10 +2042,16 @@ export class TranslationsService {
     };
   }
 
-  async canExportHandoffMaterials(actorId: string, workId: string) {
-    const user = await this.db.user.findUnique({
+  async canExportHandoffMaterials(
+    actorId: string,
+    workId: string,
+    db: DatabaseClient = this.db,
+  ) {
+    const user = await db.user.findUnique({
       where: { id: actorId },
       select: {
+        isActive: true,
+        mustChangePassword: true,
         roles: { select: { role: true } },
         workParticipations: {
           where: { workId },
@@ -1636,7 +2059,8 @@ export class TranslationsService {
         },
       },
     });
-    if (!user) return false;
+    if (!user || user.isActive === false || user.mustChangePassword)
+      return false;
     const roles = new Set(user.roles.map(({ role }) => role));
     if (
       roles.has(Role.admin) ||
@@ -1653,37 +2077,29 @@ export class TranslationsService {
     );
   }
 
-  async assertCanExportHandoffMaterials(actorId: string, workId: string) {
-    if (!(await this.canExportHandoffMaterials(actorId, workId))) {
+  async assertCanExportHandoffMaterials(
+    actorId: string,
+    workId: string,
+    db: DatabaseClient = this.db,
+  ) {
+    if (!(await this.canExportHandoffMaterials(actorId, workId, db))) {
       throw new ForbiddenException("没有导出此作品交接材料的权限");
     }
   }
 
   private async assertCanImportLabelPlus(actorId: string, workId: string) {
-    const [work, user] = await Promise.all([
-      this.db.work.findUnique({
-        where: { id: workId },
-        select: {
-          collaborationMode: true,
-          workflowStatus: true,
-          reviewStatus: true,
-        },
-      }),
-      this.db.user.findUnique({
-        where: { id: actorId },
-        select: { roles: { select: { role: true } } },
-      }),
-    ]);
+    const work = await this.db.work.findUnique({
+      where: { id: workId },
+      select: {
+        workflowStatus: true,
+        reviewStatus: true,
+        collaborationMigrationIssue: true,
+      },
+    });
     if (!work) throw new NotFoundException("作品不存在");
     assertProductionWritable(work);
     if (!(await this.hasEditParticipation(this.db, actorId, workId))) {
       throw new ForbiddenException("需要先加入当前翻译或校对阶段才能导入");
-    }
-    if (
-      work.collaborationMode === WorkCollaborationMode.multi &&
-      !user?.roles.some(({ role }) => role === Role.admin)
-    ) {
-      throw new ForbiddenException("多人协作中的整份 LabelPlus 导入仅限管理员");
     }
   }
 
@@ -1691,14 +2107,18 @@ export class TranslationsService {
     db: DatabaseClient,
     actorId: string,
     workId: string,
+    work?: EditParticipationWorkState,
   ) {
-    return (await this.editParticipationStages(db, actorId, workId)).length > 0;
+    return (
+      (await this.editParticipationStages(db, actorId, workId, work)).length > 0
+    );
   }
 
   private async editParticipationStages(
     db: DatabaseClient,
     actorId: string,
     workId: string,
+    knownWork?: EditParticipationWorkState,
   ): Promise<WorkStage[]> {
     const [user, work] = await Promise.all([
       db.user.findUnique({
@@ -1708,15 +2128,16 @@ export class TranslationsService {
           languageCapabilities: { select: { language: true } },
         },
       }),
-      db.work.findUnique({
-        where: { id: workId },
-        select: {
-          workflowStatus: true,
-          reviewStatus: true,
-          sourceLanguage: true,
-          typesetHandoffStartedAt: true,
-        },
-      }),
+      knownWork ??
+        db.work.findUnique({
+          where: { id: workId },
+          select: {
+            workflowStatus: true,
+            reviewStatus: true,
+            sourceLanguage: true,
+            typesetHandoffStartedAt: true,
+          },
+        }),
     ]);
     if (!user || !work || work.reviewStatus !== ReviewStatus.normal) return [];
     const participationStage = this.currentTextStage(work.workflowStatus);
@@ -1743,62 +2164,19 @@ export class TranslationsService {
       .map(({ stage }) => stage);
   }
 
-  private contributionCurrent(
-    participant: {
-      assignments: { workImageId: string }[];
-      contributionSubmissions: {
-        pages: { workImageId: string; imageRevision: number }[];
-      }[];
-    } | null,
-    images: { id: string; translationRevision: number }[],
-  ) {
-    const submission = participant?.contributionSubmissions[0];
-    return Boolean(
-      participant &&
-      submission &&
-      participant.assignments.length > 0 &&
-      participant.assignments.every(({ workImageId }) =>
-        submission.pages.some(
-          (page) =>
-            page.workImageId === workImageId &&
-            page.imageRevision ===
-              images.find(({ id }) => id === workImageId)?.translationRevision,
-        ),
-      ),
-    );
-  }
-
-  private async multiStageReady(workId: string, stage: WorkStage) {
-    const [images, participants] = await Promise.all([
-      this.db.workImage.findMany({
-        where: { workId },
-        select: { id: true, translationRevision: true },
-      }),
-      this.db.workStageParticipant.findMany({
-        where: { workId, stage, submittedAt: null, leftAt: null },
-        include: {
-          assignments: true,
-          contributionSubmissions: {
-            orderBy: { createdAt: "desc" },
-            take: 1,
-            include: { pages: true },
-          },
-        },
-      }),
-    ]);
-    const current = participants.filter((participant) =>
-      this.contributionCurrent(participant, images),
-    );
-    return (
-      images.length > 0 &&
-      images.every((image) =>
-        current.some((participant) =>
-          participant.assignments.some(
-            ({ workImageId }) => workImageId === image.id,
-          ),
-        ),
-      )
-    );
+  private async presenceWork(workId: string) {
+    const work = await this.db.work.findUnique({
+      where: { id: workId },
+      select: {
+        revision: true,
+        editorEpoch: true,
+        workflowStatus: true,
+        reviewStatus: true,
+        sourceLanguage: true,
+      },
+    });
+    if (!work) throw new NotFoundException("作品不存在");
+    return work;
   }
 
   private async activePresence(

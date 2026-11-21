@@ -18,6 +18,7 @@ import {
   validateObjectKey,
   validateReadExpiry,
   validateSignedWriteInput,
+  ObjectWritePreconditionError,
 } from "./object-storage.js";
 
 interface LocalMetadata {
@@ -106,6 +107,21 @@ export class LocalObjectStorage implements ObjectStorage {
 
   async read(key: string): Promise<Uint8Array> {
     return new Uint8Array(await readFile(this.path(key)));
+  }
+
+  async copy(sourceKey: string, destinationKey: string, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const metadata = await this.head(sourceKey);
+    if (!metadata?.contentType || !metadata.size || !metadata.checksum)
+      throw new Error("Source object is unavailable");
+    await this.put({
+      key: destinationKey,
+      body: await this.read(sourceKey),
+      contentType: metadata.contentType,
+      size: metadata.size,
+      checksum: metadata.checksum,
+      signal,
+    });
   }
 
   async readStream(key: string): Promise<Readable> {
@@ -205,6 +221,7 @@ export class LocalObjectStorage implements ObjectStorage {
       headers: {
         "Content-Type": "application/octet-stream",
         "X-Comiku-Request": "1",
+        ...(input.immutable ? { "If-None-Match": "*" } : {}),
       },
     };
   }
@@ -216,6 +233,7 @@ export class LocalObjectStorage implements ObjectStorage {
       typeof data.contentType !== "string" ||
       typeof data.size !== "number" ||
       typeof data.checksum !== "string" ||
+      (data.immutable !== undefined && typeof data.immutable !== "boolean") ||
       typeof data.expiresAt !== "number" ||
       data.expiresAt < Math.floor(Date.now() / 1000)
     ) {
@@ -227,6 +245,7 @@ export class LocalObjectStorage implements ObjectStorage {
         contentType: data.contentType,
         size: data.size,
         checksum: data.checksum,
+        immutable: data.immutable as boolean | undefined,
       },
       Math.max(1, data.expiresAt - Math.floor(Date.now() / 1000)),
     );
@@ -235,14 +254,33 @@ export class LocalObjectStorage implements ObjectStorage {
       contentType: data.contentType,
       size: data.size,
       checksum: data.checksum,
+      immutable: data.immutable as boolean | undefined,
     };
   }
 
-  async writeSigned(token: string, body: Uint8Array): Promise<void> {
+  async writeSigned(
+    token: string,
+    body: Uint8Array,
+    ifNoneMatch?: string,
+  ): Promise<void> {
     const data = this.signedWriteMetadata(token);
+    if (data.immutable && ifNoneMatch !== "*")
+      throw new ObjectWritePreconditionError();
     const checksum = createHash("sha256").update(body).digest("hex");
     if (body.byteLength !== data.size || checksum !== data.checksum) {
       throw new Error("Uploaded object does not match signed metadata");
+    }
+    if (data.immutable) {
+      // put uses exclusive creation. Never turn this into a HEAD/delete/write:
+      // concurrent grants for the same key must have exactly one winner.
+      try {
+        await this.put({ ...data, body });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST")
+          throw new ObjectWritePreconditionError();
+        throw error;
+      }
+      return;
     }
     const existing = await this.head(data.key);
     if (

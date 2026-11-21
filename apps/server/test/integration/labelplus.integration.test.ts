@@ -207,6 +207,7 @@ test("LabelPlus preview, atomic import, export and download round trip", async (
       ">>>>>>>>[任意来源第二页.jpg]<<<<<<<<",
     ].join("\r\n");
     const preview = await multipartRequest<{
+      contentBaseline: string;
       canImport: boolean;
       imageCount: number;
       markerCount: number;
@@ -242,6 +243,7 @@ test("LabelPlus preview, atomic import, export and download round trip", async (
       labelPlus,
       {
         stage: "translate",
+        expectedContentBaseline: preview.data.contentBaseline,
         expectedRevision: "0",
         expectedEditorEpoch: "0",
         idempotencyKey: importKey,
@@ -263,6 +265,7 @@ test("LabelPlus preview, atomic import, export and download round trip", async (
       labelPlus,
       {
         stage: "translate",
+        expectedContentBaseline: preview.data.contentBaseline,
         expectedRevision: "0",
         expectedEditorEpoch: "0",
         idempotencyKey: importKey,
@@ -280,6 +283,7 @@ test("LabelPlus preview, atomic import, export and download round trip", async (
       labelPlus,
       {
         stage: "translate",
+        expectedContentBaseline: preview.data.contentBaseline,
         expectedRevision: "0",
         expectedEditorEpoch: "0",
         idempotencyKey: randomUUID(),
@@ -400,6 +404,7 @@ test("LabelPlus preview, atomic import, export and download round trip", async (
       await db.translationEntry.deleteMany({
         where: { workImage: { workId } },
       });
+      await db.workPageAssignment.deleteMany({ where: { workId } });
       await db.workStageParticipant.deleteMany({ where: { workId } });
       await db.workImage.deleteMany({ where: { workId } });
       await db.work.deleteMany({ where: { id: workId } });

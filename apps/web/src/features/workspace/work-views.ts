@@ -4,7 +4,75 @@ type Member = Pick<
   "roles" | "languageCapabilities"
 >;
 type Language = components["schemas"]["SourceLanguage"];
+type WorkDetail = components["schemas"]["WorkDetailDto"];
 export type ClaimStage = "translate" | "proofread" | "typeset";
+export function currentWorkStage(
+  status: components["schemas"]["WorkflowStatus"],
+): components["schemas"]["WorkStage"] | null {
+  if (status === "pending_translate" || status === "translating")
+    return "translate";
+  if (status === "pending_proofread" || status === "proofreading")
+    return "proofread";
+  if (status === "pending_typeset" || status === "typesetting")
+    return "typeset";
+  return status === "pending_publish" ? "publish" : null;
+}
+
+export function stageClaimAccess(
+  member: Member & { id: string },
+  work: WorkDetail,
+  stage: ClaimStage,
+) {
+  const stages: components["schemas"]["WorkStage"][] = [
+    "translate",
+    "proofread",
+    "typeset",
+    "publish",
+  ];
+  const current = currentWorkStage(work.workflowStatus);
+  const inWindow =
+    !work.collaborationMigrationIssue &&
+    work.reviewStatus === "normal" &&
+    current !== null &&
+    stages.indexOf(current) <= stages.indexOf(stage) &&
+    !(stage === "proofread" && work.proofreadingSkipped);
+  const retained = work.participants.filter((person) => !person.leftAt);
+  const participants = retained.filter((person) => person.stage === stage);
+  const qualified = canHandleStage(member, stage, work.sourceLanguage);
+  const opposite =
+    stage === "translate"
+      ? "proofread"
+      : stage === "proofread"
+        ? "translate"
+        : null;
+  const singleConflict =
+    work.collaborationMode === "single" &&
+    opposite &&
+    retained.some(
+      (person) => person.userId === member.id && person.stage === opposite,
+    );
+  const canClaim =
+    inWindow &&
+    qualified &&
+    !singleConflict &&
+    (stage === "proofread"
+      ? !participants.some((person) => person.userId === member.id) &&
+        (work.collaborationMode === "multi" || participants.length === 0)
+      : work.collaborationMode === "multi" ||
+        participants.length === 0 ||
+        (current === stage &&
+          participants.every(
+            (person) => person.userId === member.id && person.submittedAt,
+          )));
+  const canAddProofreader =
+    stage === "proofread" &&
+    inWindow &&
+    work.collaborationMode === "multi" &&
+    (member.roles.includes("admin") ||
+      (qualified &&
+        participants.some((person) => person.userId === member.id)));
+  return { inWindow, canClaim: Boolean(canClaim), canAddProofreader };
+}
 export type WorkTab =
   | "all"
   | "translation"
@@ -61,7 +129,7 @@ export function workingTabs(
     )
       tabs.push({ value: stage, label });
   }
-  if (member.roles.some((role) => role === "operator" || role === "admin"))
+  if (member.roles.includes("operator"))
     tabs.push({ value: "pending_publish", label: "待发布" });
   return tabs;
 }

@@ -73,7 +73,7 @@ test("download waits for the worker then explicitly delivers a signed URL withou
     response: new Response(),
   } as never);
   const promise = downloadPrepared({
-    purpose: "handoff",
+    purpose: "publication",
     workId: "work",
     expectedRevision: 4,
     expectedEditorEpoch: 2,

@@ -5,6 +5,8 @@ export type UploadImage = components["schemas"]["TypesetUploadImageDto"] & {
   target: string;
   included: boolean;
   archive: boolean;
+  workImageId?: string;
+  localUrl?: string;
 };
 
 export function initialTypesetUploadImages(session: Session): UploadImage[] {
@@ -41,17 +43,6 @@ export function typesetUploadGroupProblem(
     !mergeConfirmed
   )
     return "同作品有多份 ZIP 或混入裸图，请确认合并或移除重复项";
-  const names = images.map((image) =>
-    image.sourceName.split(/[\\/]/).at(-1)?.toLowerCase(),
-  );
-  const pages = images
-    .map((image) => image.pageNumber)
-    .filter((page) => page !== null);
-  if (
-    new Set(names).size !== names.length ||
-    new Set(pages).size !== pages.length
-  )
-    return "同名文件或重复数字页码，请先移除重复项";
   return null;
 }
 
@@ -76,4 +67,24 @@ export function typesetUploadContentType(
   )[extension as "png"];
   if (!type) throw new Error(`不支持的文件格式：${file.name}`);
   return type;
+}
+
+export function suggestedTypesetPageId(
+  image: Pick<UploadImage, "workImageId" | "pageNumber">,
+  pages: { id: string; orderIndex: number }[],
+) {
+  return (
+    image.workImageId ??
+    pages.find((page) => page.orderIndex + 1 === image.pageNumber)?.id ??
+    ""
+  );
+}
+export function orderedTypesetPageMappings(
+  images: Pick<UploadImage, "id">[],
+  pages: { id: string }[],
+) {
+  if (images.length !== pages.length) return null;
+  return Object.fromEntries(
+    images.map((image, index) => [image.id, pages[index].id]),
+  );
 }

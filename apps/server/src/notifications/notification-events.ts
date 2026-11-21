@@ -149,6 +149,28 @@ export function normalizeNotificationEvent(
         input.workNumber < 1 ||
         input.workNumber > 2_147_483_647)) ||
     (input.stage !== undefined && !stages.has(input.stage)) ||
+    (input.addedProofreader !== undefined &&
+      (input.type !== "stage_joined" ||
+        input.stage !== "proofread" ||
+        typeof input.addedProofreader !== "string" ||
+        !safeText(input.addedProofreader))) ||
+    (input.affectedPageNumbers !== undefined &&
+      (!input.materialChange ||
+        !Array.isArray(input.affectedPageNumbers) ||
+        input.affectedPageNumbers.length > 100 ||
+        input.affectedPageNumbers.some(
+          (n) => !Number.isSafeInteger(n) || n < 1 || n > 2147483647,
+        ))) ||
+    (input.affectsSupplement !== undefined &&
+      (input.materialChange !== "typeset" ||
+        input.affectsSupplement !== true)) ||
+    (input.materialChange !== undefined &&
+      !(
+        (input.materialChange === "source" &&
+          input.type === "metadata_updated") ||
+        (input.materialChange === "typeset" &&
+          input.type === "typeset_version_uploaded")
+      )) ||
     (input.participationKind !== undefined &&
       (input.type !== "stage_joined" ||
         !["claim", "join"].includes(input.participationKind))) ||
@@ -193,6 +215,16 @@ export function normalizeNotificationEvent(
       ...(input.toReviewStatus !== undefined && {
         toReviewStatus: input.toReviewStatus,
       }),
+      ...(input.addedProofreader && {
+        addedProofreader: safeText(input.addedProofreader)!,
+      }),
+      ...(input.materialChange && { materialChange: input.materialChange }),
+      ...(input.affectedPageNumbers && {
+        affectedPageNumbers: [...new Set(input.affectedPageNumbers)].sort(
+          (a, b) => a - b,
+        ),
+      }),
+      ...(input.affectsSupplement && { affectsSupplement: true }),
       ...(input.participationKind !== undefined && {
         participationKind: input.participationKind,
       }),
@@ -204,6 +236,28 @@ export function notificationPayloadHash(input: NotificationEventInput): string {
   return createHash("sha256")
     .update(JSON.stringify(normalizeNotificationEvent(input)))
     .digest("hex");
+}
+
+export function materialChangeMessage(
+  snapshot: NormalizedNotificationEvent["snapshot"],
+) {
+  const pages = snapshot.affectedPageNumbers ?? [];
+  const ranges: string[] = [];
+  for (let i = 0; i < pages.length; i++) {
+    const start = pages[i];
+    while (i + 1 < pages.length && pages[i + 1] === pages[i] + 1) i++;
+    ranges.push(start === pages[i] ? String(start) : `${start}–${pages[i]}`);
+  }
+  const scope = [
+    ranges.length ? `第${ranges.join("、")}页` : "",
+    snapshot.affectsSupplement ? "补充图" : "",
+  ]
+    .filter(Boolean)
+    .join("及");
+  const label = scope ? `（${scope}）` : "";
+  return snapshot.materialChange === "source"
+    ? `原图材料已更新${label}，请刷新查看`
+    : `成图已更新${label}，请重新查看或下载`;
 }
 
 /** Version 1 is deliberately fixed; arbitrary business detail and templates are never accepted. */
@@ -222,6 +276,13 @@ export function renderNotificationMessage(
     `发生时间：${event.occurredAt.toISOString()}`,
   ];
   const snapshot = event.snapshot;
+  if (snapshot.addedProofreader)
+    lines.push(
+      options.includeDetails
+        ? `已添加校对：${snapshot.addedProofreader}`
+        : "已添加校对成员",
+    );
+  if (snapshot.materialChange) lines.push(materialChangeMessage(snapshot));
   if (snapshot.stage) lines.push(`职责：${stageLabels[snapshot.stage]}`);
   const transition = <T extends string>(
     from: T | undefined,

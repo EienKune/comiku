@@ -121,7 +121,7 @@ export function TypesetBatchTools({
                   onClick={() => {
                     setUploadProgress("");
                     setOpen(true);
-                    if (!items.length) void loadManifest();
+                    void loadManifest();
                   }}
                 >
                   批量下载嵌字交接包
@@ -150,7 +150,6 @@ export function TypesetBatchTools({
       delivered,
       fallbackTopbar,
       uploadProgress,
-      items.length,
       loadManifest,
     ],
   );

@@ -74,14 +74,6 @@ export function validateTypesetSelection(
     throw new Error(
       "同作品有多份 ZIP 或混入裸图，请明确合并为一个版本或移除重复项",
     );
-  const names = images.map((image) =>
-    basename(image.sourceName.replaceAll("\\", "/")).toLowerCase(),
-  );
-  if (new Set(names).size !== names.length)
-    throw new Error("存在同名图片，请移除重复项或拆分作品");
-  const pages = images
-    .map((image) => typesetName(image.sourceName).pageNumber)
-    .filter((page) => page !== null);
-  if (new Set(pages).size !== pages.length)
-    throw new Error("存在重复数字页码（可能同时选入原图与成图），请移除重复项");
+  // Names only suggest a target/order. Stable image IDs and explicit page
+  // mappings govern adoption, including files from different local folders.
 }

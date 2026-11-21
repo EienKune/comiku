@@ -103,6 +103,7 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
     const source = await member("source"),
       typesetter = await member("typesetter"),
       admin = await member("admin"),
+      operator = await member("operator"),
       outsider = await member("translator");
     const author = await db.author.create({
       data: {
@@ -524,13 +525,27 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
     const publicationWork = await db.work.findUniqueOrThrow({
       where: { id: work.id },
     });
-    const publicationTask = await app.get(DownloadsService).prepare(admin.id, {
-      purpose: "publication",
-      workId: work.id,
-      expectedRevision: publicationWork.revision,
-      expectedEditorEpoch: publicationWork.editorEpoch,
-      idempotencyKey: randomUUID(),
-    });
+    for (const nonOperator of [admin, typesetter, outsider]) {
+      await assert.rejects(
+        app.get(DownloadsService).prepare(nonOperator.id, {
+          purpose: "publication",
+          workId: work.id,
+          expectedRevision: publicationWork.revision,
+          expectedEditorEpoch: publicationWork.editorEpoch,
+          idempotencyKey: randomUUID(),
+        }),
+        /当前职务不能取得该用途文件/,
+      );
+    }
+    const publicationTask = await app
+      .get(DownloadsService)
+      .prepare(operator.id, {
+        purpose: "publication",
+        workId: work.id,
+        expectedRevision: publicationWork.revision,
+        expectedEditorEpoch: publicationWork.editorEpoch,
+        idempotencyKey: randomUUID(),
+      });
     await run(publicationTask.id, "download_publication");
     const publishedFile = await db.downloadPreparation.findUniqueOrThrow({
       where: { id: publicationTask.id },
@@ -546,7 +561,7 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
       Buffer.from(publishedZip[`${work.workNumber}-001成图.png`]),
       png,
     );
-    const repeatTask = await app.get(DownloadsService).prepare(admin.id, {
+    const repeatTask = await app.get(DownloadsService).prepare(operator.id, {
       purpose: "publication",
       workId: work.id,
       expectedRevision: publicationWork.revision,
@@ -562,7 +577,7 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
       ).fileObjectId,
       publishedFile.fileObjectId,
     );
-    await app.get(DownloadsService).deliver(admin.id, repeatTask.id);
+    await app.get(DownloadsService).deliver(operator.id, repeatTask.id);
     // Expiry clears staging/cache sessions without removing adopted images or durable handoff history.
     const expiredManifest = (
       await db.directUploadSession.findUniqueOrThrow({
@@ -666,6 +681,9 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
       });
       await db.labelPlusFile.deleteMany({ where: { workId: { in: workIds } } });
       await db.workEvent.deleteMany({ where: { workId: { in: workIds } } });
+      await db.workPageAssignment.deleteMany({
+        where: { workId: { in: workIds } },
+      });
       await db.workStageParticipant.deleteMany({
         where: { workId: { in: workIds } },
       });

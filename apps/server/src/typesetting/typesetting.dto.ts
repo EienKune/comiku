@@ -1,5 +1,9 @@
 import { Transform, Type } from "class-transformer";
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  ArrayUnique,
+  IsArray,
   IsBoolean,
   IsEnum,
   IsInt,
@@ -9,7 +13,7 @@ import {
   MaxLength,
   Min,
 } from "class-validator";
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional, OmitType } from "@nestjs/swagger";
 
 export class CreateTypesetHandoffPackageDto {
   @ApiProperty({ type: Number, minimum: 0 })
@@ -87,6 +91,27 @@ export class CreateTypesetVersionDto {
   sourceImageIds?: string;
 }
 
+export class AdoptTypesetVersionDto extends OmitType(CreateTypesetVersionDto, [
+  "sourceImageIds",
+] as const) {
+  @ApiProperty({ type: String, format: "uuid" }) @IsUUID() sessionId!: string;
+  @ApiProperty({ type: [String], minItems: 1, maxItems: 100 })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID("all", { each: true })
+  imageIds!: string[];
+  @ApiProperty({
+    type: "array",
+    items: { type: "string", format: "uuid", nullable: true },
+    maxItems: 100,
+  })
+  @IsArray()
+  @ArrayMaxSize(100)
+  sourceImageIds!: (string | null)[];
+}
+
 export class ManageTypesetVersionDto {
   @ApiProperty({ type: Number, minimum: 0 })
   @IsInt()
@@ -106,6 +131,10 @@ export class DeleteTypesetVersionDto extends ManageTypesetVersionDto {
 }
 
 export class TypesetVersionImageDto {
+  @ApiProperty({ type: String, format: "uuid", nullable: true }) supplementId!:
+    string | null;
+  @ApiProperty({ type: String, nullable: true }) supplementPosition!:
+    string | null;
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: String, format: "uuid", nullable: true })
   workImageId!: string | null;

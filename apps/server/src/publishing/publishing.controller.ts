@@ -35,7 +35,7 @@ export class PublishingController {
   ) {}
 
   @Get()
-  @Access({ permission: "works:read" })
+  @Access({ permission: "works:publish" })
   @ApiOperation({ operationId: "getPublishingView" })
   @ApiParam({ name: "workId", format: "uuid" })
   @ApiOkResponse({ type: PublishingViewDto })
@@ -47,7 +47,7 @@ export class PublishingController {
   }
 
   @Get("images")
-  @Access({ permission: "works:read" })
+  @Access({ permission: "works:publish" })
   @ApiOperation({ operationId: "downloadPublishingImages" })
   @ApiParam({ name: "workId", format: "uuid" })
   @ApiOkResponse({

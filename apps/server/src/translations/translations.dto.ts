@@ -99,6 +99,12 @@ export class TranslationPresenceListDto {
   @ApiProperty({ type: TranslationPresenceDto, isArray: true })
   items!: TranslationPresenceDto[];
   @ApiProperty({ type: Number, minimum: 1 }) expiresInSeconds!: number;
+  @ApiPropertyOptional({ type: Number, minimum: 0 }) workRevision?: number;
+  @ApiPropertyOptional({ type: Number, minimum: 0 }) editorEpoch?: number;
+  @ApiPropertyOptional({ enum: WorkflowStatus, enumName: "WorkflowStatus" })
+  workflowStatus?: WorkflowStatus;
+  @ApiPropertyOptional({ enum: ReviewStatus, enumName: "ReviewStatus" })
+  reviewStatus?: ReviewStatus;
 }
 
 export class TranslationOpenReviewCaseDto {
@@ -135,6 +141,7 @@ export class LabelPlusImageMappingDto {
 }
 
 export class LabelPlusImportPreviewDto {
+  @ApiProperty({ type: String }) contentBaseline!: string;
   @ApiProperty({ type: String }) formatVersion!: string;
   @ApiProperty({ type: Number, minimum: 1 }) imageCount!: number;
   @ApiProperty({ type: Number, minimum: 0 }) markerCount!: number;
@@ -147,6 +154,18 @@ export class LabelPlusImportPreviewDto {
 }
 
 export class ImportLabelPlusDto {
+  @ApiPropertyOptional({ type: String, maxLength: 64 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  expectedContentBaseline?: string;
+
+  @ApiPropertyOptional({ type: String })
+  @IsOptional()
+  @IsString()
+  @MaxLength(160000)
+  pageAccess?: string;
+
   @ApiProperty({ enum: WorkStage, enumName: "WorkStage" })
   @IsEnum(WorkStage)
   stage!: WorkStage;
@@ -203,7 +222,75 @@ export class UpdateTranslationPresenceDto {
   mode!: TranslationPresenceMode;
 }
 
+export class TranslationPageAssignmentDto {
+  @ApiProperty({ type: String, format: "uuid" }) workImageId!: string;
+  @ApiProperty({ type: String, nullable: true }) userId!: string | null;
+  @ApiProperty({ type: Number }) generation!: number;
+  @ApiProperty({ type: Number }) draftRevision!: number;
+  @ApiProperty({ type: String, nullable: true }) submittedAt!: string | null;
+}
+
+export class ProofreadLeaseViewDto {
+  @ApiProperty({ type: String }) workImageId!: string;
+  @ApiProperty({ type: String }) userId!: string;
+  @ApiProperty({ type: String }) displayName!: string;
+  @ApiProperty({ type: String, format: "date-time" }) expiresAt!: string;
+}
+
+export class ProofreadLeaseRequestDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  @IsUUID()
+  editorInstanceId!: string;
+  @ApiProperty({ type: Number, minimum: 0 })
+  @IsInt()
+  @Min(0)
+  expectedEditorEpoch!: number;
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  @IsOptional()
+  @IsUUID()
+  leaseToken?: string;
+}
+
+export class ReleaseProofreadLeaseDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  @IsUUID()
+  editorInstanceId!: string;
+  @ApiProperty({ type: String, format: "uuid" }) @IsUUID() leaseToken!: string;
+}
+
+export class ProofreadLeaseResultDto {
+  @ApiProperty({ type: String }) leaseToken!: string;
+  @ApiProperty({ type: Number }) editorEpoch!: number;
+  @ApiProperty({ type: String, format: "date-time" }) expiresAt!: string;
+  @ApiPropertyOptional({ type: TranslationImageDraftDto })
+  image?: TranslationImageDraftDto;
+}
+
+export class PageWriteAccessDto {
+  @ApiPropertyOptional({ type: Number, minimum: 0 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  expectedAssignmentGeneration?: number;
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  @IsOptional()
+  @IsUUID()
+  editorInstanceId?: string;
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  @IsOptional()
+  @IsUUID()
+  leaseToken?: string;
+}
+
 export class TranslationEditorDto {
+  @ApiPropertyOptional({ type: String, isArray: true })
+  editableImageIds?: string[];
+  @ApiPropertyOptional({ type: TranslationPageAssignmentDto, isArray: true })
+  pageAssignments?: TranslationPageAssignmentDto[];
+  @ApiPropertyOptional({ type: Boolean }) proofreadRequiresLease?: boolean;
+  @ApiPropertyOptional({ type: ProofreadLeaseViewDto, isArray: true })
+  proofreadLeases?: ProofreadLeaseViewDto[];
+
   @ApiPropertyOptional({ type: ReviewRevisionDto, nullable: true })
   reviewRevision?: ReviewRevisionDto | null;
   @ApiProperty({ type: Boolean }) canSkipProofreading!: boolean;
@@ -258,7 +345,7 @@ export class TranslationEditorDto {
   activeParticipants!: TranslationPresenceDto[];
 }
 
-class CoordinateFields {
+class CoordinateFields extends PageWriteAccessDto {
   @ApiProperty({ type: Number, minimum: 0, maximum: 1 })
   @Type(() => Number)
   @IsNumber({ allowInfinity: false, allowNaN: false })
@@ -294,7 +381,7 @@ export class CreateTranslationEntryDto extends CoordinateFields {
   expectedEditorEpoch!: number;
 }
 
-export class UpdateTranslationEntryDto {
+export class UpdateTranslationEntryDto extends PageWriteAccessDto {
   @ApiProperty({ type: Number, minimum: 0 })
   @IsInt()
   @Min(0)
@@ -342,7 +429,7 @@ export class UpdateTranslationEntryDto {
   note?: string | null;
 }
 
-export class DeleteTranslationEntryDto {
+export class DeleteTranslationEntryDto extends PageWriteAccessDto {
   @ApiProperty({ type: Number, minimum: 0 })
   @IsInt()
   @Min(0)
@@ -359,7 +446,7 @@ export class DeleteTranslationEntryDto {
   expectedEditorEpoch!: number;
 }
 
-export class ReorderTranslationEntryDto {
+export class ReorderTranslationEntryDto extends PageWriteAccessDto {
   @ApiPropertyOptional({ type: String, format: "uuid", nullable: true })
   @IsOptional()
   @IsUUID()

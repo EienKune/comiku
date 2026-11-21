@@ -1,3 +1,13 @@
+import { createHash } from "node:crypto";
+import { formalMaterialDocument } from "./formal-materials.js";
+import {
+  lockVerifiedTypesetSession,
+  verifiedTypesetImages,
+  verifiedTypesetImage,
+  type VerifiedImageSelection,
+} from "./verified-typeset-image.js";
+import { assertUnifiedHandoffCurrent } from "./typeset-material-identity.js";
+import { prefetchHandoffImages } from "./handoff-prefetch.js";
 import { DirectUploadsService } from "../transfers/direct-uploads.service.js";
 import { DownloadsService } from "../transfers/downloads.service.js";
 import { assertCurrentHandoff } from "../workflow/revision-policy.js";
@@ -26,16 +36,14 @@ import { FileObjectsService } from "../files/file-objects.service.js";
 import { TranslationsService } from "../translations/translations.service.js";
 import {
   createTypesetHandoffArchive,
-  targetImageFileName,
   typesetHandoffPackageFileName,
 } from "./handoff-package.js";
 import {
-  defaultLabelPlusHeader,
   encodeLabelPlus,
   LabelPlusParseError,
-  type LabelPlusDocument,
 } from "../labelplus/labelplus-codec.js";
 import type {
+  AdoptTypesetVersionDto,
   CreateTypesetHandoffPackageDto,
   CreateTypesetVersionDto,
   DeleteTypesetVersionDto,
@@ -45,9 +53,17 @@ import type {
   TypesetVersionListDto,
 } from "./typesetting.dto.js";
 import { TypesetVersionUploadMode } from "./typesetting.dto.js";
-import { prepareTypesetImages } from "./typeset-image-upload.js";
+import {
+  prepareTypesetImages,
+  TYPESET_IMAGE_MAX_TOTAL_BYTES,
+} from "./typeset-image-upload.js";
 import type { ManualUploadFile } from "../candidates/manual-candidate-upload.js";
 import type { TypesetHandoffManifestDto } from "./typeset-batch.dto.js";
+import {
+  lockTypesetWorkTx,
+  typesetActorTx,
+  type TypesetMutation,
+} from "./typeset-page-workflow.js";
 
 const typesetVersionRetentionMs = 30 * 24 * 60 * 60 * 1000;
 
@@ -81,11 +97,16 @@ export class TypesettingService {
           task.requireCurrentParticipation
             ? this.prepareBatchHandoff.bind(this)
             : this.createHandoffPackage.bind(this)
-        )(task.actorId, task.workId, {
-          expectedRevision: task.expectedRevision,
-          expectedEditorEpoch: task.expectedEditorEpoch,
-          idempotencyKey: task.idempotencyKey,
-        });
+        )(
+          task.actorId,
+          task.workId,
+          {
+            expectedRevision: task.expectedRevision,
+            expectedEditorEpoch: task.expectedEditorEpoch,
+            idempotencyKey: task.idempotencyKey,
+          },
+          signal,
+        );
         const record = await this.db.typesetHandoffPackage.findUniqueOrThrow({
           where: { id: pack.packageId },
         });
@@ -182,9 +203,10 @@ export class TypesettingService {
     actorId: string,
     workId: string,
     input: CreateTypesetHandoffPackageDto,
+    signal?: AbortSignal,
   ) {
     await this.assertBatchHandoff(actorId, workId, input);
-    return this.createHandoffPackage(actorId, workId, input);
+    return this.createHandoffPackage(actorId, workId, input, signal);
   }
 
   private async assertBatchHandoff(
@@ -241,11 +263,24 @@ export class TypesettingService {
     actorId: string,
     workId: string,
     input: CreateTypesetHandoffPackageDto,
+    signal?: AbortSignal,
   ): Promise<TypesetHandoffPackageDto> {
     await this.translations.assertCanExportHandoffMaterials(actorId, workId);
     const production = await this.db.work.findUnique({ where: { id: workId } });
     if (!production) throw new NotFoundException("作品不存在");
     assertProductionWritable(production);
+    const materialTextId =
+      production.requiredHandoffVersionId ??
+      (
+        await this.db.translationVersion.findFirst({
+          where: { workId },
+          orderBy: { versionNumber: "desc" },
+          select: { id: true },
+        })
+      )?.id ??
+      null;
+    if (!materialTextId)
+      throw new ConflictException("作品尚无正式译文，请先提交翻译或校对");
     const replay = await this.db.typesetHandoffPackage.findUnique({
       where: {
         workId_kind_idempotencyKey: {
@@ -256,16 +291,32 @@ export class TypesettingService {
       },
     });
     if (replay) {
+      if (
+        replay.sourceAssetRevision !== production.sourceAssetRevision ||
+        replay.translationVersionId !== materialTextId
+      )
+        throw new ConflictException("材料已更新，请重新生成");
+      await assertUnifiedHandoffCurrent(this.db, production, replay.id);
       if (!(await this.files.exists(replay.fileObjectId)))
         throw new ConflictException("交接包文件已失效，请重新生成");
       return this.packageDto(replay);
     }
+    if (
+      production.revision !== input.expectedRevision ||
+      production.editorEpoch !== input.expectedEditorEpoch
+    )
+      throw new ConflictException("作品已更新，请刷新材料清单");
     const cached = await this.db.typesetHandoffPackage.findFirst({
       where: {
         workId,
         kind: "unified_handoff",
-        workRevision: input.expectedRevision,
-        editorEpoch: input.expectedEditorEpoch,
+        sourceAssetRevision: production.sourceAssetRevision,
+        translationVersionId: materialTextId,
+        editorEpoch: {
+          in: production.typesetHandoffStartedAt
+            ? [production.editorEpoch, production.editorEpoch - 1]
+            : [production.editorEpoch],
+        },
         createdAt: { gt: new Date(Date.now() - 24 * 60 * 60_000) },
         fileObject: { lifecycleStatus: "active", deletedAt: null },
       },
@@ -286,9 +337,9 @@ export class TypesettingService {
         images: {
           orderBy: { orderIndex: "asc" },
           select: {
+            id: true,
             originalFileObjectId: true,
             originalFileObject: { select: { contentType: true } },
-            translationEntries: { orderBy: { orderIndex: "asc" } },
           },
         },
       },
@@ -309,23 +360,15 @@ export class TypesettingService {
     if (!work.images.length)
       throw new ConflictException("作品没有可导出的原图");
 
-    const document: LabelPlusDocument = {
-      formatVersion: "1,0",
-      headerLines: [...defaultLabelPlusHeader],
-      images: work.images.map((image, index) => ({
-        fileName: targetImageFileName(
-          work.workNumber,
-          index,
-          image.originalFileObject.contentType,
-        ),
-        markers: image.translationEntries.map((entry) => ({
-          x: entry.markerX.toNumber(),
-          y: entry.markerY.toNumber(),
-          positionType: entry.markerPositionType === "inside" ? 1 : 2,
-          translation: entry.translatedText,
-        })),
-      })),
-    };
+    const formalVersion = await this.db.translationVersion.findUniqueOrThrow({
+      where: { id: materialTextId, workId },
+      include: { entries: { orderBy: { orderIndex: "asc" } } },
+    });
+    const document = formalMaterialDocument(
+      work.workNumber,
+      work.images,
+      formalVersion.entries,
+    );
     let translationBody: Uint8Array;
     try {
       translationBody = encodeLabelPlus(document);
@@ -340,21 +383,27 @@ export class TypesettingService {
       0,
     );
     const archive = await createTypesetHandoffArchive(
-      (async function* (files: FileObjectsService) {
-        for (const image of work.images) {
-          const stored = await files.readStream(image.originalFileObjectId);
-          yield {
+      prefetchHandoffImages(
+        work.images,
+        async (image, readSignal) => {
+          const stored = await this.files.readStream(
+            image.originalFileObjectId,
+            readSignal,
+          );
+          return {
             contentType: image.originalFileObject.contentType,
             body: stored.body,
           };
-        }
-      })(this.files),
+        },
+        signal,
+      ),
       work.workNumber,
       translationBody,
     );
     const fileName = typesetHandoffPackageFileName(work.workNumber);
     let stored: Awaited<ReturnType<FileObjectsService["storePath"]>>;
     try {
+      signal?.throwIfAborted();
       stored = await this.files.storePath({
         path: archive.path,
         contentType: "application/zip",
@@ -402,16 +451,9 @@ export class TypesettingService {
             imageCount: work.images.length,
             markerCount,
             workRevision: current.revision,
+            sourceAssetRevision: current.sourceAssetRevision,
             editorEpoch: current.editorEpoch,
-            translationVersionId:
-              current.requiredHandoffVersionId ??
-              (
-                await tx.translationVersion.findFirst({
-                  where: { workId },
-                  orderBy: { versionNumber: "desc" },
-                  select: { id: true },
-                })
-              )?.id,
+            translationVersionId: materialTextId,
             idempotencyKey: input.idempotencyKey,
             createdById: actorId,
           },
@@ -454,6 +496,7 @@ export class TypesettingService {
         workRevision: true,
         editorEpoch: true,
         translationVersionId: true,
+        sourceAssetRevision: true,
       },
     });
     if (!record) throw new NotFoundException("嵌字交接包不存在");
@@ -464,55 +507,15 @@ export class TypesettingService {
         editorEpoch: true,
         typesetHandoffStartedAt: true,
         requiredHandoffVersionId: true,
+        sourceAssetRevision: true,
       },
     });
     if (!work) throw new NotFoundException("作品不存在");
-    if (
-      work.requiredHandoffVersionId &&
-      record.translationVersionId !== work.requiredHandoffVersionId
-    )
-      throw new ConflictException("交接包使用旧文本，请重新生成最新材料");
-    const matchesPendingBaseline =
-      !work.typesetHandoffStartedAt &&
-      work.revision === record.workRevision &&
-      work.editorEpoch === record.editorEpoch;
-    const matchesStartedBaseline =
-      Boolean(work.typesetHandoffStartedAt) &&
-      (work.editorEpoch === record.editorEpoch + 1 ||
-        work.editorEpoch === record.editorEpoch);
-    // A review switches epochs without invalidating an already downloaded package.
-    // Keep strict checks for unused packages and for packages containing old text.
-    let matchesPreservedHandoff = false;
-    if (
-      !matchesStartedBaseline &&
-      work.typesetHandoffStartedAt &&
-      record.translationVersionId
-    ) {
-      const latest = await this.db.translationVersion.findFirst({
-        where: { workId },
-        orderBy: { versionNumber: "desc" },
-        select: { id: true },
-      });
-      matchesPreservedHandoff =
-        latest?.id === record.translationVersionId &&
-        Boolean(
-          await this.db.workEvent.findFirst({
-            where: {
-              workId,
-              action: WorkEventAction.typeset_handoff_started,
-              detail: { path: ["fileId"], equals: record.id },
-            },
-            select: { id: true },
-          }),
-        );
-    }
-    if (
-      !matchesPendingBaseline &&
-      !matchesStartedBaseline &&
-      !matchesPreservedHandoff
-    ) {
-      throw new ConflictException("交接包对应的作品版本已过期，请重新生成");
-    }
+    await assertUnifiedHandoffCurrent(
+      this.db,
+      { id: workId, ...work },
+      record.id,
+    );
     return { record, work };
   }
 
@@ -578,15 +581,17 @@ export class TypesettingService {
       record.fileObjectId,
       record.fileName,
     );
-    await this.translations.beginTypesetHandoff(actorId, workId, {
-      downloadTaskId,
-      material: "unified_handoff",
-      fileId: record.id,
-      expectedRevision: baseline?.expectedRevision ?? work.revision,
-      expectedEditorEpoch: baseline?.expectedEditorEpoch ?? work.editorEpoch,
-      requireCurrentParticipation:
-        requireCurrentParticipation && Boolean(baseline),
-    });
+    if (requireCurrentParticipation) {
+      await this.translations.beginTypesetHandoff(actorId, workId, {
+        downloadTaskId,
+        material: "unified_handoff",
+        fileId: record.id,
+        expectedRevision: baseline?.expectedRevision ?? work.revision,
+        expectedEditorEpoch: baseline?.expectedEditorEpoch ?? work.editorEpoch,
+        requireCurrentParticipation:
+          requireCurrentParticipation && Boolean(baseline),
+      });
+    }
     return { ...signed, fileName: record.fileName };
   }
 
@@ -649,6 +654,8 @@ export class TypesettingService {
     const baselineWork = await tx.work.findUniqueOrThrow({
       where: { id: work.id },
     });
+    if (baselineWork.collaborationMode === "multi")
+      throw new ConflictException("多人批量上传必须按当前页分工保存");
     await assertCurrentHandoff(tx, baselineWork);
     const textVersion =
       baselineWork.requiredHandoffVersionId ??
@@ -716,6 +723,12 @@ export class TypesettingService {
     input: CreateTypesetVersionDto,
     uploadSessionId?: string,
   ): Promise<TypesetVersionListDto> {
+    const mode = await this.db.work.findUniqueOrThrow({
+      where: { id: workId },
+      select: { collaborationMode: true },
+    });
+    if (mode.collaborationMode === "multi")
+      throw new ConflictException("多人作品请使用页映射保存，不能整作覆盖");
     const replay = await this.db.typesetImageVersion.findUnique({
       where: {
         workId_idempotencyKey: { workId, idempotencyKey: input.idempotencyKey },
@@ -793,172 +806,22 @@ export class TypesettingService {
       let linked = false;
       try {
         linked = await this.db.$transaction(async (tx) => {
-          if (uploadSessionId)
-            await this.directUploads!.assertAdoptionLeaseTx(
-              tx,
-              uploadSessionId,
-            );
-          await tx.$queryRaw`SELECT id FROM users WHERE id = ${actorId}::uuid FOR SHARE`;
-          await tx.$queryRaw`SELECT user_id FROM user_roles WHERE user_id = ${actorId}::uuid FOR SHARE`;
-          await tx.$queryRaw(
-            Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
+          return this.writeSingleVersionTx(
+            tx,
+            actorId,
+            workId,
+            input,
+            prepared.automaticallySorted,
+            async () =>
+              prepared.images.map((image, index) => ({
+                fileObjectId: storedFiles[index].id,
+                sourceName: image.sourceName,
+                width: image.width,
+                height: image.height,
+                workImageId: sourceImageIds[image.uploadIndex],
+              })),
+            uploadSessionId,
           );
-          const existing = await tx.typesetImageVersion.findUnique({
-            where: {
-              workId_idempotencyKey: {
-                workId,
-                idempotencyKey: input.idempotencyKey,
-              },
-            },
-          });
-          if (existing) return false;
-          if (
-            !(await tx.user.count({
-              where: {
-                id: actorId,
-                isActive: true,
-                mustChangePassword: false,
-                roles: { some: { role: "typesetter" } },
-                workParticipations: {
-                  some: {
-                    workId,
-                    stage: "typeset",
-                    leftAt: null,
-                    submittedAt: null,
-                  },
-                },
-              },
-            }))
-          )
-            throw new ForbiddenException("嵌字职务或当前认领已失效");
-          const current = await tx.work.findUnique({ where: { id: workId } });
-          if (!current) throw new NotFoundException("作品不存在");
-          assertProductionWritable(current);
-          await assertCurrentHandoff(tx, current);
-          if (current.revision !== input.expectedRevision) {
-            throw new ConflictException("作品已更新，请刷新后重新上传");
-          }
-          if (
-            current.workflowStatus !== WorkflowStatus.typesetting ||
-            !current.typesetHandoffStartedAt
-          ) {
-            throw new ConflictException("作品当前不能上传成图");
-          }
-          const latest = await tx.typesetImageVersion.aggregate({
-            where: { workId },
-            _max: { versionNumber: true },
-          });
-          const versionNumber = (latest._max.versionNumber ?? 0) + 1;
-          const version = await tx.typesetImageVersion.create({
-            data: {
-              workId,
-              sourceTranslationVersionId:
-                current.requiredHandoffVersionId ??
-                (
-                  await tx.translationVersion.findFirst({
-                    where: { workId },
-                    orderBy: { versionNumber: "desc" },
-                    select: { id: true },
-                  })
-                )?.id,
-              reviewedTranslationVersionId:
-                current.requiredHandoffVersionId ??
-                (
-                  await tx.translationVersion.findFirst({
-                    where: { workId },
-                    orderBy: { versionNumber: "desc" },
-                    select: { id: true },
-                  })
-                )?.id,
-              textReviewedAt: new Date(),
-              versionNumber,
-              note: input.note ?? null,
-              automaticallySorted: prepared.automaticallySorted,
-              idempotencyKey: input.idempotencyKey,
-              uploadedById: actorId,
-              images: {
-                create: prepared.images.map((image, index) => ({
-                  workImageId: sourceImageIds[image.uploadIndex],
-                  fileObjectId: storedFiles[index].id,
-                  orderIndex: index,
-                  sourceName: image.sourceName.slice(0, 255),
-                  width: image.width,
-                  height: image.height,
-                })),
-              },
-            },
-          });
-          const replacedVersionId =
-            input.mode === TypesetVersionUploadMode.replace_current
-              ? current.currentTypesetVersionId
-              : null;
-          if (input.mode === TypesetVersionUploadMode.replace_current) {
-            if (!replacedVersionId) {
-              throw new ConflictException(
-                "当前没有可覆盖的成图版本，请选择新增版本",
-              );
-            }
-            const publishedReference = await tx.publishRecord.findFirst({
-              where: { typesetVersionId: replacedVersionId },
-              select: { id: true },
-            });
-            if (publishedReference) {
-              throw new ConflictException(
-                "当前成图已被发布记录引用，请新增版本并单独设为当前",
-              );
-            }
-            const reviewReference = await tx.workReviewCase.findFirst({
-              where: { openedTypesetVersionId: replacedVersionId },
-              select: { id: true },
-            });
-            if (reviewReference) {
-              throw new ConflictException(
-                "当前成图已被审核记录引用，请新增版本并单独设为当前",
-              );
-            }
-            await tx.typesetImageVersion.update({
-              where: { id: replacedVersionId },
-              data: {
-                deletedAt: new Date(),
-                purgeAfter: new Date(Date.now() + typesetVersionRetentionMs),
-                deletedById: actorId,
-              },
-            });
-          }
-          await tx.work.update({
-            where: { id: workId },
-            data: {
-              currentTypesetVersionId: version.id,
-              revision: { increment: 1 },
-            },
-          });
-          await tx.workEvent.create({
-            data: {
-              workId,
-              actorId,
-              action: WorkEventAction.typeset_version_uploaded,
-              fromWorkflowStatus: current.workflowStatus,
-              toWorkflowStatus: current.workflowStatus,
-              fromReviewStatus: current.reviewStatus,
-              toReviewStatus: current.reviewStatus,
-              idempotencyKey: input.idempotencyKey,
-              detail: {
-                operation: "typeset-version-upload",
-                mode: input.mode,
-                versionId: version.id,
-                versionNumber,
-                imageCount: prepared.images.length,
-                linkedSourceImageCount: linkedSourceIds.length,
-                automaticallySorted: prepared.automaticallySorted,
-                replacedVersionId,
-              },
-            },
-          });
-          if (uploadSessionId)
-            await this.directUploads!.completeTx(tx, uploadSessionId, {
-              versionId: version.id,
-            });
-          return true;
         });
       } finally {
         if (!linked) {
@@ -978,6 +841,267 @@ export class TypesettingService {
       throw error;
     }
     return this.listVersions(workId);
+  }
+
+  async adoptVerifiedVersion(
+    actorId: string,
+    workId: string,
+    input: AdoptTypesetVersionDto,
+  ) {
+    const sourceIds = this.parseSourceImageIds(
+      JSON.stringify(input.sourceImageIds),
+      input.imageIds.length,
+    );
+    const identity = createHash("sha256")
+      .update(
+        JSON.stringify([
+          input.sessionId,
+          input.imageIds,
+          sourceIds,
+          input.mode,
+          input.note ?? null,
+        ]),
+      )
+      .digest("hex");
+    await this.db.$transaction(async (tx) => {
+      await lockVerifiedTypesetSession(tx, actorId, input.sessionId);
+      return this.writeSingleVersionTx(
+        tx,
+        actorId,
+        workId,
+        input,
+        false,
+        async () => {
+          const images = await verifiedTypesetImages(
+            tx,
+            actorId,
+            input.sessionId,
+            input.imageIds,
+          );
+          if (
+            images.reduce((n, image) => n + image.size, 0) >
+            TYPESET_IMAGE_MAX_TOTAL_BYTES
+          )
+            throw new BadRequestException("成图总大小超出限制");
+          return images.map((image, index) => ({
+            fileObjectId: image.fileObjectId,
+            sourceName: image.sourceName,
+            width: image.width,
+            height: image.height,
+            workImageId: sourceIds[index],
+          }));
+        },
+        undefined,
+        identity,
+      );
+    });
+    return this.listVersions(workId);
+  }
+
+  private async writeSingleVersionTx(
+    tx: Prisma.TransactionClient,
+    actorId: string,
+    workId: string,
+    input: Omit<CreateTypesetVersionDto, "sourceImageIds">,
+    automaticallySorted: boolean,
+    resolveImages: () => Promise<
+      {
+        fileObjectId: string;
+        sourceName: string;
+        width: number;
+        height: number;
+        workImageId: string | null;
+      }[]
+    >,
+    uploadSessionId?: string,
+    adoptionIdentity?: string,
+  ) {
+    if (uploadSessionId)
+      await this.directUploads!.assertAdoptionLeaseTx(tx, uploadSessionId);
+    await tx.$queryRaw`SELECT id FROM users WHERE id = ${actorId}::uuid FOR SHARE`;
+    await tx.$queryRaw`SELECT user_id FROM user_roles WHERE user_id = ${actorId}::uuid FOR SHARE`;
+    await tx.$queryRaw(
+      Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
+    );
+    const existing = await tx.typesetImageVersion.findUnique({
+      where: {
+        workId_idempotencyKey: {
+          workId,
+          idempotencyKey: input.idempotencyKey,
+        },
+      },
+    });
+    if (existing) {
+      if (adoptionIdentity) {
+        const event = await tx.workEvent.findFirst({
+          where: { workId, idempotencyKey: input.idempotencyKey },
+          select: { detail: true },
+        });
+        if (
+          existing.uploadedById !== actorId ||
+          (event?.detail as { adoptionIdentity?: string } | null)
+            ?.adoptionIdentity !== adoptionIdentity
+        )
+          throw new ConflictException("该操作编号已用于另一组图片");
+      }
+      return false;
+    }
+    if (
+      !(await tx.user.count({
+        where: {
+          id: actorId,
+          isActive: true,
+          mustChangePassword: false,
+          roles: { some: { role: "typesetter" } },
+          workParticipations: {
+            some: {
+              workId,
+              stage: "typeset",
+              leftAt: null,
+              submittedAt: null,
+            },
+          },
+        },
+      }))
+    )
+      throw new ForbiddenException("嵌字职务或当前认领已失效");
+    const current = await tx.work.findUnique({ where: { id: workId } });
+    if (!current) throw new NotFoundException("作品不存在");
+    assertProductionWritable(current);
+    if (current.collaborationMode === "multi")
+      throw new ConflictException("多人作品不能通过整作版本上传覆盖页稿");
+    await assertCurrentHandoff(tx, current);
+    if (current.revision !== input.expectedRevision) {
+      throw new ConflictException("作品已更新，请刷新后重新上传");
+    }
+    if (
+      current.workflowStatus !== WorkflowStatus.typesetting ||
+      !current.typesetHandoffStartedAt
+    ) {
+      throw new ConflictException("作品当前不能上传成图");
+    }
+    const images = await resolveImages();
+    const links = images.flatMap((image) =>
+      image.workImageId ? [image.workImageId] : [],
+    );
+    if (
+      new Set(links).size !== links.length ||
+      (links.length &&
+        (await tx.workImage.count({ where: { workId, id: { in: links } } })) !==
+          links.length)
+    )
+      throw new BadRequestException("关联原稿必须属于当前作品，且只能关联一次");
+    const latest = await tx.typesetImageVersion.aggregate({
+      where: { workId },
+      _max: { versionNumber: true },
+    });
+    const versionNumber = (latest._max.versionNumber ?? 0) + 1;
+    const version = await tx.typesetImageVersion.create({
+      data: {
+        workId,
+        sourceTranslationVersionId:
+          current.requiredHandoffVersionId ??
+          (
+            await tx.translationVersion.findFirst({
+              where: { workId },
+              orderBy: { versionNumber: "desc" },
+              select: { id: true },
+            })
+          )?.id,
+        reviewedTranslationVersionId:
+          current.requiredHandoffVersionId ??
+          (
+            await tx.translationVersion.findFirst({
+              where: { workId },
+              orderBy: { versionNumber: "desc" },
+              select: { id: true },
+            })
+          )?.id,
+        textReviewedAt: new Date(),
+        versionNumber,
+        note: input.note ?? null,
+        automaticallySorted: automaticallySorted,
+        idempotencyKey: input.idempotencyKey,
+        uploadedById: actorId,
+        images: {
+          create: images.map((image, orderIndex) => ({
+            ...image,
+            orderIndex,
+            sourceName: image.sourceName.slice(0, 255),
+          })),
+        },
+      },
+    });
+    const replacedVersionId =
+      input.mode === TypesetVersionUploadMode.replace_current
+        ? current.currentTypesetVersionId
+        : null;
+    if (input.mode === TypesetVersionUploadMode.replace_current) {
+      if (!replacedVersionId) {
+        throw new ConflictException("当前没有可覆盖的成图版本，请选择新增版本");
+      }
+      const publishedReference = await tx.publishRecord.findFirst({
+        where: { typesetVersionId: replacedVersionId },
+        select: { id: true },
+      });
+      if (publishedReference) {
+        throw new ConflictException(
+          "当前成图已被发布记录引用，请新增版本并单独设为当前",
+        );
+      }
+      const reviewReference = await tx.workReviewCase.findFirst({
+        where: { openedTypesetVersionId: replacedVersionId },
+        select: { id: true },
+      });
+      if (reviewReference) {
+        throw new ConflictException(
+          "当前成图已被审核记录引用，请新增版本并单独设为当前",
+        );
+      }
+      await tx.typesetImageVersion.update({
+        where: { id: replacedVersionId },
+        data: {
+          deletedAt: new Date(),
+          purgeAfter: new Date(Date.now() + typesetVersionRetentionMs),
+          deletedById: actorId,
+        },
+      });
+    }
+    await tx.work.update({
+      where: { id: workId },
+      data: {
+        currentTypesetVersionId: version.id,
+        revision: { increment: 1 },
+      },
+    });
+    await tx.workEvent.create({
+      data: {
+        workId,
+        actorId,
+        action: WorkEventAction.typeset_version_uploaded,
+        fromWorkflowStatus: current.workflowStatus,
+        toWorkflowStatus: current.workflowStatus,
+        fromReviewStatus: current.reviewStatus,
+        toReviewStatus: current.reviewStatus,
+        idempotencyKey: input.idempotencyKey,
+        detail: {
+          operation: "typeset-version-upload",
+          ...(adoptionIdentity ? { adoptionIdentity } : {}),
+          mode: input.mode,
+          versionId: version.id,
+          versionNumber,
+          imageCount: images.length,
+          linkedSourceImageCount: links.length,
+          automaticallySorted: automaticallySorted,
+          replacedVersionId,
+        },
+      },
+    });
+    if (uploadSessionId)
+      await this.directUploads!.completeTx(tx, uploadSessionId, {
+        versionId: version.id,
+      });
+    return true;
   }
 
   async selectVersion(
@@ -1153,6 +1277,198 @@ export class TypesettingService {
     return this.files.imageUrl(image.fileObjectId, variant);
   }
 
+  async replaceCurrentImage(
+    actorId: string,
+    workId: string,
+    versionId: string,
+    imageId: string,
+    file: ManualUploadFile | undefined,
+    input: TypesetMutation,
+  ) {
+    if (!file) throw new BadRequestException("请选择一张替换成图");
+    let prepared;
+    try {
+      prepared = prepareTypesetImages([file]).images[0]!;
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error ? error.message : "成图无效",
+      );
+    }
+    await this.db.$transaction((tx) => typesetActorTx(tx, actorId, workId));
+    const stored = await this.files.store({
+      body: prepared.body,
+      contentType: prepared.contentType,
+      bucketScope: "works",
+      kind: "typeset-result",
+      sourceName: prepared.sourceName,
+      createdById: actorId,
+    });
+    try {
+      return await this.replaceVersionImage(
+        actorId,
+        workId,
+        versionId,
+        imageId,
+        input,
+        {
+          fileObjectId: stored.id,
+          sourceName: prepared.sourceName,
+          width: prepared.width,
+          height: prepared.height,
+          size: prepared.body.byteLength,
+          checksum: stored.checksum,
+        },
+      );
+    } finally {
+      await this.files.purgeUnreferenced(stored.id).catch(() => undefined);
+    }
+  }
+
+  async replaceVersionImage(
+    actorId: string,
+    workId: string,
+    versionId: string,
+    imageId: string,
+    input: TypesetMutation,
+    source:
+      | VerifiedImageSelection
+      | {
+          fileObjectId: string;
+          sourceName: string;
+          width: number;
+          height: number;
+          size: number;
+          checksum: string;
+        },
+  ) {
+    const replacementIdentity =
+      "sessionId" in source
+        ? source.sessionId + "/" + source.uploadImageId
+        : source.checksum;
+    await this.db.$transaction(async (tx) => {
+      if ("sessionId" in source)
+        await lockVerifiedTypesetSession(tx, actorId, source.sessionId);
+      await typesetActorTx(tx, actorId, workId);
+      const { work, replay } = await lockTypesetWorkTx(tx, workId, input);
+      if (replay) {
+        const detail = replay.detail as {
+          operation?: string;
+          imageId?: string;
+          previousVersionId?: string;
+          replacementIdentity?: string;
+        };
+        if (
+          replay.actorId !== actorId ||
+          detail.operation !== "typeset-current-image-replace" ||
+          detail.previousVersionId !== versionId ||
+          detail.imageId !== imageId ||
+          detail.replacementIdentity !== replacementIdentity
+        )
+          throw new ConflictException("幂等键冲突");
+        return;
+      }
+      const replacement =
+        "sessionId" in source
+          ? await verifiedTypesetImage(tx, actorId, source)
+          : source;
+      if (work.collaborationMode !== "single")
+        throw new ConflictException("多人修订须经过当前页分工校验");
+      if (
+        work.workflowStatus !== "pending_publish" ||
+        work.currentTypesetVersionId !== versionId
+      )
+        throw new ConflictException("当前完整版本或阶段已变化，请重新查看");
+      const original = await tx.typesetImageVersion.findFirstOrThrow({
+        where: { id: versionId, workId, deletedAt: null },
+        include: {
+          images: {
+            orderBy: { orderIndex: "asc" },
+            include: { fileObject: true },
+          },
+        },
+      });
+      if (
+        !original.images.some((i) => i.id === imageId) ||
+        original.images.some(
+          (i) =>
+            i.fileObject.lifecycleStatus !== "active" || i.fileObject.deletedAt,
+        )
+      )
+        throw new ConflictException("当前成图条目不存在或文件不可用");
+      const keptSize = original.images.reduce(
+        (bytes, image) =>
+          bytes + (image.id === imageId ? 0 : Number(image.fileObject.size)),
+        0,
+      );
+      if (keptSize + replacement.size > 250 * 1024 * 1024)
+        throw new ConflictException("完整成图不能超过250 MiB");
+      const latest = await tx.typesetImageVersion.aggregate({
+        where: { workId },
+        _max: { versionNumber: true },
+      });
+      const version = await tx.typesetImageVersion.create({
+        data: {
+          workId,
+          versionNumber: (latest._max.versionNumber ?? 0) + 1,
+          uploadedById: actorId,
+          idempotencyKey: input.idempotencyKey,
+          sourceTranslationVersionId: original.sourceTranslationVersionId,
+          reviewedTranslationVersionId: original.reviewedTranslationVersionId,
+          textReviewedAt: original.textReviewedAt,
+          images: {
+            create: original.images.map((i) => ({
+              orderIndex: i.orderIndex,
+              workImageId: i.workImageId,
+              supplementId: i.supplementId,
+              supplementPosition: i.supplementPosition,
+              fileObjectId:
+                i.id === imageId ? replacement.fileObjectId : i.fileObjectId,
+              sourceName:
+                i.id === imageId ? replacement.sourceName : i.sourceName,
+              width: i.id === imageId ? replacement.width : i.width,
+              height: i.id === imageId ? replacement.height : i.height,
+            })),
+          },
+        },
+      });
+      await tx.work.update({
+        where: { id: workId },
+        data: {
+          currentTypesetVersionId: version.id,
+          revision: { increment: 1 },
+        },
+      });
+      await tx.workEvent.create({
+        data: {
+          workId,
+          actorId,
+          action: "typeset_version_uploaded",
+          idempotencyKey: input.idempotencyKey,
+          fromWorkflowStatus: work.workflowStatus,
+          toWorkflowStatus: work.workflowStatus,
+          fromReviewStatus: work.reviewStatus,
+          toReviewStatus: work.reviewStatus,
+          detail: {
+            operation: "typeset-current-image-replace",
+            affectedPageNumbers: [
+              original.images.find((i) => i.id === imageId)!.orderIndex + 1,
+            ],
+            affectsSupplement:
+              original.images.find((i) => i.id === imageId)!.workImageId ===
+              null,
+            imageId,
+            versionId: version.id,
+            previousVersionId: versionId,
+            replacementIdentity,
+            isRevision: true,
+            imageCount: original.images.length,
+          },
+        },
+      });
+    });
+    return this.listVersions(workId);
+  }
+
   private async assertCanUploadVersion(actorId: string, workId: string) {
     const user = await this.db.user.findUnique({
       where: { id: actorId },
@@ -1245,6 +1561,7 @@ export class TypesettingService {
       const work = await tx.work.findUnique({
         where: { id: workId },
         select: {
+          collaborationMode: true,
           revision: true,
           workflowStatus: true,
           reviewStatus: true,
@@ -1253,6 +1570,12 @@ export class TypesettingService {
       });
       if (!work) throw new NotFoundException("作品不存在");
       assertProductionWritable(work);
+      if (work.collaborationMode === "multi")
+        throw new ConflictException(
+          "多人作品历史版本仅供查看，请替换本人当前页",
+        );
+      if (work.workflowStatus === WorkflowStatus.published)
+        throw new ConflictException("发布快照不能通过普通历史操作修改");
       if (work.revision !== input.expectedRevision) {
         throw new ConflictException("作品已更新，请刷新后重试");
       }
@@ -1325,6 +1648,8 @@ export class TypesettingService {
       images: {
         id: string;
         workImageId: string | null;
+        supplementId: string | null;
+        supplementPosition: string | null;
         orderIndex: number;
         sourceName: string;
         width: number;
@@ -1353,6 +1678,8 @@ export class TypesettingService {
       images: version.images.map((image) => ({
         id: image.id,
         workImageId: image.workImageId,
+        supplementId: image.supplementId,
+        supplementPosition: image.supplementPosition,
         orderIndex: image.orderIndex,
         sourceName: image.sourceName,
         width: image.width,
