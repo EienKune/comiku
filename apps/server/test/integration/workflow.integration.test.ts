@@ -2187,6 +2187,34 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       "GET",
       `/api/works/${workId}/publishing`,
     );
+    for (const nonOperator of [admin, typesetter, translator, proofreader]) {
+      for (const path of ["publishing", "publishing/images"]) {
+        assert.equal(
+          (
+            await request(
+              nonOperator.browser,
+              "GET",
+              `/api/works/${workId}/${path}`,
+            )
+          ).status,
+          403,
+        );
+      }
+      assert.equal(
+        (
+          await request(
+            nonOperator.browser,
+            "POST",
+            `/api/works/${workId}/publishing/confirm`,
+            {
+              expectedRevision: publishingView.data.workRevision,
+              idempotencyKey: randomUUID(),
+            },
+          )
+        ).status,
+        403,
+      );
+    }
     assert.equal(publishingView.status, 200);
     assert.equal(publishingView.data.authorCredit, "@_workflow_author_");
     assert.equal(
@@ -2197,13 +2225,10 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
     assert.deepEqual(publishingView.data.translationCredits, ["发布前新署名"]);
     assert.deepEqual(publishingView.data.proofreadCredits, ["proofreader"]);
     assert.deepEqual(publishingView.data.typesetCredits, ["typesetter"]);
-    assert.match(publishingView.data.generatedText, /^\*\*流程测试作品\*\*/);
+    assert.match(publishingView.data.generatedText, /^流程测试作品\n/);
     assert.equal(publishingView.data.body, null);
     assert.ok(!publishingView.data.generatedText.includes("原帖参考配文"));
-    assert.match(
-      publishingView.data.generatedText,
-      /^\*\*流程测试作品\*\*\n作者：/,
-    );
+    assert.match(publishingView.data.generatedText, /^流程测试作品\n作者：/);
     assert.match(
       publishingView.data.generatedText,
       /作者：@_workflow_author_[\s\S]*翻译：发布前新署名[\s\S]*校对：proofreader[\s\S]*嵌字：typesetter/,
@@ -2240,7 +2265,7 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       assert.equal(publishingView.data.workRevision, savedBody.data.revision);
       assert.ok(
         publishingView.data.generatedText.startsWith(
-          `**流程测试作品**\n${body.trim() ? `${body.trim()}\n` : ""}作者：`,
+          `流程测试作品\n${body.trim() ? `${body.trim()}\n` : ""}作者：`,
         ),
       );
       assert.ok(!publishingView.data.generatedText.includes("原帖参考配文"));
@@ -2319,7 +2344,11 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       data: { displayName: "发布后改名" },
     });
     const publishedDetail = await request<{
-      publishedCredits: { translate: string[]; proofread: string[]; typeset: string[] };
+      publishedCredits: {
+        translate: string[];
+        proofread: string[];
+        typeset: string[];
+      };
     }>(proofreader.browser, "GET", `/api/works/${workId}`);
     assert.equal(publishedDetail.status, 200);
     assert.deepEqual(publishedDetail.data.publishedCredits, {

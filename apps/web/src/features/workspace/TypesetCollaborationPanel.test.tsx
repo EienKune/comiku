@@ -124,3 +124,27 @@ test("published output remains viewable with no upload or self-submission mutati
   ).toBeTruthy();
   expect(screen.queryByLabelText("替换当前成图")).toBeNull();
 });
+
+test("keeps the own-page upload entry discoverable before handoff starts", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      Response.json(
+        url.includes("/url")
+          ? { url: "/fixture.png" }
+          : {
+              ...state,
+              workflowStatus: "pending_typeset",
+              handoffReady: false,
+            },
+      ),
+    ),
+  );
+  mount();
+  const picker = await screen.findByLabelText("上传成图或 ZIP");
+  expect((picker as HTMLInputElement).disabled).toBe(true);
+  expect(
+    screen.getByText("先下载交接包并开始嵌字，再上传本人认领页的成图。"),
+  ).toBeTruthy();
+  expect(screen.getByText("本人认领：第 1、2 页")).toBeTruthy();
+});

@@ -13,6 +13,9 @@ const member = (
 test("work tabs follow actual roles regardless of task counts", () => {
   expect(
     workingTabs(member(["admin"], ["ja"])).map((tab) => tab.value),
+  ).toEqual(["todo"]);
+  expect(
+    workingTabs(member(["admin", "operator"])).map((tab) => tab.value),
   ).toEqual(["todo", "pending_publish"]);
   expect(workingTabs(member(["typesetter"])).map((tab) => tab.value)).toEqual([
     "todo",

@@ -5411,6 +5411,16 @@ export interface components {
             upload: components["schemas"]["SignedUploadTargetDto"] | null;
             images: components["schemas"]["TypesetUploadImageDto"][];
         };
+        TypesetUploadReceiptDto: {
+            workNumber: number;
+            /** Format: uuid */
+            workId: string;
+            /** Format: uuid */
+            versionId: string | null;
+            stageSubmitted: boolean;
+            workCompleted: boolean;
+            imageIds: string[];
+        };
         TypesetUploadSessionDto: {
             /** Format: uuid */
             id: string;
@@ -5420,10 +5430,18 @@ export interface components {
             maxWorks: number;
             maxTotalBytes: number;
             files: components["schemas"]["TypesetUploadFileDto"][];
+            receipts?: components["schemas"]["TypesetUploadReceiptDto"][];
+        };
+        TypesetBatchPageMappingDto: {
+            /** Format: uuid */
+            imageId: string;
+            /** Format: uuid */
+            workImageId: string;
         };
         TypesetUploadGroupInputDto: {
             workNumber: number;
             imageIds: string[];
+            pageMappings?: components["schemas"]["TypesetBatchPageMappingDto"][];
             mergeConfirmed: boolean;
             manualTargetConfirmed: boolean;
             contentConfirmed: boolean;
@@ -5444,6 +5462,8 @@ export interface components {
             handoffStartedAt: string | null;
             imageCount: number;
             error: string | null;
+            ignored?: string[];
+            savedImageCount?: number;
         };
         TypesetUploadPlansDto: {
             items: components["schemas"]["TypesetUploadPlanDto"][];
@@ -5456,7 +5476,9 @@ export interface components {
             /** Format: uuid */
             workId: string;
             /** Format: uuid */
-            versionId: string;
+            versionId: string | null;
+            workCompleted?: boolean;
+            ignored?: string[];
             /** @description 本次确认是否同时提交嵌字；旧会话只返回原有保存结果 */
             stageSubmitted: boolean;
         };
@@ -20682,7 +20704,9 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                workId: string;
+            };
             cookie?: never;
         };
         requestBody?: never;

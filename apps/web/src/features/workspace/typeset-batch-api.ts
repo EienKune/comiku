@@ -6,7 +6,7 @@ export async function refreshTypesetWork(workId: string) {
     exact: true,
   });
   await Promise.all(
-    ["work", "typeset-versions"]
+    ["work", "typeset-versions", "typeset-collaboration", "publishing"]
       .map((prefix) =>
         queryClient.invalidateQueries({ queryKey: [prefix, workId] }),
       )

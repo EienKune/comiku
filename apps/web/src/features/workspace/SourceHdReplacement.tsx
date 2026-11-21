@@ -1,6 +1,7 @@
 import { FilePickerButton } from "../../components/ImagePicker";
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { workImageKey } from "./use-work-image-url";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, SelectControl } from "../../components/ui";
 import { collaborationRequest } from "./collaboration-request";
 import { refreshTypesetWork } from "./typeset-batch-api";
@@ -17,6 +18,7 @@ export function SourceHdReplacement({
   revision: number;
   onChanged?: () => void | Promise<void>;
 }) {
+  const cache = useQueryClient();
   const firstImageId = images[0]?.id ?? "";
   const [imageId, setImageId] = useState(firstImageId);
   const [file, setFile] = useState<File | null>(null);
@@ -40,7 +42,11 @@ export function SourceHdReplacement({
     setImageId(firstImageId);
   }, [workId, firstImageId]);
   const source = useQuery({
-    queryKey: ["source-hd-old", workId, imageId, revision],
+    queryKey: [
+      ...workImageKey(workId, imageId),
+      "replacement-preview",
+      revision,
+    ],
     queryFn: () =>
       collaborationRequest<{ url: string }>(
         `/api/works/${workId}/images/${imageId}/url`,
@@ -63,7 +69,10 @@ export function SourceHdReplacement({
       );
       setFile(null);
       setConfirmed(false);
-      await refreshTypesetWork(workId);
+      await Promise.all([
+        cache.invalidateQueries({ queryKey: workImageKey(workId, imageId) }),
+        refreshTypesetWork(workId),
+      ]);
       await onChanged?.();
       setMessage("原图已替换，材料更新已记录");
     } catch (e) {

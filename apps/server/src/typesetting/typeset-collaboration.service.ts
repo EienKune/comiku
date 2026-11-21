@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
 import {
   BadRequestException,
@@ -18,8 +19,10 @@ import {
   currentTypesetCreditsTx,
   lockTypesetWorkTx,
   typesetActorTx,
+  submitTypesetPagesTx,
   type TypesetMutation,
 } from "./typeset-page-workflow.js";
+import { Prisma } from "../generated/prisma/client.js";
 import type { ApplyTypesetImportDto } from "./typeset-collaboration.dto.js";
 
 @Injectable()
@@ -213,16 +216,40 @@ export class TypesetCollaborationService {
     }
   }
 
-  async apply(actorId: string, workId: string, input: ApplyTypesetImportDto) {
+  async apply(
+    actorId: string,
+    workId: string,
+    input: ApplyTypesetImportDto & { expectedEditorEpoch?: number },
+    batch?: { previewId: string; submissionKey: string; ignored: string[] },
+  ) {
     const inputHash = createHash("sha256")
       .update(
         JSON.stringify({
           sessionId: input.sessionId,
           mappings: input.mappings,
+          ...(batch ? { submissionKey: batch.submissionKey } : {}),
         }),
       )
       .digest("hex");
     return this.db.$transaction(async (tx) => {
+      if (batch) {
+        await tx.$queryRaw(
+          Prisma.sql`SELECT id FROM typeset_upload_sessions WHERE id = ${input.sessionId}::uuid FOR UPDATE`,
+        );
+        const preview = await tx.typesetUploadPreview.findFirst({
+          where: { id: batch.previewId, sessionId: input.sessionId, workId },
+        });
+        if (
+          !preview ||
+          preview.id !== batch.submissionKey ||
+          preview.idempotencyKey !== input.idempotencyKey ||
+          !isDeepStrictEqual(
+            (preview.imageIds as { mappings?: unknown }).mappings,
+            input.mappings,
+          )
+        )
+          throw new ConflictException("上传预览已更新，请重新检查提交条件");
+      }
       const participant = await typesetActorTx(tx, actorId, workId);
       const { work, replay } = await lockTypesetWorkTx(tx, workId, input);
       if (replay) {
@@ -236,6 +263,31 @@ export class TypesetCollaborationService {
           detail.inputHash !== inputHash
         )
           throw new ConflictException("幂等键已用于其他操作或不同页映射");
+        if (batch) {
+          const receipt = await tx.workEvent.findUnique({
+            where: {
+              workId_idempotencyKey: {
+                workId,
+                idempotencyKey: batch.submissionKey,
+              },
+            },
+          });
+          if (
+            !receipt ||
+            (receipt.detail as { operation?: string }).operation !==
+              "submit:typeset"
+          )
+            throw new ConflictException("批量提交回执不完整，请刷新后重试");
+          const detail = receipt.detail as { versionId?: string };
+          return {
+            revision: work.revision,
+            workId,
+            versionId: detail.versionId ?? null,
+            stageSubmitted: true,
+            workCompleted: receipt.toWorkflowStatus === "pending_publish",
+            ignored: batch.ignored,
+          };
+        }
         return { revision: work.revision };
       }
       const session = await tx.typesetUploadSession.findFirst({
@@ -514,6 +566,35 @@ export class TypesetCollaborationService {
           },
         },
       });
+      if (batch) {
+        await submitTypesetPagesTx(tx, actorId, workId, {
+          expectedRevision: work.revision + 1,
+          expectedEditorEpoch: work.editorEpoch,
+          idempotencyKey: batch.submissionKey,
+        });
+        const receipt = await tx.workEvent.findUniqueOrThrow({
+          where: {
+            workId_idempotencyKey: {
+              workId,
+              idempotencyKey: batch.submissionKey,
+            },
+          },
+        });
+        const detail = receipt.detail as { versionId?: string };
+        if (detail.versionId)
+          await tx.typesetUploadPreview.update({
+            where: { id: batch.previewId },
+            data: { versionId: detail.versionId },
+          });
+        return {
+          revision: work.revision + 2,
+          workId,
+          versionId: detail.versionId ?? null,
+          stageSubmitted: true,
+          workCompleted: receipt.toWorkflowStatus === "pending_publish",
+          ignored: batch.ignored,
+        };
+      }
       return { revision: work.revision + 1, versionId: version?.id ?? null };
     });
   }
