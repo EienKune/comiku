@@ -130,8 +130,97 @@ async function uploadTypesetFilesInternal(
   let next = 0;
   let completed = 0;
   const errors: string[] = [];
-  // Bound outgoing bodies, and settle all in-flight uploads before reporting failure.
-  await Promise.all(
+  const ready: number[] = [];
+  const waiting: ((index: number | null) => void)[] = [];
+  let uploadsFinished = false;
+  function enqueue(index: number) {
+    const receive = waiting.shift();
+    if (receive) receive(index);
+    else ready.push(index);
+  }
+  function take() {
+    if (ready.length) return Promise.resolve(ready.shift()!);
+    if (uploadsFinished) return Promise.resolve(null);
+    return new Promise<number | null>((resolve) => waiting.push(resolve));
+  }
+  function report(item: Session["files"][number], error: unknown) {
+    const readable = readableTransferError(error);
+    errors.push(
+      `${item.sourceName}：${readable instanceof Error ? readable.message : "上传连接中断"}`,
+    );
+  }
+  const validators = Array.from(
+    { length: Math.min(2, files.length) },
+    async () => {
+      while (true) {
+        const index = await take();
+        if (index === null) return;
+        const item = session.files[index];
+        try {
+          let processed = false;
+          for (let retry = 0; retry < 30; retry++) {
+            signal?.throwIfAborted();
+            const response = await authenticatedFetch(
+              `/api/typeset/upload-sessions/${session.id}/files/${item.id}/verify`,
+              {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  "X-Comiku-Request": "1",
+                },
+                body: "{}",
+                signal,
+              },
+            );
+            const verified =
+              (await response.json()) as components["schemas"]["TypesetUploadFileDto"] & {
+                message?: string;
+              };
+            if (
+              !response.ok &&
+              (response.status !== 409 ||
+                verified.message?.includes("会话已过期"))
+            )
+              throw new Error(
+                verified.message || `校验失败（HTTP ${response.status}）`,
+              );
+            if (response.ok && verified.status !== "verifying") {
+              session = {
+                ...session,
+                files: session.files.map((file) =>
+                  file.id === item.id ? verified : file,
+                ),
+              };
+              onSession?.(session);
+              if (verified.status !== "processed")
+                throw new Error(verified.error || "文件校验失败，请重试");
+              processed = true;
+              completed++;
+              onProgress?.(`已校验 ${completed}/${files.length} 个文件`);
+              break;
+            }
+            await new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(() => {
+                signal?.removeEventListener("abort", abort);
+                resolve();
+              }, 1000);
+              function abort() {
+                clearTimeout(timer);
+                reject(signal?.reason);
+              }
+              signal?.addEventListener("abort", abort, { once: true });
+            });
+          }
+          if (!processed) throw new Error("文件仍在校验，请稍后重试保存");
+        } catch (error) {
+          report(item, error);
+        }
+      }
+    },
+  );
+  // Three storage PUTs feed two independent verification slots. A slow decode
+  // must not hold a PUT slot; all requests settle before save or error reporting.
+  const uploads = Promise.all(
     Array.from({ length: Math.min(3, files.length) }, async () => {
       while (next < files.length && !signal?.aborted) {
         const index = next++;
@@ -142,32 +231,46 @@ async function uploadTypesetFilesInternal(
         }
         try {
           signal?.throwIfAborted();
-          if (!item.upload) throw new Error("上传地址已失效");
-          onProgress?.(
-            `正在上传 ${completed}/${files.length}：${item.sourceName}`,
-          );
-          const response = await authenticatedFetch(item.upload.url, {
-            method: item.upload.method,
-            headers: item.upload.headers,
-            body: files[index],
-            signal,
-          });
-          if (!response.ok)
-            throw new Error(`上传失败（HTTP ${response.status}）`);
-          completed++;
-          onProgress?.(`已上传 ${completed}/${files.length} 个文件`);
+          if (item.status !== "verifying") {
+            if (!item.upload) throw new Error("上传地址已失效");
+            onProgress?.(
+              `正在上传 ${completed}/${files.length}：${item.sourceName}`,
+            );
+            const response = await authenticatedFetch(item.upload.url, {
+              method: item.upload.method,
+              headers: item.upload.headers,
+              body: files[index],
+              signal,
+            });
+            if (!response.ok)
+              throw new Error(`上传失败（HTTP ${response.status}）`);
+          }
+          if (!item.archive) {
+            enqueue(index);
+          } else completed++;
         } catch (error) {
-          const readable = readableTransferError(error);
-          errors.push(
-            `${item.sourceName}：${readable instanceof Error ? readable.message : "上传连接中断"}`,
-          );
+          report(item, error);
         }
       }
     }),
-  );
+  ).finally(() => {
+    uploadsFinished = true;
+    for (const receive of waiting.splice(0)) receive(null);
+  });
+  await Promise.all([uploads, ...validators]);
   signal?.throwIfAborted();
   if (errors.length) throw new Error(`${errors.join("；")}。请重试上传`);
-  return extractTypesetSessionInternal(session.id, options);
+  if (session.files.some((file) => file.archive))
+    return extractTypesetSessionInternal(session.id, options);
+  session = await unwrap(
+    await client.GET("/api/typeset/upload-sessions/{id}", {
+      params: { path: { id: session.id } },
+      signal,
+    }),
+  );
+  if (options.requireComplete) assertComplete(session);
+  onProgress?.("");
+  return session;
 }
 
 function readableTransferError(error: unknown) {

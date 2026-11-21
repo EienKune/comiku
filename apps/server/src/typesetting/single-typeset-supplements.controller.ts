@@ -24,6 +24,7 @@ import { bodyValidation } from "../common/http.js";
 import type { ManualUploadFile } from "../candidates/manual-candidate-upload.js";
 import {
   AddSingleTypesetSupplementDto,
+  AdoptTypesetSupplementDto,
   TypesetDraftMutationDto,
 } from "./typeset-collaboration.dto.js";
 import { TypesetVersionListDto } from "./typesetting.dto.js";
@@ -68,6 +69,21 @@ export class SingleTypesetSupplementsController {
     input: AddSingleTypesetSupplementDto,
   ) {
     return this.service.add(req.actor.userId, workId, versionId, file, input);
+  }
+  @Post("from-session")
+  @HttpCode(200)
+  @Access({ permission: "works:typeset" })
+  @ApiOperation({ operationId: "addVerifiedTypesetSupplement" })
+  @ApiBody({ type: AdoptTypesetSupplementDto })
+  @ApiOkResponse({ type: TypesetVersionListDto })
+  addVerified(
+    @Req() req: AuthRequest,
+    @Param("workId", ParseUUIDPipe) workId: string,
+    @Param("versionId", ParseUUIDPipe) versionId: string,
+    @Body(bodyValidation(AdoptTypesetSupplementDto))
+    input: AdoptTypesetSupplementDto,
+  ) {
+    return this.service.addVerified(req.actor.userId, workId, versionId, input);
   }
   @Post(":imageId/delete")
   @HttpCode(200)

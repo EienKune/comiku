@@ -108,6 +108,21 @@ export class LocalObjectStorage implements ObjectStorage {
     return new Uint8Array(await readFile(this.path(key)));
   }
 
+  async copy(sourceKey: string, destinationKey: string, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const metadata = await this.head(sourceKey);
+    if (!metadata?.contentType || !metadata.size || !metadata.checksum)
+      throw new Error("Source object is unavailable");
+    await this.put({
+      key: destinationKey,
+      body: await this.read(sourceKey),
+      contentType: metadata.contentType,
+      size: metadata.size,
+      checksum: metadata.checksum,
+      signal,
+    });
+  }
+
   async readStream(key: string): Promise<Readable> {
     if (!(await this.head(key))) throw new Error("Object not found");
     return createReadStream(this.path(key));

@@ -1,3 +1,8 @@
+import {
+  lockVerifiedTypesetSession,
+  verifiedTypesetImage,
+  type VerifiedImageSelection,
+} from "./verified-typeset-image.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   BadRequestException,
@@ -67,6 +72,23 @@ export class SingleTypesetSupplementsService {
       await this.files.purgeUnreferenced(stored.id).catch(() => undefined);
     }
   }
+  async addVerified(
+    actorId: string,
+    workId: string,
+    versionId: string,
+    input: TypesetMutation &
+      VerifiedImageSelection & { position: "start" | "end" },
+  ) {
+    await this.mutate(actorId, workId, versionId, input, {
+      kind: "session",
+      selection: {
+        sessionId: input.sessionId,
+        uploadImageId: input.uploadImageId,
+      },
+      position: input.position,
+    });
+    return this.typesetting.listVersions(workId);
+  }
   async remove(
     actorId: string,
     workId: string,
@@ -85,7 +107,12 @@ export class SingleTypesetSupplementsService {
     workId: string,
     versionId: string,
     input: TypesetMutation,
-    change:
+    requested:
+      | {
+          kind: "session";
+          selection: VerifiedImageSelection;
+          position: "start" | "end";
+        }
       | { kind: "remove"; imageId: string }
       | {
           kind: "add";
@@ -97,17 +124,33 @@ export class SingleTypesetSupplementsService {
           digest: string;
         },
   ) {
-    const operation = `single-typeset-supplement-${change.kind}`;
+    const operation = `single-typeset-supplement-${requested.kind === "session" ? "add" : requested.kind}`;
     const hash = createHash("sha256")
       .update(
         JSON.stringify(
-          change.kind === "add"
-            ? { versionId, position: change.position, digest: change.digest }
-            : { versionId, imageId: change.imageId },
+          requested.kind === "add"
+            ? {
+                versionId,
+                position: requested.position,
+                digest: requested.digest,
+              }
+            : requested.kind === "session"
+              ? {
+                  versionId,
+                  position: requested.position,
+                  ...requested.selection,
+                }
+              : { versionId, imageId: requested.imageId },
         ),
       )
       .digest("hex");
     await this.db.$transaction(async (tx) => {
+      if (requested.kind === "session")
+        await lockVerifiedTypesetSession(
+          tx,
+          actorId,
+          requested.selection.sessionId,
+        );
       const participant = await typesetActorTx(tx, actorId, workId);
       const { work, replay } = await lockTypesetWorkTx(tx, workId, input);
       if (replay) {
@@ -123,6 +166,14 @@ export class SingleTypesetSupplementsService {
           throw new ConflictException("幂等键已用于不同修订");
         return;
       }
+      const change =
+        requested.kind === "session"
+          ? {
+              kind: "add" as const,
+              position: requested.position,
+              ...(await verifiedTypesetImage(tx, actorId, requested.selection)),
+            }
+          : requested;
       const responsible = await tx.workStageParticipant.findMany({
         where: { workId, stage: "typeset", leftAt: null },
         select: { id: true },

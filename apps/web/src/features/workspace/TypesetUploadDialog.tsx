@@ -29,6 +29,11 @@ import {
   type UploadImage,
 } from "./typeset-upload-plan";
 import { refreshTypesetWork } from "./typeset-batch-api";
+import {
+  prepareLocalTypesetImages,
+  releaseLocalTypesetImages,
+  type LocalTypesetImage,
+} from "./typeset-local-files";
 
 type Session = components["schemas"]["TypesetUploadSessionDto"];
 type Plan = components["schemas"]["TypesetUploadPlanDto"] & {
@@ -82,9 +87,9 @@ function PreviewImage({
           },
         ),
       ),
-    visible,
+    visible && !image.localUrl,
   );
-  const src = query.data?.url;
+  const src = image.localUrl ?? query.data?.url;
   return (
     <button
       type="button"
@@ -93,7 +98,7 @@ function PreviewImage({
       aria-label={`预览 ${image.sourceName}`}
       onClick={onPreview}
     >
-      {src && isDisplayableImageUrl(src) ? (
+      {src && (image.localUrl || isDisplayableImageUrl(src)) ? (
         <img src={src} alt={image.sourceName} loading="lazy" />
       ) : (
         <span>{query.isError ? "预览加载失败" : "加载预览…"}</span>
@@ -125,13 +130,16 @@ function UploadLightbox({
           { params: { path: { id: sessionId, imageId: image.id } } },
         ),
       ),
+    !image.localUrl,
   );
   return (
     <ImageLightbox
       src={
-        query.data?.url && isDisplayableImageUrl(query.data.url)
-          ? query.data.url
-          : undefined
+        image.localUrl
+          ? image.localUrl
+          : query.data?.url && isDisplayableImageUrl(query.data.url)
+            ? query.data.url
+            : undefined
       }
       alt={image.sourceName}
       loading={query.isPending}
@@ -161,11 +169,14 @@ export function TypesetUploadDialog({
   const active = useRef(true);
   const transfer = useRef<AbortController | null>(null);
   const uploadRetry = useRef<{ files: File[]; sessionId: string } | null>(null);
+  const localImages = useRef<LocalTypesetImage[]>([]);
+  const selectedKey = useRef("");
   useEffect(() => {
     active.current = true;
     return () => {
       active.current = false;
       transfer.current?.abort();
+      releaseLocalTypesetImages(localImages.current);
     };
   }, []);
   const action = useAction();
@@ -305,7 +316,7 @@ export function TypesetUploadDialog({
     .filter(Boolean)
     .join(",");
   useEffect(() => {
-    if (!open || !session) return;
+    if (!open || !images.length) return;
     let cancelled = false;
     void (async () => {
       for (const number of targetKeys.split(",")) {
@@ -336,7 +347,7 @@ export function TypesetUploadDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, session, targets, targetKeys]);
+  }, [open, images.length, targets, targetKeys]);
 
   async function getTargets() {
     const result = await unwrap(
@@ -382,26 +393,20 @@ export function TypesetUploadDialog({
   async function upload() {
     await action.run(async () => {
       transfer.current = new AbortController();
-      const result = await uploadTypesetFiles(files, {
+      const result = await prepareLocalTypesetImages(files, {
         signal: transfer.current.signal,
-        maxTotalBytes: session?.maxTotalBytes,
-        sessionId:
-          uploadRetry.current?.files === files
-            ? uploadRetry.current.sessionId
-            : undefined,
         onProgress: setProgress,
-        onSession: (created) => {
-          setSession(created);
-          setImages([]);
-          setPlans([]);
-          setUploaded([]);
-          localStorage.setItem(storageKey, created.id);
-          setSavedId(created.id);
-          uploadRetry.current = { files, sessionId: created.id };
-        },
       });
-      applySession(result);
+      releaseLocalTypesetImages(localImages.current);
+      localImages.current = result;
+      setSession(null);
+      setImages(result);
+      setPlans([]);
+      setUploaded([]);
+      setChecks({});
+      setStates({});
       uploadRetry.current = null;
+      selectedKey.current = "";
       setFiles([]);
       await getTargets();
       setProgress("");
@@ -428,27 +433,102 @@ export function TypesetUploadDialog({
     });
   }
   async function previewPlans() {
-    if (!session) return;
     await action.run(async () => {
       setProgress("正在检查作品状态与本人页映射…");
-      const configured = groups.filter(
+      let configured = groups.filter(
         ([target]) => target && !uploaded.includes(Number(target)),
       );
       if (!configured.length) throw new Error("请先指定需要上传的作品");
+      // Ownership and selection are resolved before creating any upload session.
+      configured = configured
+        .map(([target, rows]) => {
+          const state = states[target];
+          if (!state) throw new Error(`#${target}：请等待作品状态加载`);
+          if (!checks[target]?.content)
+            throw new Error(`#${target}：请先预览核对成图`);
+          const problem = typesetUploadGroupProblem(
+            rows,
+            checks[target]?.merge ?? false,
+          );
+          if (problem) throw new Error(`#${target}：${problem}`);
+          if (state.collaborationMode !== "multi") return [target, rows];
+          const participant = state.participants.find(
+            (item) => item.userId === user.id,
+          );
+          const selected = rows.filter((image) => {
+            const pageId = suggestedTypesetPageId(image, state.pages);
+            if (!pageId)
+              throw new Error(`${image.sourceName}：请明确选择本人原稿页`);
+            return state.pages.some(
+              (page) =>
+                page.id === pageId &&
+                page.assignment?.participantId === participant?.id &&
+                !!participant,
+            );
+          });
+          const mappedPages = selected.map((image) =>
+            suggestedTypesetPageId(image, state.pages),
+          );
+          if (new Set(mappedPages).size !== mappedPages.length)
+            throw new Error(`#${target}：同一原稿页只能选择一张成图`);
+          return [target, selected];
+        })
+        .filter(([, rows]) => rows.length) as [string, UploadImage[]][];
+      if (!configured.length) throw new Error("本次没有选中本人负责的成图");
+      let currentSession = session;
+      const ids: Record<string, string> = {};
+      if (localImages.current.length) {
+        const wanted = new Set(
+          configured.flatMap(([, rows]) => rows.map((image) => image.id)),
+        );
+        const selected = localImages.current.filter((image) =>
+          wanted.has(image.id),
+        );
+        const key = selected.map((image) => image.id).join();
+        if (key !== selectedKey.current) {
+          uploadRetry.current = null;
+          selectedKey.current = key;
+        }
+        const selectedFiles =
+          uploadRetry.current?.files ?? selected.map((image) => image.file);
+        currentSession = await uploadTypesetFiles(selectedFiles, {
+          requireComplete: true,
+          sessionId: uploadRetry.current?.sessionId,
+          onProgress: setProgress,
+          onSession: (created) => {
+            setSession(created);
+            uploadRetry.current = {
+              files: selectedFiles,
+              sessionId: created.id,
+            };
+            localStorage.setItem(storageKey, created.id);
+            setSavedId(created.id);
+          },
+        });
+        const remote = currentSession.files.flatMap((file) => file.images);
+        if (remote.length !== selected.length)
+          throw new Error("文件校验结果不完整，请重试检查");
+        selected.forEach((image, index) => {
+          ids[image.id] = remote[index].id;
+        });
+      }
+      if (!currentSession) throw new Error("请先选择成图");
       const result = await unwrap(
         await client.POST("/api/typeset/upload-sessions/{id}/plans", {
-          params: { path: { id: session.id } },
+          params: { path: { id: currentSession.id } },
           body: {
             groups: configured.map(([target, rows]) => ({
               workNumber: Number(target),
-              imageIds: rows.map((image) => image.id),
+              imageIds: rows.map((image) => ids[image.id] ?? image.id),
               mergeConfirmed: checks[target]?.merge ?? false,
               contentConfirmed: checks[target]?.content ?? false,
-              manualTargetConfirmed: checks[target]?.manual ?? false,
+              manualTargetConfirmed:
+                !!localImages.current.length ||
+                (checks[target]?.manual ?? false),
               ...(states[target]?.collaborationMode === "multi"
                 ? {
                     pageMappings: rows.map((image) => ({
-                      imageId: image.id,
+                      imageId: ids[image.id] ?? image.id,
                       workImageId: suggestedTypesetPageId(
                         image,
                         states[target].pages,
@@ -627,7 +707,7 @@ export function TypesetUploadDialog({
             loading={action.busy}
             onClick={() => void upload()}
           >
-            上传并解析预览
+            本地解析预览
           </Button>
           {savedId && (
             <Button
@@ -759,9 +839,9 @@ export function TypesetUploadDialog({
               <div className="workspace-upload-image-grid">
                 {rows.map((image, index) => (
                   <div className="workspace-upload-image" key={image.id}>
-                    {session && (
+                    {(session || image.localUrl) && (
                       <PreviewImage
-                        sessionId={session.id}
+                        sessionId={session?.id ?? ""}
                         image={image}
                         onPreview={() => setPreview({ images: rows, index })}
                       />
@@ -989,7 +1069,7 @@ export function TypesetUploadDialog({
               ))}
           </details>
         )}
-        {!!session && (
+        {!!images.length && (
           <footer className="workspace-upload-footer">
             {(confirmationProgress || hasResults) && (
               <div
@@ -1020,7 +1100,7 @@ export function TypesetUploadDialog({
             )}
             {!hasResults && !confirmationProgress && (
               <p className="account-notice">
-                “检查提交条件”只检查匹配、权限与当前状态，不创建版本或提交。图片、页序或作品状态变化后需重新检查。
+                “检查提交条件”上传并校验本次选中的本人页，不保存版本或提交。文件名仅用于提示，请核对目标和页序。
               </p>
             )}
             <div className="workspace-dialog-actions">
@@ -1075,9 +1155,9 @@ export function TypesetUploadDialog({
           </p>
         )}
       </dialog>
-      {preview && session && (
+      {preview && (
         <UploadLightbox
-          sessionId={session.id}
+          sessionId={session?.id ?? ""}
           images={preview.images}
           index={preview.index}
           onClose={() => setPreview(null)}

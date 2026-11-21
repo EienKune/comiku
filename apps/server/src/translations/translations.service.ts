@@ -1,3 +1,5 @@
+import { lockAccountMembership } from "../users/account-membership-lock.js";
+import { assertMaterialCurrent } from "../typesetting/typeset-materials-identity.js";
 import { assertUnifiedHandoffCurrent } from "../typesetting/typeset-material-identity.js";
 import { assertProductionWritable } from "../workflow/review-policy.js";
 import {
@@ -59,7 +61,11 @@ import type {
 type DatabaseClient = PrismaService | Prisma.TransactionClient;
 type TypesetHandoffDetail = {
   downloadTaskId?: string;
-  material: "translation_package" | "source_images" | "unified_handoff";
+  material:
+    | "translation_package"
+    | "source_images"
+    | "unified_handoff"
+    | "browser_materials";
   fileId: string;
   expectedRevision?: number;
   expectedEditorEpoch?: number;
@@ -776,9 +782,58 @@ export class TranslationsService {
     detail: TypesetHandoffDetail,
   ) {
     await this.db.$transaction(async (tx) => {
+      if (detail.material === "browser_materials")
+        await lockAccountMembership(tx);
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM works WHERE id = ${workId}::uuid FOR UPDATE`,
       );
+      if (detail.material === "browser_materials") {
+        const material = await assertMaterialCurrent(tx, workId, detail.fileId);
+        if (
+          material.actorId !== actorId ||
+          material.requireCurrentParticipation !==
+            Boolean(detail.requireCurrentParticipation)
+        )
+          throw new ForbiddenException("不能领取其他成员的材料");
+        const work = await tx.work.findUniqueOrThrow({ where: { id: workId } });
+        assertProductionWritable(work);
+        if (
+          work.workflowStatus !== WorkflowStatus.pending_typeset &&
+          work.workflowStatus !== WorkflowStatus.typesetting
+        )
+          throw new ConflictException("作品当前不在嵌字交接阶段");
+        const actor = await tx.user.findFirst({
+          where: { id: actorId, isActive: true, mustChangePassword: false },
+          select: { id: true },
+        });
+        if (
+          !actor ||
+          !(await this.canExportHandoffMaterials(actorId, workId, tx))
+        )
+          throw new ForbiddenException("当前账号不可领取材料");
+        // Inspection never freezes text, even when the reader already owns pages.
+        if (!material.requireCurrentParticipation) {
+          await tx.typesetMaterial.update({
+            where: { id: material.id },
+            data: { deliveredAt: material.deliveredAt ?? new Date() },
+          });
+          return;
+        }
+        await this.beginTypesetHandoffTx(tx, actorId, workId, {
+          ...detail,
+          expectedRevision: material.deliveredAt
+            ? work.revision
+            : material.workRevision,
+          expectedEditorEpoch: material.deliveredAt
+            ? work.editorEpoch
+            : material.editorEpoch,
+        });
+        await tx.typesetMaterial.update({
+          where: { id: material.id },
+          data: { deliveredAt: material.deliveredAt ?? new Date() },
+        });
+        return;
+      }
       if (detail.material === "unified_handoff") {
         const currentMaterial = await tx.work.findUniqueOrThrow({
           where: { id: workId },
@@ -915,21 +970,45 @@ export class TranslationsService {
     }
     const nextWorkRevision = work.revision + 1;
     const nextEditorEpoch = work.editorEpoch + 1;
-    const version = await this.createStageVersionIfChanged(tx, {
-      actorId,
-      workId,
-      stage: WorkStage.proofread,
-      workRevision: nextWorkRevision,
-      editorEpoch: nextEditorEpoch,
-    });
-    // A legacy package may predate its first formal snapshot. Bind that exact
-    // accepted package under the same work lock; never rewrite a prior identity.
-    if (detail.material === "unified_handoff" && version) {
-      await tx.typesetHandoffPackage.updateMany({
-        where: { id: detail.fileId, workId, translationVersionId: null },
-        data: { translationVersionId: version.id },
+    // Both browser manifests and fallback packages name an immutable formal
+    // snapshot. Delivery freezes that version without recapturing mutable drafts.
+    const fixedVersionId =
+      detail.material === "browser_materials"
+        ? (
+            await tx.typesetMaterial.findUniqueOrThrow({
+              where: { id: detail.fileId },
+            })
+          ).translationVersionId
+        : detail.material === "unified_handoff"
+          ? (
+              await tx.typesetHandoffPackage.findUniqueOrThrow({
+                where: { id: detail.fileId },
+              })
+            ).translationVersionId
+          : null;
+    if (
+      (detail.material === "browser_materials" ||
+        detail.material === "unified_handoff") &&
+      !fixedVersionId
+    )
+      throw new ConflictException("材料缺少正式译文版本，请重新生成");
+    const version = fixedVersionId
+      ? await tx.translationVersion.findUniqueOrThrow({
+          where: { id: fixedVersionId },
+          select: { id: true, versionNumber: true, kind: true },
+        })
+      : await this.createStageVersionIfChanged(tx, {
+          actorId,
+          workId,
+          stage: WorkStage.proofread,
+          workRevision: nextWorkRevision,
+          editorEpoch: nextEditorEpoch,
+        });
+    if (fixedVersionId)
+      await tx.translationVersion.update({
+        where: { id: fixedVersionId },
+        data: { handoffStartedAt: new Date() },
       });
-    }
     const changed = await tx.work.updateMany({
       where: {
         id: workId,
@@ -1963,10 +2042,16 @@ export class TranslationsService {
     };
   }
 
-  async canExportHandoffMaterials(actorId: string, workId: string) {
-    const user = await this.db.user.findUnique({
+  async canExportHandoffMaterials(
+    actorId: string,
+    workId: string,
+    db: DatabaseClient = this.db,
+  ) {
+    const user = await db.user.findUnique({
       where: { id: actorId },
       select: {
+        isActive: true,
+        mustChangePassword: true,
         roles: { select: { role: true } },
         workParticipations: {
           where: { workId },
@@ -1974,7 +2059,8 @@ export class TranslationsService {
         },
       },
     });
-    if (!user) return false;
+    if (!user || user.isActive === false || user.mustChangePassword)
+      return false;
     const roles = new Set(user.roles.map(({ role }) => role));
     if (
       roles.has(Role.admin) ||
@@ -1991,8 +2077,12 @@ export class TranslationsService {
     );
   }
 
-  async assertCanExportHandoffMaterials(actorId: string, workId: string) {
-    if (!(await this.canExportHandoffMaterials(actorId, workId))) {
+  async assertCanExportHandoffMaterials(
+    actorId: string,
+    workId: string,
+    db: DatabaseClient = this.db,
+  ) {
+    if (!(await this.canExportHandoffMaterials(actorId, workId, db))) {
       throw new ForbiddenException("没有导出此作品交接材料的权限");
     }
   }

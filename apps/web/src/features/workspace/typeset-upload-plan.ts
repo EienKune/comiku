@@ -6,6 +6,7 @@ export type UploadImage = components["schemas"]["TypesetUploadImageDto"] & {
   included: boolean;
   archive: boolean;
   workImageId?: string;
+  localUrl?: string;
 };
 
 export function initialTypesetUploadImages(session: Session): UploadImage[] {
@@ -42,17 +43,6 @@ export function typesetUploadGroupProblem(
     !mergeConfirmed
   )
     return "同作品有多份 ZIP 或混入裸图，请确认合并或移除重复项";
-  const names = images.map((image) =>
-    image.sourceName.split(/[\\/]/).at(-1)?.toLowerCase(),
-  );
-  const pages = images
-    .map((image) => image.pageNumber)
-    .filter((page) => page !== null);
-  if (
-    new Set(names).size !== names.length ||
-    new Set(pages).size !== pages.length
-  )
-    return "同名文件或重复数字页码，请先移除重复项";
   return null;
 }
 

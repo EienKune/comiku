@@ -1,3 +1,5 @@
+import { TypesetMaterialsController } from "./typeset-materials.controller.js";
+import { TypesetMaterialsService } from "./typeset-materials.service.js";
 import { Module } from "@nestjs/common";
 import { DatabaseModule } from "../database/database.module.js";
 import { FilesModule } from "../files/files.module.js";
@@ -18,6 +20,7 @@ import { SingleTypesetSupplementsController } from "./single-typeset-supplements
 @Module({
   imports: [DatabaseModule, FilesModule, TranslationsModule, WorksModule],
   controllers: [
+    TypesetMaterialsController,
     TypesettingController,
     TypesetBatchController,
     TypesetUploadsController,
@@ -26,6 +29,7 @@ import { SingleTypesetSupplementsController } from "./single-typeset-supplements
     SingleTypesetSupplementsController,
   ],
   providers: [
+    TypesetMaterialsService,
     TypesettingService,
     TypesetUploadsService,
     TypesetCollaborationService,

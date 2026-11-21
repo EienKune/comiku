@@ -35,7 +35,7 @@ test("typeset batch naming accepts only explicit work numbers and optional rende
   assert.equal(typesetName("999999999999999999-1.png").workNumber, null);
 });
 
-test("typeset batch selection requires explicit container merges and rejects duplicate pages", () => {
+test("typeset batch selection requires explicit container merges and treats names as suggestions", () => {
   const image = (sourceName: string, uploadFileId: string, archive = true) => ({
     sourceName,
     uploadFileId,
@@ -62,21 +62,13 @@ test("typeset batch selection requires explicit container merges and rejects dup
     [image("1-1.png", "a"), image("说明.png", "b", false)],
     true,
   );
-  assert.throws(
-    () =>
-      validateTypesetSelection(
-        [image("1-1.png", "a"), image("1-01成图.png", "a")],
-        true,
-      ),
-    /重复数字页码/,
+  validateTypesetSelection(
+    [image("1-1.png", "a"), image("1-01成图.png", "a")],
+    true,
   );
-  assert.throws(
-    () =>
-      validateTypesetSelection(
-        [image("first/explain.png", "a"), image("second/explain.png", "b")],
-        true,
-      ),
-    /同名/,
+  validateTypesetSelection(
+    [image("first/explain.png", "a"), image("second/explain.png", "b")],
+    true,
   );
   assert.throws(
     () =>

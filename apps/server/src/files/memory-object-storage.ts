@@ -48,6 +48,18 @@ export class MemoryObjectStorage implements ObjectStorage {
     return item.body.slice();
   }
 
+  async copy(sourceKey: string, destinationKey: string, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const source = this.objects.get(validateObjectKey(sourceKey));
+    if (!source) throw new Error("Source object is unavailable");
+    await this.put({
+      ...source,
+      key: destinationKey,
+      body: source.body.slice(),
+      signal,
+    });
+  }
+
   async readStream(key: string) {
     return Readable.from([await this.read(key)]);
   }

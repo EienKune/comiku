@@ -43,6 +43,7 @@ import type {
   TypesetUploadPlanDto,
   TypesetUploadPlansDto,
   TypesetUploadSessionDto,
+  TypesetUploadFileDto,
 } from "./typeset-upload.dto.js";
 
 const details = {
@@ -219,9 +220,12 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
     return session;
   }
 
-  private async dto(session: Session): Promise<TypesetUploadSessionDto> {
+  private async dto(
+    session: Session,
+    signWrites = true,
+  ): Promise<TypesetUploadSessionDto> {
     const previews =
-      session.status === "previewed"
+      signWrites && session.status === "previewed"
         ? await this.db.typesetUploadPreview.findMany({
             where: { sessionId: session.id },
             select: {
@@ -282,7 +286,9 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
       files: await Promise.all(
         session.files.map(async (file) => {
           const target =
-            file.status !== "processed" && session.status !== "extracting"
+            signWrites &&
+            !["processed", "verifying"].includes(file.status) &&
+            session.status !== "extracting"
               ? await this.files.signedStagingWriteUrl(
                   {
                     key: file.objectKey,
@@ -358,8 +364,260 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /** A PUT is only staging. Snapshot, validate actual bytes, then atomically adopt. */
+  async verifyFile(
+    actorId: string,
+    id: string,
+    fileId: string,
+  ): Promise<TypesetUploadFileDto> {
+    await this.assertActor(actorId);
+    const attempt = await this.db.$transaction(async (tx) => {
+      // Atomic, cluster-wide admission; no network work holds this lock.
+      await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(1869833076, 1)`;
+      await tx.$queryRaw`SELECT id FROM typeset_upload_sessions WHERE id=${id}::uuid FOR UPDATE`;
+      const session = await tx.typesetUploadSession.findFirst({
+        where: { id, actorId },
+        include: { files: { ...details.files, where: { id: fileId } } },
+      });
+      if (!session) throw new NotFoundException("成图上传会话不存在");
+      if (session.expiresAt <= new Date() || session.status === "expired")
+        throw new ConflictException("成图上传会话已过期");
+      if (session.status === "extracting")
+        throw new ConflictException("会话正在后台解析，请稍后重试");
+      const file = session.files.find((row) => row.id === fileId);
+      if (!file) throw new NotFoundException("上传文件不存在");
+      if (file.status === "processed") return null;
+      if (file.contentType === "application/zip")
+        throw new BadRequestException("请先在本地解包，再逐张验证成图");
+      const now = new Date();
+      if (
+        await tx.typesetUploadVerification.count({
+          where: {
+            uploadFileId: fileId,
+            status: "processing",
+            expiresAt: { gt: now },
+          },
+        })
+      )
+        return null;
+      if (
+        (await tx.typesetUploadVerification.count({
+          where: { status: "processing", expiresAt: { gt: now } },
+        })) >= 2
+      )
+        throw new ConflictException("当前图片验证繁忙，请稍后重试");
+      await tx.typesetUploadVerification.updateMany({
+        where: {
+          uploadFileId: fileId,
+          status: "processing",
+          expiresAt: { lte: now },
+        },
+        data: { status: "failed" },
+      });
+      const attemptId = randomUUID();
+      const created = await tx.typesetUploadVerification.create({
+        data: {
+          id: attemptId,
+          uploadFileId: fileId,
+          objectKey: `works/typeset-upload-preview/${id}/${attemptId}`,
+          expiresAt: new Date(now.getTime() + 2 * 60_000),
+        },
+      });
+      await tx.typesetUploadFile.update({
+        where: { id: fileId },
+        data: { status: "verifying", error: null },
+      });
+      return { ...created, file };
+    });
+    if (attempt) {
+      const signal = AbortSignal.timeout(90_000);
+      try {
+        const file = attempt.file;
+        const metadata = await this.files.headStagingObject(
+          file.objectKey,
+          signal,
+        );
+        if (
+          !metadata ||
+          metadata.size !== Number(file.size) ||
+          metadata.contentType !== file.contentType ||
+          metadata.checksum?.toLowerCase() !== file.checksum
+        )
+          throw new Error("文件未上传完成，或大小、类型、校验值与会话不一致");
+        // No client ever receives a write capability for the copied key.
+        await this.files.copyStagingObject(
+          file.objectKey,
+          attempt.objectKey,
+          signal,
+        );
+        const body = await this.files.readStagingObjectLimited(
+          attempt.objectKey,
+          Number(file.size),
+          signal,
+        );
+        if (
+          body.byteLength !== Number(file.size) ||
+          createHash("sha256").update(body).digest("hex") !== file.checksum
+        )
+          throw new Error("上传内容校验失败");
+        const prepared = prepareTypesetBatchFile({
+          originalname: file.sourceName,
+          mimetype: file.contentType,
+          size: body.byteLength,
+          buffer: body,
+        });
+        const image = prepared.images[0];
+        if (
+          prepared.images.length !== 1 ||
+          image.contentType !== file.contentType
+        )
+          throw new Error("图片实际格式与上传类型不一致");
+        await this.db.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT id FROM typeset_upload_sessions WHERE id=${id}::uuid FOR UPDATE`;
+          await this.assertActor(actorId, tx);
+          const session = await tx.typesetUploadSession.findFirst({
+            where: { id, actorId },
+            include: { files: { ...details.files, where: { id: fileId } } },
+          });
+          const current = await tx.typesetUploadVerification.findUnique({
+            where: { id: attempt.id },
+          });
+          if (
+            !session ||
+            session.status === "expired" ||
+            session.expiresAt <= new Date() ||
+            current?.status !== "processing" ||
+            current.expiresAt <= new Date()
+          )
+            throw new ConflictException("本次验证已过期，请重试当前文件");
+          if (
+            session.files.find((row) => row.id === fileId)?.status ===
+            "processed"
+          )
+            throw new ConflictException("文件已由其他请求验证完成");
+          const totals = await tx.fileObject.aggregate({
+            where: {
+              typesetUploadImages: { some: { uploadFile: { sessionId: id } } },
+            },
+            _sum: { size: true },
+          });
+          const imageCount = await tx.typesetUploadImage.count({
+            where: { uploadFile: { sessionId: id } },
+          });
+          if (
+            Number(totals._sum.size ?? 0) + body.byteLength >
+              this.environment.typesetBatchMaxBytes ||
+            imageCount + 1 > this.environment.typesetBatchMaxWorks * 100
+          )
+            throw new BadRequestException("整批图片超过容量或数量上限");
+          const completed = await tx.typesetUploadVerification.updateMany({
+            where: {
+              id: attempt.id,
+              status: "processing",
+              expiresAt: { gt: new Date() },
+            },
+            data: { status: "completed" },
+          });
+          if (!completed.count)
+            throw new ConflictException("本次验证已失效，请重试当前文件");
+          const adopted = await this.files.adoptCopiedObjectTx(tx, {
+            objectKey: attempt.objectKey,
+            contentType: image.contentType,
+            size: body.byteLength,
+            checksum: file.checksum,
+            createdById: actorId,
+          });
+          await tx.typesetUploadFile.update({
+            where: { id: fileId },
+            data: {
+              status: "processed",
+              error: null,
+              images: {
+                create: [
+                  {
+                    fileObjectId: adopted.id,
+                    sourceName: file.sourceName,
+                    width: image.width!,
+                    height: image.height!,
+                    orderIndex: 0,
+                  },
+                ],
+              },
+            },
+          });
+          await tx.typesetUploadSession.update({
+            where: { id },
+            data: { status: "previewed" },
+          });
+        });
+        await this.files
+          .deleteStagingObject(file.objectKey)
+          .catch(() => undefined);
+      } catch (error) {
+        // A lost commit reply must never delete the adopted snapshot.
+        const failed = await this.db.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT id FROM typeset_upload_sessions WHERE id=${id}::uuid FOR UPDATE`;
+          const current = await tx.typesetUploadVerification.findUnique({
+            where: { id: attempt.id },
+          });
+          if (current?.status === "completed") return false;
+          await tx.typesetUploadVerification.updateMany({
+            where: { id: attempt.id, status: "processing" },
+            data: { status: "failed" },
+          });
+          const newer = await tx.typesetUploadVerification.count({
+            where: {
+              uploadFileId: fileId,
+              id: { not: attempt.id },
+              status: "processing",
+              expiresAt: { gt: new Date() },
+            },
+          });
+          if (!newer)
+            await tx.typesetUploadFile.updateMany({
+              where: { id: fileId, status: { not: "processed" } },
+              data: {
+                status: "failed",
+                error: (error instanceof Error
+                  ? error.message
+                  : "无法验证成图"
+                ).slice(0, 500),
+              },
+            });
+          return true;
+        });
+        if (failed)
+          await this.files
+            .deleteStagingObject(attempt.objectKey)
+            .catch(() => undefined);
+      }
+    }
+    const session = await this.db.typesetUploadSession.findFirst({
+      where: { id, actorId },
+      include: { files: { ...details.files, where: { id: fileId } } },
+    });
+    if (
+      !session ||
+      session.expiresAt <= new Date() ||
+      session.status === "expired"
+    )
+      throw new ConflictException("成图上传会话已过期");
+    const file = session.files[0];
+    return (await this.dto({ ...session, files: [file] }, false)).files[0];
+  }
+
   async queueExtract(actorId: string, id: string) {
     const session = await this.find(actorId, id);
+    if (
+      await this.db.typesetUploadVerification.count({
+        where: {
+          uploadFile: { sessionId: id },
+          status: "processing",
+          expiresAt: { gt: new Date() },
+        },
+      })
+    )
+      throw new ConflictException("图片正在逐张验证，请稍后重试");
     if (
       session.status === "previewed" &&
       session.files.every((file) => file.status === "processed")
@@ -373,6 +631,27 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
         ? `typeset-extract:${id}`
         : `typeset-extract:${id}:${randomUUID()}`;
     await this.db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM typeset_upload_sessions WHERE id=${id}::uuid FOR UPDATE`;
+      const current = await tx.typesetUploadSession.findFirst({
+        where: { id, actorId },
+      });
+      if (
+        !current ||
+        current.expiresAt <= new Date() ||
+        current.status === "expired"
+      )
+        throw new ConflictException("成图上传会话已过期");
+      if (
+        await tx.typesetUploadVerification.count({
+          where: {
+            uploadFile: { sessionId: id },
+            status: "processing",
+            expiresAt: { gt: new Date() },
+          },
+        })
+      )
+        throw new ConflictException("图片正在逐张验证，请稍后重试");
+      if (current.status === "extracting") return;
       await tx.typesetUploadSession.update({
         where: { id },
         data: { status: "extracting" },
@@ -919,8 +1198,52 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
     this.cleanupRunning = true;
     try {
       await this.cleanupBatch();
+      await this.cleanupVerifications();
     } finally {
       this.cleanupRunning = false;
+    }
+  }
+
+  private async cleanupVerifications() {
+    // Unique keys fence unknown old owners away from all later adopted images.
+    // Keep tombstones and repeat deletion after an interrupted/late storage call.
+    const before = new Date(Date.now() - 10 * 60_000);
+    const retryBefore = new Date(Date.now() - 15 * 60_000);
+    const attempts = await this.db.typesetUploadVerification.findMany({
+      where: {
+        status: { not: "completed" },
+        expiresAt: { lt: before },
+        OR: [{ cleanedAt: null }, { cleanedAt: { lt: retryBefore } }],
+      },
+      orderBy: [
+        { cleanedAt: { sort: "asc", nulls: "first" } },
+        { expiresAt: "asc" },
+      ],
+      take: 50,
+      include: { uploadFile: { select: { sessionId: true } } },
+    });
+    for (const attempt of attempts) {
+      const claimed = await this.db.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM typeset_upload_sessions WHERE id=${attempt.uploadFile.sessionId}::uuid FOR UPDATE`;
+        return tx.typesetUploadVerification.updateMany({
+          where: {
+            id: attempt.id,
+            status: { not: "completed" },
+            expiresAt: { lt: before },
+          },
+          data: { status: "failed" },
+        });
+      });
+      if (!claimed.count) continue;
+      try {
+        await this.files.deleteStagingObject(attempt.objectKey);
+        await this.db.typesetUploadVerification.updateMany({
+          where: { id: attempt.id, status: "failed" },
+          data: { cleanedAt: new Date() },
+        });
+      } catch {
+        /* Next bounded sweep retries the same tombstone. */
+      }
     }
   }
 

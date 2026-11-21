@@ -7,6 +7,7 @@ import { Button, SelectControl } from "../../components/ui";
 import { collaborationRequest } from "./collaboration-request";
 import { refreshTypesetWork } from "./typeset-batch-api";
 import { useConfirmation } from "../../components/use-confirmation";
+import { uploadTypesetFiles } from "./typeset-upload-transfer";
 
 /** A stable output-entry ID is required: output position never implies source identity. */
 export function TypesetCurrentImageTools({
@@ -39,6 +40,20 @@ export function TypesetCurrentImageTools({
   const [supplementPreview, setSupplementPreview] = useState("");
   const addKey = useRef(crypto.randomUUID());
   const removeKey = useRef(crypto.randomUUID());
+  const uploads = useRef(new Map<File, string>());
+  const replaceKey = useRef(crypto.randomUUID());
+  const verified = async (selected: File) => {
+    const session = await uploadTypesetFiles([selected], {
+      requireComplete: true,
+      sessionId: uploads.current.get(selected),
+      onSession: (session) => {
+        uploads.current.set(selected, session.id);
+      },
+    });
+    const image = session.files.flatMap((file) => file.images)[0];
+    if (!image) throw new Error("图片校验结果不完整，请重试");
+    return { sessionId: session.id, uploadImageId: image.id };
+  };
   const confirmation = useConfirmation([
     workId,
     versionId,
@@ -97,13 +112,18 @@ export function TypesetCurrentImageTools({
     setBusy(true);
     setMessage("");
     try {
-      const form = new FormData();
-      form.set("file", file);
-      form.set("expectedRevision", String(revision));
-      form.set("idempotencyKey", crypto.randomUUID());
+      const staged = await verified(file);
       await collaborationRequest(
-        `/api/works/${workId}/typeset/versions/${versionId}/images/${imageId}/replace`,
-        { method: "POST", body: form },
+        `/api/works/${workId}/typeset/versions/${versionId}/images/${imageId}/replace/from-session`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...staged,
+            expectedRevision: revision,
+            idempotencyKey: replaceKey.current,
+          }),
+        },
       );
       setFile(null);
       await refreshTypesetWork(workId);
@@ -142,12 +162,17 @@ export function TypesetCurrentImageTools({
           }),
         });
       else {
-        const form = new FormData();
-        form.set("file", supplementFile!);
-        form.set("position", supplementPosition);
-        form.set("expectedRevision", String(revision));
-        form.set("idempotencyKey", addKey.current);
-        await collaborationRequest(base, { method: "POST", body: form });
+        const staged = await verified(supplementFile!);
+        await collaborationRequest(`${base}/from-session`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...staged,
+            position: supplementPosition,
+            expectedRevision: revision,
+            idempotencyKey: addKey.current,
+          }),
+        });
       }
       setSupplementFile(null);
       await refreshTypesetWork(workId);
@@ -190,7 +215,10 @@ export function TypesetCurrentImageTools({
               inputLabel="选择当前成图替换文件"
               accept="image/png,image/jpeg,image/webp"
               disabled={busy}
-              onFiles={([next]) => setFile(next)}
+              onFiles={([next]) => {
+                setFile(next);
+                replaceKey.current = crypto.randomUUID();
+              }}
             />
             {file && (
               <span className="workspace-selected-filename">{file.name}</span>
