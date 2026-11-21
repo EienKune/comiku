@@ -6025,30 +6025,15 @@ export function WorkDetailPage() {
                           : "当前没有可加入的工作阶段"}
                       </p>
                     </div>
-                    <div className="workspace-inline-actions workspace-current-work-actions">
-                      {stage === "typeset" && (
-                        <a
-                          className="account-link workspace-editor-entry"
-                          href="#typeset-output"
-                        >
-                          <Upload size={14} />
-                          {canStartTypesetHandoff
-                            ? "上传与提交成图"
-                            : "查看成图"}
-                        </a>
-                      )}
-                      <Link
-                        className="account-link workspace-editor-entry"
-                        to={`/works/${work.id}/editor`}
-                      >
-                        <ScanText size={14} />
-                        {stage === "proofread"
-                          ? "进入校对工作区"
-                          : stage === "typeset" || stage === "publish"
-                            ? "查看翻译稿"
-                            : "进入翻译工作区"}
-                      </Link>
-                    </div>
+                    <Link
+                      className="account-link workspace-editor-entry"
+                      to={`/works/${work.id}/editor`}
+                    >
+                      <ScanText size={14} />
+                      {stage === "proofread"
+                        ? "进入校对工作区"
+                        : "进入翻译工作区"}
+                    </Link>
                   </div>
                   {stage === "publish" && (
                     <p className="workspace-notice">
@@ -6108,45 +6093,6 @@ export function WorkDetailPage() {
                       />
                     )}
                   <WorkSourceRecord workId={work.id} />
-                  {stage === "typeset" && (
-                    <section className="workspace-handoff-panel">
-                      <div>
-                        <h3>嵌字交接材料</h3>
-                        <p>
-                          原图与 LabelPlus 翻译文件位于同一个 ZIP
-                          根目录，可直接交给嵌字工具使用。
-                        </p>
-                      </div>
-                      {hasHandoffAccess ? (
-                        <div className="workspace-inline-actions">
-                          <Button
-                            loading={action.busy}
-                            onClick={() =>
-                              void downloadTypesetHandoffPackage(work)
-                            }
-                          >
-                            <Download size={16} />
-                            {work.typesetHandoffStartedAt
-                              ? "重新下载嵌字交接包"
-                              : canStartTypesetHandoff
-                                ? "下载交接包并开始嵌字"
-                                : "下载嵌字交接包"}
-                          </Button>
-                        </div>
-                      ) : (
-                        <p className="workspace-muted">
-                          当前账号没有下载本作品交接材料的权限。
-                        </p>
-                      )}
-                      <small>
-                        {work.typesetHandoffStartedAt
-                          ? `交接已于 ${dateTime(work.typesetHandoffStartedAt)} 开始，校对内容已冻结。`
-                          : canStartTypesetHandoff
-                            ? "下载成功即开始本轮嵌字并冻结校对稿，随后到成图区上传本人认领页。此前的检查下载不代表已开始。"
-                            : "检查下载不会开始嵌字。请先在任务组协调中认领嵌字页，再下载交接包并开始。"}
-                      </small>
-                    </section>
-                  )}
                 </Surface>
                 <Surface className="workspace-panel workspace-coordination">
                   <div className="workspace-panel-heading">
@@ -6507,6 +6453,45 @@ export function WorkDetailPage() {
                 "archived",
               ].includes(work.workflowStatus) && (
                 <div id="typeset-output" className="workspace-detail-output">
+                  {stage === "typeset" && (
+                    <section className="workspace-handoff-panel">
+                      <div>
+                        <h3>嵌字交接材料</h3>
+                        <p>
+                          原图与 LabelPlus 翻译文件位于同一个 ZIP
+                          根目录，可直接交给嵌字工具使用。
+                        </p>
+                      </div>
+                      {hasHandoffAccess ? (
+                        <div className="workspace-inline-actions">
+                          <Button
+                            loading={action.busy}
+                            onClick={() =>
+                              void downloadTypesetHandoffPackage(work)
+                            }
+                          >
+                            <Download size={16} />
+                            {work.typesetHandoffStartedAt
+                              ? "重新下载嵌字交接包"
+                              : canStartTypesetHandoff
+                                ? "下载交接包并开始嵌字"
+                                : "下载嵌字交接包"}
+                          </Button>
+                        </div>
+                      ) : (
+                        <p className="workspace-muted">
+                          当前账号没有下载本作品交接材料的权限。
+                        </p>
+                      )}
+                      <small>
+                        {work.typesetHandoffStartedAt
+                          ? `交接已于 ${dateTime(work.typesetHandoffStartedAt)} 开始，校对内容已冻结。`
+                          : canStartTypesetHandoff
+                            ? "下载成功即开始本轮嵌字并冻结校对稿，随后到成图区上传本人认领页。此前的检查下载不代表已开始。"
+                            : "检查下载不会开始嵌字。请先在任务组协调中认领嵌字页，再下载交接包并开始。"}
+                      </small>
+                    </section>
+                  )}
                   {work.collaborationMode === "multi" ? (
                     <TypesetCollaborationPanel
                       workId={work.id}

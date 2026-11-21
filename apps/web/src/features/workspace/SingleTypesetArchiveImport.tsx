@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button, SelectControl } from "../../components/ui";
 import { collaborationRequest } from "./collaboration-request";
+import { useTypesetDetailUpload } from "./use-typeset-detail-upload";
 import { refreshTypesetWork } from "./typeset-batch-api";
 type Item = {
   id: string;
@@ -42,7 +43,9 @@ export function SingleTypesetArchiveImport({
 }) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [sources, setSources] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
+  const [mutationBusy, setBusy] = useState(false);
+  const upload = useTypesetDetailUpload(workId, revision);
+  const busy = mutationBusy || upload.busy;
   const [message, setMessage] = useState("");
   const run = async (operation: () => Promise<void>) => {
     setBusy(true);
@@ -55,20 +58,16 @@ export function SingleTypesetArchiveImport({
       setBusy(false);
     }
   };
-  const choose = (file: File | undefined) =>
-    run(async () => {
-      if (!file) return;
-      const form = new FormData();
-      form.set("files", file);
-      form.set("expectedRevision", String(revision));
-      form.set("idempotencyKey", crypto.randomUUID());
-      const result = await collaborationRequest<Omit<Preview, "key">>(
-        `/api/works/${workId}/typeset/collaboration/preview`,
-        { method: "POST", body: form },
-      );
+  const choose = (file: File | undefined) => {
+    if (!file || busy) return;
+    setPreview(null);
+    setSources({});
+    upload.choose([file], (result) => {
+      setMessage("");
       setPreview({ ...result, key: crypto.randomUUID() });
       setSources({});
     });
+  };
   const save = () =>
     run(async () => {
       if (!preview) return;
@@ -90,6 +89,7 @@ export function SingleTypesetArchiveImport({
         },
       );
       setPreview(null);
+      upload.reset();
       await refreshTypesetWork(workId);
       await onChanged?.();
       setMessage("单人成图版本已保存，请确认整份完整后提交嵌字");
@@ -117,6 +117,18 @@ export function SingleTypesetArchiveImport({
           onFiles={([file]) => void choose(file)}
         />
       </div>
+      {(upload.progress || upload.error || message) && (
+        <div className="typeset-collaboration-feedback" aria-live="polite">
+          {upload.progress && <p role="status">{upload.progress}</p>}
+          {upload.error && <p role="alert">{upload.error}</p>}
+          {message && <p role="status">{message}</p>}
+          {upload.retryable && (
+            <Button variant="secondary" disabled={busy} onClick={upload.retry}>
+              重试上传
+            </Button>
+          )}
+        </div>
+      )}
       {preview && (
         <>
           <div className="typeset-collaboration-grid">
@@ -127,6 +139,7 @@ export function SingleTypesetArchiveImport({
                   {index + 1} · {item.sourceName}
                 </span>
                 <SelectControl
+                  disabled={busy}
                   aria-label={`${item.sourceName} 原图关联`}
                   value={sources[item.id] ?? ""}
                   onValueChange={(value) =>
@@ -185,14 +198,16 @@ export function SingleTypesetArchiveImport({
             <Button
               variant="secondary"
               disabled={busy}
-              onClick={() => setPreview(null)}
+              onClick={() => {
+                setPreview(null);
+                upload.reset();
+              }}
             >
               取消导入
             </Button>
           </div>
         </>
       )}
-      {message && <p role="status">{message}</p>}
     </div>
   );
 }

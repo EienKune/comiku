@@ -116,11 +116,9 @@ afterEach(() => {
 test("an inspection download before claiming stays an inspection and explains the next step", async () => {
   await show(() => fixture(false));
   expect(
-    screen.getByRole("link", { name: "查看翻译稿" }).getAttribute("href"),
+    screen.getByRole("link", { name: "进入翻译工作区" }).getAttribute("href"),
   ).toBe("/works/work/editor");
-  expect(
-    screen.getByRole("link", { name: "查看成图" }).getAttribute("href"),
-  ).toBe("#typeset-output");
+  expect(screen.queryByRole("link", { name: "查看成图" })).toBeNull();
   expect(
     screen.getByText(
       "检查下载不会开始嵌字。请先在任务组协调中认领嵌字页，再下载交接包并开始。",
@@ -148,7 +146,13 @@ test("an interrupted current-member handoff reconciles the committed start and o
     throw new Error("下载响应中断");
   });
   await show(() => work);
-  expect(screen.getByRole("link", { name: "上传与提交成图" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "上传与提交成图" })).toBeNull();
+  const handoff = screen
+    .getByRole("heading", { name: "嵌字交接材料" })
+    .closest("section");
+  expect(handoff?.nextElementSibling).toBe(
+    screen.getByRole("region", { name: "成图协作" }),
+  );
   fireEvent.click(screen.getByRole("button", { name: "下载交接包并开始嵌字" }));
   expect(
     await screen.findByRole("button", { name: "重新下载嵌字交接包" }),

@@ -1,4 +1,5 @@
 import { assertUnifiedHandoffCurrent } from "./typeset-material-identity.js";
+import { prefetchHandoffImages } from "./handoff-prefetch.js";
 import { DirectUploadsService } from "../transfers/direct-uploads.service.js";
 import { DownloadsService } from "../transfers/downloads.service.js";
 import { assertCurrentHandoff } from "../workflow/revision-policy.js";
@@ -87,11 +88,16 @@ export class TypesettingService {
           task.requireCurrentParticipation
             ? this.prepareBatchHandoff.bind(this)
             : this.createHandoffPackage.bind(this)
-        )(task.actorId, task.workId, {
-          expectedRevision: task.expectedRevision,
-          expectedEditorEpoch: task.expectedEditorEpoch,
-          idempotencyKey: task.idempotencyKey,
-        });
+        )(
+          task.actorId,
+          task.workId,
+          {
+            expectedRevision: task.expectedRevision,
+            expectedEditorEpoch: task.expectedEditorEpoch,
+            idempotencyKey: task.idempotencyKey,
+          },
+          signal,
+        );
         const record = await this.db.typesetHandoffPackage.findUniqueOrThrow({
           where: { id: pack.packageId },
         });
@@ -188,9 +194,10 @@ export class TypesettingService {
     actorId: string,
     workId: string,
     input: CreateTypesetHandoffPackageDto,
+    signal?: AbortSignal,
   ) {
     await this.assertBatchHandoff(actorId, workId, input);
-    return this.createHandoffPackage(actorId, workId, input);
+    return this.createHandoffPackage(actorId, workId, input, signal);
   }
 
   private async assertBatchHandoff(
@@ -247,6 +254,7 @@ export class TypesettingService {
     actorId: string,
     workId: string,
     input: CreateTypesetHandoffPackageDto,
+    signal?: AbortSignal,
   ): Promise<TypesetHandoffPackageDto> {
     await this.translations.assertCanExportHandoffMaterials(actorId, workId);
     const production = await this.db.work.findUnique({ where: { id: workId } });
@@ -378,21 +386,27 @@ export class TypesettingService {
       0,
     );
     const archive = await createTypesetHandoffArchive(
-      (async function* (files: FileObjectsService) {
-        for (const image of work.images) {
-          const stored = await files.readStream(image.originalFileObjectId);
-          yield {
+      prefetchHandoffImages(
+        work.images,
+        async (image, readSignal) => {
+          const stored = await this.files.readStream(
+            image.originalFileObjectId,
+            readSignal,
+          );
+          return {
             contentType: image.originalFileObject.contentType,
             body: stored.body,
           };
-        }
-      })(this.files),
+        },
+        signal,
+      ),
       work.workNumber,
       translationBody,
     );
     const fileName = typesetHandoffPackageFileName(work.workNumber);
     let stored: Awaited<ReturnType<FileObjectsService["storePath"]>>;
     try {
+      signal?.throwIfAborted();
       stored = await this.files.storePath({
         path: archive.path,
         contentType: "application/zip",

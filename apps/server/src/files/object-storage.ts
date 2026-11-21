@@ -29,7 +29,7 @@ export interface SignedWriteTarget {
 export interface ObjectStorage {
   put(input: PutObjectInput): Promise<void>;
   read(key: string): Promise<Uint8Array>;
-  readStream(key: string): Promise<Readable>;
+  readStream(key: string, signal?: AbortSignal): Promise<Readable>;
   head(key: string): Promise<StoredObjectMetadata | null>;
   signedReadUrl(
     key: string,

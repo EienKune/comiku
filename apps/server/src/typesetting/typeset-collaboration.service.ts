@@ -216,6 +216,123 @@ export class TypesetCollaborationService {
     }
   }
 
+  /** Bind already processed files without transferring or generating derivatives again. */
+  async previewSession(
+    actorId: string,
+    workId: string,
+    input: TypesetMutation & { sessionId: string },
+  ) {
+    return this.db.$transaction(async (tx) => {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM typeset_upload_sessions WHERE id=${input.sessionId}::uuid FOR UPDATE`,
+      );
+      const session = await tx.typesetUploadSession.findFirst({
+        where: { id: input.sessionId, actorId },
+        include: {
+          files: {
+            orderBy: { orderIndex: "asc" },
+            include: {
+              images: {
+                orderBy: { orderIndex: "asc" },
+                include: { fileObject: true },
+              },
+            },
+          },
+        },
+      });
+      if (
+        !session ||
+        session.status === "expired" ||
+        session.expiresAt <= new Date()
+      )
+        throw new ConflictException(
+          "上传会话不存在、已过期或不属于本人，请重新选择文件",
+        );
+      if (
+        session.status !== "previewed" ||
+        session.files.some((file) => file.status !== "processed")
+      )
+        throw new ConflictException("请等待全部文件解析成功后重试");
+      await typesetActorTx(tx, actorId, workId);
+      const { work } = await lockTypesetWorkTx(tx, workId, input);
+      // A request key from an unrelated event must never bypass this snapshot check.
+      if (work.revision !== input.expectedRevision)
+        throw new ConflictException("作品已更新，请刷新后重新确认");
+      const images = session.files.flatMap((file) => file.images);
+      if (
+        !images.length ||
+        images.length > 100 ||
+        images.reduce((sum, image) => sum + Number(image.fileObject.size), 0) >
+          250 * 1024 * 1024
+      )
+        throw new BadRequestException(
+          "单作品须包含 1–100 张成图且总量不超过 250 MiB",
+        );
+      for (const file of session.files) {
+        const named = typesetName(
+          file.sourceName,
+          file.contentType === "application/zip",
+        );
+        if (named.workNumber && named.workNumber !== work.workNumber)
+          throw new BadRequestException("文件明确指向其他作品，已停止导入");
+      }
+      for (const image of images) {
+        const named = typesetName(image.sourceName);
+        if (named.workNumber && named.workNumber !== work.workNumber)
+          throw new BadRequestException("ZIP 中包含其他作品的图片，已停止导入");
+        if (
+          image.fileObject.lifecycleStatus !== "active" ||
+          image.fileObject.deletedAt
+        )
+          throw new ConflictException("预览文件不可用，请重新选择文件");
+      }
+      const existing = await tx.typesetUploadPreview.findUnique({
+        where: { sessionId_workId: { sessionId: session.id, workId } },
+      });
+      if (
+        existing &&
+        (existing.workRevision !== work.revision ||
+          existing.editorEpoch !== work.editorEpoch ||
+          existing.handoffStartedAt.getTime() !==
+            work.typesetHandoffStartedAt!.getTime() ||
+          existing.versionId)
+      )
+        throw new ConflictException(
+          "上传预览或作品已更新，请重新选择文件并确认",
+        );
+      if (!existing)
+        await tx.typesetUploadPreview.create({
+          data: {
+            sessionId: session.id,
+            workId,
+            workRevision: work.revision,
+            editorEpoch: work.editorEpoch,
+            handoffStartedAt: work.typesetHandoffStartedAt!,
+            imageIds: [],
+            idempotencyKey: randomUUID(),
+          },
+        });
+      const pages = await tx.workImage.findMany({
+        where: { workId },
+        orderBy: { orderIndex: "asc" },
+      });
+      return {
+        sessionId: session.id,
+        expectedRevision: work.revision,
+        images: images.map((image) => ({
+          id: image.id,
+          sourceName: image.sourceName,
+          suggestedWorkImageId:
+            pages.find(
+              (page) =>
+                page.orderIndex + 1 ===
+                typesetName(image.sourceName).pageNumber,
+            )?.id ?? null,
+        })),
+      };
+    });
+  }
+
   async apply(
     actorId: string,
     workId: string,

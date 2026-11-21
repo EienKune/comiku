@@ -135,3 +135,15 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.typeset-collaboration-feedback {
+  display: grid;
+  gap: var(--space-2);
+  overflow-wrap: anywhere;
+}
+.typeset-collaboration-feedback > p {
+  margin: 0;
+}
+.typeset-collaboration-feedback > button {
+  justify-self: start;
+}

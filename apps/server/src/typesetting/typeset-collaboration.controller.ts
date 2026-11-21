@@ -33,6 +33,7 @@ import {
   TypesetCollaborationStateDto,
   TypesetImportPreviewDto,
   TypesetDraftSavedDto,
+  TypesetSessionPreviewDto,
 } from "./typeset-collaboration.dto.js";
 @ApiTags("typesetting")
 @ApiCookieAuth()
@@ -104,6 +105,21 @@ export class TypesetCollaborationController {
     @Body(bodyValidation(ApplyTypesetImportDto)) input: ApplyTypesetImportDto,
   ) {
     return this.service.apply(req.actor.userId, workId, input);
+  }
+  @Post("preview-session")
+  @HttpCode(200)
+  @Access({ permission: "works:typeset" })
+  @ApiOperation({ operationId: "previewTypesetCollaborationSession" })
+  @ApiParam({ name: "workId", format: "uuid", type: String })
+  @ApiBody({ type: TypesetSessionPreviewDto })
+  @ApiOkResponse({ type: TypesetImportPreviewDto })
+  previewSession(
+    @Req() req: AuthRequest,
+    @Param("workId", ParseUUIDPipe) workId: string,
+    @Body(bodyValidation(TypesetSessionPreviewDto))
+    input: TypesetSessionPreviewDto,
+  ) {
+    return this.service.previewSession(req.actor.userId, workId, input);
   }
   @Post("drafts/:draftId/delete")
   @HttpCode(200)

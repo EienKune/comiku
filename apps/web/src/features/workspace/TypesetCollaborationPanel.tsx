@@ -7,6 +7,7 @@ import { Button, SelectControl, Surface } from "../../components/ui";
 import { collaborationRequest } from "./collaboration-request";
 import { refreshTypesetWork } from "./typeset-batch-api";
 import "./typeset-collaboration.css";
+import { useTypesetDetailUpload } from "./use-typeset-detail-upload";
 
 type Draft = {
   id: string;
@@ -59,15 +60,38 @@ function Image({
   revision?: number;
   sourceKey?: readonly unknown[];
 }) {
+  const placeholder = useRef<HTMLSpanElement>(null);
+  const image = useRef<HTMLImageElement>(null);
+  const [visible, setVisible] = useState(
+    typeof IntersectionObserver === "undefined",
+  );
+  useEffect(() => {
+    const element = image.current ?? placeholder.current;
+    if (visible || !element) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "160px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [visible]);
   const query = useQuery({
+    enabled: visible,
     queryKey: sourceKey ?? ["typeset-collaboration-image", path, revision],
     queryFn: () => collaborationRequest<{ url: string }>(path),
     staleTime: 120000,
   });
   return query.data ? (
-    <img src={query.data.url} alt={alt} loading="lazy" />
+    <img ref={image} src={query.data.url} alt={alt} loading="lazy" />
   ) : (
-    <span>{query.isError ? "图片加载失败" : "加载图片…"}</span>
+    <span ref={placeholder}>
+      {query.isError ? "图片加载失败" : "加载图片…"}
+    </span>
   );
 }
 
@@ -100,7 +124,9 @@ export function TypesetCollaborationPanel({
   };
   const [preview, setPreview] = useState<Preview | null>(null);
   const [mappings, setMappings] = useState<Mapping[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [mutationBusy, setBusy] = useState(false);
+  const upload = useTypesetDetailUpload(workId, workRevision, actorId);
+  const busy = mutationBusy || upload.busy;
   const [message, setMessage] = useState("");
   const [view, setView] = useState<string | null>(null);
   const [comparePage, setComparePage] = useState("");
@@ -175,17 +201,12 @@ export function TypesetCollaborationPanel({
       );
       await changed();
     });
-  const loadPreview = (files: File[], replace?: Draft) =>
-    run(async () => {
-      if (!files?.length) return;
-      const form = new FormData();
-      form.set("expectedRevision", String(state.revision));
-      form.set("idempotencyKey", crypto.randomUUID());
-      for (const file of files) form.append("files", file);
-      const result = await collaborationRequest<Preview>(`${base}/preview`, {
-        method: "POST",
-        body: form,
-      });
+  const loadPreview = (files: File[], replace?: Draft) => {
+    if (!files.length || busy) return;
+    setPreview(null);
+    setMappings([]);
+    upload.choose(files, (result) => {
+      setMessage("");
       setPreview({ ...result, idempotencyKey: crypto.randomUUID() });
       setMappings(
         result.images.map((image) => {
@@ -208,6 +229,7 @@ export function TypesetCollaborationPanel({
         }),
       );
     });
+  };
   const save = () =>
     run(async () => {
       if (!preview) return;
@@ -234,6 +256,7 @@ export function TypesetCollaborationPanel({
         }),
       );
       setPreview(null);
+      upload.reset();
       await changed();
       setMessage(pending ? "成图已更新，请重新查看或下载" : "成图草稿已保存");
     });
@@ -292,6 +315,101 @@ export function TypesetCollaborationPanel({
               取消本人提交
             </Button>
           )}
+        </div>
+      )}
+      {(upload.progress || upload.error || message) && (
+        <div className="typeset-collaboration-feedback" aria-live="polite">
+          {upload.progress && <p role="status">{upload.progress}</p>}
+          {upload.error && <p role="alert">{upload.error}</p>}
+          {message && <p role="status">{message}</p>}
+          {upload.retryable && (
+            <Button variant="secondary" disabled={busy} onClick={upload.retry}>
+              重试上传
+            </Button>
+          )}
+        </div>
+      )}
+      {preview && (
+        <div aria-label="成图映射预览">
+          <h3>确认保存映射</h3>
+          <div className="typeset-collaboration-grid">
+            {preview.images.map((image, index) => {
+              const mapping = mappings[index]!;
+              return (
+                <article key={image.id}>
+                  <Image
+                    path={`/api/typeset/upload-sessions/${preview.sessionId}/images/${image.id}/url?variant=thumbnail`}
+                    alt={image.sourceName}
+                  />
+                  <span>{image.sourceName}</span>
+                  <SelectControl
+                    disabled={busy}
+                    aria-label={`${image.sourceName} 对应页`}
+                    value={
+                      mapping.ignored
+                        ? "ignore"
+                        : mapping.position === "page"
+                          ? (mapping.workImageId ?? "")
+                          : mapping.position
+                    }
+                    onValueChange={(value) => {
+                      setMappings((rows) =>
+                        rows.map((m, i) =>
+                          i !== index
+                            ? m
+                            : {
+                                imageId: m.imageId,
+                                draftId: m.draftId,
+                                position:
+                                  value === "start" || value === "end"
+                                    ? value
+                                    : "page",
+                                workImageId: [
+                                  "start",
+                                  "end",
+                                  "ignore",
+                                ].includes(value)
+                                  ? undefined
+                                  : value,
+                                ignored: value === "ignore",
+                              },
+                        ),
+                      );
+                    }}
+                  >
+                    <option value="">请选择本人原稿页</option>
+                    <option value="ignore">忽略（他人页或本次不保存）</option>
+                    {mine.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        第 {p.orderIndex + 1} 页
+                        {state.drafts.some((d) => d.workImageId === p.id)
+                          ? "（替换）"
+                          : "（新增）"}
+                      </option>
+                    ))}
+                    <option value="start">新增补充图 · 开头</option>
+                    <option value="end">新增补充图 · 末尾</option>
+                  </SelectControl>
+                  {mapping.ignored && <span>该文件将被忽略，不覆盖他人页</span>}
+                </article>
+              );
+            })}
+          </div>
+          <div className="typeset-collaboration-actions">
+            <Button disabled={busy} onClick={save}>
+              {pending ? "确认完整修订" : "保存本批草稿"}
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={() => {
+                setPreview(null);
+                upload.reset();
+              }}
+            >
+              取消导入
+            </Button>
+          </div>
         </div>
       )}
       <div className="typeset-collaboration-grid">
@@ -401,81 +519,6 @@ export function TypesetCollaborationPanel({
             </article>
           ))}
       </div>
-      {preview && (
-        <div aria-label="成图映射预览">
-          <h3>确认保存映射</h3>
-          <div className="typeset-collaboration-grid">
-            {preview.images.map((image, index) => {
-              const mapping = mappings[index]!;
-              return (
-                <article key={image.id}>
-                  <Image
-                    path={`/api/typeset/upload-sessions/${preview.sessionId}/images/${image.id}/url?variant=thumbnail`}
-                    alt={image.sourceName}
-                  />
-                  <span>{image.sourceName}</span>
-                  <SelectControl
-                    aria-label={`${image.sourceName} 对应页`}
-                    value={
-                      mapping.ignored
-                        ? "ignore"
-                        : mapping.position === "page"
-                          ? (mapping.workImageId ?? "")
-                          : mapping.position
-                    }
-                    onValueChange={(value) => {
-                      setMappings((rows) =>
-                        rows.map((m, i) =>
-                          i !== index
-                            ? m
-                            : {
-                                imageId: m.imageId,
-                                draftId: m.draftId,
-                                position:
-                                  value === "start" || value === "end"
-                                    ? value
-                                    : "page",
-                                workImageId: [
-                                  "start",
-                                  "end",
-                                  "ignore",
-                                ].includes(value)
-                                  ? undefined
-                                  : value,
-                                ignored: value === "ignore",
-                              },
-                        ),
-                      );
-                    }}
-                  >
-                    <option value="">请选择本人原稿页</option>
-                    <option value="ignore">忽略（他人页或本次不保存）</option>
-                    {mine.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        第 {p.orderIndex + 1} 页
-                        {state.drafts.some((d) => d.workImageId === p.id)
-                          ? "（替换）"
-                          : "（新增）"}
-                      </option>
-                    ))}
-                    <option value="start">新增补充图 · 开头</option>
-                    <option value="end">新增补充图 · 末尾</option>
-                  </SelectControl>
-                  {mapping.ignored && <span>该文件将被忽略，不覆盖他人页</span>}
-                </article>
-              );
-            })}
-          </div>
-          <div className="typeset-collaboration-actions">
-            <Button disabled={busy} onClick={save}>
-              {pending ? "确认完整修订" : "保存本批草稿"}
-            </Button>
-            <Button variant="secondary" onClick={() => setPreview(null)}>
-              取消导入
-            </Button>
-          </div>
-        </div>
-      )}
       {view && activeDraft && (
         <div
           className="typeset-compare"
@@ -577,7 +620,6 @@ export function TypesetCollaborationPanel({
           </div>
         </div>
       )}
-      {message && <p role="status">{message}</p>}
     </Surface>
   );
 }

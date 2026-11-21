@@ -363,12 +363,16 @@ export class FileObjectsService {
     }
   }
 
-  async readStream(id: string) {
+  async readStream(id: string, signal?: AbortSignal) {
     const file = await this.db.fileObject.findFirst({
       where: { id, lifecycleStatus: "active", deletedAt: null },
     });
     if (!file) throw new NotFoundException("文件不存在或不可用");
-    return { file, body: await this.storage.readStream(file.objectKey) };
+    signal?.throwIfAborted();
+    return {
+      file,
+      body: await this.storage.readStream(file.objectKey, signal),
+    };
   }
   async exists(id: string) {
     const file = await this.db.fileObject.findFirst({

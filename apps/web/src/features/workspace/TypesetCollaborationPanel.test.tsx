@@ -1,5 +1,6 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -7,7 +8,15 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { uploadTypesetFiles } from "./typeset-upload-transfer";
 import { TypesetCollaborationPanel } from "./TypesetCollaborationPanel";
+vi.mock("./typeset-upload-transfer", () => ({ uploadTypesetFiles: vi.fn() }));
+beforeEach(() => {
+  vi.mocked(uploadTypesetFiles).mockResolvedValue({
+    id: "session",
+    status: "previewed",
+  } as never);
+});
 vi.mock("./typeset-batch-api", () => ({
   refreshTypesetWork: vi.fn(async () => undefined),
 }));
@@ -41,11 +50,13 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.clearAllMocks();
 });
-function mount() {
-  const client = new QueryClient({
+function mount(
+  client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
-  });
+  }),
+) {
   return render(
     <QueryClientProvider client={client}>
       <TypesetCollaborationPanel workId="work" actorId="a" workRevision={5} />
@@ -59,7 +70,7 @@ test("previews current-work files, ignores other owners and saves only explicit 
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, init });
-      if (url.endsWith("/preview"))
+      if (url.endsWith("/preview-session"))
         return Response.json({
           sessionId: "session",
           expectedRevision: 5,
@@ -95,6 +106,12 @@ test("previews current-work files, ignores other owners and saves only explicit 
   await waitFor(() =>
     expect(calls.some((c) => c.url.endsWith("/apply"))).toBe(true),
   );
+  expect(calls.some((c) => c.url.endsWith("/preview"))).toBe(false);
+  const binding = calls.find((c) => c.url.endsWith("/preview-session"))!;
+  expect(JSON.parse(String(binding.init?.body))).toMatchObject({
+    sessionId: "session",
+    expectedRevision: 5,
+  });
   const apply = calls.find((c) => c.url.endsWith("/apply"))!;
   expect(JSON.parse(String(apply.init?.body)).mappings).toEqual([
     { imageId: "i2", workImageId: "p2", position: "page" },
@@ -147,4 +164,94 @@ test("keeps the own-page upload entry discoverable before handoff starts", async
     screen.getByText("先下载交接包并开始嵌字，再上传本人认领页的成图。"),
   ).toBeTruthy();
   expect(screen.getByText("本人认领：第 1、2 页")).toBeTruthy();
+});
+
+test("shows failed uploads next to the picker and retries the same files before mapping", async () => {
+  vi.mocked(uploadTypesetFiles).mockRejectedValueOnce(
+    new Error("21-002.png：上传失败（HTTP 502）"),
+  );
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      Response.json(
+        url.endsWith("/preview-session")
+          ? {
+              sessionId: "session",
+              expectedRevision: 5,
+              images: [
+                {
+                  id: "i2",
+                  sourceName: "21-002.png",
+                  suggestedWorkImageId: "p2",
+                },
+              ],
+            }
+          : url.includes("/url")
+            ? { url: "/fixture.png" }
+            : state,
+      ),
+    ),
+  );
+  mount();
+  const input = await screen.findByLabelText("上传成图或 ZIP");
+  const files = [new File(["png"], "21-002.png", { type: "image/png" })];
+  fireEvent.change(input, { target: { files } });
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("HTTP 502");
+  const firstPage = screen.getByRole("button", { name: "第 1 页成图" });
+  expect(
+    alert.compareDocumentPosition(firstPage) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "重试上传" }));
+  await screen.findByRole("heading", { name: "确认保存映射" });
+  expect(vi.mocked(uploadTypesetFiles).mock.calls[1][0][0]).toBe(files[0]);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("observes cached thumbnails too so a stale signed URL refreshes on remount", async () => {
+  const callbacks: IntersectionObserverCallback[] = [];
+  const targets: Element[] = [];
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(callback: IntersectionObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe(target: Element) {
+        targets.push(target);
+      }
+      disconnect() {}
+    },
+  );
+  const fetcher = vi.fn(async (url: string) =>
+    Response.json(url.includes("/url") ? { url: "/fresh.png" } : state),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  client.setQueryData(
+    [
+      "typeset-collaboration-image",
+      "/api/works/work/typeset/collaboration/drafts/d1/url?variant=thumbnail",
+      1,
+    ],
+    { url: "/expired.png" },
+    { updatedAt: Date.now() - 180000 },
+  );
+  mount(client);
+  const image = await screen.findByRole("img", { name: "第 1 页成图" });
+  expect(image.getAttribute("src")).toBe("/expired.png");
+  await waitFor(() => expect(targets).toContain(image));
+  act(() => {
+    for (const callback of callbacks)
+      callback(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+  });
+  await waitFor(() => expect(image.getAttribute("src")).toBe("/fresh.png"));
+  expect(
+    fetcher.mock.calls.some(([url]) => url.includes("/drafts/d1/url")),
+  ).toBe(true);
 });

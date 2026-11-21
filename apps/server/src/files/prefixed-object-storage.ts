@@ -24,8 +24,8 @@ export class PrefixedObjectStorage implements ObjectStorage {
   async read(key: string) {
     return this.storage.read(this.key(key));
   }
-  async readStream(key: string) {
-    return this.storage.readStream(this.key(key));
+  async readStream(key: string, signal?: AbortSignal) {
+    return this.storage.readStream(this.key(key), signal);
   }
   async head(key: string) {
     return this.storage.head(this.key(key));
