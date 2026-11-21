@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -11,11 +12,318 @@ import { MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { client, queryClient } from "../account/api";
 import { TypesetUploadDialog } from "./TypesetUploadDialog";
 import { createComikuClient } from "@comiku/api-client";
+import * as batchApi from "./typeset-batch-api";
+import * as transferApi from "./typeset-upload-transfer";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   localStorage.clear();
   queryClient.clear();
+});
+
+function showUploadDialog() {
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      <MemoryRouter>
+        <Routes>
+          <Route element={<Outlet context={{ id: "user" }} />}>
+            <Route
+              path="/"
+              element={
+                <TypesetUploadDialog
+                  open
+                  onClose={vi.fn()}
+                  onHandoff={vi.fn()}
+                  onStatus={vi.fn()}
+                />
+              }
+            />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+test.each(["upload", "resume"] as const)(
+  "keeps successful batch images visible alongside a failed ZIP after %s",
+  async (entry) => {
+    const result = {
+      id: "partial",
+      status: "previewed",
+      expiresAt: "2030-01-01T00:00:00Z",
+      maxWorks: 20,
+      maxTotalBytes: 512 * 1024 * 1024,
+      files: [
+        {
+          id: "good",
+          sourceName: "21.zip",
+          archive: true,
+          status: "processed",
+          error: null,
+          upload: null,
+          images: [
+            {
+              id: "image",
+              uploadFileId: "good",
+              sourceName: "21-001成图.png",
+              width: 10,
+              height: 10,
+              size: 12,
+              workNumber: 21,
+              pageNumber: 1,
+              warnings: [],
+            },
+          ],
+        },
+        {
+          id: "bad",
+          sourceName: "22.zip",
+          archive: true,
+          status: "failed",
+          error: "ZIP 无法解析",
+          upload: null,
+          images: [],
+        },
+      ],
+    };
+    vi.spyOn(client, "GET").mockImplementation(
+      async (path: string) =>
+        ({
+          data: path.includes("handoff-manifest") ? { items: [] } : result,
+          response: new Response(),
+        }) as never,
+    );
+    vi.spyOn(client, "POST").mockImplementation(
+      async () => ({ data: result, response: new Response() }) as never,
+    );
+    if (entry === "resume")
+      localStorage.setItem("comiku:typeset-upload-session:user", "partial");
+    else
+      vi.spyOn(transferApi, "uploadTypesetFiles").mockResolvedValue(
+        result as Awaited<ReturnType<typeof transferApi.uploadTypesetFiles>>,
+      );
+    const { container } = showUploadDialog();
+    if (entry === "resume")
+      fireEvent.click(screen.getByRole("button", { name: "恢复上次会话" }));
+    else {
+      fireEvent.change(container.querySelector("input[type=file]")!, {
+        target: { files: [new File(["test"], "21.zip")] },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "上传并解析预览" }));
+    }
+    expect(await screen.findByText("21-001成图.png")).toBeTruthy();
+    expect(screen.getByText(/22.zip.*ZIP 无法解析/)).toBeTruthy();
+  },
+);
+
+test("a failed file transfer keeps the selection and retries its existing upload session", async () => {
+  const file = new File(["synthetic"], "11.png", { type: "image/png" });
+  const session = { id: "retry-session", files: [] } as unknown as Awaited<
+    ReturnType<typeof transferApi.uploadTypesetFiles>
+  >;
+  const upload = vi
+    .spyOn(transferApi, "uploadTypesetFiles")
+    .mockImplementation(async (_files, options) => {
+      options?.onSession?.(session);
+      throw new Error("11.png：上传失败（HTTP 502）。请重试上传");
+    });
+  const { container } = showUploadDialog();
+  fireEvent.change(container.querySelector('input[type="file"]')!, {
+    target: { files: [file] },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "上传并解析预览" }));
+  await screen.findByText("11.png：上传失败（HTTP 502）。请重试上传");
+  expect(localStorage.getItem("comiku:typeset-upload-session:user")).toBe(
+    "retry-session",
+  );
+  expect(screen.getByText(/已选 1 个文件/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "上传并解析预览" }));
+  await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+  expect(upload.mock.calls[1][0]).toEqual([file]);
+  expect(upload.mock.calls[1][1]?.sessionId).toBe("retry-session");
+  await screen.findByText("11.png：上传失败（HTTP 502）。请重试上传");
+});
+
+test("batch footer waits for every result, preserves confirmed receipts on refresh failure, and retries only failures", async () => {
+  localStorage.setItem("comiku:typeset-upload-session:user", "session");
+  const session = {
+    id: "session",
+    status: "previewed",
+    maxWorks: 20,
+    maxTotalBytes: 512 * 1024 * 1024,
+    files: [11, 16].map((number) => ({
+      id: `file${number}`,
+      sourceName: `${number}.png`,
+      archive: false,
+      status: "processed",
+      error: null,
+      upload: null,
+      images: [
+        {
+          id: `image${number}`,
+          uploadFileId: `file${number}`,
+          sourceName: `${number}-001.png`,
+          width: 100,
+          height: 100,
+          size: 20,
+          workNumber: number,
+          pageNumber: 1,
+          warnings: [],
+        },
+      ],
+    })),
+  };
+  vi.spyOn(client, "GET").mockImplementation(
+    async (path: string) =>
+      ({
+        data: path.includes("handoff-manifest")
+          ? {
+              items: [11, 16].map((number) => ({
+                workId: `work${number}`,
+                workNumber: number,
+                title: null,
+              })),
+            }
+          : path.endsWith("/collaboration")
+            ? {
+                collaborationMode: "single",
+                participants: [],
+                pages: [],
+                drafts: [],
+              }
+            : path.endsWith("/url")
+              ? { url: "https://example.invalid/fixture.png" }
+              : session,
+        response: new Response(),
+      }) as never,
+  );
+  vi.spyOn(batchApi, "refreshTypesetWork").mockRejectedValue(
+    new Error("刷新连接中断"),
+  );
+  let finishSecond: (() => void) | undefined;
+  let secondAttempts = 0;
+  const post = vi
+    .spyOn(client, "POST")
+    .mockImplementation(async (path: string, input: unknown) => {
+      if (path.endsWith("/plans"))
+        return {
+          data: {
+            items: [11, 16].map((number) => ({
+              workNumber: number,
+              workId: `work${number}`,
+              previewId: `preview${number}`,
+              imageCount: 1,
+              error: null,
+            })),
+          },
+          response: new Response(),
+        } as never;
+      const number =
+        (input as { body: { previewId: string } }).body.previewId ===
+        "preview11"
+          ? 11
+          : 16;
+      if (number === 16 && ++secondAttempts === 1) {
+        await new Promise<void>((resolve) => {
+          finishSecond = resolve;
+        });
+        return {
+          error: { message: "版本冲突，请重试" },
+          response: new Response(null, { status: 409 }),
+        } as never;
+      }
+      return {
+        data: {
+          workId: `work${number}`,
+          stageSubmitted: true,
+          workCompleted: number === 11,
+        },
+        response: new Response(),
+      } as never;
+    });
+  const onClose = vi.fn();
+  render(
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      <MemoryRouter>
+        <Routes>
+          <Route element={<Outlet context={{ id: "user" }} />}>
+            <Route
+              path="/"
+              element={
+                <TypesetUploadDialog
+                  open
+                  onClose={onClose}
+                  onHandoff={vi.fn()}
+                  onStatus={vi.fn()}
+                />
+              }
+            />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "恢复上次会话" }));
+  await screen.findByText("11-001.png");
+  for (const checkbox of screen.getAllByRole("checkbox", {
+    name: "已预览核对，所选图片为成图（包含说明页）",
+  }))
+    fireEvent.click(checkbox);
+  fireEvent.click(screen.getByRole("button", { name: "检查提交条件" }));
+  await screen.findAllByText("检查通过：保存 1 张并提交嵌字");
+  fireEvent.click(screen.getByRole("button", { name: "确认上传并提交嵌字" }));
+  await waitFor(() => expect(finishSecond).toBeTypeOf("function"));
+  const pending = screen.getByRole("status", { name: "批量交稿结果" });
+  expect(pending.textContent).toContain("正在提交 2 / 2 部作品");
+  expect(pending.textContent).not.toContain("交稿完成");
+  expect(
+    (screen.getByRole("button", { name: "关闭成图上传" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  finishSecond!();
+  await waitFor(() =>
+    expect(
+      screen.getByRole("status", { name: "批量交稿结果" }).textContent,
+    ).toContain("部分作品未完成"),
+  );
+  expect(
+    screen.getByRole("status", { name: "批量交稿结果" }).textContent,
+  ).toContain("1 部进入待发布");
+  expect(
+    screen.getByRole("status", { name: "批量交稿结果" }).textContent,
+  ).toContain("1 部未完成");
+  expect(screen.getAllByRole("button", { name: "重试此项" })).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "重试此项" }));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("status", { name: "批量交稿结果" }).textContent,
+    ).toContain("本人已交稿，等待其他成员"),
+  );
+  const result = screen.getByRole("status", { name: "批量交稿结果" });
+  expect(result.textContent).toContain("1 部进入待发布");
+  expect(result.textContent).toContain("1 部等待其他成员");
+  expect(
+    screen.queryByRole("button", { name: "确认上传并提交嵌字" }),
+  ).toBeNull();
+  expect(screen.queryByRole("button", { name: "重试此项" })).toBeNull();
+  const confirms = (post.mock.calls as unknown as [string, unknown][]).filter(
+    ([path]) => path.endsWith("/confirm"),
+  );
+  expect(confirms).toHaveLength(3);
+  expect(
+    confirms.map(
+      ([, input]) => (input as { body: { previewId: string } }).body.previewId,
+    ),
+  ).toEqual(["preview11", "preview16", "preview16"]);
+  fireEvent.click(
+    within(result.parentElement!).getByRole("button", { name: "关闭" }),
+  );
+  expect(onClose).toHaveBeenCalledOnce();
 });
 
 test("the real API client serializes extraction as a JSON write with the request marker", async () => {
@@ -188,6 +496,14 @@ test.each([true, false])(
         : "此会话已保存成图版本，未提交嵌字；请到作品详情处理",
     );
     await waitFor(() => expect(attempts).toBe(2));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("status", { name: "批量交稿结果" }).textContent,
+      ).toContain(stageSubmitted ? "交稿完成" : "成图已保存，嵌字尚未提交"),
+    );
+    expect(
+      screen.queryByRole("button", { name: "确认上传并提交嵌字" }),
+    ).toBeNull();
     for (const [, input] of post.mock.calls.filter(([path]) =>
       path.endsWith("/confirm"),
     ))
@@ -416,12 +732,11 @@ test("restores frozen multi-page mapping, submits only own pages, and shows pers
   ).toBeTruthy();
   expect(postCalls().some(([path]) => path.endsWith("/extract"))).toBe(false);
   expect(
-    (
-      screen.getByRole("button", {
-        name: "确认上传并提交嵌字",
-      }) as HTMLButtonElement
-    ).disabled,
-  ).toBe(true);
+    screen.queryByRole("button", { name: "确认上传并提交嵌字" }),
+  ).toBeNull();
+  expect(
+    screen.getByRole("status", { name: "批量交稿结果" }).textContent,
+  ).toContain("本人已交稿，等待其他成员");
 });
 
 test("a restored completed work missing from the manifest does not block the remaining work", async () => {

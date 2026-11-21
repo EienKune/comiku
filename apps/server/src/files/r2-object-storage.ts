@@ -129,10 +129,11 @@ export class R2ObjectStorage implements ObjectStorage {
     return result.Body.transformToByteArray();
   }
 
-  async readStream(key: string): Promise<Readable> {
+  async readStream(key: string, signal?: AbortSignal): Promise<Readable> {
     validateObjectKey(key);
     const result = await this.client.send(
       new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+      { abortSignal: signal },
     );
     if (!result.Body) throw new Error("Object body is unavailable");
     return Readable.fromWeb(result.Body.transformToWebStream());

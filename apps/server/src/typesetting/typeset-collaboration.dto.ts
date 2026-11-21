@@ -26,6 +26,9 @@ export class AddSingleTypesetSupplementDto extends TypesetDraftMutationDto {
   @ApiProperty({ enum: ["start", "end"] }) @IsIn(["start", "end"]) position!:
     "start" | "end";
 }
+export class TypesetSessionPreviewDto extends TypesetDraftMutationDto {
+  @ApiProperty({ type: String, format: "uuid" }) @IsUUID() sessionId!: string;
+}
 export class TypesetImportMappingDto {
   @ApiProperty({ type: String, format: "uuid" }) @IsUUID() imageId!: string;
   @ApiPropertyOptional({ type: String, format: "uuid", nullable: true })

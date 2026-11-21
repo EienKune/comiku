@@ -7,7 +7,9 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { uploadTypesetFiles } from "./typeset-upload-transfer";
 import { SingleTypesetArchiveImport } from "./SingleTypesetArchiveImport";
+vi.mock("./typeset-upload-transfer", () => ({ uploadTypesetFiles: vi.fn() }));
 vi.mock("./typeset-batch-api", () => ({
   refreshTypesetWork: vi.fn(async () => undefined),
 }));
@@ -17,13 +19,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 test("single ZIP accepts free image count and explicit preview ordering, then saves without submission", async () => {
+  vi.mocked(uploadTypesetFiles).mockResolvedValue({
+    id: "session",
+    status: "previewed",
+  } as never);
   const bodies: unknown[] = [];
   const urls: string[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       urls.push(url);
-      if (url.endsWith("/preview"))
+      if (url.endsWith("/preview-session"))
         return Response.json({
           sessionId: "session",
           expectedRevision: 5,

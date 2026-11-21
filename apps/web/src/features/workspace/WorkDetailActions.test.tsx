@@ -248,8 +248,8 @@ test.each([
   ["translating", "进入翻译工作区"],
   ["pending_proofread", "进入校对工作区"],
   ["proofreading", "进入校对工作区"],
-  ["pending_typeset", "查看翻译稿"],
-  ["pending_publish", "查看翻译稿"],
+  ["pending_typeset", "进入翻译工作区"],
+  ["pending_publish", "进入翻译工作区"],
   ["published", "进入翻译工作区"],
   ["archived", "进入翻译工作区"],
 ] as const)(

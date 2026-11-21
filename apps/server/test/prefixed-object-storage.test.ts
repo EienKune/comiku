@@ -7,6 +7,22 @@ import test from "node:test";
 import { LocalObjectStorage } from "../src/files/local-object-storage.js";
 import { PrefixedObjectStorage } from "../src/files/prefixed-object-storage.js";
 
+test("prefix forwards stream cancellation to its backing storage", async () => {
+  const controller = new AbortController();
+  const raw = new LocalObjectStorage("unused");
+  const expected = new Error("aborted backing GET");
+  raw.readStream = async (key: string, signal?: AbortSignal) => {
+    assert.equal(key, "trial/source/example.png");
+    assert.equal(signal, controller.signal);
+    throw expected;
+  };
+  const storage = new PrefixedObjectStorage(raw, "trial/");
+  await assert.rejects(
+    storage.readStream("source/example.png", controller.signal),
+    (error) => error === expected,
+  );
+});
+
 test("prefix isolates put/read/stream/head/delete and both signed URL operations", async () => {
   const root = await mkdtemp(join(tmpdir(), "comiku-prefix-"));
   try {

@@ -136,7 +136,7 @@ test("typeset page drafts accumulate, isolate owners, aggregate once, revise com
     async function save(
       actorId: string,
       pages: number[],
-      opts: { supplement?: boolean; zip?: boolean } = {},
+      opts: { supplement?: boolean; zip?: boolean; staged?: boolean } = {},
     ) {
       const inputs = opts.zip
         ? [
@@ -160,10 +160,70 @@ test("typeset page drafts accumulate, isolate owners, aggregate once, revise com
             upload(`${work.workNumber}-${String(p + 1).padStart(3, "0")}.png`),
           );
       if (opts.zip) inputs[0].size = inputs[0].buffer.length;
-      const preview = await collaboration.preview(actorId, work.id, inputs, {
-        expectedRevision: await revision(),
-        idempotencyKey: randomUUID(),
-      });
+      const expectedRevision = await revision();
+      // Simulate the worker's durable extracted metadata; the detail bind must reuse it.
+      const staged = opts.staged
+        ? await db.typesetUploadSession.create({
+            data: {
+              actorId,
+              status: "previewed",
+              expiresAt: new Date(Date.now() + 3600000),
+              files: {
+                create: {
+                  sourceName: "detail-fixture.zip",
+                  contentType: "application/zip",
+                  status: "processed",
+                  objectKey: `fixture/${randomUUID()}`,
+                  size: 0,
+                  checksum: "0".repeat(64),
+                  orderIndex: 0,
+                  images: {
+                    create: inputs.map((file, orderIndex) => ({
+                      sourceName: file.originalname,
+                      fileObjectId: original.id,
+                      width: 1,
+                      height: 1,
+                      orderIndex,
+                    })),
+                  },
+                },
+              },
+            },
+          })
+        : null;
+      const preview = staged
+        ? await collaboration.previewSession(actorId, work.id, {
+            sessionId: staged.id,
+            expectedRevision,
+            idempotencyKey: randomUUID(),
+          })
+        : await collaboration.preview(actorId, work.id, inputs, {
+            expectedRevision,
+            idempotencyKey: randomUUID(),
+          });
+      if (staged) {
+        assert.deepEqual(
+          await collaboration.previewSession(actorId, work.id, {
+            sessionId: staged.id,
+            expectedRevision,
+            idempotencyKey: randomUUID(),
+          }),
+          preview,
+        );
+        assert.equal(
+          await db.typesetUploadPreview.count({
+            where: { sessionId: staged.id, workId: work.id },
+          }),
+          1,
+        );
+        await assert.rejects(
+          collaboration.previewSession(b.id, work.id, {
+            sessionId: staged.id,
+            expectedRevision,
+            idempotencyKey: randomUUID(),
+          }),
+        );
+      }
       return collaboration.apply(actorId, work.id, {
         sessionId: preview.sessionId,
         expectedRevision: preview.expectedRevision,
@@ -175,7 +235,7 @@ test("typeset page drafts accumulate, isolate owners, aggregate once, revise com
         })),
       });
     }
-    await save(a.id, [0]);
+    await save(a.id, [0], { staged: true });
     await assert.rejects(
       db.$transaction((tx) =>
         submitTypesetPagesTx(tx, a.id, work.id, {

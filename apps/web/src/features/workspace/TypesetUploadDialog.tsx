@@ -1,13 +1,24 @@
-import { pollTransfer } from "./transfers-api";
+import {
+  extractTypesetSession,
+  uploadTypesetFiles,
+} from "./typeset-upload-transfer";
 import { useImageUrl } from "../../components/use-image-url";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Upload, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  CheckCircle2,
+  CircleAlert,
+  LoaderCircle,
+  Upload,
+  X,
+} from "lucide-react";
 import type { components } from "@comiku/api-client";
 import { Button, SelectField } from "../../components/ui";
 import { ImageLightbox } from "../../components/ImageLightbox";
 import { isDisplayableImageUrl } from "../../components/media-url";
 import { useAccount } from "../account/account-context";
-import { authenticatedFetch, client, unwrap } from "../account/api";
+import { client, unwrap } from "../account/api";
 import { useAction } from "../account/use-action";
 import { Feedback } from "../account/forms";
 import {
@@ -15,8 +26,6 @@ import {
   suggestedTypesetPageId,
   orderedTypesetPageMappings,
   typesetUploadGroupProblem,
-  uploadFileChecksum,
-  typesetUploadContentType,
   type UploadImage,
 } from "./typeset-upload-plan";
 import { refreshTypesetWork } from "./typeset-batch-api";
@@ -25,6 +34,9 @@ type Session = components["schemas"]["TypesetUploadSessionDto"];
 type Plan = components["schemas"]["TypesetUploadPlanDto"] & {
   status?: "uploaded" | "failed";
   message?: string;
+  stageSubmitted?: boolean;
+  workCompleted?: boolean;
+  refreshWarning?: string;
 };
 type Collaboration = components["schemas"]["TypesetCollaborationStateDto"];
 type Target = components["schemas"]["TypesetHandoffManifestItemDto"];
@@ -147,10 +159,13 @@ export function TypesetUploadDialog({
   const dialog = useRef<HTMLDialogElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const active = useRef(true);
+  const transfer = useRef<AbortController | null>(null);
+  const uploadRetry = useRef<{ files: File[]; sessionId: string } | null>(null);
   useEffect(() => {
     active.current = true;
     return () => {
       active.current = false;
+      transfer.current?.abort();
     };
   }, []);
   const action = useAction();
@@ -167,6 +182,11 @@ export function TypesetUploadDialog({
   const [plans, setPlans] = useState<Plan[]>([]);
   const [uploaded, setUploaded] = useState<number[]>([]);
   const [progress, setProgress] = useState("");
+  const [confirmationProgress, setConfirmationProgress] = useState<{
+    current: number;
+    total: number;
+    workNumber: number;
+  } | null>(null);
   const [preview, setPreview] = useState<{
     images: UploadImage[];
     index: number;
@@ -181,6 +201,52 @@ export function TypesetUploadDialog({
       result.set(image.target, [...(result.get(image.target) ?? []), image]);
     return [...result.entries()];
   }, [images]);
+  const pendingGroups = groups.filter(
+    ([target]) => target && !uploaded.includes(Number(target)),
+  );
+  const retryPlans = plans.filter(
+    (plan) => plan.previewId && !plan.error && plan.status !== "uploaded",
+  );
+  const confirmedPlans = plans.filter((plan) => plan.status === "uploaded");
+  const completedCount = confirmedPlans.filter(
+    (plan) => plan.stageSubmitted && plan.workCompleted !== false,
+  ).length;
+  const waitingCount = confirmedPlans.filter(
+    (plan) => plan.stageSubmitted && plan.workCompleted === false,
+  ).length;
+  const savedCount = confirmedPlans.length - completedCount - waitingCount;
+  const failedCount = plans.filter(
+    (plan) => plan.status === "failed" || plan.error,
+  ).length;
+  const hasResults =
+    confirmedPlans.length > 0 || plans.some((plan) => plan.status === "failed");
+  const hasUnfinished =
+    pendingGroups.length > 0 ||
+    groups.some(([target]) => !target) ||
+    !!session?.files.some((file) => file.error);
+  const resultTitle = failedCount
+    ? confirmedPlans.length
+      ? "部分作品未完成"
+      : "交稿未完成"
+    : hasUnfinished
+      ? "已提交部分作品"
+      : savedCount
+        ? "成图已保存，嵌字尚未提交"
+        : waitingCount
+          ? "本人已交稿，等待其他成员"
+          : "交稿完成";
+  const resultDetails = [
+    completedCount ? `${completedCount} 部进入待发布` : "",
+    waitingCount ? `${waitingCount} 部等待其他成员` : "",
+    savedCount ? `${savedCount} 部仅保存成图，需到作品详情处理` : "",
+    pendingGroups.length
+      ? `${pendingGroups.length} 部未完成${failedCount ? "，可检查或重试" : ""}`
+      : "",
+    groups.some(([target]) => !target) ? "仍有未指定目标的图片" : "",
+    session?.files.some((file) => file.error) ? "仍有文件未成功解析" : "",
+  ]
+    .filter(Boolean)
+    .join("；");
   useEffect(() => {
     const element = dialog.current;
     if (element) {
@@ -223,6 +289,8 @@ export function TypesetUploadDialog({
         imageCount: item.imageIds.length,
         error: null,
         status: "uploaded",
+        stageSubmitted: item.stageSubmitted,
+        workCompleted: item.workCompleted,
         message: item.stageSubmitted
           ? item.workCompleted
             ? "已上传成图并提交嵌字，进入待发布"
@@ -277,29 +345,20 @@ export function TypesetUploadDialog({
     setTargets(result.items);
   }
   async function extract(id: string) {
-    const queued = await unwrap(
-      await client.POST("/api/typeset/upload-sessions/{id}/extract", {
-        params: { path: { id } },
-        body: {},
-      }),
-    );
-    const result = await pollTransfer(
-      queued,
-      async () =>
-        unwrap(
-          await client.GET("/api/typeset/upload-sessions/{id}", {
-            params: { path: { id } },
-          }),
-        ),
-      ["extracting"],
-    );
+    transfer.current = new AbortController();
+    const result = await extractTypesetSession(id, {
+      onProgress: setProgress,
+      signal: transfer.current.signal,
+    });
     applySession(result);
     await getTargets();
     setProgress("");
   }
   function updateImages(update: (previous: UploadImage[]) => UploadImage[]) {
     setImages(update);
-    setPlans([]);
+    setPlans((previous) =>
+      previous.filter((plan) => plan.status === "uploaded"),
+    );
   }
   function updateCheck(
     target: string,
@@ -316,61 +375,36 @@ export function TypesetUploadDialog({
         ...patch,
       },
     }));
-    setPlans([]);
+    setPlans((previous) =>
+      previous.filter((plan) => plan.status === "uploaded"),
+    );
   }
   async function upload() {
     await action.run(async () => {
-      if (!files.length) throw new Error("请选择成图或 ZIP");
-      if (
-        files.length > 200 ||
-        files.reduce((total, file) => total + file.size, 0) >
-          (session?.maxTotalBytes ?? 512 * 1024 * 1024)
-      )
-        throw new Error("所选文件超过整批数量或容量上限");
-      const descriptors = [];
-      for (const file of files) {
-        const type = typesetUploadContentType(file);
-        if (file.size > (type === "application/zip" ? 250 : 25) * 1024 * 1024)
-          throw new Error(`${file.name} 超过单文件容量上限`);
-        setProgress(`正在校验：${file.name}`);
-        descriptors.push({
-          sourceName: file.name,
-          contentType: typesetUploadContentType(file),
-          size: file.size,
-          checksum: await uploadFileChecksum(file),
-        });
-      }
-      const created = await unwrap(
-        await client.POST("/api/typeset/upload-sessions", {
-          body: { files: descriptors },
-        }),
-      );
-      setSession(created);
-      setUploaded([]);
-      localStorage.setItem(storageKey, created.id);
-      setSavedId(created.id);
-      for (const item of created.files) {
-        const index = created.files.findIndex((row) => row.id === item.id);
-        if (!active.current) return;
-        if (!item.upload) continue;
-        setProgress(
-          `正在上传 ${index + 1}/${files.length}：${item.sourceName}`,
-        );
-        try {
-          const response = await authenticatedFetch(item.upload.url, {
-            method: item.upload.method,
-            headers: item.upload.headers,
-            body: files[index],
-          });
-          if (!response.ok)
-            setProgress(`${item.sourceName} 未上传成功，继续其他文件`);
-        } catch {
-          setProgress(`${item.sourceName} 上传连接中断，继续其他文件`);
-        }
-      }
+      transfer.current = new AbortController();
+      const result = await uploadTypesetFiles(files, {
+        signal: transfer.current.signal,
+        maxTotalBytes: session?.maxTotalBytes,
+        sessionId:
+          uploadRetry.current?.files === files
+            ? uploadRetry.current.sessionId
+            : undefined,
+        onProgress: setProgress,
+        onSession: (created) => {
+          setSession(created);
+          setImages([]);
+          setPlans([]);
+          setUploaded([]);
+          localStorage.setItem(storageKey, created.id);
+          setSavedId(created.id);
+          uploadRetry.current = { files, sessionId: created.id };
+        },
+      });
+      applySession(result);
+      uploadRetry.current = null;
       setFiles([]);
-      setProgress("正在服务端受限解包与生成预览…");
-      await extract(created.id);
+      await getTargets();
+      setProgress("");
     });
   }
   async function resume() {
@@ -426,7 +460,10 @@ export function TypesetUploadDialog({
           },
         }),
       );
-      setPlans(result.items);
+      setPlans((previous) => [
+        ...previous.filter((plan) => plan.status === "uploaded"),
+        ...result.items,
+      ]);
       setProgress("");
     });
   }
@@ -435,9 +472,16 @@ export function TypesetUploadDialog({
     confirming.current = true;
     try {
       await action.run(async () => {
-        for (const plan of rows) {
+        let submitted = 0;
+        let failed = 0;
+        for (const [index, plan] of rows.entries()) {
           if (!active.current) break;
           if (!plan.previewId) continue;
+          setConfirmationProgress({
+            current: index + 1,
+            total: rows.length,
+            workNumber: plan.workNumber,
+          });
           setProgress(`正在确认 #${plan.workNumber}`);
           onStatus(`成图上传 · 正在处理 #${plan.workNumber}`);
           try {
@@ -453,6 +497,9 @@ export function TypesetUploadDialog({
                   ? {
                       ...row,
                       status: "uploaded",
+                      stageSubmitted: result.stageSubmitted,
+                      workCompleted: result.workCompleted,
+                      refreshWarning: undefined,
                       message: result.stageSubmitted
                         ? result.workCompleted === false
                           ? "已保存成图并提交本人负责页，等待其他成员"
@@ -465,8 +512,9 @@ export function TypesetUploadDialog({
             setUploaded((previous) => [
               ...new Set([...previous, plan.workNumber]),
             ]);
-            await refreshTypesetWork(result.workId);
+            submitted++;
           } catch (error) {
+            failed++;
             setPlans((previous) =>
               previous.map((row) =>
                 row.workNumber === plan.workNumber
@@ -479,14 +527,35 @@ export function TypesetUploadDialog({
                   : row,
               ),
             );
-            if (plan.workId) await refreshTypesetWork(plan.workId);
+          }
+          // A confirmed server receipt remains authoritative even when a
+          // follow-up cache refresh fails. Keep processing the other works.
+          if (plan.workId) {
+            try {
+              await refreshTypesetWork(plan.workId);
+            } catch {
+              setPlans((previous) =>
+                previous.map((row) =>
+                  row.workNumber === plan.workNumber
+                    ? {
+                        ...row,
+                        refreshWarning:
+                          "页面状态刷新失败，可重新打开作品查看最新状态。",
+                      }
+                    : row,
+                ),
+              );
+            }
           }
         }
         setProgress("");
-        onStatus("成图批量上传已处理，请查看逐项结果");
+        onStatus(
+          `成图批量处理结束：${submitted} 部已保存${failed ? `，${failed} 部未完成，可重试` : "，请查看交稿结果"}`,
+        );
       });
     } finally {
       confirming.current = false;
+      setConfirmationProgress(null);
     }
   }
   function move(imageId: string, delta: number, rows: UploadImage[]) {
@@ -862,6 +931,9 @@ export function TypesetUploadDialog({
                       plan.error ||
                       `检查通过：保存 ${plan.savedImageCount ?? plan.imageCount} 张并提交${isMulti ? "本人负责页" : "嵌字"}${plan.ignored?.length ? `，忽略非本人负责的 ${plan.ignored.length} 张` : ""}`}
                   </p>
+                  {plan.refreshWarning && (
+                    <p className="account-notice">{plan.refreshWarning}</p>
+                  )}
                   {plan.status === "failed" && (
                     <Button
                       size="sm"
@@ -918,53 +990,84 @@ export function TypesetUploadDialog({
           </details>
         )}
         {!!session && (
-          <p className="account-notice">
-            “检查提交条件”只检查匹配、权限与当前状态，不创建版本或提交。
-            图片、页序或作品状态变化后需重新检查；最终确认处理通过检查的作品，失败项保留供单独重试。
-          </p>
-        )}
-        {!!session && (
-          <div className="workspace-dialog-actions">
-            <Button
-              variant="secondary"
-              disabled={
-                action.busy ||
-                !groups.some(
-                  ([target]) => target && !uploaded.includes(Number(target)),
-                ) ||
-                groups.some(
-                  ([target]) =>
-                    target &&
-                    !uploaded.includes(Number(target)) &&
-                    (!states[target] || !!stateErrors[target]),
-                )
-              }
-              onClick={() => void previewPlans()}
-            >
-              检查提交条件
-            </Button>
-            <Button
-              loading={action.busy}
-              disabled={
-                !plans.some(
-                  (plan) =>
-                    plan.previewId && !plan.error && plan.status !== "uploaded",
-                )
-              }
-              onClick={() =>
-                void confirm(
-                  plans.filter(
-                    (plan) =>
-                      plan.previewId &&
-                      !plan.error &&
-                      plan.status !== "uploaded",
-                  ),
-                )
-              }
-            >
-              确认上传并提交嵌字
-            </Button>
-          </div>
+          <footer className="workspace-upload-footer">
+            {(confirmationProgress || hasResults) && (
+              <div
+                role="status"
+                aria-label="批量交稿结果"
+                className={`workspace-upload-result ${confirmationProgress ? "is-processing" : failedCount || hasUnfinished || savedCount ? "is-warning" : "is-complete"}`}
+              >
+                {confirmationProgress ? (
+                  <LoaderCircle size={22} aria-hidden="true" />
+                ) : failedCount || hasUnfinished || savedCount ? (
+                  <CircleAlert size={22} aria-hidden="true" />
+                ) : (
+                  <CheckCircle2 size={22} aria-hidden="true" />
+                )}
+                <div>
+                  <strong>
+                    {confirmationProgress
+                      ? `正在提交 ${confirmationProgress.current} / ${confirmationProgress.total} 部作品`
+                      : resultTitle}
+                  </strong>
+                  <p>
+                    {confirmationProgress
+                      ? `正在处理 #${confirmationProgress.workNumber}，请保持窗口打开。`
+                      : resultDetails}
+                  </p>
+                </div>
+              </div>
+            )}
+            {!hasResults && !confirmationProgress && (
+              <p className="account-notice">
+                “检查提交条件”只检查匹配、权限与当前状态，不创建版本或提交。图片、页序或作品状态变化后需重新检查。
+              </p>
+            )}
+            <div className="workspace-dialog-actions">
+              {pendingGroups.length > 0 && (
+                <>
+                  <Button
+                    variant="secondary"
+                    disabled={
+                      action.busy ||
+                      !pendingGroups.length ||
+                      groups.some(
+                        ([target]) =>
+                          target &&
+                          !uploaded.includes(Number(target)) &&
+                          (!states[target] || !!stateErrors[target]),
+                      )
+                    }
+                    onClick={() => void previewPlans()}
+                  >
+                    检查提交条件
+                  </Button>
+                  {(retryPlans.length > 0 || !hasResults) && (
+                    <Button
+                      loading={!!confirmationProgress}
+                      disabled={action.busy || !retryPlans.length}
+                      onClick={() => void confirm(retryPlans)}
+                    >
+                      {confirmationProgress
+                        ? "正在提交嵌字"
+                        : plans.some((plan) => plan.status === "failed")
+                          ? "重试未完成作品"
+                          : "确认上传并提交嵌字"}
+                    </Button>
+                  )}
+                </>
+              )}
+              {hasResults && (
+                <Button
+                  variant={pendingGroups.length ? "secondary" : "primary"}
+                  disabled={action.busy}
+                  onClick={onClose}
+                >
+                  关闭
+                </Button>
+              )}
+            </div>
+          </footer>
         )}
         {groups.some(([target]) => !target) && (
           <p className="account-notice">
