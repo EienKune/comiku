@@ -19366,8 +19366,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "additionalProperties": false
+                "$ref": "#/components/schemas/VerifyTypesetUploadFileDto"
               }
             }
           }
@@ -36282,6 +36281,18 @@
       "TypesetUploadFileDto": {
         "type": "object",
         "properties": {
+          "size": {
+            "type": "number"
+          },
+          "checksum": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "uploadMissing": {
+            "type": "boolean"
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -36316,6 +36327,10 @@
           }
         },
         "required": [
+          "size",
+          "checksum",
+          "contentType",
+          "uploadMissing",
           "id",
           "sourceName",
           "archive",
@@ -36403,6 +36418,25 @@
           "maxWorks",
           "maxTotalBytes",
           "files"
+        ]
+      },
+      "VerifyTypesetUploadFileDto": {
+        "type": "object",
+        "properties": {
+          "width": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "height": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "width",
+          "height"
         ]
       },
       "TypesetBatchPageMappingDto": {

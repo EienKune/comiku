@@ -14,6 +14,7 @@ import {
   validateObjectKey,
   validateReadExpiry,
   validateSignedWriteInput,
+  ObjectWritePreconditionError,
 } from "./object-storage.js";
 
 export class MemoryObjectStorage implements ObjectStorage {
@@ -105,6 +106,7 @@ export class MemoryObjectStorage implements ObjectStorage {
       headers: {
         "Content-Type": "application/octet-stream",
         "X-Comiku-Request": "1",
+        ...(input.immutable ? { "If-None-Match": "*" } : {}),
       },
     };
   }
@@ -133,6 +135,7 @@ export class MemoryObjectStorage implements ObjectStorage {
       typeof data.contentType !== "string" ||
       typeof data.size !== "number" ||
       typeof data.checksum !== "string" ||
+      (data.immutable !== undefined && typeof data.immutable !== "boolean") ||
       typeof data.expiresAt !== "number" ||
       data.expiresAt < Math.floor(Date.now() / 1000)
     ) {
@@ -143,14 +146,28 @@ export class MemoryObjectStorage implements ObjectStorage {
       contentType: data.contentType,
       size: data.size,
       checksum: data.checksum,
+      immutable: data.immutable as boolean | undefined,
     };
   }
 
-  async writeSigned(token: string, body: Uint8Array): Promise<void> {
+  async writeSigned(
+    token: string,
+    body: Uint8Array,
+    ifNoneMatch?: string,
+  ): Promise<void> {
     const data = this.signedWriteMetadata(token);
+    if (data.immutable && ifNoneMatch !== "*")
+      throw new ObjectWritePreconditionError();
     const checksum = createHash("sha256").update(body).digest("hex");
     if (body.byteLength !== data.size || checksum !== data.checksum) {
       throw new Error("Uploaded object does not match signed metadata");
+    }
+    if (data.immutable) {
+      // There must be no await between the existence check and publication.
+      validateObjectKey(data.key);
+      if (this.objects.has(data.key)) throw new ObjectWritePreconditionError();
+      this.objects.set(data.key, { ...data, body: body.slice() });
+      return;
     }
     await this.put({
       key: data.key,

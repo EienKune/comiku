@@ -18,6 +18,14 @@ export interface SignedWriteInput {
   contentType: string;
   size: number;
   checksum: string;
+  /** A signed create-only grant; retries must observe the existing object. */
+  immutable?: boolean;
+}
+
+export class ObjectWritePreconditionError extends Error {
+  constructor() {
+    super("Object write condition failed");
+  }
 }
 
 export interface SignedWriteTarget {
@@ -46,7 +54,11 @@ export interface ObjectStorage {
     input: SignedWriteInput,
     expiresInSeconds: number,
   ): Promise<SignedWriteTarget>;
-  writeSigned?(token: string, body: Uint8Array): Promise<void>;
+  writeSigned?(
+    token: string,
+    body: Uint8Array,
+    ifNoneMatch?: string,
+  ): Promise<void>;
   delete(key: string, signal?: AbortSignal): Promise<void>;
 }
 
@@ -88,7 +100,8 @@ export function validateSignedWriteInput(
     input.contentType.length > 255 ||
     !Number.isSafeInteger(input.size) ||
     input.size < 1 ||
-    !/^[a-f0-9]{64}$/i.test(input.checksum)
+    !/^[a-f0-9]{64}$/i.test(input.checksum) ||
+    (input.immutable !== undefined && typeof input.immutable !== "boolean")
   ) {
     throw new Error("Invalid signed write metadata");
   }

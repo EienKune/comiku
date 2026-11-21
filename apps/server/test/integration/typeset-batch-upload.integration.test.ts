@@ -236,14 +236,24 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
       assert.match(error.message, /请求来源或格式无效/u);
     }
     assert.equal((await uploads.get(user.id, session.id)).status, "pending");
+    for (const file of session.files.filter((file) => !file.archive))
+      assert.equal(
+        (
+          await uploads.verifyFile(user.id, session.id, file.id, {
+            width: 1,
+            height: 1,
+          })
+        ).status,
+        "processed",
+      );
     const extractedResponse = await extractRequest(session.id);
     assert.equal(extractedResponse.status, 200);
     const queued = (await extractedResponse.json()) as TypesetUploadSessionDto;
     assert.equal(queued.status, "extracting");
-    assert.equal(queued.files.flatMap((file) => file.images).length, 0);
+    assert.equal(queued.files.flatMap((file) => file.images).length, 4);
     async function finishExtraction(id: string) {
-      const job = await db.backgroundJob.findUniqueOrThrow({
-        where: { idempotencyKey: `typeset-extract:${id}` },
+      const job = await db.backgroundJob.findFirstOrThrow({
+        where: { resourceId: id, kind: "typeset_extract", status: "queued" },
       });
       await db.backgroundJob.update({
         where: { id: job.id },
@@ -295,6 +305,16 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
           checksum: record.checksum,
         });
       }
+      for (const file of sample.files.filter((file) => !file.archive))
+        assert.equal(
+          (
+            await uploads.verifyFile(user.id, sample.id, file.id, {
+              width: 1,
+              height: 1,
+            })
+          ).status,
+          "processed",
+        );
       // Retrying the same HTTP action restores the already uploaded materials.
       for (let attempt = 0; attempt < 2; attempt++) {
         const response = await extractRequest(sample.id);

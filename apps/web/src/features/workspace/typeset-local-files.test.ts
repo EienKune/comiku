@@ -6,6 +6,14 @@ import {
   releaseLocalTypesetImages,
 } from "./typeset-local-files";
 beforeEach(() => {
+  vi.stubGlobal(
+    "createImageBitmap",
+    vi.fn(async () => ({
+      width: 640,
+      height: 960,
+      close: vi.fn(),
+    })),
+  );
   vi.stubGlobal("File", NodeFile);
   vi.stubGlobal(
     "URL",
@@ -42,6 +50,9 @@ test("expands local images in archive order, preserves only naming hints and nev
   ]);
   expect(rows[0].uploadFileId).toBe(rows[1].uploadFileId);
   expect(rows.every((row) => row.localUrl === "blob:local-preview")).toBe(true);
+  expect(rows.every((row) => row.width === 640 && row.height === 960)).toBe(
+    true,
+  );
   expect(network).not.toHaveBeenCalled();
   releaseLocalTypesetImages(rows);
   expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2);

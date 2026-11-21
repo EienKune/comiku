@@ -16,6 +16,10 @@ function session() {
     maxTotalBytes: 512 * 1024 * 1024,
     files: [
       {
+        size: 12,
+        checksum: "a".repeat(64),
+        contentType: "application/zip",
+        uploadMissing: false,
         id: "zip1",
         sourceName: "139.zip",
         archive: true,

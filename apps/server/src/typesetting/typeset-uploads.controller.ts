@@ -31,6 +31,7 @@ import {
   TypesetUploadPlansDto,
   TypesetUploadSessionDto,
   TypesetUploadFileDto,
+  VerifyTypesetUploadFileDto,
 } from "./typeset-upload.dto.js";
 import { TypesetUploadsService } from "./typeset-uploads.service.js";
 
@@ -83,10 +84,7 @@ export class TypesetUploadsController {
   @HttpCode(200)
   @Access({ permission: "works:typeset" })
   @ApiOperation({ operationId: "verifyTypesetUploadFile" })
-  @ApiBody({
-    required: true,
-    schema: { type: "object", additionalProperties: false },
-  })
+  @ApiBody({ type: VerifyTypesetUploadFileDto })
   @ApiParam({ name: "id", format: "uuid" })
   @ApiParam({ name: "fileId", format: "uuid" })
   @ApiOkResponse({ type: TypesetUploadFileDto })
@@ -94,8 +92,10 @@ export class TypesetUploadsController {
     @Req() req: AuthRequest,
     @Param("id", ParseUUIDPipe) id: string,
     @Param("fileId", ParseUUIDPipe) fileId: string,
+    @Body(bodyValidation(VerifyTypesetUploadFileDto))
+    input: VerifyTypesetUploadFileDto,
   ) {
-    return this.uploads.verifyFile(req.actor.userId, id, fileId);
+    return this.uploads.verifyFile(req.actor.userId, id, fileId, input);
   }
 
   @Get(":id/images/:imageId/url")

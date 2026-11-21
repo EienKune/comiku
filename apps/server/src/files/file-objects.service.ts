@@ -6,6 +6,7 @@ import { PrismaService } from "../database/prisma.service.js";
 import {
   OBJECT_STORAGE,
   type ObjectStorage,
+  validateObjectKey,
   validateReadExpiry,
 } from "./object-storage.js";
 import type { SignedWriteInput } from "./object-storage.js";
@@ -428,6 +429,11 @@ export class FileObjectsService {
   }
 
   signedStagingWriteUrl(input: SignedWriteInput, expiresInSeconds: number) {
+    const directTypesetKey = input.key.startsWith("typeset-uploads/immutable/");
+    if (directTypesetKey !== (input.immutable === true))
+      throw new Error(
+        "Immutable grants require an immutable typeset upload key and condition",
+      );
     return this.storage.signedWriteUrl(input, expiresInSeconds);
   }
 
@@ -476,6 +482,38 @@ export class FileObjectsService {
   }
 
   async adoptCopiedObjectTx(
+    tx: Prisma.TransactionClient,
+    input: {
+      objectKey: string;
+      contentType: string;
+      size: number;
+      checksum: string;
+      createdById: string;
+    },
+  ) {
+    return this.adoptVerifiedTypesetObjectTx(tx, input);
+  }
+
+  /** HEAD confirmed the byte count. Only create-only upload keys can be adopted in place. */
+  async adoptDirectObjectTx(
+    tx: Prisma.TransactionClient,
+    input: {
+      objectKey: string;
+      contentType: string;
+      size: number;
+      checksum: string;
+      createdById: string;
+    },
+  ) {
+    validateObjectKey(input.objectKey);
+    if (!input.objectKey.startsWith("typeset-uploads/immutable/"))
+      throw new Error(
+        "Direct adoption requires an immutable typeset upload key",
+      );
+    return this.adoptVerifiedTypesetObjectTx(tx, input);
+  }
+
+  private async adoptVerifiedTypesetObjectTx(
     tx: Prisma.TransactionClient,
     input: {
       objectKey: string;

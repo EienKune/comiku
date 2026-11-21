@@ -132,6 +132,14 @@ test("single typesetting previews images and ZIPs in one form and retries the or
     typesetHandoffStartedAt: "2026-11-21T01:00:00Z",
   } as Work;
   vi.stubGlobal("File", NodeFile);
+  vi.stubGlobal(
+    "createImageBitmap",
+    vi.fn(async () => ({
+      width: 640,
+      height: 960,
+      close: vi.fn(),
+    })),
+  );
   vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:local");
   vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
   const session = {

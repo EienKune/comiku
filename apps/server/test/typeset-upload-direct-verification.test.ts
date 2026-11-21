@@ -43,16 +43,23 @@ function matches(a: Attempt, w: Where) {
 }
 for (const mode of [
   "success",
-  "corrupt",
+  "missing",
+  "wrong-size",
+  "metadata-ignored",
+  "legacy",
+  "invalid-dimensions",
   "lost-commit",
   "expired",
   "budget",
 ] as const)
-  test(`single file snapshot, bounded transactions and retry fences (${mode})`, async () => {
+  test(`immutable direct file HEAD confirmation, bounded transactions and retry fences (${mode})`, async () => {
     const checksum = createHash("sha256").update(png).digest("hex");
     const file = {
       id: "file",
-      objectKey: "staging/typeset-upload/session/file",
+      objectKey:
+        mode === "legacy"
+          ? "staging/typeset-upload/session/file"
+          : "typeset-uploads/immutable/session/file",
       sourceName: "1-1成图.png",
       contentType: "image/png",
       size: BigInt(png.length),
@@ -68,7 +75,7 @@ for (const mode of [
       expiresAt: new Date(Date.now() + 3600000),
       files: [file],
     };
-    const snapshots = new Map<string, Buffer>(),
+    const deleted: string[] = [],
       attempts: Attempt[] = [];
     let copies = 0,
       adopts = 0,
@@ -157,40 +164,47 @@ for (const mode of [
         }
       },
     };
-    const metadata = { size: png.length, contentType: "image/png", checksum };
     const files = {
-      headStagingObject: async (key: string) => {
+      headStagingObject: async (key: string, signal?: AbortSignal) => {
         assert.equal(depth, 0);
-        return key.startsWith("staging/")
-          ? metadata
-          : snapshots.has(key)
-            ? metadata
-            : null;
-      },
-      copyStagingObject: async (source: string, key: string) => {
-        assert.equal(depth, 0);
-        assert.equal(source, file.objectKey);
-        copies++;
-        snapshots.set(
-          key,
-          mode === "corrupt" ? Buffer.alloc(png.length) : Buffer.from(png),
-        );
-      },
-      readStagingObjectLimited: async (key: string) => {
-        assert.equal(depth, 0);
-        assert.ok(!key.startsWith("staging/"));
+        assert.equal(key, file.objectKey);
+        assert.ok(signal);
         if (mode === "expired") attempts[0].expiresAt = new Date(0);
-        return snapshots.get(key)!;
+        return mode === "missing"
+          ? null
+          : {
+              size: mode === "wrong-size" ? png.length + 1 : png.length,
+              contentType: "application/octet-stream",
+              checksum: "deliberately-untrusted-metadata",
+            };
+      },
+      copyStagingObject: async () => {
+        copies++;
+        throw new Error("must not copy");
+      },
+      readStagingObjectLimited: async () => {
+        throw new Error("must not read bytes");
+      },
+      readStagingObject: async () => {
+        throw new Error("must not read bytes");
       },
       deleteStagingObject: async (key: string) => {
-        snapshots.delete(key);
+        deleted.push(key);
       },
-      adoptCopiedObjectTx: async (
+      adoptDirectObjectTx: async (
         _tx: unknown,
-        input: { objectKey: string },
+        input: {
+          objectKey: string;
+          size: number;
+          checksum: string;
+          contentType: string;
+        },
       ) => {
         assert.equal(depth, 1);
-        assert.ok(!input.objectKey.startsWith("staging/"));
+        assert.equal(input.objectKey, file.objectKey);
+        assert.equal(input.checksum, checksum);
+        assert.equal(input.size, png.length);
+        assert.equal(input.contentType, file.contentType);
         adopts++;
         return { id: "object" };
       },
@@ -208,18 +222,34 @@ for (const mode of [
         typesetBatchMaxWorks: 20,
       } as never,
     );
-    const result = await service.verifyFile("actor", "session", "file");
-    if (["corrupt", "expired", "budget"].includes(mode)) {
-      assert.equal(result.status, "failed");
-      assert.match(result.error!, /校验|过期|上限/);
+    const verify = () =>
+      service.verifyFile("actor", "session", "file", {
+        width: mode === "invalid-dimensions" ? 0 : 1234,
+        height: 5678,
+      });
+    if (["legacy", "invalid-dimensions"].includes(mode)) {
+      await assert.rejects(verify, /重新选择|宽高/);
       assert.equal(adopts, 0);
-      assert.equal(snapshots.size, 0);
+      assert.equal(copies, 0);
+      return;
+    }
+    const result = await verify();
+    if (["missing", "wrong-size", "expired", "budget"].includes(mode)) {
+      assert.equal(result.status, "failed");
+      assert.match(result.error!, /大小|未上传|过期|上限/);
+      assert.equal(adopts, 0);
     } else {
       assert.equal(result.status, "processed");
       assert.equal(result.images.length, 1);
-      await service.verifyFile("actor", "session", "file");
-      assert.equal(copies, 1);
+      assert.equal(result.images[0].width, 1234);
+      assert.equal(result.images[0].height, 5678);
+      await verify();
       assert.equal(adopts, 1);
-      assert.equal(snapshots.size, 1);
     }
+    assert.equal(result.uploadMissing, mode === "missing");
+    assert.equal(result.size, png.length);
+    assert.equal(result.checksum, checksum);
+    assert.equal(result.contentType, "image/png");
+    assert.equal(copies, 0);
+    assert.deepEqual(deleted, []);
   });

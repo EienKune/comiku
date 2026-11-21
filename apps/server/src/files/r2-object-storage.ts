@@ -183,10 +183,11 @@ export class R2ObjectStorage implements ObjectStorage {
     expiresInSeconds: number,
   ): Promise<SignedWriteTarget> {
     validateSignedWriteInput(input, expiresInSeconds);
-    const headers = {
+    const headers: Record<string, string> = {
       "Content-Type": input.contentType,
       "x-amz-meta-sha256": input.checksum.toLowerCase(),
     };
+    if (input.immutable) headers["If-None-Match"] = "*";
     return {
       url: await getSignedUrl(
         this.client,
@@ -195,11 +196,15 @@ export class R2ObjectStorage implements ObjectStorage {
           Key: input.key,
           ContentType: input.contentType,
           Metadata: { sha256: input.checksum.toLowerCase() },
+          IfNoneMatch: input.immutable ? "*" : undefined,
         }),
         {
           expiresIn: expiresInSeconds,
           unhoistableHeaders: new Set(["x-amz-meta-sha256"]),
-          signableHeaders: new Set(["content-type"]),
+          signableHeaders: new Set([
+            "content-type",
+            ...(input.immutable ? ["if-none-match"] : []),
+          ]),
         },
       ),
       expiresInSeconds,

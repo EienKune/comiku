@@ -44,6 +44,7 @@ import type {
   TypesetUploadPlansDto,
   TypesetUploadSessionDto,
   TypesetUploadFileDto,
+  VerifyTypesetUploadFileDto,
 } from "./typeset-upload.dto.js";
 
 const details = {
@@ -60,6 +61,8 @@ const details = {
 type Session = Prisma.TypesetUploadSessionGetPayload<{
   include: typeof details;
 }>;
+const immutablePrefix = "typeset-uploads/immutable/";
+const missingUploadError = "文件尚未上传，请重试上传";
 const lifetimeMs = 24 * 60 * 60 * 1000;
 
 @Injectable()
@@ -169,7 +172,10 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
               id: fileId,
               orderIndex,
               sourceName: file.sourceName,
-              objectKey: `staging/typeset-upload/${id}/${fileId}`,
+              objectKey:
+                file.contentType === "application/zip"
+                  ? `staging/typeset-upload/${id}/${fileId}`
+                  : `${immutablePrefix}${id}/${fileId}`,
               contentType: file.contentType,
               size: BigInt(file.size),
               checksum: file.checksum,
@@ -295,6 +301,7 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
                     contentType: file.contentType,
                     size: Number(file.size),
                     checksum: file.checksum,
+                    immutable: file.objectKey.startsWith(immutablePrefix),
                   },
                   Math.min(
                     900,
@@ -311,6 +318,10 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
           const container = typesetName(file.sourceName, archive);
           return {
             id: file.id,
+            size: Number(file.size),
+            checksum: file.checksum,
+            contentType: file.contentType,
+            uploadMissing: file.error === missingUploadError,
             sourceName: file.sourceName,
             archive,
             status: file.status,
@@ -364,11 +375,12 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  /** A PUT is only staging. Snapshot, validate actual bytes, then atomically adopt. */
+  /** Confirm only the immutable assigned object and its actual length; metadata is browser declared. */
   async verifyFile(
     actorId: string,
     id: string,
     fileId: string,
+    input: VerifyTypesetUploadFileDto,
   ): Promise<TypesetUploadFileDto> {
     await this.assertActor(actorId);
     const attempt = await this.db.$transaction(async (tx) => {
@@ -389,6 +401,15 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
       if (file.status === "processed") return null;
       if (file.contentType === "application/zip")
         throw new BadRequestException("请先在本地解包，再逐张验证成图");
+      if (file.objectKey !== `${immutablePrefix}${id}/${fileId}`)
+        throw new ConflictException("旧上传会话不能直接确认，请重新选择文件");
+      if (
+        ![input.width, input.height].every(
+          (value) =>
+            Number.isInteger(value) && value > 0 && value <= 2147483647,
+        )
+      )
+        throw new BadRequestException("请提供有效的图片宽高");
       const now = new Date();
       if (
         await tx.typesetUploadVerification.count({
@@ -419,7 +440,9 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
         data: {
           id: attemptId,
           uploadFileId: fileId,
-          objectKey: `works/typeset-upload-preview/${id}/${attemptId}`,
+          // This unique lease marker is never uploaded. The assigned file key is
+          // shared across retries, while the released schema keeps attempt keys unique.
+          objectKey: `${file.objectKey}/verification/${attemptId}`,
           expiresAt: new Date(now.getTime() + 2 * 60_000),
         },
       });
@@ -437,41 +460,9 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
           file.objectKey,
           signal,
         );
-        if (
-          !metadata ||
-          metadata.size !== Number(file.size) ||
-          metadata.contentType !== file.contentType ||
-          metadata.checksum?.toLowerCase() !== file.checksum
-        )
-          throw new Error("文件未上传完成，或大小、类型、校验值与会话不一致");
-        // No client ever receives a write capability for the copied key.
-        await this.files.copyStagingObject(
-          file.objectKey,
-          attempt.objectKey,
-          signal,
-        );
-        const body = await this.files.readStagingObjectLimited(
-          attempt.objectKey,
-          Number(file.size),
-          signal,
-        );
-        if (
-          body.byteLength !== Number(file.size) ||
-          createHash("sha256").update(body).digest("hex") !== file.checksum
-        )
-          throw new Error("上传内容校验失败");
-        const prepared = prepareTypesetBatchFile({
-          originalname: file.sourceName,
-          mimetype: file.contentType,
-          size: body.byteLength,
-          buffer: body,
-        });
-        const image = prepared.images[0];
-        if (
-          prepared.images.length !== 1 ||
-          image.contentType !== file.contentType
-        )
-          throw new Error("图片实际格式与上传类型不一致");
+        if (!metadata) throw new Error(missingUploadError);
+        if (metadata.size !== Number(file.size))
+          throw new Error("文件实际大小与上传会话不一致，请重新选择文件");
         await this.db.$transaction(async (tx) => {
           await tx.$queryRaw`SELECT id FROM typeset_upload_sessions WHERE id=${id}::uuid FOR UPDATE`;
           await this.assertActor(actorId, tx);
@@ -505,7 +496,7 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
             where: { uploadFile: { sessionId: id } },
           });
           if (
-            Number(totals._sum.size ?? 0) + body.byteLength >
+            Number(totals._sum.size ?? 0) + Number(file.size) >
               this.environment.typesetBatchMaxBytes ||
             imageCount + 1 > this.environment.typesetBatchMaxWorks * 100
           )
@@ -520,10 +511,10 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
           });
           if (!completed.count)
             throw new ConflictException("本次验证已失效，请重试当前文件");
-          const adopted = await this.files.adoptCopiedObjectTx(tx, {
-            objectKey: attempt.objectKey,
-            contentType: image.contentType,
-            size: body.byteLength,
+          const adopted = await this.files.adoptDirectObjectTx(tx, {
+            objectKey: file.objectKey,
+            contentType: file.contentType,
+            size: Number(file.size),
             checksum: file.checksum,
             createdById: actorId,
           });
@@ -537,8 +528,8 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
                   {
                     fileObjectId: adopted.id,
                     sourceName: file.sourceName,
-                    width: image.width!,
-                    height: image.height!,
+                    width: input.width,
+                    height: input.height,
                     orderIndex: 0,
                   },
                 ],
@@ -550,12 +541,9 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
             data: { status: "previewed" },
           });
         });
-        await this.files
-          .deleteStagingObject(file.objectKey)
-          .catch(() => undefined);
       } catch (error) {
         // A lost commit reply must never delete the adopted snapshot.
-        const failed = await this.db.$transaction(async (tx) => {
+        await this.db.$transaction(async (tx) => {
           await tx.$queryRaw`SELECT id FROM typeset_upload_sessions WHERE id=${id}::uuid FOR UPDATE`;
           const current = await tx.typesetUploadVerification.findUnique({
             where: { id: attempt.id },
@@ -586,10 +574,8 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
             });
           return true;
         });
-        if (failed)
-          await this.files
-            .deleteStagingObject(attempt.objectKey)
-            .catch(() => undefined);
+        // This immutable object belongs to the file, not to this attempt.
+        // A retry or later completed attempt may still adopt it. Session cleanup owns deletion.
       }
     }
     const session = await this.db.typesetUploadSession.findFirst({
@@ -719,6 +705,8 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
         if (file.status === "processed") continue;
         const storedIds: string[] = [];
         try {
+          if (file.contentType !== "application/zip")
+            throw new Error("请重新选择文件，并使用逐图确认接口确认成图");
           const metadata = await this.files.headStagingObject(file.objectKey);
           if (
             !metadata ||
@@ -1212,6 +1200,7 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
     const attempts = await this.db.typesetUploadVerification.findMany({
       where: {
         status: { not: "completed" },
+        NOT: { objectKey: { startsWith: immutablePrefix } },
         expiresAt: { lt: before },
         OR: [{ cleanedAt: null }, { cleanedAt: { lt: retryBefore } }],
       },
@@ -1236,7 +1225,8 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
       });
       if (!claimed.count) continue;
       try {
-        await this.files.deleteStagingObject(attempt.objectKey);
+        if (!attempt.objectKey.startsWith(immutablePrefix))
+          await this.files.deleteStagingObject(attempt.objectKey);
         await this.db.typesetUploadVerification.updateMany({
           where: { id: attempt.id, status: "failed" },
           data: { cleanedAt: new Date() },
@@ -1248,28 +1238,71 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async cleanupBatch() {
+    // A request authorized before URL expiry may finish after the first DELETE.
+    // Retain a tombstone for one final sweep after 24 hours, without idle DELETEs.
+    const latePutGraceMs = 24 * 60 * 60_000;
+    const now = new Date();
     const sessions = await this.db.typesetUploadSession.findMany({
       where: {
-        expiresAt: { lte: new Date() },
+        expiresAt: { lte: now },
         OR: [
-          { status: { notIn: ["expired", "extracting"] } },
+          { status: { notIn: ["expired", "extracting", "cleanup_grace"] } },
           {
             status: "extracting",
             updatedAt: { lt: new Date(Date.now() - 10 * 60 * 1000) },
           },
+          {
+            status: "cleanup_grace",
+            expiresAt: { lte: new Date(now.getTime() - latePutGraceMs) },
+          },
         ],
       },
-      include: details,
+      select: { id: true },
+      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
       take: 20,
     });
     for (const session of sessions) {
-      const orphanIds = await this.db.$transaction(async (tx) => {
+      const cleanup = await this.db.$transaction(async (tx) => {
         await tx.$queryRaw(
           Prisma.sql`SELECT id FROM typeset_upload_sessions WHERE id = ${session.id}::uuid FOR UPDATE`,
         );
+        const current = await tx.typesetUploadSession.findUniqueOrThrow({
+          where: { id: session.id },
+          include: { files: true },
+        });
+        const graceElapsed =
+          current.expiresAt.getTime() + latePutGraceMs <= Date.now();
+        if (
+          current.status === "expired" ||
+          current.expiresAt > new Date() ||
+          (current.status === "cleanup_grace" && !graceElapsed) ||
+          (current.status === "extracting" &&
+            current.updatedAt >= new Date(Date.now() - 10 * 60_000))
+        )
+          return null;
+        // The discovery list may predate an adoption that held this same lock.
+        // Decide raw-object deletion only from the committed file state under lock.
+        const stagingKeys = current.files
+          .filter(
+            (file) =>
+              !file.objectKey.startsWith(immutablePrefix) ||
+              file.status !== "processed",
+          )
+          .map((file) => file.objectKey);
+        const needsGrace =
+          !graceElapsed &&
+          current.files.some(
+            (file) =>
+              file.objectKey.startsWith(immutablePrefix) &&
+              file.status !== "processed",
+          );
+        const pendingStatus = graceElapsed
+          ? "cleanup_final_pending"
+          : "cleanup_pending";
         await tx.typesetUploadSession.update({
           where: { id: session.id },
-          data: { status: "expired" },
+          // Persist retry intent before storage calls so a crash cannot lose it.
+          data: { status: pendingStatus },
         });
         const images = await tx.typesetUploadImage.findMany({
           where: { uploadFile: { sessionId: session.id } },
@@ -1293,19 +1326,21 @@ export class TypesetUploadsService implements OnModuleInit, OnModuleDestroy {
           where: { id: { in: orphanIds } },
           data: { lifecycleStatus: "pending_deletion" },
         });
-        return orphanIds;
+        return { orphanIds, stagingKeys, needsGrace, pendingStatus };
       });
+      if (!cleanup) continue;
       let stagingFailed = false;
-      for (const file of session.files)
-        await this.files.deleteStagingObject(file.objectKey).catch(() => {
+      for (const objectKey of cleanup.stagingKeys) {
+        await this.files.deleteStagingObject(objectKey).catch(() => {
           stagingFailed = true;
         });
-      if (stagingFailed)
-        await this.db.typesetUploadSession.update({
-          where: { id: session.id },
-          data: { status: "cleanup_pending" },
+      }
+      if (!stagingFailed)
+        await this.db.typesetUploadSession.updateMany({
+          where: { id: session.id, status: cleanup.pendingStatus },
+          data: { status: cleanup.needsGrace ? "cleanup_grace" : "expired" },
         });
-      for (const fileId of orphanIds)
+      for (const fileId of cleanup.orphanIds)
         await this.files.purgeUnreferenced(fileId).catch(() => undefined);
     }
     const retryFiles = await this.db.fileObject.findMany({

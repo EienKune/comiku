@@ -29,7 +29,7 @@ const png = Buffer.from(
 );
 const checksum = createHash("sha256").update(png).digest("hex");
 
-test("direct image verification isolates snapshots, admits bounded parallel files, rebinds without reupload and preserves adopted drafts", async () => {
+test("direct image HEAD confirmation admits bounded parallel files, rebinds without reupload and preserves adopted drafts", async () => {
   const module = await Test.createTestingModule({
     imports: [
       AppModule.forRoot(
@@ -100,39 +100,48 @@ test("direct image verification isolates snapshots, admits bounded parallel file
     const gate = new Promise<void>((r) => {
       release = r;
     });
-    const copyStorage = storage as ObjectStorage &
-      Required<Pick<ObjectStorage, "copy">>;
-    const originalCopy = copyStorage.copy.bind(storage);
-    const copying = mock.method(
-      copyStorage,
-      "copy",
-      async (source: string, key: string, signal?: AbortSignal) => {
-        await originalCopy(source, key, signal);
+    const originalHead = storage.head.bind(storage);
+    const heading = mock.method(
+      storage,
+      "head",
+      async (key: string, signal?: AbortSignal) => {
+        const result = await originalHead(key, signal);
         opened++;
         if (opened === 2) notifyOpened();
         await gate;
+        return result
+          ? {
+              ...result,
+              contentType: "application/octet-stream",
+              checksum: "untrusted",
+            }
+          : null;
       },
     );
-    const first = uploads.verifyFile(actorId, session.id, rows[0].id),
-      second = uploads.verifyFile(actorId, session.id, rows[1].id);
+    const noRead = mock.method(files, "readStagingObjectLimited", async () => {
+      throw new Error("direct confirmation must not GET");
+    });
+    const noCopy = mock.method(files, "copyStagingObject", async () => {
+      throw new Error("direct confirmation must not copy");
+    });
+    const dimensions = { width: 1234, height: 5678 };
+    const first = uploads.verifyFile(
+        actorId,
+        session.id,
+        rows[0].id,
+        dimensions,
+      ),
+      second = uploads.verifyFile(actorId, session.id, rows[1].id, dimensions);
     await openedBoth;
     assert.equal(
-      (await uploads.verifyFile(actorId, session.id, rows[0].id)).status,
+      (await uploads.verifyFile(actorId, session.id, rows[0].id, dimensions))
+        .status,
       "verifying",
     );
     await assert.rejects(
-      uploads.verifyFile(actorId, session.id, rows[2].id),
+      uploads.verifyFile(actorId, session.id, rows[2].id, dimensions),
       /繁忙/,
     );
-    // Both snapshots exist while source is overwritten using an old write capability.
-    await storage.delete(rows[0].objectKey);
-    await storage.put({
-      key: rows[0].objectKey,
-      body: Buffer.alloc(png.length),
-      size: png.length,
-      contentType: "image/png",
-      checksum,
-    });
     // A short unrelated transaction is admitted while storage remains paused.
     await db.user.update({
       where: { id: actorId },
@@ -140,7 +149,9 @@ test("direct image verification isolates snapshots, admits bounded parallel file
     });
     release();
     const [one, two] = await Promise.all([first, second]);
-    copying.mock.restore();
+    heading.mock.restore();
+    assert.equal(noRead.mock.calls.length, 0);
+    assert.equal(noCopy.mock.calls.length, 0);
     assert.equal(one.status, "processed");
     assert.equal(two.status, "processed");
     assert.equal(opened, 2);
@@ -152,7 +163,10 @@ test("direct image verification isolates snapshots, admits bounded parallel file
       Buffer.from(await storage.read(adopted.fileObject.objectKey)),
       png,
     );
-    assert.ok(!adopted.fileObject.objectKey.startsWith("staging/"));
+    assert.equal(adopted.fileObject.objectKey, rows[0].objectKey);
+    assert.equal(adopted.width, dimensions.width);
+    assert.equal(adopted.height, dimensions.height);
+    assert.equal(adopted.fileObject.checksum, checksum);
     const before = await db.fileObject.count({
       where: { createdById: actorId },
     });
@@ -166,10 +180,31 @@ test("direct image verification isolates snapshots, admits bounded parallel file
           "Content-Type": "application/json",
           Cookie: `comiku_session=${token}`,
         },
-        body: "{}",
+        body: JSON.stringify(dimensions),
       },
     );
     assert.equal(response.status, 200);
+    for (const payload of [
+      {},
+      { width: 0, height: 1 },
+      { width: 1.5, height: 1 },
+      { width: 1, height: 2147483648 },
+    ]) {
+      const invalidDimensions = await fetch(
+        `${base}/api/typeset/upload-sessions/${session.id}/files/${rows[0].id}/verify`,
+        {
+          method: "POST",
+          headers: {
+            Origin: "http://localhost:5173",
+            "X-Comiku-Request": "1",
+            "Content-Type": "application/json",
+            Cookie: `comiku_session=${token}`,
+          },
+          body: JSON.stringify(payload),
+        },
+      );
+      assert.equal(invalidDimensions.status, 400);
+    }
     const receipt = (await response.json()) as TypesetUploadFileDto;
     assert.equal(receipt.id, rows[0].id);
     assert.equal(receipt.upload, null);
@@ -186,21 +221,26 @@ test("direct image verification isolates snapshots, admits bounded parallel file
           "Content-Type": "application/json",
           Cookie: `comiku_session=${token}`,
         },
-        body: "{}",
+        body: JSON.stringify(dimensions),
       },
     );
     assert.equal(denied.status, 403);
     await storage.delete(rows[2].objectKey);
     await storage.put({
       key: rows[2].objectKey,
-      body: Buffer.alloc(png.length),
-      size: png.length,
+      body: Buffer.alloc(png.length - 1),
+      size: png.length - 1,
       contentType: "image/png",
       checksum,
     });
-    const invalid = await uploads.verifyFile(actorId, session.id, rows[2].id);
+    const invalid = await uploads.verifyFile(
+      actorId,
+      session.id,
+      rows[2].id,
+      dimensions,
+    );
     assert.equal(invalid.status, "failed");
-    assert.match(invalid.error!, /校验/);
+    assert.match(invalid.error!, /大小/);
     await storage.delete(rows[2].objectKey);
     await storage.put({
       key: rows[2].objectKey,
@@ -210,9 +250,18 @@ test("direct image verification isolates snapshots, admits bounded parallel file
       checksum,
     });
     assert.equal(
-      (await uploads.verifyFile(actorId, session.id, rows[2].id)).status,
+      (await uploads.verifyFile(actorId, session.id, rows[2].id, dimensions))
+        .status,
       "processed",
     );
+    // Failed attempt tombstones share only a marker prefix with the live object.
+    // Retrying and then cleaning an old attempt must preserve the adopted bytes.
+    await db.typesetUploadVerification.updateMany({
+      where: { uploadFileId: rows[2].id, status: "failed" },
+      data: { expiresAt: new Date(Date.now() - 20 * 60_000) },
+    });
+    await uploads.cleanupExpired();
+    assert.equal((await storage.head(rows[2].objectKey))?.size, png.length);
     const author = await db.author.create({
       data: { displayName: "Direct fixture author" },
     });
@@ -304,11 +353,56 @@ test("direct image verification isolates snapshots, admits bounded parallel file
       }),
       /采用/,
     );
+    const lateFileId = randomUUID();
+    const lateKey = `typeset-uploads/immutable/${session.id}/${lateFileId}`;
+    stagedKeys.push(lateKey);
+    await db.typesetUploadFile.create({
+      data: {
+        id: lateFileId,
+        sessionId: session.id,
+        orderIndex: 3,
+        objectKey: lateKey,
+        sourceName: "late.png",
+        contentType: "image/png",
+        size: png.length,
+        checksum,
+      },
+    });
+    const writeLate = () =>
+      storage.put({
+        key: lateKey,
+        body: png,
+        size: png.length,
+        contentType: "image/png",
+        checksum,
+      });
+    await writeLate();
     await db.typesetUploadSession.update({
       where: { id: session.id },
       data: { expiresAt: new Date(Date.now() - 1000) },
     });
-    await uploads.cleanupExpired();
+    // Simulate a listing captured while adoption still held the session row
+    // lock: cleanup must read the post-commit file status under that same lock.
+    const findExpired = db.typesetUploadSession.findMany.bind(
+      db.typesetUploadSession,
+    );
+    const originalList = db.typesetUploadSession.findMany;
+    db.typesetUploadSession.findMany = (async (args) => {
+      const listed = await findExpired(args);
+      return listed.map((item) => ({
+        ...item,
+        files: rows.map((file) => ({
+          ...file,
+          status: "verifying",
+          images: [],
+        })),
+      }));
+    }) as typeof originalList;
+    try {
+      await uploads.cleanupExpired();
+    } finally {
+      db.typesetUploadSession.findMany = originalList;
+    }
     assert.equal(
       await db.typesetUploadImage.count({
         where: { uploadFile: { sessionId: session.id } },
@@ -327,6 +421,77 @@ test("direct image verification isolates snapshots, admits bounded parallel file
       Buffer.from(await storage.read(adopted.fileObject.objectKey)),
       png,
     );
+    assert.equal(await storage.head(rows[1].objectKey), null);
+    assert.equal(await storage.head(rows[2].objectKey), null);
+    assert.equal(await storage.head(lateKey), null);
+    assert.equal(
+      (
+        await db.typesetUploadSession.findUniqueOrThrow({
+          where: { id: session.id },
+        })
+      ).status,
+      "cleanup_grace",
+    );
+    // A PUT authorized before expiry can finish after the first deletion.
+    await writeLate();
+    const originalDelete = storage.delete.bind(storage);
+    const deletion = mock.method(storage, "delete", async (key: string) => {
+      await originalDelete(key);
+    });
+    await uploads.cleanupExpired();
+    assert.equal(
+      deletion.mock.calls.length,
+      0,
+      "no idle DELETEs during the 24-hour grace period",
+    );
+    assert.equal((await storage.head(lateKey))?.size, png.length);
+    deletion.mock.restore();
+    await db.typesetUploadSession.update({
+      where: { id: session.id },
+      data: { expiresAt: new Date(Date.now() - 24 * 3600000 - 1000) },
+    });
+    const failedDelete = mock.method(storage, "delete", async (key: string) => {
+      if (key === lateKey) throw new Error("synthetic final deletion failure");
+      await originalDelete(key);
+    });
+    await uploads.cleanupExpired();
+    assert.equal(
+      (
+        await db.typesetUploadSession.findUniqueOrThrow({
+          where: { id: session.id },
+        })
+      ).status,
+      "cleanup_final_pending",
+    );
+    failedDelete.mock.restore();
+    await uploads.cleanupExpired();
+    assert.equal(await storage.head(lateKey), null);
+    assert.equal(
+      (
+        await db.typesetUploadSession.findUniqueOrThrow({
+          where: { id: session.id },
+        })
+      ).status,
+      "expired",
+    );
+    assert.deepEqual(
+      Buffer.from(await storage.read(adopted.fileObject.objectKey)),
+      png,
+    );
+    const finishedDelete = mock.method(
+      storage,
+      "delete",
+      async (key: string) => {
+        await originalDelete(key);
+      },
+    );
+    await uploads.cleanupExpired();
+    assert.equal(
+      finishedDelete.mock.calls.length,
+      0,
+      "finished tombstones stop issuing DELETEs",
+    );
+    finishedDelete.mock.restore();
   } finally {
     release();
     mock.restoreAll();
@@ -544,6 +709,86 @@ test("expired snapshot cleanup waits for the adopter session lock and rechecks i
         await files.purgeUnreferenced(file.id);
       await db.backgroundJob.deleteMany({ where: { actorId } });
       await db.userRole.deleteMany({ where: { userId: actorId } });
+      await db.user.delete({ where: { id: actorId } });
+    }
+    await app.close();
+  }
+});
+
+test("final cleanup is bounded and a failed oldest tombstone does not hide the next batch", async () => {
+  const module = await Test.createTestingModule({
+    imports: [
+      AppModule.forRoot(
+        parseEnvironment({ NODE_ENV: "test", DATABASE_URL: testUrl }),
+      ),
+    ],
+  }).compile();
+  const app = module.createNestApplication();
+  await app.init();
+  const db = app.get(PrismaService),
+    uploads = app.get(TypesetUploadsService),
+    storage = app.get<ObjectStorage>(OBJECT_STORAGE);
+  let actorId = "";
+  const deletionKeys: string[] = [];
+  let restoreDelete = () => {};
+  try {
+    const actor = await db.user.create({
+      data: {
+        username: `late_cleanup_${randomUUID()}`,
+        displayName: "Late cleanup fixture",
+        passwordHash: "non-login",
+      },
+    });
+    actorId = actor.id;
+    const keys: string[] = [];
+    for (let index = 0; index < 21; index++) {
+      const sessionId = randomUUID(),
+        fileId = randomUUID();
+      const objectKey = `typeset-uploads/immutable/${sessionId}/${fileId}`;
+      keys.push(objectKey);
+      await db.typesetUploadSession.create({
+        data: {
+          id: sessionId,
+          actorId,
+          status: "cleanup_final_pending",
+          expiresAt: new Date(Date.now() - 25 * 3600000),
+          updatedAt: new Date(Date.now() - 60000 - index * 1000),
+          files: {
+            create: {
+              id: fileId,
+              sourceName: "late.png",
+              objectKey,
+              orderIndex: 0,
+              contentType: "image/png",
+              size: png.length,
+              checksum,
+            },
+          },
+        },
+      });
+    }
+    const deletion = mock.method(storage, "delete", async (key: string) => {
+      deletionKeys.push(key);
+      if (key === keys[20]) throw new Error("synthetic persistent failure");
+    });
+    restoreDelete = () => deletion.mock.restore();
+    await uploads.cleanupExpired();
+    assert.equal(deletionKeys.length, 20);
+    assert.equal(deletionKeys.includes(keys[0]), false);
+    await uploads.cleanupExpired();
+    assert.equal(deletionKeys.length, 22);
+    assert.equal(deletionKeys.includes(keys[0]), true);
+    assert.equal(new Set(deletionKeys).size, 21);
+    assert.equal(
+      await db.typesetUploadSession.count({
+        where: { actorId, status: "expired" },
+      }),
+      20,
+    );
+  } finally {
+    restoreDelete();
+    if (actorId) {
+      await db.typesetUploadSession.deleteMany({ where: { actorId } });
       await db.user.delete({ where: { id: actorId } });
     }
     await app.close();

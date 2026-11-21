@@ -1,12 +1,64 @@
 import type { components } from "@comiku/api-client";
 import { authenticatedFetch, client, unwrap } from "../account/api";
 import { pollTransfer } from "./transfers-api";
+import { typesetImageDimensions } from "./typeset-image-dimensions";
 import {
   typesetUploadContentType,
   uploadFileChecksum,
 } from "./typeset-upload-plan";
 
 type Session = components["schemas"]["TypesetUploadSessionDto"];
+// Receipts belong to an exact immutable File and authorized session/file identity.
+// Keep uncertain replies so Retry confirms the original object before any PUT.
+const uploadReceipts = new WeakMap<File, Set<string>>();
+const checksums = new WeakMap<File, Promise<string>>();
+function checksum(file: File) {
+  let pending = checksums.get(file);
+  if (!pending) {
+    pending = uploadFileChecksum(file).catch((error: unknown) => {
+      checksums.delete(file);
+      throw error;
+    });
+    checksums.set(file, pending);
+  }
+  return pending;
+}
+/** Match exact immutable bytes, permitting local package extras only for explicit restoration. */
+export async function matchTypesetSessionFiles(
+  session: Session,
+  files: File[],
+  options: { allowExtraFiles?: boolean; signal?: AbortSignal } = {},
+) {
+  if (
+    (!options.allowExtraFiles && session.files.length !== files.length) ||
+    session.files.length > files.length
+  )
+    throw new Error("重试文件与上传会话不匹配，请重新选择文件");
+  const available = [];
+  // Hash one file at a time: an entire selected batch can reach 512 MiB.
+  for (const file of files) {
+    options.signal?.throwIfAborted();
+    available.push({
+      file,
+      checksum: await checksum(file),
+      contentType: typesetUploadContentType(file),
+    });
+  }
+  const restored: File[] = [];
+  for (const remote of session.files) {
+    options.signal?.throwIfAborted();
+    const index = available.findIndex(
+      (local) =>
+        remote.sourceName === local.file.name &&
+        remote.size === local.file.size &&
+        remote.contentType === local.contentType &&
+        remote.checksum === local.checksum,
+    );
+    if (index < 0) throw new Error("重试文件与上传会话不匹配，请重新选择文件");
+    restored.push(available.splice(index, 1)[0].file);
+  }
+  return restored;
+}
 export type TypesetTransferOptions = {
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
@@ -96,16 +148,20 @@ async function uploadTypesetFilesInternal(
     );
     if (
       session.files.length !== files.length ||
-      session.files.some((file, i) => file.sourceName !== files[i].name)
+      session.id !== options.sessionId
     )
       throw new Error("重试文件与上传会话不匹配，请重新选择文件");
+    files = await matchTypesetSessionFiles(session, files, { signal });
     onSession?.(session);
     if (
       session.status === "previewed" &&
       session.files.every((file) => file.status === "processed")
     )
       return session;
-    if (session.status === "extracting")
+    if (
+      session.status === "extracting" &&
+      session.files.every((file) => file.archive || file.status === "processed")
+    )
       return extractTypesetSessionInternal(session.id, options);
   } else {
     const descriptors = [];
@@ -116,7 +172,7 @@ async function uploadTypesetFilesInternal(
         sourceName: file.name,
         contentType: typesetUploadContentType(file),
         size: file.size,
-        checksum: await uploadFileChecksum(file),
+        checksum: await checksum(file),
       });
     }
     session = await unwrap(
@@ -168,7 +224,9 @@ async function uploadTypesetFilesInternal(
                   "content-type": "application/json",
                   "X-Comiku-Request": "1",
                 },
-                body: "{}",
+                body: JSON.stringify(
+                  await typesetImageDimensions(files[index]),
+                ),
                 signal,
               },
             );
@@ -192,6 +250,10 @@ async function uploadTypesetFilesInternal(
                 ),
               };
               onSession?.(session);
+              if (verified.uploadMissing)
+                uploadReceipts
+                  .get(files[index])
+                  ?.delete(`${session.id}:${item.id}`);
               if (verified.status !== "processed")
                 throw new Error(verified.error || "文件校验失败，请重试");
               processed = true;
@@ -218,8 +280,8 @@ async function uploadTypesetFilesInternal(
       }
     },
   );
-  // Three storage PUTs feed two independent verification slots. A slow decode
-  // must not hold a PUT slot; all requests settle before save or error reporting.
+  // Three storage PUTs feed two independent metadata confirmation slots.
+  // All requests settle before save or error reporting.
   const uploads = Promise.all(
     Array.from({ length: Math.min(3, files.length) }, async () => {
       while (next < files.length && !signal?.aborted) {
@@ -231,18 +293,27 @@ async function uploadTypesetFilesInternal(
         }
         try {
           signal?.throwIfAborted();
-          if (item.status !== "verifying") {
+          const receiptKey = `${session.id}:${item.id}`;
+          const receipts =
+            uploadReceipts.get(files[index]) ?? new Set<string>();
+          uploadReceipts.set(files[index], receipts);
+          if (item.status !== "verifying" && !receipts.has(receiptKey)) {
             if (!item.upload) throw new Error("上传地址已失效");
+            const immutable =
+              !item.archive &&
+              new Headers(item.upload.headers).get("If-None-Match") === "*";
+            if (!item.archive) await typesetImageDimensions(files[index]);
             onProgress?.(
               `正在上传 ${completed}/${files.length}：${item.sourceName}`,
             );
+            if (immutable) receipts.add(receiptKey);
             const response = await authenticatedFetch(item.upload.url, {
               method: item.upload.method,
               headers: item.upload.headers,
               body: files[index],
               signal,
             });
-            if (!response.ok)
+            if (!response.ok && !(immutable && response.status === 412))
               throw new Error(`上传失败（HTTP ${response.status}）`);
           }
           if (!item.archive) {
