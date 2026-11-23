@@ -17,6 +17,111 @@ test("disabled bridge never initializes activation, queries sources or registers
   assert.equal(await bridge.maintain(), null);
 });
 
+test("capture keeps personal submit receipts skipped and freezes final and legacy handoffs", async () => {
+  for (const [stage, current, next] of [
+    ["translate", "translating", "pending_proofread"],
+    ["typeset", "typesetting", "pending_publish"],
+  ]) {
+    for (const kind of ["personal", "final", "legacy"]) {
+      const source = {
+        id: "00000000-0000-4000-8000-000000000001",
+        workId: "00000000-0000-4000-8000-000000000002",
+        workNumber: 42,
+        action: "stage_submitted",
+        createdAt: new Date("2026-11-07T00:00:00Z"),
+        fromWorkflowStatus: kind === "legacy" ? null : current,
+        toWorkflowStatus:
+          kind === "legacy" ? null : kind === "final" ? next : current,
+        fromReviewStatus: null,
+        toReviewStatus: null,
+        detail: { stage, operation: `submit:${stage}` },
+      };
+      let selections = 0;
+      let templateReads = 0;
+      let markedCaptured = false;
+      let receipt: Record<string, unknown> | undefined;
+      const tx = {
+        $queryRaw: async () => {
+          selections++;
+          if (selections === 1) return [source];
+          if (selections === 2) return [];
+          return [
+            {
+              id: "00000000-0000-4000-8000-000000000004",
+              revision: 1,
+              generation: 1,
+              groupId: "123456",
+              connectionKey: "synthetic",
+              connectionFingerprint: "a".repeat(64),
+              includeDetails: false,
+              templateVersion: 1,
+              receiverMode: "legacy",
+              subscriptionRules: [],
+            },
+          ];
+        },
+        $executeRaw: async (query: readonly string[]) => {
+          if (query.join("").includes("notification_captured_at"))
+            markedCaptured = true;
+          return 1;
+        },
+        notificationTemplate: {
+          findMany: async () => {
+            templateReads++;
+            return [];
+          },
+        },
+        notificationWorkEventReceipt: {
+          findFirst: async () => ({ resourceOrdinal: 1 }),
+          create: async ({ data }: { data: Record<string, unknown> }) => {
+            receipt = data;
+          },
+        },
+      };
+      const bridge = new NotificationWorkEventBridgeService(
+        {
+          $transaction: (fn: (client: typeof tx) => Promise<unknown>) => fn(tx),
+        } as never,
+        {} as never,
+        { enabled: true } as never,
+      );
+      assert.equal(
+        await (
+          bridge as unknown as {
+            capture(
+              sourceSince: Date,
+              expandedSourceSince: Date,
+            ): Promise<boolean>;
+          }
+        ).capture(new Date(0), new Date(0)),
+        true,
+      );
+      assert.equal(markedCaptured, true);
+      assert.equal(receipt?.sourceEventId, source.id);
+      assert.equal(receipt?.resourceOrdinal, 2);
+      if (kind === "personal") {
+        assert.equal(receipt?.status, "skipped", stage);
+        assert.equal(receipt?.errorCode, "no_public_notification");
+        assert.deepEqual(receipt?.safeInput, {});
+        assert.deepEqual(receipt?.routeRefs, []);
+        assert.equal(receipt?.payloadHash, null);
+        assert.equal(templateReads, 0);
+        assert.equal(selections, 2);
+      } else {
+        assert.equal(receipt?.status, "pending", `${stage} ${kind}`);
+        const input = receipt?.safeInput as { type: string; stage: string };
+        assert.equal(input.type, "stage_submitted");
+        assert.equal(input.stage, stage);
+        assert.equal((receipt?.routeRefs as unknown[]).length, 1);
+        assert.equal(
+          receipt?.payloadHash,
+          notificationPayloadHash(input as never),
+        );
+      }
+    }
+  }
+});
+
 test("systemic database failure backs off instead of hot-looping and stays outside callers", async () => {
   let calls = 0;
   const bridge = new NotificationWorkEventBridgeService(

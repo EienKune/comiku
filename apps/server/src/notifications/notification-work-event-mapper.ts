@@ -63,6 +63,16 @@ export function mapWorkEventNotification(
     !allowedStages.includes(stage as never)
   )
     throw new Error("notification_event_invalid");
+  // Personal page submissions retain stage_submitted for audit and idempotent
+  // retries. Public handoff copy applies only after the work advances. Missing
+  // historical status facts keep their legacy mapping.
+  if (
+    source.action === "stage_submitted" &&
+    (stage === "translate" || stage === "typeset") &&
+    source.fromWorkflowStatus !== null &&
+    source.fromWorkflowStatus === source.toWorkflowStatus
+  )
+    return null;
   // Credit names are free text and may contain colons. Match only the fixed
   // producer prefix; neither names nor the claim target enter the snapshot.
   const operation =

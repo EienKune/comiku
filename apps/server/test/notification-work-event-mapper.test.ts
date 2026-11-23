@@ -166,3 +166,48 @@ test("only formal material revisions and direct proofreading additions carry saf
     undefined,
   );
 });
+
+test("page-stage personal submissions notify only when the whole work advances", () => {
+  for (const [stage, current, next] of [
+    ["translate", "translating", "pending_proofread"],
+    ["typeset", "typesetting", "pending_publish"],
+  ]) {
+    const submit = {
+      ...source,
+      action: "stage_submitted",
+      fromWorkflowStatus: current,
+      toWorkflowStatus: current,
+      detail: {
+        stage,
+        operation: `submit:${stage}`,
+        participantIds: ["private"],
+      },
+    };
+    assert.equal(
+      mapWorkEventNotification(submit, 1),
+      null,
+      `${stage} first member`,
+    );
+    const final = mapWorkEventNotification(
+      { ...submit, toWorkflowStatus: next },
+      2,
+    )!;
+    assert.equal(final.type, "stage_submitted");
+    assert.equal(final.stage, stage);
+    assert.equal(final.ordinal, 2);
+    assert.equal(final.toWorkflowStatus, next);
+    // Old events without workflow facts remain readable; never infer personal
+    // completion from missing historical metadata or require new version keys.
+    const legacy = mapWorkEventNotification(
+      {
+        ...submit,
+        fromWorkflowStatus: null,
+        toWorkflowStatus: null,
+        detail: { stage },
+      },
+      3,
+    )!;
+    assert.equal(legacy.type, "stage_submitted");
+    assert.equal(legacy.stage, stage);
+  }
+});

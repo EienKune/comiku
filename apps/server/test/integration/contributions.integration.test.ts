@@ -117,6 +117,23 @@ test("effective contributions, unique works, first publication, historical ident
     const multi = await work("Same work, multiple roles and credits");
     const aTranslate = await credit(multi.id, a.id, "translate", first, now);
     const bTranslate = await credit(multi.id, b.id, "translate", first);
+    // Reconciled legacy multi work can have page ownership without per-member
+    // submission receipts; its original simultaneous formal credits stay valid.
+    await db.work.update({
+      where: { id: multi.id },
+      data: { collaborationMode: "multi" },
+    });
+    const legacyImage = await db.workImage.findFirstOrThrow({
+      where: { workId: multi.id },
+    });
+    await db.workPageAssignment.create({
+      data: {
+        workId: multi.id,
+        workImageId: legacyImage.id,
+        stage: "translate",
+        participantId: bTranslate.id,
+      },
+    });
     await credit(multi.id, a.id, "translate", first, now); // Duplicate historical row never adds a second credit.
     await credit(multi.id, a.id, "typeset", first);
     await credit(multi.id, actor.id, "translate", null, now);

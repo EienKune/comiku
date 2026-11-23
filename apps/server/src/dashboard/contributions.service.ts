@@ -89,24 +89,69 @@ export function contributionAchievements(
 }
 
 /** submitted_at is the workflow's current formal credit: cancellation clears it,
- * and uncredited submit actors keep it null. Events/pages are immutable audit,
- * not additional deliveries. Historic credits survive leaving and archiving. */
+ * and uncredited submit actors keep it null. Formal round events identify joint
+ * page deliveries; they never add credits on their own. Historic credits survive
+ * leaving and archiving. */
 function contributionCte(userId: string | null) {
   const owner = userId
     ? Prisma.sql`AND p.user_id = ${userId}::uuid`
     : Prisma.empty;
+  // Page ownership can also be backfilled legacy data. Only receipt-backed
+  // stages use asynchronous rounds. Receipts and events share the database's
+  // transaction clock; submitted_at is a JS clock and can follow its own event.
+  // The latest receipt fences off old full rounds after a partial resubmission.
   return Prisma.sql`WITH completed AS (
     SELECT DISTINCT ON (p.user_id, p.work_id, p.stage)
       p.user_id, p.work_id, p.stage, p.submitted_at AS completed_at
     FROM work_stage_participants p
     WHERE p.submitted_at IS NOT NULL AND p.stage IN ('translate', 'proofread', 'typeset') ${owner}
     ORDER BY p.user_id, p.work_id, p.stage, p.submitted_at DESC, p.id DESC
+  ), page_stages AS (
+    SELECT DISTINCT c.work_id, c.stage
+    FROM completed c JOIN works w ON w.id = c.work_id
+    JOIN work_page_assignments a ON a.work_id = c.work_id AND a.stage = c.stage
+    WHERE w.collaboration_mode = 'multi' AND c.stage IN ('translate', 'typeset')
+      AND EXISTS (
+        SELECT 1 FROM work_stage_participants p
+        JOIN stage_contribution_submissions s ON s.participant_id = p.id
+        WHERE p.work_id = c.work_id AND p.stage = c.stage
+      )
+  ), effective_page_participants AS (
+    SELECT DISTINCT ON (p.user_id, p.work_id, p.stage)
+      p.id, p.user_id, p.work_id, p.stage, p.joined_at, p.submitted_at
+    FROM work_stage_participants p
+    JOIN page_stages s ON s.work_id = p.work_id AND s.stage = p.stage
+    WHERE p.submitted_at IS NOT NULL
+    ORDER BY p.user_id, p.work_id, p.stage, p.submitted_at DESC, p.id DESC
+  ), effective_page_submissions AS (
+    SELECT p.*, s.created_at AS submitted_round_at
+    FROM effective_page_participants p
+    LEFT JOIN LATERAL (
+      SELECT created_at FROM stage_contribution_submissions
+      WHERE participant_id = p.id ORDER BY created_at DESC LIMIT 1
+    ) s ON TRUE
   ), collaborative_rounds AS (
-    SELECT p.work_id, p.stage, p.submitted_at
+    SELECT p.work_id, p.stage
     FROM work_stage_participants p
     JOIN (SELECT DISTINCT work_id, stage, completed_at FROM completed) c
       ON c.work_id = p.work_id AND c.stage = p.stage AND c.completed_at = p.submitted_at
+    LEFT JOIN page_stages s ON s.work_id = p.work_id AND s.stage = p.stage
+    WHERE s.work_id IS NULL
     GROUP BY p.work_id, p.stage, p.submitted_at HAVING COUNT(DISTINCT p.user_id) >= 2
+    UNION ALL
+    SELECT p.work_id, p.stage
+    FROM effective_page_submissions p
+    JOIN work_events e ON e.work_id = p.work_id AND e.action = 'stage_submitted'
+      AND e.detail->>'stage' = p.stage::text
+      AND e.created_at >= p.joined_at
+      AND (e.created_at >= p.submitted_round_at
+        OR (p.submitted_round_at IS NULL AND e.detail->'participantIds' @> to_jsonb(p.id::text)))
+      AND e.detail->'credits' @> jsonb_build_array(jsonb_build_object('userId', p.user_id))
+      AND ((p.stage = 'translate' AND e.detail->>'translationVersionId' IS NOT NULL)
+        OR (p.stage = 'typeset' AND e.detail->>'typesetVersionId' IS NOT NULL))
+    GROUP BY p.work_id, p.stage, e.id
+    HAVING COUNT(DISTINCT p.user_id) >= 2
+      ${userId ? Prisma.sql`AND BOOL_OR(p.user_id = ${userId}::uuid)` : Prisma.empty}
   ), current_tasks AS (
     SELECT p.user_id, p.work_id, p.stage, MIN(p.joined_at) AS joined_at
     FROM work_stage_participants p

@@ -60,27 +60,75 @@ export async function buildMaterialArchive(
   const entries: Record<string, Uint8Array> = {};
   let cursor = 0;
   let renewal: Promise<MaterialManifest> | undefined;
+  let currentImages = material.images;
   let firstFailure: unknown;
+  function renewImages() {
+    // R2 can omit CORS headers on an expired signature. The browser then hides
+    // its 403 behind a fetch TypeError, indistinguishable from a network fault.
+    // Share one renewal, retry once, and let persistent failures surface.
+    renewal ??= Promise.resolve()
+      .then(renew!)
+      .then((refreshed) => {
+        controller.signal.throwIfAborted();
+        if (
+          refreshed.images.length !== material.images.length ||
+          refreshed.images.some((image, index) => {
+            const original = material.images[index];
+            return (
+              !image.url ||
+              image.fileName !== original.fileName ||
+              image.checksum !== original.checksum ||
+              image.size !== original.size
+            );
+          })
+        )
+          throw new Error("材料已更新，请重新领取");
+        currentImages = refreshed.images;
+        return refreshed;
+      });
+    return waitForRenewal();
+  }
+  function waitForRenewal() {
+    controller.signal.throwIfAborted();
+    return new Promise<MaterialManifest>((resolve, reject) => {
+      const stop = () => reject(controller.signal.reason);
+      controller.signal.addEventListener("abort", stop, { once: true });
+      renewal!.then(resolve, reject).finally(() => {
+        controller.signal.removeEventListener("abort", stop);
+      });
+    });
+  }
   async function worker() {
     while (cursor < material.images.length) {
       controller.signal.throwIfAborted();
       const index = cursor++;
       const image = material.images[index];
-      if (!image.url) throw new Error("材料下载地址缺失，请重新领取");
-      let response = await fetcher(image.url, { signal: controller.signal });
-      if (response.status === 403 && renew) {
-        renewal ??= renew();
-        const refreshed = (await renewal).images[index];
-        if (
-          !refreshed?.url ||
-          refreshed.fileName !== image.fileName ||
-          refreshed.checksum !== image.checksum ||
-          refreshed.size !== image.size
-        )
-          throw new Error("材料已更新，请重新领取");
-        response = await fetcher(refreshed.url, { signal: controller.signal });
+      // Later worker waves must use renewed URLs, including while signing is
+      // still in flight, rather than repeatedly trying the expired manifest.
+      if (renewal) await waitForRenewal();
+      controller.signal.throwIfAborted();
+      const signedImage = currentImages[index];
+      if (!signedImage.url) throw new Error("材料下载地址缺失，请重新领取");
+      const canRenew = renew && currentImages === material.images;
+      let response: Response | undefined;
+      try {
+        response = await fetcher(signedImage.url, {
+          signal: controller.signal,
+        });
+      } catch (error) {
+        controller.signal.throwIfAborted();
+        if (!canRenew || !(error instanceof TypeError)) throw error;
       }
-      if (!response.ok) throw new Error(`下载失败：${image.fileName}，请重试`);
+      controller.signal.throwIfAborted();
+      if (canRenew && (!response || response.status === 403)) {
+        await renewImages();
+        controller.signal.throwIfAborted();
+        response = await fetcher(currentImages[index].url!, {
+          signal: controller.signal,
+        });
+      }
+      controller.signal.throwIfAborted();
+      if (!response?.ok) throw new Error(`下载失败：${image.fileName}，请重试`);
       const bytes = new Uint8Array(await response.arrayBuffer());
       const checksum = Array.from(
         new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
@@ -96,6 +144,7 @@ export async function buildMaterialArchive(
       { length: Math.min(6, material.images.length) },
       () =>
         worker().catch((error) => {
+          if (signal?.aborted) error = signal.reason;
           firstFailure ??= error;
           controller.abort();
           throw error;
