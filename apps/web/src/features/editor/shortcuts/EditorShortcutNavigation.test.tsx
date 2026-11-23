@@ -136,7 +136,7 @@ async function fixture(canEdit = true) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  await screen.findByAltText("第 1 页");
+  fireEvent.load(await screen.findByAltText("第 1 页"));
   await waitFor(() =>
     expect(
       (screen.getByRole("button", { name: "添加框内" }) as HTMLButtonElement)
@@ -200,7 +200,7 @@ test("list navigation ignores text fields, buttons, IME, active dialogs, and rep
   press(list, "ArrowDown");
   expect(screen.getByText("当前选择：标记 1")).toBeTruthy();
   const area = screen.getByDisplayValue("第1页译文1");
-  const page = screen.getByRole("spinbutton", { name: "跳转页码，共 2 页" });
+  const page = screen.getByRole("button", { name: /预览并跳转页面/ });
   for (const target of [
     area,
     page,
@@ -259,4 +259,18 @@ test("saved custom shortcuts update keycaps and behavior and readonly retains na
   ).toBe("H");
   expect(press(canvas, "g").defaultPrevented).toBe(false);
   expect(press(canvas, "h").defaultPrevented).toBe(true);
+});
+
+test("readonly translation selection keeps native copy and text navigation without editor shortcuts", async () => {
+  await fixture(false);
+  const area = screen.getByDisplayValue("第1页译文1") as HTMLTextAreaElement;
+  expect(area.readOnly).toBe(true);
+  expect(area.disabled).toBe(false);
+  area.focus();
+  area.setSelectionRange(0, area.value.length);
+  expect(press(area, "c", { ctrlKey: true }).defaultPrevented).toBe(false);
+  expect(press(area, "ArrowRight").defaultPrevented).toBe(false);
+  expect(press(area, "Delete").defaultPrevented).toBe(false);
+  expect(screen.getByAltText("第 1 页")).toBeTruthy();
+  expect(area.value).toBe("第1页译文1");
 });

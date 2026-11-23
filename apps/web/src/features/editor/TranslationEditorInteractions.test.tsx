@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
@@ -23,7 +24,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function fixture(canEdit = true, seededEntries = 0) {
+async function fixture(
+  canEdit = true,
+  seededEntries = 0,
+  loadImage = true,
+  emptyLastEntry = false,
+) {
   vi.stubGlobal("PointerEvent", MouseEvent);
   const user: CurrentUser = {
     id: "00000000-0000-4000-8000-000000000001",
@@ -85,7 +91,10 @@ async function fixture(canEdit = true, seededEntries = 0) {
       markerX: 0.2 + orderIndex * 0.05,
       markerY: 0.3 + orderIndex * 0.05,
       markerPositionType: "inside",
-      translatedText: `原文 ${orderIndex + 1}`,
+      translatedText:
+        emptyLastEntry && orderIndex === seededEntries - 1
+          ? ""
+          : `原文 ${orderIndex + 1}`,
       note: null,
       revision: 0,
       createdById: user.id,
@@ -271,6 +280,7 @@ async function fixture(canEdit = true, seededEntries = 0) {
     </QueryClientProvider>,
   );
   const img = await screen.findByAltText("第 1 页");
+  if (loadImage) fireEvent.load(img);
   vi.spyOn(img, "getBoundingClientRect").mockReturnValue({
     left: 0,
     top: 0,
@@ -287,7 +297,7 @@ async function fixture(canEdit = true, seededEntries = 0) {
     expect(
       (screen.getByRole("button", { name: "添加框内" }) as HTMLButtonElement)
         .disabled,
-    ).toBe(!canEdit),
+    ).toBe(!canEdit || !loadImage),
   );
   const point = () =>
     fireEvent.pointerDown(canvas, { clientX: 40, clientY: 60, pointerId: 1 });
@@ -317,6 +327,80 @@ async function fixture(canEdit = true, seededEntries = 0) {
     },
   };
 }
+
+test("waits for the actual image before exposing markers or accepting canvas input", async () => {
+  const f = await fixture(true, 1, false);
+  expect(within(f.canvas).getByRole("status").textContent).toContain(
+    "正在加载第 1 页",
+  );
+  expect(
+    f.img.closest<HTMLElement>(".translation-image-layer")!.style.visibility,
+  ).toBe("hidden");
+  expect(screen.queryByRole("button", { name: "标记 1" })).toBeNull();
+  f.point();
+  expect(f.canvas.setPointerCapture).not.toHaveBeenCalled();
+  for (const name of ["添加框内", "添加框外", "移动标记"])
+    expect(
+      (screen.getByRole("button", { name }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  fireEvent.keyDown(f.canvas, { key: "2" });
+  expect(
+    screen
+      .getByRole("button", { name: "移动画布" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  fireEvent.load(f.img);
+  expect(screen.queryByText("正在加载第 1 页")).toBeNull();
+  expect(screen.getByRole("button", { name: "标记 1" })).toBeTruthy();
+  expect(
+    f.img.closest<HTMLElement>(".translation-image-layer")!.style.visibility,
+  ).toBe("visible");
+});
+
+test("immediately removes the previous image and ignores stale load and error events across rapid navigation", async () => {
+  const f = await fixture(true, 1);
+  fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+  expect(screen.queryByAltText("第 1 页")).toBeNull();
+  expect(within(f.canvas).getByRole("status").textContent).toContain(
+    "正在加载第 2 页",
+  );
+  const second = await screen.findByAltText("第 2 页");
+  fireEvent.load(f.img);
+  fireEvent.error(f.img);
+  expect(within(f.canvas).getByRole("status").textContent).toContain(
+    "正在加载第 2 页",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "上一页" }));
+  const firstAgain = await screen.findByAltText("第 1 页");
+  expect(firstAgain).not.toBe(f.img);
+  fireEvent.load(second);
+  fireEvent.load(f.img);
+  expect(within(f.canvas).getByRole("status").textContent).toContain(
+    "正在加载第 1 页",
+  );
+  expect(screen.queryByRole("button", { name: "标记 1" })).toBeNull();
+  fireEvent.load(firstAgain);
+  expect(screen.getByRole("button", { name: "标记 1" })).toBeTruthy();
+});
+
+test("retries an image failure and keeps it inactive until the replacement loads", async () => {
+  const f = await fixture(true, 1, false);
+  fireEvent.error(f.img);
+  expect(screen.getByRole("alert").textContent).toContain(
+    "第 1 页图片加载失败",
+  );
+  expect(screen.queryByRole("button", { name: "标记 1" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "重试加载图片" }));
+  expect(within(f.canvas).getByRole("status").textContent).toContain(
+    "正在加载第 1 页",
+  );
+  const retry = await screen.findByAltText("第 1 页");
+  expect(retry).not.toBe(f.img);
+  fireEvent.load(f.img);
+  expect(screen.queryByRole("button", { name: "标记 1" })).toBeNull();
+  fireEvent.load(retry);
+  expect(screen.getByRole("button", { name: "标记 1" })).toBeTruthy();
+});
 
 test("defaults to pan, preserves marker selection and removes ordering controls", async () => {
   const f = await fixture();
@@ -428,7 +512,7 @@ test("reorder receipt cannot silently rebase a dirty draft over a colleague's ne
     { key: "ArrowUp" },
   );
   await screen.findByText(
-    "标记顺序已保存，但有译文同时被其他参与者修改。请确认保留哪一版译文。",
+    /标记顺序已保存，但有译文同时被其他参与者修改。请确认保留哪一版译文。/,
   );
   await waitFor(() =>
     expect(
@@ -549,6 +633,7 @@ test("tool shortcuts leave typing and page-number input alone", async () => {
   const area = await screen.findByPlaceholderText("输入对应译文");
   area.focus();
   fireEvent.keyDown(area, { key: "4" });
+  fireEvent.click(screen.getByRole("button", { name: /预览并跳转页面/ }));
   const page = screen.getByRole("spinbutton", { name: "跳转页码，共 2 页" });
   page.focus();
   const event = new KeyboardEvent("keydown", {
@@ -867,6 +952,7 @@ test("wheel leaves browser gestures, page controls and active drags alone", asyn
     expect(event.defaultPrevented).toBe(false);
     expect(f.img.style.transform).toBe("scale(1)");
   }
+  fireEvent.click(screen.getByRole("button", { name: /预览并跳转页面/ }));
   const input = screen.getByRole("spinbutton", { name: "跳转页码，共 2 页" });
   const event = new WheelEvent("wheel", {
     bubbles: true,
@@ -1021,3 +1107,77 @@ test.each(["entry", "image", "epoch"])(
     ).toHaveLength(1);
   },
 );
+
+test.each(["create", "delete"])(
+  "%s page receipts cannot raise another dirty entry's revision or overwrite a colleague",
+  async (operation) => {
+    const f = await fixture(true, 2, true, true);
+    const edited = f.head.images[0].entries[0];
+    fireEvent.change(screen.getByDisplayValue("原文 1"), {
+      target: { value: "本人未保存的译文" },
+    });
+    edited.translatedText = "同事已保存的译文";
+    edited.revision = 1;
+    if (operation === "create") {
+      fireEvent.click(screen.getByRole("button", { name: "添加框内" }));
+      f.point();
+      await screen.findByRole("button", { name: "标记 3" });
+    } else {
+      fireEvent.click(screen.getAllByRole("button", { name: "删除标记" })[1]);
+      await waitFor(() => expect(f.head.images[0].entries).toHaveLength(1));
+    }
+    const patch = vi
+      .spyOn(client, "PATCH")
+      .mockImplementation(async (_path, options) => {
+        const body = (
+          options as {
+            body: { expectedRevision: number; translatedText: string };
+          }
+        ).body;
+        if (body.expectedRevision !== edited.revision)
+          return {
+            error: { message: "版本变化" },
+            response: new Response(null, { status: 409 }),
+          } as never;
+        edited.translatedText = body.translatedText;
+        return {
+          data: { ...edited, revision: 2 },
+          response: new Response(null, { status: 200 }),
+        } as never;
+      });
+    const save = screen.queryByRole("button", { name: "保存草稿" });
+    if (save) {
+      fireEvent.click(save);
+      await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    }
+    expect(edited.translatedText).toBe("同事已保存的译文");
+    expect(
+      await screen.findByRole("button", { name: "查看本地草稿" }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "查看本地草稿" }));
+    expect(screen.getByDisplayValue("本人未保存的译文")).toBeTruthy();
+    for (const [, options] of patch.mock.calls as unknown as [
+      string,
+      { body: { expectedRevision: number } },
+    ][])
+      expect(options.body.expectedRevision).toBe(0);
+  },
+);
+
+test("a creation receipt preserves remotely deleted dirty text for copying without duplicating the confirmed new marker", async () => {
+  const f = await fixture(true, 2);
+  const deletedId = f.head.images[0].entries[0].id;
+  fireEvent.change(screen.getByDisplayValue("原文 1"), {
+    target: { value: "云端删除前的本地输入" },
+  });
+  f.head.images[0].entries = f.head.images[0].entries.filter(
+    ({ id }) => id !== deletedId,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "添加框内" }));
+  f.point();
+  fireEvent.click(await screen.findByRole("button", { name: "查看本地草稿" }));
+  expect(screen.getByDisplayValue("云端删除前的本地输入")).toBeTruthy();
+  expect(screen.getAllByPlaceholderText("输入对应译文")).toHaveLength(3);
+  expect(screen.queryByText("待创建")).toBeNull();
+  expect(f.head.images[0].entries).toHaveLength(2);
+});

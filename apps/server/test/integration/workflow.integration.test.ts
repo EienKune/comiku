@@ -1,3 +1,4 @@
+import { translationPageHeads } from "./page-heads.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -290,6 +291,8 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
     };
     type TranslationEditorResponse = {
       canEdit: boolean;
+      workflowStatus: string;
+      reviewStatus: string;
       editStages: string[];
       joinableStage: string | null;
       submissionStage: string | null;
@@ -318,6 +321,10 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
     type TranslationPresenceResponse = {
       expiresInSeconds: number;
       items: TranslationEditorResponse["activeParticipants"];
+      workRevision: number;
+      editorEpoch: number;
+      workflowStatus: string;
+      reviewStatus: string;
     };
     const initial = await request<WorkResponse>(
       translator.browser,
@@ -548,6 +555,8 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       `/api/works/${workId}/stages/leave`,
       {
         stage: "translate",
+        confirmClearDraft: true,
+        impactImageIds: initial.data.images.map((i) => i.id),
         expectedRevision: startedTranslation.data.mutation!.workRevision,
         idempotencyKey: randomUUID(),
       },
@@ -642,6 +651,24 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
     );
     assert.equal(translatingPresence.status, 200);
     assert.equal(translatingPresence.data.expiresInSeconds, 90);
+    const presenceWorkHead = {
+      workRevision: adminEditor.data.workRevision,
+      editorEpoch: adminEditor.data.editorEpoch,
+      workflowStatus: adminEditor.data.workflowStatus,
+      reviewStatus: adminEditor.data.reviewStatus,
+    };
+    const assertPresenceWorkHead = (data: TranslationPresenceResponse) => {
+      assert.deepEqual(
+        {
+          workRevision: data.workRevision,
+          editorEpoch: data.editorEpoch,
+          workflowStatus: data.workflowStatus,
+          reviewStatus: data.reviewStatus,
+        },
+        presenceWorkHead,
+      );
+    };
+    assertPresenceWorkHead(translatingPresence.data);
     assert.deepEqual(
       translatingPresence.data.items.map(({ mode, isCurrentSession }) => ({
         mode,
@@ -656,6 +683,7 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       { mode: "view" },
     );
     assert.equal(viewingPresence.status, 200);
+    assertPresenceWorkHead(viewingPresence.data);
     assert.equal(viewingPresence.data.items.length, 2);
     assert.equal(
       viewingPresence.data.items.find(
@@ -704,6 +732,7 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       JSON.stringify(afterViewerLeft.data),
     );
     assert.equal(afterViewerLeft.data.items.length, 1);
+    assertPresenceWorkHead(afterViewerLeft.data);
     assert.equal(
       (
         await request(
@@ -930,6 +959,11 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
           `/api/works/${workId}/stages/submit`,
           {
             stage: "translate",
+            pageHeads: await translationPageHeads(
+              db,
+              workId,
+              translator.user.id,
+            ),
             expectedRevision: joined.data.revision,
             expectedEditorEpoch: activeEditorEpoch,
             idempotencyKey: joinKey,
@@ -971,6 +1005,11 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
           `/api/works/${workId}/stages/submit`,
           {
             stage: "translate",
+            pageHeads: await translationPageHeads(
+              db,
+              workId,
+              translator.user.id,
+            ),
             expectedRevision: current.revision,
             expectedEditorEpoch: activeEditorEpoch,
             idempotencyKey: randomUUID(),
@@ -1044,6 +1083,7 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       `/api/works/${workId}/stages/submit`,
       {
         stage: "translate",
+        pageHeads: await translationPageHeads(db, workId, translator.user.id),
         expectedRevision: current.revision,
         expectedEditorEpoch: activeEditorEpoch,
         idempotencyKey: randomUUID(),
@@ -1185,6 +1225,7 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       `/api/works/${workId}/stages/submit`,
       {
         stage: "translate",
+        pageHeads: await translationPageHeads(db, workId, translator.user.id),
         expectedRevision: cancelledTranslation.data.revision,
         expectedEditorEpoch: cancelledTranslation.data.editorEpoch,
         idempotencyKey: randomUUID(),
@@ -1208,6 +1249,19 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       proofJoined.data.editorEpoch,
       resubmittedTranslation.data.editorEpoch,
     );
+    const editorInstanceId = randomUUID();
+    const leasePath = `/api/works/${workId}/translations/pages/${imageId}/lease`;
+    const acquire = async (expectedEditorEpoch: number) => {
+      const response = await request<{ leaseToken: string }>(
+        proofreader.browser,
+        "POST",
+        leasePath,
+        { editorInstanceId, expectedEditorEpoch },
+      );
+      assert.ok(response.status >= 200 && response.status < 300);
+      return { editorInstanceId, leaseToken: response.data.leaseToken };
+    };
+    const firstLease = await acquire(proofJoined.data.editorEpoch);
     const proofreadStarted = await request<TranslationEntryResponse>(
       proofreader.browser,
       "PATCH",
@@ -1215,6 +1269,7 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       {
         expectedRevision: translatedRevision.data.revision,
         expectedEditorEpoch: proofJoined.data.editorEpoch,
+        ...firstLease,
         translatedText: "校对首次修改",
       },
     );
@@ -1251,6 +1306,11 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
         )
       ).status,
       409,
+    );
+    assert.equal(
+      (await request(proofreader.browser, "DELETE", leasePath, firstLease))
+        .status,
+      204,
     );
     const proofSubmitted = await request<WorkResponse>(
       proofreader.browser,
@@ -1324,6 +1384,7 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
     );
     assert.equal(cancelledProofread.status, 200);
     assert.equal(cancelledProofread.data.workflowStatus, "proofreading");
+    const secondLease = await acquire(cancelledProofread.data.editorEpoch);
     const correctedProofread = await request<TranslationEntryResponse>(
       proofreader.browser,
       "PATCH",
@@ -1331,10 +1392,16 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       {
         expectedRevision: proofreadStarted.data.revision,
         expectedEditorEpoch: cancelledProofread.data.editorEpoch,
+        ...secondLease,
         translatedText: "取消提交后的校对修正",
       },
     );
     assert.equal(correctedProofread.status, 200);
+    assert.equal(
+      (await request(proofreader.browser, "DELETE", leasePath, secondLease))
+        .status,
+      204,
+    );
     const resubmittedProofread = await request<WorkResponse>(
       proofreader.browser,
       "POST",
@@ -1586,6 +1653,8 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       `/api/works/${workId}/stages/leave`,
       {
         stage: "typeset",
+        confirmClearDraft: true,
+        impactImageIds: initial.data.images.map((i) => i.id),
         expectedRevision: afterTypesetHandoff.revision,
         idempotencyKey: randomUUID(),
       },
@@ -1595,11 +1664,10 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       leftAfterTypesetHandoff.data.workflowStatus,
       "pending_typeset",
     );
-    assert.equal(leftAfterTypesetHandoff.data.typesetHandoffStartedAt, null);
-    await db.work.update({
-      where: { id: workId },
-      data: { typesetHandoffStartedAt: new Date() },
-    });
+    assert.ok(
+      leftAfterTypesetHandoff.data.typesetHandoffStartedAt,
+      "a released role preserves the actual handoff boundary",
+    );
     const rejoinedAfterTypesetHandoff = await request<WorkResponse>(
       typesetter.browser,
       "POST",
@@ -2119,6 +2187,34 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       "GET",
       `/api/works/${workId}/publishing`,
     );
+    for (const nonOperator of [admin, typesetter, translator, proofreader]) {
+      for (const path of ["publishing", "publishing/images"]) {
+        assert.equal(
+          (
+            await request(
+              nonOperator.browser,
+              "GET",
+              `/api/works/${workId}/${path}`,
+            )
+          ).status,
+          403,
+        );
+      }
+      assert.equal(
+        (
+          await request(
+            nonOperator.browser,
+            "POST",
+            `/api/works/${workId}/publishing/confirm`,
+            {
+              expectedRevision: publishingView.data.workRevision,
+              idempotencyKey: randomUUID(),
+            },
+          )
+        ).status,
+        403,
+      );
+    }
     assert.equal(publishingView.status, 200);
     assert.equal(publishingView.data.authorCredit, "@_workflow_author_");
     assert.equal(
@@ -2129,13 +2225,10 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
     assert.deepEqual(publishingView.data.translationCredits, ["发布前新署名"]);
     assert.deepEqual(publishingView.data.proofreadCredits, ["proofreader"]);
     assert.deepEqual(publishingView.data.typesetCredits, ["typesetter"]);
-    assert.match(publishingView.data.generatedText, /^\*\*流程测试作品\*\*/);
+    assert.match(publishingView.data.generatedText, /^流程测试作品\n/);
     assert.equal(publishingView.data.body, null);
     assert.ok(!publishingView.data.generatedText.includes("原帖参考配文"));
-    assert.match(
-      publishingView.data.generatedText,
-      /^\*\*流程测试作品\*\*\n作者：/,
-    );
+    assert.match(publishingView.data.generatedText, /^流程测试作品\n作者：/);
     assert.match(
       publishingView.data.generatedText,
       /作者：@_workflow_author_[\s\S]*翻译：发布前新署名[\s\S]*校对：proofreader[\s\S]*嵌字：typesetter/,
@@ -2172,7 +2265,7 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       assert.equal(publishingView.data.workRevision, savedBody.data.revision);
       assert.ok(
         publishingView.data.generatedText.startsWith(
-          `**流程测试作品**\n${body.trim() ? `${body.trim()}\n` : ""}作者：`,
+          `流程测试作品\n${body.trim() ? `${body.trim()}\n` : ""}作者：`,
         ),
       );
       assert.ok(!publishingView.data.generatedText.includes("原帖参考配文"));
@@ -2249,6 +2342,19 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
     await db.user.update({
       where: { id: proofreader.user.id },
       data: { displayName: "发布后改名" },
+    });
+    const publishedDetail = await request<{
+      publishedCredits: {
+        translate: string[];
+        proofread: string[];
+        typeset: string[];
+      };
+    }>(proofreader.browser, "GET", `/api/works/${workId}`);
+    assert.equal(publishedDetail.status, 200);
+    assert.deepEqual(publishedDetail.data.publishedCredits, {
+      translate: published.data.translationCredits,
+      proofread: published.data.proofreadCredits,
+      typeset: published.data.typesetCredits,
     });
     const frozenPublishingView = await request<PublishingViewResponse>(
       operator.browser,
@@ -2612,6 +2718,7 @@ test("work participation, review blocking, audit and dashboard lifecycle", async
       await db.workStageAssignment.deleteMany({
         where: { participant: { workId } },
       });
+      await db.workPageAssignment.deleteMany({ where: { workId } });
       await db.workStageParticipant.deleteMany({ where: { workId } });
       await db.translationVersion.deleteMany({ where: { workId } });
       await db.workImage.deleteMany({ where: { workId } });

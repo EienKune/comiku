@@ -1,5 +1,6 @@
 import { Readable } from "node:stream";
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -99,11 +100,29 @@ export class R2ObjectStorage implements ObjectStorage {
     );
   }
 
-  async head(key: string): Promise<StoredObjectMetadata | null> {
+  async copy(sourceKey: string, destinationKey: string, signal?: AbortSignal) {
+    validateObjectKey(sourceKey);
+    validateObjectKey(destinationKey);
+    await this.client.send(
+      new CopyObjectCommand({
+        Bucket: this.bucket,
+        Key: destinationKey,
+        CopySource: `${this.bucket}/${sourceKey.split("/").map(encodeURIComponent).join("/")}`,
+        MetadataDirective: "COPY",
+      }),
+      { abortSignal: signal },
+    );
+  }
+
+  async head(
+    key: string,
+    signal?: AbortSignal,
+  ): Promise<StoredObjectMetadata | null> {
     validateObjectKey(key);
     try {
       const result = await this.client.send(
         new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+        { abortSignal: signal },
       );
       return {
         contentType: result.ContentType,
@@ -129,10 +148,11 @@ export class R2ObjectStorage implements ObjectStorage {
     return result.Body.transformToByteArray();
   }
 
-  async readStream(key: string): Promise<Readable> {
+  async readStream(key: string, signal?: AbortSignal): Promise<Readable> {
     validateObjectKey(key);
     const result = await this.client.send(
       new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+      { abortSignal: signal },
     );
     if (!result.Body) throw new Error("Object body is unavailable");
     return Readable.fromWeb(result.Body.transformToWebStream());
@@ -163,10 +183,11 @@ export class R2ObjectStorage implements ObjectStorage {
     expiresInSeconds: number,
   ): Promise<SignedWriteTarget> {
     validateSignedWriteInput(input, expiresInSeconds);
-    const headers = {
+    const headers: Record<string, string> = {
       "Content-Type": input.contentType,
       "x-amz-meta-sha256": input.checksum.toLowerCase(),
     };
+    if (input.immutable) headers["If-None-Match"] = "*";
     return {
       url: await getSignedUrl(
         this.client,
@@ -175,11 +196,15 @@ export class R2ObjectStorage implements ObjectStorage {
           Key: input.key,
           ContentType: input.contentType,
           Metadata: { sha256: input.checksum.toLowerCase() },
+          IfNoneMatch: input.immutable ? "*" : undefined,
         }),
         {
           expiresIn: expiresInSeconds,
           unhoistableHeaders: new Set(["x-amz-meta-sha256"]),
-          signableHeaders: new Set(["content-type"]),
+          signableHeaders: new Set([
+            "content-type",
+            ...(input.immutable ? ["if-none-match"] : []),
+          ]),
         },
       ),
       expiresInSeconds,

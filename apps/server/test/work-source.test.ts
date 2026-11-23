@@ -4,7 +4,11 @@ import test from "node:test";
 import { NotFoundException } from "@nestjs/common";
 import { WorksService } from "../src/works/works.service.js";
 
-function fixture(unknownLegacyPage = false, mismatchedOriginal = false) {
+function fixture(
+  unknownLegacyPage = false,
+  mismatchedOriginal = false,
+  replacements: { oldFileObjectId: string; newFileObjectId: string }[] = [],
+) {
   const media = ["media-a", "media-b", "media-c"].map((id, orderIndex) => ({
     id,
     fileObjectId: `file-${id}`,
@@ -30,6 +34,7 @@ function fixture(unknownLegacyPage = false, mismatchedOriginal = false) {
       workImage:
         item.id === "media-b"
           ? {
+              sourceAssetReplacements: replacements,
               id: "page-one",
               originalFileObjectId: mismatchedOriginal
                 ? "different-file"
@@ -204,4 +209,17 @@ test("a legacy provenance pointer to a different original stays unknown", async 
   assert.equal(source.media[1].adopted, null);
   assert.equal(source.media[1].adoptedByWork, null);
   assert.equal(source.media[1].workImageId, null);
+});
+
+test("audited HD replacement lineage preserves source adoption across several upgrades", async () => {
+  const source = await fixture(false, true, [
+    { oldFileObjectId: "file-media-b", newFileObjectId: "hd-one" },
+    { oldFileObjectId: "hd-one", newFileObjectId: "different-file" },
+  ]).source("work");
+  assert.equal(source.media[1].disposition, "this_work");
+  assert.equal(source.media[1].workImageId, "page-one");
+  const broken = await fixture(false, true, [
+    { oldFileObjectId: "unrelated-file", newFileObjectId: "different-file" },
+  ]).source("work");
+  assert.equal(broken.media[1].disposition, "unknown");
 });

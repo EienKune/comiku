@@ -7,6 +7,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsOptional,
   IsString,
   IsUUID,
   Matches,
@@ -15,7 +16,7 @@ import {
   Min,
   ValidateNested,
 } from "class-validator";
-import { ApiProperty } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { SignedUploadTargetDto } from "../candidates/candidates.dto.js";
 import {
   TYPESET_BATCH_MAX_FILES,
@@ -61,6 +62,18 @@ export class CreateTypesetUploadSessionDto {
   @Type(() => TypesetUploadFileInputDto)
   files!: TypesetUploadFileInputDto[];
 }
+export class VerifyTypesetUploadFileDto {
+  @ApiProperty({ type: Number, minimum: 1, maximum: 2147483647 })
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  width!: number;
+  @ApiProperty({ type: Number, minimum: 1, maximum: 2147483647 })
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  height!: number;
+}
 export class TypesetUploadImageDto {
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: String, format: "uuid" }) uploadFileId!: string;
@@ -73,6 +86,10 @@ export class TypesetUploadImageDto {
   @ApiProperty({ type: String, isArray: true }) warnings!: string[];
 }
 export class TypesetUploadFileDto {
+  @ApiProperty({ type: Number }) size!: number;
+  @ApiProperty({ type: String }) checksum!: string;
+  @ApiProperty({ type: String }) contentType!: string;
+  @ApiProperty({ type: Boolean }) uploadMissing!: boolean;
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: String }) sourceName!: string;
   @ApiProperty({ type: Boolean }) archive!: boolean;
@@ -83,6 +100,16 @@ export class TypesetUploadFileDto {
   @ApiProperty({ type: TypesetUploadImageDto, isArray: true })
   images!: TypesetUploadImageDto[];
 }
+export class TypesetUploadReceiptDto {
+  @ApiProperty({ type: Number }) workNumber!: number;
+  @ApiProperty({ type: String, format: "uuid" }) workId!: string;
+  @ApiProperty({ type: String, format: "uuid", nullable: true }) versionId!:
+    string | null;
+  @ApiProperty({ type: Boolean }) stageSubmitted!: boolean;
+  @ApiProperty({ type: Boolean }) workCompleted!: boolean;
+  @ApiProperty({ type: String, format: "uuid", isArray: true })
+  imageIds!: string[];
+}
 export class TypesetUploadSessionDto {
   @ApiProperty({ type: String, format: "uuid" }) id!: string;
   @ApiProperty({ type: String }) status!: string;
@@ -91,6 +118,12 @@ export class TypesetUploadSessionDto {
   @ApiProperty({ type: Number }) maxTotalBytes!: number;
   @ApiProperty({ type: TypesetUploadFileDto, isArray: true })
   files!: TypesetUploadFileDto[];
+  @ApiPropertyOptional({ type: TypesetUploadReceiptDto, isArray: true })
+  receipts?: TypesetUploadReceiptDto[];
+}
+export class TypesetBatchPageMappingDto {
+  @ApiProperty({ type: String, format: "uuid" }) @IsUUID() imageId!: string;
+  @ApiProperty({ type: String, format: "uuid" }) @IsUUID() workImageId!: string;
 }
 export class TypesetUploadGroupInputDto {
   @ApiProperty({ type: Number, minimum: 1 })
@@ -111,6 +144,14 @@ export class TypesetUploadGroupInputDto {
   @ArrayUnique()
   @IsUUID(undefined, { each: true })
   imageIds!: string[];
+  @ApiPropertyOptional({ type: TypesetBatchPageMappingDto, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(100)
+  @ValidateNested({ each: true })
+  @Type(() => TypesetBatchPageMappingDto)
+  pageMappings?: TypesetBatchPageMappingDto[];
   @ApiProperty({ type: Boolean }) @IsBoolean() mergeConfirmed!: boolean;
   @ApiProperty({ type: Boolean }) @IsBoolean() manualTargetConfirmed!: boolean;
   @ApiProperty({ type: Boolean }) @IsBoolean() contentConfirmed!: boolean;
@@ -142,6 +183,8 @@ export class TypesetUploadPlanDto {
   handoffStartedAt!: string | null;
   @ApiProperty({ type: Number }) imageCount!: number;
   @ApiProperty({ type: String, nullable: true }) error!: string | null;
+  @ApiPropertyOptional({ type: String, isArray: true }) ignored?: string[];
+  @ApiPropertyOptional({ type: Number }) savedImageCount?: number;
 }
 export class TypesetUploadPlansDto {
   @ApiProperty({ type: TypesetUploadPlanDto, isArray: true })
@@ -152,7 +195,10 @@ export class ConfirmTypesetUploadDto {
 }
 export class TypesetUploadConfirmedDto {
   @ApiProperty({ type: String, format: "uuid" }) workId!: string;
-  @ApiProperty({ type: String, format: "uuid" }) versionId!: string;
+  @ApiProperty({ type: String, format: "uuid", nullable: true }) versionId!:
+    string | null;
+  @ApiPropertyOptional({ type: Boolean }) workCompleted?: boolean;
+  @ApiPropertyOptional({ type: String, isArray: true }) ignored?: string[];
   @ApiProperty({
     type: Boolean,
     description: "本次确认是否同时提交嵌字；旧会话只返回原有保存结果",

@@ -30,6 +30,22 @@ export function mapWorkEventNotification(
     !Array.isArray(source.detail)
       ? (source.detail as Record<string, unknown>)
       : {};
+  if (
+    source.action === "typeset_version_uploaded" &&
+    ["typeset-page-save", "typeset-supplement-delete"].includes(
+      String(detail.operation),
+    ) &&
+    detail.isRevision !== true
+  )
+    return null;
+  const materialChange =
+    source.action === "metadata_updated" &&
+    detail.operation === "source-hd-replaced"
+      ? "source"
+      : source.action === "typeset_version_uploaded" &&
+          detail.isRevision === true
+        ? "typeset"
+        : undefined;
   const allowedStages = allowedNotificationStages(source.action);
   const stage =
     source.action === "publish_confirmed"
@@ -47,6 +63,16 @@ export function mapWorkEventNotification(
     !allowedStages.includes(stage as never)
   )
     throw new Error("notification_event_invalid");
+  // Personal page submissions retain stage_submitted for audit and idempotent
+  // retries. Public handoff copy applies only after the work advances. Missing
+  // historical status facts keep their legacy mapping.
+  if (
+    source.action === "stage_submitted" &&
+    (stage === "translate" || stage === "typeset") &&
+    source.fromWorkflowStatus !== null &&
+    source.fromWorkflowStatus === source.toWorkflowStatus
+  )
+    return null;
   // Credit names are free text and may contain colons. Match only the fixed
   // producer prefix; neither names nor the claim target enter the snapshot.
   const operation =
@@ -71,6 +97,23 @@ export function mapWorkEventNotification(
     occurredAt: source.createdAt,
     ...(stage !== undefined && { stage }),
     ...(participationKind !== undefined && { participationKind }),
+    ...(stage === "proofread" &&
+      source.action === "stage_joined" &&
+      typeof detail.operation === "string" &&
+      detail.operation.startsWith("assign:proofread:") &&
+      typeof detail.addedProofreader === "string" && {
+        addedProofreader: detail.addedProofreader,
+      }),
+    ...(materialChange && {
+      materialChange,
+      ...(materialChange === "source" && Number.isInteger(detail.pageNumber)
+        ? { affectedPageNumbers: [detail.pageNumber] }
+        : Array.isArray(detail.affectedPageNumbers) &&
+            detail.affectedPageNumbers.length
+          ? { affectedPageNumbers: detail.affectedPageNumbers }
+          : {}),
+      ...(detail.affectsSupplement === true && { affectsSupplement: true }),
+    }),
     ...(source.fromWorkflowStatus !== null && {
       fromWorkflowStatus: source.fromWorkflowStatus,
     }),

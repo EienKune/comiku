@@ -139,6 +139,7 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
           sourceCandidatePostId: candidate.id,
           importedById: user.id,
           sourceLanguage: "ja",
+          editorEpoch: 1,
           workflowStatus: started ? "typesetting" : "pending_typeset",
           typesetHandoffStartedAt: started ? new Date() : null,
           images: {
@@ -159,18 +160,8 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
     const a = await makeWork(),
       b = await makeWork(false),
       unauthorized = await makeWork(true, other.id);
-    await db.work.update({
-      where: { id: a.id },
-      data: { collaborationMode: "multi" },
-    });
-    await db.workStageParticipant.create({
-      data: {
-        workId: a.id,
-        stage: "typeset",
-        userId: other.id,
-        participationMode: "collaborator",
-      },
-    });
+    // This legacy complete-version flow belongs to single mode. Multi-mode
+    // uploads with explicit page maps atomically save and submit the actor's pages.
     await db.workCreditAlias.create({
       data: {
         workId: a.id,
@@ -245,14 +236,24 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
       assert.match(error.message, /请求来源或格式无效/u);
     }
     assert.equal((await uploads.get(user.id, session.id)).status, "pending");
+    for (const file of session.files.filter((file) => !file.archive))
+      assert.equal(
+        (
+          await uploads.verifyFile(user.id, session.id, file.id, {
+            width: 1,
+            height: 1,
+          })
+        ).status,
+        "processed",
+      );
     const extractedResponse = await extractRequest(session.id);
     assert.equal(extractedResponse.status, 200);
     const queued = (await extractedResponse.json()) as TypesetUploadSessionDto;
     assert.equal(queued.status, "extracting");
-    assert.equal(queued.files.flatMap((file) => file.images).length, 0);
+    assert.equal(queued.files.flatMap((file) => file.images).length, 4);
     async function finishExtraction(id: string) {
-      const job = await db.backgroundJob.findUniqueOrThrow({
-        where: { idempotencyKey: `typeset-extract:${id}` },
+      const job = await db.backgroundJob.findFirstOrThrow({
+        where: { resourceId: id, kind: "typeset_extract", status: "queued" },
       });
       await db.backgroundJob.update({
         where: { id: job.id },
@@ -304,6 +305,16 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
           checksum: record.checksum,
         });
       }
+      for (const file of sample.files.filter((file) => !file.archive))
+        assert.equal(
+          (
+            await uploads.verifyFile(user.id, sample.id, file.id, {
+              width: 1,
+              height: 1,
+            })
+          ).status,
+          "processed",
+        );
       // Retrying the same HTTP action restores the already uploaded materials.
       for (let attempt = 0; attempt < 2; attempt++) {
         const response = await extractRequest(sample.id);
@@ -449,7 +460,7 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
     const participants = await db.workStageParticipant.findMany({
       where: { workId: a.id, stage: "typeset", leftAt: null },
     });
-    assert.equal(participants.length, 2);
+    assert.equal(participants.length, 1);
     assert.ok(participants.every((participant) => participant.submittedAt));
     assert.equal(
       participants.find((participant) => participant.userId === user.id)
@@ -479,7 +490,7 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
           leftAt: null,
         },
       }),
-      2,
+      1,
     );
     assert.equal(
       (
@@ -495,6 +506,17 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
       ).items[0].previewId,
       null,
     );
+    await db.translationVersion.create({
+      data: {
+        workId: b.id,
+        versionNumber: 1,
+        kind: "proofread_submission",
+        stage: "proofread",
+        workRevision: b.revision,
+        editorEpoch: b.editorEpoch,
+        createdById: user.id,
+      },
+    });
     const packageInput = {
       expectedRevision: b.revision,
       expectedEditorEpoch: b.editorEpoch,
@@ -551,6 +573,7 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
       1,
     );
     assert.equal(await db.candidatePost.count({ where: { authorId } }), 3);
+    assert.ok(results[0].versionId);
     const linked = await db.typesetImageVersionImage.findFirstOrThrow({
       where: { versionId: results[0].versionId },
     });
@@ -582,6 +605,231 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
         where: { workId: { in: workIds }, action: "stage_submitted" },
       }),
       2,
+    );
+
+    // A complete archive can cover several owners. The frozen map is explicit,
+    // only our pages are written, and confirmation submits them atomically.
+    const multi = await makeWork();
+    await db.work.update({
+      where: { id: multi.id },
+      data: { collaborationMode: "multi" },
+    });
+    await db.workImage.createMany({
+      data: [1, 2].map((orderIndex) => ({
+        workId: multi.id,
+        originalFileObjectId: original.id,
+        orderIndex,
+      })),
+    });
+    const pages = await db.workImage.findMany({
+      where: { workId: multi.id },
+      orderBy: { orderIndex: "asc" },
+    });
+    const me = await db.workStageParticipant.findFirstOrThrow({
+      where: { workId: multi.id, userId: user.id, stage: "typeset" },
+    });
+    const them = await db.workStageParticipant.create({
+      data: {
+        workId: multi.id,
+        userId: other.id,
+        stage: "typeset",
+        participationMode: "collaborator",
+      },
+    });
+    await db.workPageAssignment.createMany({
+      data: pages.map((page, index) => ({
+        workId: multi.id,
+        workImageId: page.id,
+        stage: "typeset",
+        participantId: index === 1 ? them.id : me.id,
+      })),
+    });
+    async function stageArchive(actorId: string, count: number) {
+      const body = Buffer.from(
+        zipSync(
+          Object.fromEntries(
+            Array.from({ length: count }, (_, i) => [
+              `plain-${String.fromCharCode(97 + i)}.png`,
+              png,
+            ]),
+          ),
+        ),
+      );
+      const created = await uploads.create(actorId, {
+        files: [
+          {
+            sourceName: "unnumbered.zip",
+            contentType: "application/zip",
+            size: body.length,
+            checksum: createHash("sha256").update(body).digest("hex"),
+          },
+        ],
+      });
+      const file = await db.typesetUploadFile.findUniqueOrThrow({
+        where: { id: created.files[0].id },
+      });
+      await storage.put({
+        key: file.objectKey,
+        body,
+        size: body.length,
+        contentType: "application/zip",
+        checksum: file.checksum,
+      });
+      return uploads.extract(actorId, created.id);
+    }
+    const stagedMulti = await stageArchive(user.id, 3);
+    const stagedImages = stagedMulti.files[0].images;
+    const multiGroup = {
+      workNumber: multi.workNumber,
+      imageIds: stagedImages.map((image) => image.id),
+      mergeConfirmed: false,
+      manualTargetConfirmed: true,
+      contentConfirmed: true,
+    };
+    const unmapped = await uploads.plans(user.id, stagedMulti.id, {
+      groups: [multiGroup],
+    });
+    assert.match(unmapped.items[0].error!, /逐图确认/);
+    // Deliberately reverse the two own pages: the explicit order wins over filenames.
+    const mapped = await uploads.plans(user.id, stagedMulti.id, {
+      groups: [
+        {
+          ...multiGroup,
+          pageMappings: stagedImages.map((image, index) => ({
+            imageId: image.id,
+            workImageId: pages[2 - index].id,
+          })),
+        },
+      ],
+    });
+    assert.equal(mapped.items[0].error, null);
+    assert.equal(mapped.items[0].savedImageCount, 2);
+    assert.deepEqual(mapped.items[0].ignored, [stagedImages[1].sourceName]);
+    // The first own-page write occurs before the second file is rejected.
+    // Both it and the submission must roll back together, then retry safely.
+    const rejectedImage = await db.typesetUploadImage.findUniqueOrThrow({
+      where: { id: stagedImages[2].id },
+    });
+    await db.fileObject.update({
+      where: { id: rejectedImage.fileObjectId },
+      data: { lifecycleStatus: "pending_deletion" },
+    });
+    await assert.rejects(
+      uploads.confirm(user.id, stagedMulti.id, mapped.items[0].previewId!),
+      /预览文件不可用/,
+    );
+    assert.equal(
+      await db.workTypesetDraft.count({ where: { workId: multi.id } }),
+      0,
+    );
+    assert.equal(await db.workEvent.count({ where: { workId: multi.id } }), 0);
+    await db.fileObject.update({
+      where: { id: rejectedImage.fileObjectId },
+      data: { lifecycleStatus: "active" },
+    });
+    const multiResults = await Promise.all(
+      [0, 1].map(() =>
+        uploads.confirm(user.id, stagedMulti.id, mapped.items[0].previewId!),
+      ),
+    );
+    assert.equal(multiResults[0].stageSubmitted, true);
+    assert.equal(multiResults[0].workCompleted, false);
+    assert.equal(multiResults[0].versionId, null);
+    assert.equal(multiResults[1].stageSubmitted, true);
+    const restoredPersonal = await uploads.get(user.id, stagedMulti.id);
+    assert.deepEqual(restoredPersonal.receipts, [
+      {
+        workNumber: multi.workNumber,
+        workId: multi.id,
+        versionId: null,
+        stageSubmitted: true,
+        workCompleted: false,
+        imageIds: stagedImages.map((image) => image.id),
+      },
+    ]);
+    const ownDrafts = await db.workTypesetDraft.findMany({
+      where: { workId: multi.id },
+      orderBy: { orderIndex: "asc" },
+    });
+    assert.deepEqual(
+      ownDrafts.map((draft) => [draft.workImageId, draft.sourceName]),
+      [
+        [pages[0].id, stagedImages[2].sourceName],
+        [pages[2].id, stagedImages[0].sourceName],
+      ],
+    );
+    assert.ok(
+      ownDrafts.every(
+        (draft) =>
+          draft.participantId === me.id &&
+          draft.submittedRevision === draft.revision,
+      ),
+    );
+    assert.equal(
+      await db.workTypesetDraft.count({
+        where: { workId: multi.id, participantId: them.id },
+      }),
+      0,
+    );
+    assert.equal(
+      await db.workEvent.count({
+        where: { workId: multi.id, action: "stage_submitted" },
+      }),
+      1,
+    );
+    assert.equal(
+      await db.typesetImageVersion.count({ where: { workId: multi.id } }),
+      0,
+    );
+    const otherSession = await stageArchive(other.id, 1);
+    const otherPlan = await uploads.plans(other.id, otherSession.id, {
+      groups: [
+        {
+          ...multiGroup,
+          imageIds: [otherSession.files[0].images[0].id],
+          pageMappings: [
+            {
+              imageId: otherSession.files[0].images[0].id,
+              workImageId: pages[1].id,
+            },
+          ],
+        },
+      ],
+    });
+    assert.equal(otherPlan.items[0].error, null);
+    const finalResult = await uploads.confirm(
+      other.id,
+      otherSession.id,
+      otherPlan.items[0].previewId!,
+    );
+    assert.equal(finalResult.stageSubmitted, true);
+    assert.equal(finalResult.workCompleted, true);
+    assert.ok(finalResult.versionId);
+    assert.equal(
+      (await db.work.findUniqueOrThrow({ where: { id: multi.id } }))
+        .workflowStatus,
+      "pending_publish",
+    );
+    assert.equal(
+      await db.typesetImageVersion.count({ where: { workId: multi.id } }),
+      1,
+    );
+    // Old replays retain the historical personal-only receipt after someone else completes.
+    const oldReceipt = await uploads.confirm(
+      user.id,
+      stagedMulti.id,
+      mapped.items[0].previewId!,
+    );
+    assert.equal(oldReceipt.workCompleted, false);
+    assert.equal(oldReceipt.versionId, null);
+    assert.equal(
+      (await uploads.get(user.id, stagedMulti.id)).receipts?.[0].workCompleted,
+      false,
+    );
+    assert.equal(
+      (await uploads.get(other.id, otherSession.id)).receipts?.[0]
+        .workCompleted,
+      true,
     );
   } finally {
     await db.typesetUploadPreview.deleteMany({
@@ -616,6 +864,18 @@ test("staged typeset batches resolve ambiguity, freeze baselines, isolate failur
       where: { workId: { in: workIds } },
     });
     await db.workEvent.deleteMany({ where: { workId: { in: workIds } } });
+    await db.stageContributionPage.deleteMany({
+      where: { submission: { participant: { workId: { in: workIds } } } },
+    });
+    await db.stageContributionSubmission.deleteMany({
+      where: { participant: { workId: { in: workIds } } },
+    });
+    await db.workTypesetDraft.deleteMany({
+      where: { workId: { in: workIds } },
+    });
+    await db.workPageAssignment.deleteMany({
+      where: { workId: { in: workIds } },
+    });
     await db.workStageParticipant.deleteMany({
       where: { workId: { in: workIds } },
     });

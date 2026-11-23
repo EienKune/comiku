@@ -131,3 +131,83 @@ test("participation kind projects only the exact durable claim/join shapes for t
   )!;
   assert.equal("participationKind" in unrelated, false);
 });
+
+test("only formal material revisions and direct proofreading additions carry safe audience facts", () => {
+  const map = (action: string, detail: Record<string, unknown>) =>
+    mapWorkEventNotification({ ...source, action, detail }, 1);
+  assert.equal(
+    map("typeset_version_uploaded", { operation: "typeset-page-save" }),
+    null,
+  );
+  const revised = normalizeNotificationEvent(
+    map("typeset_version_uploaded", {
+      operation: "typeset-page-save",
+      isRevision: true,
+      affectedPageNumbers: [3, 1, 1],
+      affectsSupplement: true,
+    })!,
+  );
+  assert.deepEqual(revised.snapshot.affectedPageNumbers, [1, 3]);
+  assert.equal(revised.snapshot.affectsSupplement, true);
+  assert.equal(
+    map("metadata_updated", { operation: "source-hd-replaced", pageNumber: 2 })
+      ?.materialChange,
+    "source",
+  );
+  const assignment = map("stage_joined", {
+    stage: "proofread",
+    operation: "assign:proofread:user",
+    addedProofreader: "协作成员",
+  });
+  assert.equal(assignment?.addedProofreader, "协作成员");
+  assert.equal(
+    map("metadata_updated", { addedProofreader: "unrelated" })
+      ?.addedProofreader,
+    undefined,
+  );
+});
+
+test("page-stage personal submissions notify only when the whole work advances", () => {
+  for (const [stage, current, next] of [
+    ["translate", "translating", "pending_proofread"],
+    ["typeset", "typesetting", "pending_publish"],
+  ]) {
+    const submit = {
+      ...source,
+      action: "stage_submitted",
+      fromWorkflowStatus: current,
+      toWorkflowStatus: current,
+      detail: {
+        stage,
+        operation: `submit:${stage}`,
+        participantIds: ["private"],
+      },
+    };
+    assert.equal(
+      mapWorkEventNotification(submit, 1),
+      null,
+      `${stage} first member`,
+    );
+    const final = mapWorkEventNotification(
+      { ...submit, toWorkflowStatus: next },
+      2,
+    )!;
+    assert.equal(final.type, "stage_submitted");
+    assert.equal(final.stage, stage);
+    assert.equal(final.ordinal, 2);
+    assert.equal(final.toWorkflowStatus, next);
+    // Old events without workflow facts remain readable; never infer personal
+    // completion from missing historical metadata or require new version keys.
+    const legacy = mapWorkEventNotification(
+      {
+        ...submit,
+        fromWorkflowStatus: null,
+        toWorkflowStatus: null,
+        detail: { stage },
+      },
+      3,
+    )!;
+    assert.equal(legacy.type, "stage_submitted");
+    assert.equal(legacy.stage, stage);
+  }
+});

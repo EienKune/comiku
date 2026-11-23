@@ -59,7 +59,7 @@ test("receipt v3 validates participation without broadening earlier receipt allo
       /notification_event_invalid/,
     );
   assert.throws(
-    () => validateNotificationReceiptInput({ ...input, ...metadata }, 4),
+    () => validateNotificationReceiptInput({ ...input, ...metadata }, 5),
     /notification_event_invalid/,
   );
 });
@@ -95,4 +95,27 @@ test("normalizer rejects misplaced participation and keeps absent fields out of 
     notificationPreviewEvent("stage_joined").snapshot.participationKind,
     "claim",
   );
+});
+
+test("revised materials freeze a typed notice in v4 without accepting free text or altering v3", () => {
+  for (const [type, materialChange] of [
+    ["metadata_updated", "source"],
+    ["typeset_version_uploaded", "typeset"],
+  ] as const) {
+    const value = { ...input, ...metadata, type, materialChange };
+    assert.equal(
+      validateNotificationReceiptInput(value, 4).snapshot.materialChange,
+      materialChange,
+    );
+    assert.throws(() => validateNotificationReceiptInput(value, 3));
+    assert.throws(() =>
+      validateNotificationReceiptInput({ ...value, type: "stage_joined" }, 4),
+    );
+    assert.throws(() =>
+      validateNotificationReceiptInput(
+        { ...value, materialChange: "untrusted" },
+        4,
+      ),
+    );
+  }
 });

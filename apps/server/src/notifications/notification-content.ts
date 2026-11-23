@@ -4,7 +4,10 @@ import type {
   NormalizedNotificationEvent,
 } from "./notifications.contracts.js";
 import type { NotificationTemplateSettings } from "./notification-template-policy.js";
-import { notificationPreviewEvent } from "./notification-events.js";
+import {
+  materialChangeMessage,
+  notificationPreviewEvent,
+} from "./notification-events.js";
 
 const REPLAY_MARKER = "【历史补发】\n";
 const messageTime = new Intl.DateTimeFormat("en-GB", {
@@ -31,10 +34,21 @@ type EventCopy = {
 
 function eventCopy(event: NormalizedNotificationEvent): EventCopy {
   const stage = event.snapshot.stage ? stageLabels[event.snapshot.stage] : "";
+  if (event.snapshot.materialChange)
+    return {
+      action: materialChangeMessage(event.snapshot),
+      actorLabel: "更新人",
+    };
   switch (event.type) {
     case "imported":
       return { action: "作品已入库", actorLabel: "入库人" };
     case "stage_joined":
+      if (event.snapshot.addedProofreader)
+        return {
+          action: "已添加校对成员",
+          namedAction: (name) =>
+            `${name}添加了校对成员${event.snapshot.addedProofreader}`,
+        };
       if (event.snapshot.participationKind === "claim")
         return {
           action: `已认领${stage || "制作任务"}`,

@@ -209,7 +209,7 @@ test("opens the real editor data and focuses the matching text entry from a mark
   );
 
   expect(await screen.findByText("测试作品")).toBeTruthy();
-  expect(await screen.findByAltText("第 1 页")).toBeTruthy();
+  fireEvent.load(await screen.findByAltText("第 1 页"));
   await waitFor(() =>
     expect(
       (screen.getByRole("button", { name: "添加框内" }) as HTMLButtonElement)
@@ -227,14 +227,7 @@ test("opens the real editor data and focuses the matching text entry from a mark
   const submit = screen.getByRole("button", { name: "提交翻译" });
   expect((submit as HTMLButtonElement).disabled).toBe(false);
   expect(screen.queryByRole("button", { name: "检查标点" })).toBeNull();
-  fireEvent.click(submit);
-  const cleanConfirmation = await screen.findByRole("dialog", {
-    name: "提交翻译阶段？",
-  });
-  expect(within(cleanConfirmation).queryByLabelText("标点问题明细")).toBeNull();
-  fireEvent.click(
-    within(cleanConfirmation).getByRole("button", { name: "取消" }),
-  );
+  expect(screen.queryByRole("dialog")).toBeNull();
   expect(stageSubmitCount).toBe(0);
   const translation = screen.getByDisplayValue("已经保存的译文");
   expect(screen.getByText("添加备注（可选）").closest("details")?.open).toBe(
@@ -245,7 +238,7 @@ test("opens the real editor data and focuses the matching text entry from a mark
 
   vi.useFakeTimers();
   fireEvent.change(translation, { target: { value: "修改后的译文,请确认" } });
-  expect((submit as HTMLButtonElement).disabled).toBe(true);
+  expect((submit as HTMLButtonElement).disabled).toBe(false);
   await vi.advanceTimersByTimeAsync(2999);
   expect(patch).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1);
@@ -258,7 +251,17 @@ test("opens the real editor data and focuses the matching text entry from a mark
     expect((submit as HTMLButtonElement).disabled).toBe(false),
   );
 
-  const pageJump = screen.getByRole("spinbutton", { name: /跳转页码/ });
+  fireEvent.click(screen.getByRole("button", { name: /预览并跳转页面/ }));
+  const preview = screen.getByRole("dialog", { name: "页面预览" });
+  expect(
+    within(preview)
+      .getByRole("button", { name: "第 1 页" })
+      .getAttribute("aria-current"),
+  ).toBe("page");
+  expect(within(preview).getByRole("button", { name: "第 2 页" })).toBeTruthy();
+  const pageJump = within(preview).getByRole("spinbutton", {
+    name: /跳转页码/,
+  });
   fireEvent.change(pageJump, { target: { value: "2" } });
   fireEvent.submit(pageJump.closest("form")!);
   expect(await screen.findByAltText("第 2 页")).toBeTruthy();
@@ -290,7 +293,7 @@ test("opens the real editor data and focuses the matching text entry from a mark
 
   fireEvent.click(submit);
   fireEvent.click(submit);
-  fireEvent.click(await screen.findByRole("button", { name: "确认提交" }));
+  fireEvent.click(await screen.findByRole("button", { name: "仍然提交" }));
   await waitFor(() => expect(stageSubmitCount).toBe(1));
 });
 
@@ -546,7 +549,7 @@ test("waits for a fresh editor response instead of hydrating an inactive cache",
   expect(screen.queryByText("旧缓存标题")).toBeNull();
 });
 
-test("asks before entering an editor that already has an active collaborator", async () => {
+test("opens directly when another collaborator is already active", async () => {
   const user: CurrentUser = {
     canSkipProofreading: false,
     id: "00000000-0000-4000-8000-000000000041",
@@ -641,17 +644,22 @@ test("asks before entering an editor that already has an active collaborator", a
     </QueryClientProvider>,
   );
 
-  expect(await screen.findByText("已有成员正在编辑")).toBeTruthy();
-  expect(screen.getByText("正在编辑的译者")).toBeTruthy();
+  await screen.findByText("暂无原图");
+  expect(screen.queryByText("已有成员正在编辑")).toBeNull();
+  expect(screen.queryByRole("button", { name: "进入协作" })).toBeNull();
+  expect(screen.getByText("暂无原图")).toBeTruthy();
+  expect(screen.queryByText(/正在加载第/)).toBeNull();
   expect(
     (screen.getByRole("button", { name: "添加框内" }) as HTMLButtonElement)
       .disabled,
   ).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "进入协作" }));
   await waitFor(() =>
     expect(
-      (screen.getByRole("button", { name: "添加框内" }) as HTMLButtonElement)
-        .disabled,
+      (
+        screen.getByRole("button", {
+          name: "导入 LabelPlus",
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(false),
   );
 });

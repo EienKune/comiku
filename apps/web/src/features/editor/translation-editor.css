@@ -11,13 +11,18 @@
 }
 
 .account-app.is-editor-mode .translation-editor {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   height: 100dvh;
   min-height: 0;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto auto minmax(0, 1fr);
   overflow: hidden;
   background: color-mix(in srgb, var(--color-canvas) 88%, #111827);
+}
+
+.translation-editor-header,
+.translation-editor-toolbar,
+.translation-editor-notices {
+  flex: none;
 }
 
 .translation-editor-header {
@@ -32,6 +37,29 @@
   background: color-mix(in srgb, var(--color-surface-glass) 92%, transparent);
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(18px);
+}
+
+.editor-submission-more {
+  position: relative;
+  flex: none;
+}
+
+.editor-submission-more__panel {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 8;
+  width: max-content;
+  max-width: calc(100vw - var(--space-6));
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+
+.editor-submission-more__panel > .ui-button {
+  width: 100%;
 }
 
 .translation-entry-choice-backdrop {
@@ -532,6 +560,7 @@
 
 .translation-editor-main {
   display: grid;
+  flex: 1 1 auto;
   min-height: 0;
   grid-template-columns: minmax(0, 1fr) minmax(20rem, 25rem);
   gap: var(--space-3);
@@ -645,41 +674,6 @@
   gap: var(--space-2);
 }
 
-.translation-page-jump {
-  display: flex;
-  min-height: var(--control-height-md);
-  align-items: center;
-  gap: var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-pill);
-  padding: 0 var(--space-3);
-  background: var(--color-surface-glass);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(10px);
-}
-
-.translation-page-jump label {
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-}
-
-.translation-page-jump input {
-  width: 3.5rem;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--color-text);
-  font: inherit;
-  font-size: var(--text-sm);
-  font-weight: var(--font-weight-control);
-  text-align: center;
-}
-
-.translation-page-jump:focus-within {
-  border-color: var(--color-focus);
-  box-shadow: var(--shadow-focus);
-}
-
 .translation-page-controls .ui-icon-button {
   background: var(--color-surface-glass);
   backdrop-filter: blur(10px);
@@ -724,6 +718,7 @@
 }
 
 .translation-entry-heading {
+  grid-row: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -741,16 +736,24 @@
   font-size: var(--text-xs);
 }
 
-.translation-readonly-notice {
-  margin: var(--space-3);
+.translation-page-permission {
+  display: grid;
+  grid-row: 2;
+  justify-items: start;
+  gap: var(--space-2);
   padding: var(--space-3);
-  border-radius: var(--radius-md);
+  border-bottom: 1px solid var(--color-border);
   background: var(--color-status-info-bg);
   color: var(--color-status-info-text);
   font-size: var(--text-xs);
 }
 
+.translation-readonly-notice {
+  margin: 0;
+}
+
 .translation-entry-list {
+  grid-row: 3;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -853,10 +856,6 @@
   box-shadow: var(--shadow-focus);
 }
 
-.translation-entry-card textarea:disabled {
-  background: var(--color-surface-muted);
-}
-
 .translation-entry-empty {
   display: grid;
   min-height: 16rem;
@@ -877,6 +876,7 @@
 }
 
 .translation-selected-summary {
+  grid-row: 4;
   padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--color-border);
   color: var(--color-text-muted);
@@ -1006,4 +1006,12 @@
   .translation-editor-back {
     padding-inline: var(--space-2);
   }
+}
+
+/* Native readonly textareas retain selection/copy in Chromium, WebKit and Firefox. */
+.translation-entry-card textarea[readonly] {
+  caret-color: transparent;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
 }

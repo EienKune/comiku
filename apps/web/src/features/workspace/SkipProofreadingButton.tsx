@@ -154,7 +154,7 @@ export function SkipProofreadingButton({
           </p>
           {claims.length > 0 && (
             <p>
-              以下成员已认领校对，确认跳过会取消这些认领并清理其本作品的校对临时署名：
+              以下成员已认领校对，确认跳过会取消这些认领并清理其本作品的校对署名：
               {claims.map(({ displayName }) => displayName).join("、")}。
             </p>
           )}

@@ -56,9 +56,9 @@ Account ID 为 32 位十六进制。实现根据 Account ID 生成 S3 endpoint�
 
 `R2_KEY_PREFIX` 是可选的对象路径前缀，通过相同的 `.env` 或 `COMIKU_ENV_FILE` 读取。例如 `R2_KEY_PREFIX=source-test/` 将逻辑 key `source/example.jpg` 存为 `source-test/source/example.jpg`；数据库仍保存逻辑 key。普通上传、签名上传/读取、流读取、HEAD 和删除均通过同一前缀包装器。留空保持原路径；只接受以 `/` 结束的安全目录段。前缀用于共桶命名隔离，不代替独立权限；已有数据切换前缀前须迁移对象并同步生命周期规则，配置更改不会自动搬运。
 
-Bucket 保持私有，CORS 精确允许当前浏览器 origin，方法为 GET/PUT/HEAD，允许 content-type、x-amz-meta-sha256，按需暴露 ETag。浏览器直接向签名 URL 上传/下载，API 和 worker 负责权限、HEAD/魔数/摘要、解包及采用校验。业务对象与备份对象使用独立 Bucket 和凭据。
+Bucket 保持私有，CORS 精确允许当前浏览器 origin，方法为 GET/PUT/HEAD，允许 Content-Type、x-amz-meta-sha256、If-None-Match，按需暴露 ETag。成图由浏览器识别格式、读取尺寸并上传到限定首次写入的签名地址。API 用 HEAD 确认对象存在及实际字节数，随后记录浏览器声明的尺寸和摘要。其他上传类型沿用各自的内容校验。业务对象与备份对象使用独立 Bucket 和凭据。
 
-只能给 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/` 设置一日过期规则；使用 `R2_KEY_PREFIX` 时规则也须包含该前缀。`staging/direct-upload/` 由应用根据任务租约与终态回执分阶段清理，不得配置按对象年龄自动删除的规则；升级前须核对桶中实际规则并排除此路径。不要给所有业务对象统一短期过期。原图、缩略图、可恢复版本、交接和发布历史各有引用与清理规则。
+只能给 `staging/candidate-upload/`、`staging/typeset-upload/`、`staging/user-avatar/` 设置一日过期规则；使用 `R2_KEY_PREFIX` 时规则也须包含该前缀。`staging/direct-upload/` 由应用根据任务租约与终态回执分阶段清理，不得配置按对象年龄自动删除的规则；升级前须核对桶中实际规则并排除此路径。成图在 `typeset-uploads/immutable/` 下原位采用，须按文件引用保留。不要给所有业务对象统一短期过期。原图、缩略图、可恢复版本、交接和发布历史各有引用与清理规则。
 
 local 与 R2 不是自动迁移关系：更换驱动不会搬运已有对象。使用独立测试库/桶验证 R2，不要把原 local 数据库直接切到空 R2 Bucket。
 

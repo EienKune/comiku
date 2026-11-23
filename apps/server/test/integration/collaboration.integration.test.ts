@@ -28,6 +28,14 @@ type WorkResponse = {
   editorEpoch: number;
   workflowStatus: string;
   images: { id: string }[];
+  pageAssignments: {
+    workImageId: string;
+    stage: string;
+    userId: string | null;
+    generation: number;
+    draftRevision: number;
+    isSubmitted: boolean;
+  }[];
 };
 
 test("single-stage identity locks and multi-page contributions integrate server drafts", async () => {
@@ -126,6 +134,17 @@ test("single-stage identity locks and multi-page contributions integrate server 
       },
     });
     accountId = account.id;
+    const originals = await Promise.all(
+      [1, 2].map((value) =>
+        files.store({
+          body: new Uint8Array([value]),
+          contentType: "image/png",
+          bucketScope: "source",
+          kind: "candidate-media",
+          createdById: admin.user.id,
+        }),
+      ),
+    );
     const singleCandidate = await db.candidatePost.create({
       data: {
         authorId,
@@ -143,6 +162,9 @@ test("single-stage identity locks and multi-page contributions integrate server 
         authorId,
         sourceCandidatePostId: singleCandidate.id,
         title: "单人职责约束",
+        images: {
+          create: { originalFileObjectId: originals[0].id, orderIndex: 0 },
+        },
         sourceLanguage: "ja",
         importedById: admin.user.id,
       },
@@ -190,17 +212,6 @@ test("single-stage identity locks and multi-page contributions integrate server 
       409,
     );
 
-    const originals = await Promise.all(
-      [1, 2].map((value) =>
-        files.store({
-          body: new Uint8Array([value]),
-          contentType: "image/png",
-          bucketScope: "source",
-          kind: "candidate-media",
-          createdById: admin.user.id,
-        }),
-      ),
-    );
     const collaborativeCandidate = await db.candidatePost.create({
       data: {
         authorId,
@@ -235,9 +246,23 @@ test("single-stage identity locks and multi-page contributions integrate server 
           },
         },
       },
-      include: { images: { orderBy: { orderIndex: "asc" } } },
+      include: {
+        images: { orderBy: { orderIndex: "asc" } },
+        stageParticipants: true,
+      },
     });
     workIds.push(collaborative.id);
+    await db.workPageAssignment.createMany({
+      data: collaborative.images.map((image, index) => ({
+        workId: collaborative.id,
+        workImageId: image.id,
+        stage: "translate",
+        participantId:
+          index === 0 ? collaborative.stageParticipants[0].id : null,
+        generation: index === 0 ? 1 : 0,
+      })),
+    });
+
     assert.equal(
       (
         await request(
@@ -264,48 +289,37 @@ test("single-stage identity locks and multi-page contributions integrate server 
       },
     );
     assert.equal(joined.status, 200);
-    const clearedA = await request<WorkResponse>(
-      memberA.browser,
-      "POST",
-      `/api/works/${collaborative.id}/stages/assignments`,
-      {
-        stage: "translate",
-        imageIds: [],
-        expectedRevision: joined.data.revision,
-        idempotencyKey: randomUUID(),
-      },
+    const assignedB = joined;
+    assert.equal(
+      (
+        await request(
+          memberA.browser,
+          "POST",
+          `/api/works/${collaborative.id}/stages/assignments`,
+          {
+            stage: "translate",
+            imageIds: [],
+            expectedRevision: joined.data.revision,
+            idempotencyKey: randomUUID(),
+          },
+        )
+      ).status,
+      409,
+      "releasing current drafts requires explicit scope confirmation",
     );
-    assert.equal(clearedA.status, 200);
-    const assignedA = await request<WorkResponse>(
-      memberA.browser,
-      "POST",
-      `/api/works/${collaborative.id}/stages/assignments`,
-      {
-        stage: "translate",
-        imageIds: [collaborative.images[0].id],
-        expectedRevision: clearedA.data.revision,
-        idempotencyKey: randomUUID(),
-      },
-    );
-    assert.equal(assignedA.status, 200);
-    const assignedB = await request<WorkResponse>(
-      memberB.browser,
-      "POST",
-      `/api/works/${collaborative.id}/stages/assignments`,
-      {
-        stage: "translate",
-        imageIds: [collaborative.images[1].id],
-        expectedRevision: assignedA.data.revision,
-        idempotencyKey: randomUUID(),
-      },
-    );
-    assert.equal(assignedB.status, 200);
     const completedA = await request<WorkResponse>(
       memberA.browser,
       "POST",
       `/api/works/${collaborative.id}/stages/contributions/complete`,
       {
         stage: "translate",
+        pageHeads: [
+          {
+            imageId: collaborative.images[0].id,
+            generation: 1,
+            draftRevision: 0,
+          },
+        ],
         expectedRevision: assignedB.data.revision,
         expectedEditorEpoch: 0,
         idempotencyKey: randomUUID(),
@@ -338,6 +352,7 @@ test("single-stage identity locks and multi-page contributions integrate server 
         markerX: 0.25,
         markerY: 0.375,
         markerPositionType: "inside",
+        expectedAssignmentGeneration: 1,
         expectedImageRevision: 0,
         expectedEditorEpoch: 0,
         idempotencyKey: randomUUID(),
@@ -350,23 +365,20 @@ test("single-stage identity locks and multi-page contributions integrate server 
       `/api/works/${collaborative.id}/stages/contributions/complete`,
       {
         stage: "translate",
+        pageHeads: [
+          {
+            imageId: collaborative.images[1].id,
+            generation: 1,
+            draftRevision: 1,
+          },
+        ],
         expectedRevision: completedA.data.revision,
         expectedEditorEpoch: 0,
         idempotencyKey: randomUUID(),
       },
     );
     assert.equal(completedB.status, 200);
-    const submitted = await request<WorkResponse>(
-      memberA.browser,
-      "POST",
-      `/api/works/${collaborative.id}/stages/submit`,
-      {
-        stage: "translate",
-        expectedRevision: completedB.data.revision,
-        expectedEditorEpoch: 0,
-        idempotencyKey: randomUUID(),
-      },
-    );
+    const submitted = completedB;
     assert.equal(submitted.status, 200);
     assert.equal(submitted.data.workflowStatus, "pending_proofread");
     assert.equal(submitted.data.editorEpoch, 1);
@@ -406,6 +418,18 @@ test("single-stage identity locks and multi-page contributions integrate server 
       `/api/works/${collaborative.id}/stages/submit`,
       {
         stage: "translate",
+        pageHeads: cancelled.data.pageAssignments
+          .filter(
+            (p) =>
+              p.stage === "translate" &&
+              p.userId === memberA.user.id &&
+              !p.isSubmitted,
+          )
+          .map((p) => ({
+            imageId: p.workImageId,
+            generation: p.generation,
+            draftRevision: p.draftRevision,
+          })),
         expectedRevision: cancelled.data.revision,
         expectedEditorEpoch: cancelled.data.editorEpoch,
         idempotencyKey: randomUUID(),
@@ -521,36 +545,36 @@ test("single-stage identity locks and multi-page contributions integrate server 
         include: { images: true, stageParticipants: true },
       });
       workIds.push(unchangedWork.id);
-      let head: WorkResponse = { ...unchangedWork };
-      if (mode === "multi") {
-        const participant = unchangedWork.stageParticipants[0];
-        await db.workStageAssignment.create({
-          data: {
-            participantId: participant.id,
-            workImageId: unchangedWork.images[0].id,
-            assignedById: memberB.user.id,
-          },
-        });
-        const completed = await request<WorkResponse>(
+      await db.workPageAssignment.create({
+        data: {
+          workId: unchangedWork.id,
+          workImageId: unchangedWork.images[0].id,
+          stage: "translate",
+          participantId: unchangedWork.stageParticipants[0].id,
+          generation: 1,
+          draftRevision: 1,
+        },
+      });
+      let head = (
+        await request<WorkResponse>(
           memberB.browser,
-          "POST",
-          `/api/works/${head.id}/stages/contributions/complete`,
-          {
-            stage: "translate",
-            expectedRevision: head.revision,
-            expectedEditorEpoch: head.editorEpoch,
-            idempotencyKey: randomUUID(),
-          },
-        );
-        assert.equal(completed.status, 200);
-        head = completed.data;
-      }
+          "GET",
+          `/api/works/${unchangedWork.id}`,
+        )
+      ).data;
       const translated = await request<WorkResponse>(
         memberB.browser,
         "POST",
-        `/api/works/${head.id}/stages/submit`,
+        `/api/works/${head.id}/stages/${mode === "multi" ? "contributions/complete" : "submit"}`,
         {
           stage: "translate",
+          pageHeads: [
+            {
+              imageId: unchangedWork.images[0].id,
+              generation: 1,
+              draftRevision: 1,
+            },
+          ],
           expectedRevision: head.revision,
           expectedEditorEpoch: head.editorEpoch,
           idempotencyKey: randomUUID(),
@@ -653,50 +677,18 @@ test("single-stage identity locks and multi-page contributions integrate server 
             await request(
               memberA.browser,
               "POST",
-              `/api/works/${head.id}/stages/submit`,
-              submitProof(),
+              `/api/works/${head.id}/stages/assignments`,
+              {
+                stage: "proofread",
+                imageIds: [unchangedWork.images[0].id],
+                expectedRevision: head.revision,
+                idempotencyKey: randomUUID(),
+              },
             )
           ).status,
-          409,
+          400,
+          "proofread is shared and never uses page allocation",
         );
-        const assigned = await request<WorkResponse>(
-          memberA.browser,
-          "POST",
-          `/api/works/${head.id}/stages/assignments`,
-          {
-            stage: "proofread",
-            imageIds: [unchangedWork.images[0].id],
-            expectedRevision: head.revision,
-            idempotencyKey: randomUUID(),
-          },
-        );
-        assert.equal(assigned.status, 200);
-        head = assigned.data;
-        assert.equal(
-          (
-            await request(
-              memberA.browser,
-              "POST",
-              `/api/works/${head.id}/stages/submit`,
-              submitProof(),
-            )
-          ).status,
-          409,
-        );
-        const completed = await request<WorkResponse>(
-          memberA.browser,
-          "POST",
-          `/api/works/${head.id}/stages/contributions/complete`,
-          {
-            stage: "proofread",
-            expectedRevision: head.revision,
-            expectedEditorEpoch: head.editorEpoch,
-            idempotencyKey: randomUUID(),
-          },
-        );
-        assert.equal(completed.status, 200);
-        head = completed.data;
-        assert.equal(head.workflowStatus, "pending_proofread");
       }
       const key = randomUUID();
       const input = { ...submitProof(), idempotencyKey: key };
@@ -766,6 +758,9 @@ test("single-stage identity locks and multi-page contributions integrate server 
       assert.equal(cancelledProof.data.workflowStatus, "proofreading");
     }
   } finally {
+    await db.proofreadPageLease.deleteMany({
+      where: { workId: { in: workIds } },
+    });
     await db.workEvent.deleteMany({ where: { workId: { in: workIds } } });
     await db.stageContributionSubmission.deleteMany({
       where: { participant: { workId: { in: workIds } } },
@@ -778,6 +773,9 @@ test("single-stage identity locks and multi-page contributions integrate server 
     });
     await db.translationEntry.deleteMany({
       where: { workImage: { workId: { in: workIds } } },
+    });
+    await db.workPageAssignment.deleteMany({
+      where: { workId: { in: workIds } },
     });
     await db.workStageParticipant.deleteMany({
       where: { workId: { in: workIds } },

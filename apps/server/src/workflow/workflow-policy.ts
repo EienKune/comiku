@@ -57,10 +57,7 @@ export const stageTransitions: Record<WorkStage, StageTransition> = {
 
 export function canSubmitWorkStage(stage: WorkStage, status: WorkflowStatus) {
   const transition = stageTransitions[stage];
-  return (
-    status === transition.active ||
-    (stage === WorkStage.proofread && status === transition.pending)
-  );
+  return status === transition.active || status === transition.pending;
 }
 
 export function canWorkStage(roles: Role[], stage: WorkStage): boolean {

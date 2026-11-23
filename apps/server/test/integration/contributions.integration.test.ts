@@ -58,6 +58,18 @@ test("effective contributions, unique works, first publication, historical ident
       data: { displayName: "Synthetic contribution author" },
     });
     authorId = author.id;
+    const original = await db.fileObject.create({
+      data: {
+        objectKey: `contribution-original/${randomUUID()}`,
+        bucketScope: "source",
+        kind: "fixture",
+        contentType: "image/png",
+        size: 1n,
+        checksum: "0".repeat(64),
+      },
+    });
+    fileIds.push(original.id);
+
     const work = async (title: string, archived = false) => {
       const post = await db.candidatePost.create({
         data: {
@@ -75,6 +87,9 @@ test("effective contributions, unique works, first publication, historical ident
           sourceCandidatePostId: post.id,
           importedById: admin.id,
           title,
+          images: {
+            create: { originalFileObjectId: original.id, orderIndex: 0 },
+          },
           workflowStatus: archived ? "archived" : "pending_proofread",
         },
       });
@@ -102,6 +117,23 @@ test("effective contributions, unique works, first publication, historical ident
     const multi = await work("Same work, multiple roles and credits");
     const aTranslate = await credit(multi.id, a.id, "translate", first, now);
     const bTranslate = await credit(multi.id, b.id, "translate", first);
+    // Reconciled legacy multi work can have page ownership without per-member
+    // submission receipts; its original simultaneous formal credits stay valid.
+    await db.work.update({
+      where: { id: multi.id },
+      data: { collaborationMode: "multi" },
+    });
+    const legacyImage = await db.workImage.findFirstOrThrow({
+      where: { workId: multi.id },
+    });
+    await db.workPageAssignment.create({
+      data: {
+        workId: multi.id,
+        workImageId: legacyImage.id,
+        stage: "translate",
+        participantId: bTranslate.id,
+      },
+    });
     await credit(multi.id, a.id, "translate", first, now); // Duplicate historical row never adds a second credit.
     await credit(multi.id, a.id, "typeset", first);
     await credit(multi.id, actor.id, "translate", null, now);
@@ -311,28 +343,23 @@ test("effective contributions, unique works, first publication, historical ident
       { headers: { Cookie: cookie } },
     );
     assert.equal(own.status, 400);
-    // Exercise the real multi-person transaction: the clicking actor has no
-    // completed assignment, while another member owns the valid page snapshot.
+    // A non-owner cannot submit another contributor's pages or acquire credit.
+    // The actual owner submits/cancels/re-submits their exact current page heads.
     const actual = await work("Actual submission transaction");
     await db.work.update({
       where: { id: actual.id },
       data: { workflowStatus: "translating", collaborationMode: "multi" },
     });
     const contributor = await credit(actual.id, b.id, "translate", null);
-    const submitActor = await credit(actual.id, actor.id, "translate", null);
-    const file = await db.fileObject.create({
-      data: {
-        objectKey: `synthetic-contributions/${randomUUID()}`,
-        bucketScope: "source",
-        kind: "fixture",
-        contentType: "image/png",
-        size: 1,
-        checksum: "a".repeat(64),
-      },
-    });
-    fileIds.push(file.id);
-    const image = await db.workImage.create({
-      data: { workId: actual.id, originalFileObjectId: file.id, orderIndex: 0 },
+    const submitActor = await credit(
+      actual.id,
+      actor.id,
+      "translate",
+      null,
+      new Date(),
+    );
+    const image = await db.workImage.findFirstOrThrow({
+      where: { workId: actual.id },
     });
     await db.workStageAssignment.create({
       data: {
@@ -349,15 +376,32 @@ test("effective contributions, unique works, first publication, historical ident
         pages: { create: { workImageId: image.id, imageRevision: 0 } },
       },
     });
+    await db.workPageAssignment.create({
+      data: {
+        workId: actual.id,
+        workImageId: image.id,
+        stage: "translate",
+        participantId: contributor.id,
+        generation: 1,
+      },
+    });
     const submission = {
       stage: "translate" as const,
+      pageHeads: [{ imageId: image.id, generation: 1, draftRevision: 0 }],
       expectedRevision: 0,
       expectedEditorEpoch: 0,
       idempotencyKey: randomUUID(),
     };
     const works = app.get(WorksService);
+    await assert.rejects(
+      () =>
+        db.$transaction((tx) =>
+          works.submitStageTx(tx, actor.id, actual.id, submission),
+        ),
+      /认领本人翻译页/,
+    );
     await db.$transaction((tx) =>
-      works.submitStageTx(tx, actor.id, actual.id, submission),
+      works.submitStageTx(tx, b.id, actual.id, submission),
     );
     const formal = await db.workStageParticipant.findUniqueOrThrow({
       where: { id: contributor.id },
@@ -377,7 +421,7 @@ test("effective contributions, unique works, first publication, historical ident
     assert.equal(actorSummary.counts.translate, 0);
     assert.equal(actorSummary.counts.tasks, 0);
     await db.$transaction((tx) =>
-      works.submitStageTx(tx, actor.id, actual.id, submission),
+      works.submitStageTx(tx, b.id, actual.id, submission),
     );
     assert.equal(
       (
@@ -407,21 +451,26 @@ test("effective contributions, unique works, first publication, historical ident
       ).counts.translate,
       1,
     );
-    await works.joinStage(actor.id, actual.id, {
-      stage: "translate",
-      expectedRevision: 2,
-      idempotencyKey: randomUUID(),
-    });
+    await assert.rejects(
+      () =>
+        works.joinStage(actor.id, actual.id, {
+          stage: "translate",
+          expectedRevision: 2,
+          idempotencyKey: randomUUID(),
+        }),
+      /空闲页/,
+    );
     assert.equal(
       await db.workStageParticipant.count({
         where: { workId: actual.id, userId: actor.id },
       }),
-      2,
+      1,
     );
     await db.$transaction((tx) =>
       works.submitStageTx(tx, b.id, actual.id, {
         stage: "translate",
-        expectedRevision: 3,
+        pageHeads: [{ imageId: image.id, generation: 1, draftRevision: 0 }],
+        expectedRevision: 2,
         expectedEditorEpoch: 2,
         idempotencyKey: randomUUID(),
       }),
@@ -478,6 +527,7 @@ test("effective contributions, unique works, first publication, historical ident
         where: { participant: whereWork },
       });
       await db.translationVersion.deleteMany({ where: whereWork });
+      await db.workPageAssignment.deleteMany({ where: whereWork });
       await db.workStageParticipant.deleteMany({ where: whereWork });
       await db.typesetImageVersion.deleteMany({ where: whereWork });
       await db.workImage.deleteMany({ where: whereWork });

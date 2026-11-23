@@ -1067,6 +1067,9 @@ test("source fetch, media transfer and candidate batch lifecycle", async () => {
     if (authorId) {
       await db.workReviewCase.deleteMany({ where: { work: { authorId } } });
       await db.workEvent.deleteMany({ where: { work: { authorId } } });
+      await db.workPageAssignment.deleteMany({
+        where: { work: { authorId } },
+      });
       await db.workStageParticipant.deleteMany({
         where: { work: { authorId } },
       });

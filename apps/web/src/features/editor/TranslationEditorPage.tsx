@@ -1,3 +1,6 @@
+import { workImageKey } from "../workspace/use-work-image-url";
+import { EditorPagePreview } from "./EditorPagePreview";
+import { EditorSubmissionCancelAction } from "./EditorSubmissionCancelAction";
 import { useConfirmation } from "../../components/use-confirmation";
 import { refreshReviewViews } from "../workspace/review-cache";
 import {
@@ -5,11 +8,10 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "@comiku/api-client";
 import {
   AlertTriangle,
@@ -23,6 +25,7 @@ import {
   FileText,
   FileWarning,
   Grab,
+  Grid2X2,
   HardDrive,
   ImageIcon,
   Keyboard,
@@ -30,11 +33,9 @@ import {
   Maximize2,
   Move,
   Plus,
-  RotateCcw,
   Save,
   Trash2,
   Upload,
-  UserRoundCheck,
   Users,
   ZoomIn,
   ZoomOut,
@@ -47,12 +48,7 @@ import { isDisplayableImageUrl } from "../../components/media-url";
 import { OptionalSection } from "../../components/OptionalSection";
 import { MarkerTooltip } from "../../components/MarkerTooltip";
 import { useAccount } from "../account/account-context";
-import {
-  authenticatedFetch,
-  client,
-  queryClient,
-  unwrap,
-} from "../account/api";
+import { authenticatedFetch, client, unwrap } from "../account/api";
 import {
   createTranslationDraft,
   deleteTranslationDraft,
@@ -65,6 +61,8 @@ import {
   type TranslationDraftRecord,
   type TranslationImage,
 } from "./draft-storage";
+import { getPageWriteAccess, type PageEditor } from "./page-access";
+import { mergeServerImage } from "./merge-server-image";
 import { useCanvasWheelZoom } from "./use-canvas-wheel-zoom";
 import { useMarkerReorder } from "./use-marker-reorder";
 import {
@@ -99,6 +97,10 @@ const localIdPrefix = "local:";
 const markerCoordinateScale = 1_000;
 
 type DraftConflictKind = "recovery" | "content" | "epoch";
+type EditorStateSignal = Pick<
+  components["schemas"]["TranslationEditorDto"],
+  "workRevision" | "editorEpoch" | "workflowStatus" | "reviewStatus"
+>;
 
 type MarkerUndo = {
   entryId: string;
@@ -140,32 +142,6 @@ function entryContentMatches(
   );
 }
 
-function mergeServerImage(
-  serverImage: TranslationImage,
-  localImage: EditableTranslationImage | undefined,
-  dirtyIds: Set<string>,
-): EditableTranslationImage {
-  if (!localImage) return serverImage;
-  return {
-    ...serverImage,
-    entries: serverImage.entries.map((serverEntry) => {
-      const localEntry = localImage.entries.find(
-        (entry) => entry.id === serverEntry.id,
-      );
-      return localEntry && dirtyIds.has(serverEntry.id)
-        ? {
-            ...serverEntry,
-            markerX: localEntry.markerX,
-            markerY: localEntry.markerY,
-            markerPositionType: localEntry.markerPositionType,
-            translatedText: localEntry.translatedText,
-            note: localEntry.note,
-          }
-        : serverEntry;
-    }),
-  };
-}
-
 function statusCopy(state: SaveState, savedAt: Date | null) {
   switch (state) {
     case "syncing":
@@ -198,12 +174,23 @@ async function updateEditorPresence(
   workId: string,
   mode: TranslationPresenceMode,
 ) {
-  return unwrap(
-    await client.POST("/api/works/{workId}/translations/presence", {
+  const result = await client.POST(
+    "/api/works/{workId}/translations/presence",
+    {
       params: { path: { workId } },
       body: { mode },
-    }),
+    },
   );
+  if (mode === "edit" && result.response.status === 403) {
+    const viewing = await unwrap(
+      await client.POST("/api/works/{workId}/translations/presence", {
+        params: { path: { workId } },
+        body: { mode: "view" },
+      }),
+    );
+    return { ...viewing, viewOnly: true };
+  }
+  return { ...(await unwrap(result)), viewOnly: false };
 }
 
 function stageCopy(stage: WorkStage) {
@@ -218,13 +205,14 @@ const reviewStatusCopy = {
 export function TranslationEditorPage() {
   const { id: workId = "" } = useParams();
   const user = useAccount();
+  const queryClient = useQueryClient();
   const shortcuts = useEditorShortcuts(user.id);
   const [showShortcutSettings, setShowShortcutSettings] = useState(false);
   const shortcutComposing = useRef(false);
   const [images, setImages] = useState<EditableTranslationImage[]>([]);
   const imagesRef = useRef<EditableTranslationImage[]>([]);
   const [pageIndex, setPageIndex] = useState(0);
-  const [pageJump, setPageJump] = useState("1");
+  const [showPagePreview, setShowPagePreview] = useState(false);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [tool, setTool] = useState<EditorTool>("pan");
   const [zoom, setZoom] = useState(1);
@@ -236,6 +224,28 @@ export function TranslationEditorPage() {
   const dirtyRef = useRef(new Set<string>());
   const [recoveryDraft, setRecoveryDraft] =
     useState<TranslationDraftRecord | null>(null);
+  const recoveryDraftRef = useRef(recoveryDraft);
+  recoveryDraftRef.current = recoveryDraft;
+  const editorScope = `${user.id}:${workId}`;
+  const editorScopeRef = useRef(editorScope);
+  const reconciliationSequence = useRef(0);
+  const [refreshingScope, setRefreshingScope] = useState<string | null>(null);
+  const refreshingScopeRef = useRef<string | null>(null);
+  const observedStageHead = useRef<Pick<
+    EditorStateSignal,
+    "workRevision" | "editorEpoch"
+  > | null>(null);
+  const stageRefreshTask = useRef<Promise<
+    components["schemas"]["TranslationEditorDto"] | undefined
+  > | null>(null);
+  if (editorScopeRef.current !== editorScope) {
+    editorScopeRef.current = editorScope;
+    reconciliationSequence.current++;
+    refreshingScopeRef.current = null;
+    observedStageHead.current = null;
+    stageRefreshTask.current = null;
+  }
+  const stageRefreshing = refreshingScope === editorScope;
   const [draftConflictKind, setDraftConflictKind] =
     useState<DraftConflictKind | null>(null);
   const [draftHydrated, setDraftHydrated] = useState(false);
@@ -255,6 +265,7 @@ export function TranslationEditorPage() {
   const undoFailure = useRef(0);
   const undoPending = useRef(0);
   const editorHeadRef = useRef({
+    workRevision: 0,
     editorEpoch: 0,
     latestVersionId: null as string | null,
   });
@@ -265,8 +276,6 @@ export function TranslationEditorPage() {
   const [activeParticipants, setActiveParticipants] = useState<
     TranslationPresence[]
   >([]);
-  const [showEntryChoice, setShowEntryChoice] = useState(false);
-  const [entryChoicePending, setEntryChoicePending] = useState(false);
   const [labelPlusFile, setLabelPlusFile] = useState<File | null>(null);
   const [labelPlusPreview, setLabelPlusPreview] =
     useState<LabelPlusImportPreview | null>(null);
@@ -287,23 +296,27 @@ export function TranslationEditorPage() {
 
   const editor = useQuery({
     queryKey: ["translation-editor", workId],
-    queryFn: async () =>
+    queryFn: async ({ signal }) =>
       unwrap(
         await client.GET("/api/works/{workId}/translations", {
           params: { path: { workId } },
+          signal,
         }),
       ),
     enabled: Boolean(workId && user.permissions.includes("works:read")),
     staleTime: 0,
     gcTime: 0,
     refetchOnMount: "always",
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   const editorDataRef = useRef(editor.data);
   editorDataRef.current = editor.data;
 
   const currentImage = images[pageIndex];
+  const pageNumber = currentImage ? pageIndex + 1 : 0;
   const imageUrl = useQuery({
-    queryKey: ["work-image", workId, currentImage?.id],
+    queryKey: [...workImageKey(workId, currentImage?.id), "editor"],
     queryFn: async () =>
       unwrap(
         await client.GET("/api/works/{workId}/images/{imageId}/url", {
@@ -315,6 +328,25 @@ export function TranslationEditorPage() {
     enabled: Boolean(currentImage),
     staleTime: 4 * 60 * 1000,
   });
+  const [imageRetry, setImageRetry] = useState(0);
+  const imageRequestKey = `${currentImage?.id ?? ""}:${imageUrl.data?.url ?? ""}:${imageRetry}`;
+  const [imageLoad, setImageLoad] = useState<{
+    key: string;
+    phase: "loading" | "ready" | "failed";
+  }>({ key: imageRequestKey, phase: "loading" });
+  if (imageLoad.key !== imageRequestKey)
+    setImageLoad({ key: imageRequestKey, phase: "loading" });
+  const imageReady =
+    imageLoad.key === imageRequestKey && imageLoad.phase === "ready";
+  const imageFailed =
+    (imageLoad.key === imageRequestKey && imageLoad.phase === "failed") ||
+    (!imageUrl.isFetching &&
+      (imageUrl.isError ||
+        (imageUrl.isSuccess && !isDisplayableImageUrl(imageUrl.data?.url))));
+
+  useEffect(() => {
+    drag.current = null;
+  }, [imageRequestKey]);
 
   const currentEntries = useMemo(
     () => currentImage?.entries ?? [],
@@ -324,9 +356,34 @@ export function TranslationEditorPage() {
     image.entries.some((entry) => entry.localOnly),
   );
   const hasUnsaved = dirtyEntryIds.size > 0 || hasLocalEntry;
-  const writable = Boolean(
-    editor.data?.canEdit && presenceMode === "edit" && !recoveryDraft,
+  const showingLocalRecovery = Boolean(
+    recoveryDraft && images === recoveryDraft.images,
   );
+  const pageEditor = editor.data as PageEditor | undefined;
+  const pageEditable =
+    !pageEditor?.editableImageIds ||
+    Boolean(
+      currentImage && pageEditor.editableImageIds.includes(currentImage.id),
+    );
+  const writable = Boolean(
+    editor.data?.canEdit &&
+    presenceMode === "edit" &&
+    !stageRefreshing &&
+    !recoveryDraft &&
+    pageEditable,
+  );
+  const canSubmitStage = Boolean(
+    editor.data?.canEdit &&
+    presenceMode === "edit" &&
+    !recoveryDraft &&
+    !stageRefreshing,
+  );
+  function pageAccess(imageId: string) {
+    const current = editorDataRef.current as PageEditor | undefined;
+    if (refreshingScopeRef.current === editorScope || !current?.canEdit)
+      throw new Error("当前阶段没有编辑权限，本地草稿已保留，请核对最新状态。");
+    return getPageWriteAccess(current, imageId);
+  }
   const stageContentReady =
     editor.data?.submissionStage !== "translate" ||
     (draftHydrated &&
@@ -414,7 +471,7 @@ export function TranslationEditorPage() {
     image: imageRef,
     zoom,
     offset,
-    ready: Boolean(currentImage && imageUrl.data?.url),
+    ready: imageReady,
     onChange: (next) => {
       drag.current = null;
       setZoom(next.zoom);
@@ -423,18 +480,11 @@ export function TranslationEditorPage() {
   });
   const submissionStage = editor.data?.submissionStage ?? null;
   const cancelableSubmissionStage =
-    editor.data?.cancelableSubmissionStage ?? null;
-  const otherActiveEditors = activeParticipants
-    .filter(
-      (participant) =>
-        participant.mode === "edit" && !participant.isCurrentSession,
-    )
-    .filter(
-      (participant, index, participants) =>
-        participants.findIndex(
-          ({ userId }) => userId === participant.userId,
-        ) === index,
-    );
+    editor.data?.collaborationMode === "multi" &&
+    submissionStage === "proofread" &&
+    editor.data.cancelableSubmissionStage === "translate"
+      ? null
+      : (editor.data?.cancelableSubmissionStage ?? null);
   const activeUserCount = new Set(
     activeParticipants.map(({ userId }) => userId),
   ).size;
@@ -464,58 +514,6 @@ export function TranslationEditorPage() {
     setDirtyEntryIds(next);
   }
 
-  function chooseViewMode() {
-    setPresenceMode("view");
-    setShowEntryChoice(false);
-    void updateEditorPresence(workId, "view")
-      .then((presence) => setActiveParticipants(presence.items))
-      .catch(() => undefined);
-  }
-
-  async function enterCollaboration() {
-    const current = editorDataRef.current;
-    if (!current || entryChoicePending) return;
-    setEntryChoicePending(true);
-    setMessage(null);
-    try {
-      if (
-        current.joinableStage === "translate" ||
-        current.joinableStage === "proofread"
-      ) {
-        const joined = await unwrap(
-          await client.POST("/api/works/{id}/stages/join", {
-            params: { path: { id: workId } },
-            body: {
-              stage: current.joinableStage,
-              expectedRevision: current.workRevision,
-              idempotencyKey: crypto.randomUUID(),
-            },
-          }),
-        );
-        queryClient.setQueryData(["work", workId], joined);
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ["works"] }),
-          queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-          queryClient.invalidateQueries({ queryKey: ["dashboard-works"] }),
-        ]);
-        const refreshed = await editor.refetch();
-        if (!refreshed.data?.canEdit) {
-          throw new Error("加入协作后未能取得编辑权限，请刷新页面重试");
-        }
-        replaceEditorHead(refreshed.data);
-      }
-      const presence = await updateEditorPresence(workId, "edit");
-      setActiveParticipants(presence.items);
-      setPresenceMode("edit");
-      setShowEntryChoice(false);
-    } catch (error) {
-      setPresenceMode("view");
-      setMessage(error instanceof Error ? error.message : "进入协作失败");
-    } finally {
-      setEntryChoicePending(false);
-    }
-  }
-
   async function previewLabelPlus(file: File) {
     if (
       !editor.data ||
@@ -524,6 +522,7 @@ export function TranslationEditorPage() {
       editor.data.reviewStatus !== "normal"
     )
       return;
+    const isCurrent = requestStillCurrent();
     if (file.size > 2 * 1024 * 1024) {
       setMessage("LabelPlus 文件不能超过 2 MiB。");
       setSaveState("failed");
@@ -540,16 +539,18 @@ export function TranslationEditorPage() {
           body: body as never,
         }),
       );
+      if (!isCurrent()) return;
       setLabelPlusFile(file);
       setLabelPlusPreview(preview);
       setLabelPlusStage(
         editor.data.submissionStage ?? editor.data.editStages[0] ?? null,
       );
     } catch (error) {
+      if (!isCurrent()) return;
       setSaveState("failed");
       setMessage(error instanceof Error ? error.message : "无法解析 LabelPlus");
     } finally {
-      setLabelPlusOperation(null);
+      if (isCurrent()) setLabelPlusOperation(null);
     }
   }
 
@@ -568,6 +569,7 @@ export function TranslationEditorPage() {
     ) {
       return;
     }
+    const isCurrent = requestStillCurrent();
     setLabelPlusOperation("import");
     setMessage(null);
     const body = new FormData();
@@ -576,19 +578,33 @@ export function TranslationEditorPage() {
     body.append("expectedRevision", String(current.workRevision));
     body.append("expectedEditorEpoch", String(current.editorEpoch));
     body.append("idempotencyKey", crypto.randomUUID());
+    body.append("expectedContentBaseline", labelPlusPreview.contentBaseline);
     try {
+      const targetIds = [
+        ...new Set(
+          labelPlusPreview.mappings.map((mapping) => mapping.targetImageId),
+        ),
+      ];
+      if (!isCurrent()) return;
+      body.append(
+        "pageAccess",
+        JSON.stringify(
+          targetIds.map((imageId) => ({ imageId, ...pageAccess(imageId) })),
+        ),
+      );
       const imported = await unwrap(
         await client.POST("/api/works/{workId}/labelplus/imports", {
           params: { path: { workId } },
           body: body as never,
         }),
       );
+      if (!isCurrent()) return;
       queryClient.setQueryData(["translation-editor", workId], imported);
       replaceEditorHead(imported);
       replaceImages(imported.images);
       replaceDirty(new Set());
       setPageIndex(0);
-      setPageJump("1");
+      setShowPagePreview(false);
       setSelectedEntryId(null);
       await deleteTranslationDraft(user.id, workId).catch(() => undefined);
       await Promise.all([
@@ -605,10 +621,11 @@ export function TranslationEditorPage() {
         `已导入 ${labelPlusPreview.imageCount} 个图片章节和 ${labelPlusPreview.markerCount} 个标记，并生成正式版本。`,
       );
     } catch (error) {
+      if (!isCurrent()) return;
       setSaveState("conflict");
       setMessage(error instanceof Error ? error.message : "LabelPlus 导入失败");
     } finally {
-      setLabelPlusOperation(null);
+      if (isCurrent()) setLabelPlusOperation(null);
     }
   }
 
@@ -726,12 +743,15 @@ export function TranslationEditorPage() {
   }
 
   function replaceEditorHead(editorData: {
+    workRevision?: number;
     editorEpoch: number;
     latestVersion: { id: string } | null;
   }) {
     markerUndoStack.current = [];
     undoFailure.current++;
     editorHeadRef.current = {
+      workRevision:
+        editorData.workRevision ?? editorHeadRef.current.workRevision,
       editorEpoch: editorData.editorEpoch,
       latestVersionId: editorData.latestVersion?.id ?? null,
     };
@@ -743,6 +763,7 @@ export function TranslationEditorPage() {
     if (!mutation) return;
     editorHeadRef.current = {
       ...editorHeadRef.current,
+      workRevision: mutation.workRevision,
       editorEpoch: mutation.editorEpoch,
     };
     queryClient.setQueryData(
@@ -784,7 +805,7 @@ export function TranslationEditorPage() {
     setSaveState(
       stillUnsaved ? (navigator.onLine ? "local" : "offline") : "saved",
     );
-    if (!stillUnsaved) {
+    if (!stillUnsaved && !recoveryDraftRef.current) {
       void deleteTranslationDraft(user.id, workId).catch(() => undefined);
     }
   }
@@ -794,24 +815,13 @@ export function TranslationEditorPage() {
     setOffset({ x: 0, y: 0 });
   }
 
-  function goToPage(nextIndex: number) {
+  async function goToPage(nextIndex: number) {
     markerUndoStack.current = [];
     if (!images.length) return;
     const safeIndex = clamp(nextIndex, 0, images.length - 1);
     setPageIndex(safeIndex);
-    setPageJump(String(safeIndex + 1));
     setSelectedEntryId(null);
     resetViewport();
-  }
-
-  function submitPageJump(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const requestedPage = Number(pageJump);
-    if (!Number.isInteger(requestedPage) || requestedPage < 1) {
-      setPageJump(String(pageIndex + 1));
-      return;
-    }
-    goToPage(requestedPage - 1);
   }
 
   function selectEntry(entryId: string, focusText = false) {
@@ -840,11 +850,213 @@ export function TranslationEditorPage() {
       );
   }
 
+  function requestStillCurrent() {
+    const sequence = reconciliationSequence.current;
+    return () =>
+      editorMounted.current &&
+      editorScopeRef.current === editorScope &&
+      reconciliationSequence.current === sequence;
+  }
+
+  function stageChangeMessage(
+    previous: components["schemas"]["TranslationEditorDto"] | undefined,
+    latest: components["schemas"]["TranslationEditorDto"],
+    operation: "observe" | "cancel" = "observe",
+  ) {
+    if (
+      (previous?.workflowStatus === "pending_proofread" ||
+        previous?.workflowStatus === "proofreading") &&
+      latest.workflowStatus === "translating"
+    )
+      return "其他翻译成员已撤回提交，作品已退回翻译中。旧校对编辑已停止；你的翻译提交状态已更新。";
+    if (
+      latest.workflowStatus === "proofreading" &&
+      (operation === "cancel" || previous?.workflowStatus !== "proofreading")
+    )
+      return "校对已开始保存，翻译提交已不能撤回；已更新当前状态。";
+    if (
+      [
+        "pending_typeset",
+        "typesetting",
+        "pending_publish",
+        "published",
+      ].includes(latest.workflowStatus) &&
+      (operation === "cancel" ||
+        previous?.workflowStatus !== latest.workflowStatus)
+    )
+      return "校对已提交，翻译提交已不能撤回；已更新当前状态。";
+    if (operation === "cancel")
+      return "作品阶段或版本已变化，本次未能取消提交；已更新当前状态。";
+    if (
+      previous?.workflowStatus === latest.workflowStatus &&
+      previous.reviewStatus === latest.reviewStatus &&
+      previous.editorEpoch === latest.editorEpoch &&
+      previous.latestVersion?.id === latest.latestVersion?.id
+    )
+      return "本页编辑权限已变化，已读取当前阶段；本地草稿保留供核对。";
+    return "作品阶段或正式版本已变化，已更新当前状态，请核对后继续。";
+  }
+
+  function refreshStageState(
+    reason?: string,
+    signal?: Pick<EditorStateSignal, "workRevision" | "editorEpoch">,
+  ) {
+    if (signal)
+      observedStageHead.current = {
+        workRevision: Math.max(
+          observedStageHead.current?.workRevision ?? 0,
+          signal.workRevision,
+        ),
+        editorEpoch: Math.max(
+          observedStageHead.current?.editorEpoch ?? 0,
+          signal.editorEpoch,
+        ),
+      };
+    if (stageRefreshTask.current) return stageRefreshTask.current;
+    const previous = editorDataRef.current;
+    reconciliationSequence.current++;
+    const isCurrent = requestStillCurrent();
+    refreshingScopeRef.current = editorScope;
+    setRefreshingScope(editorScope);
+    markerUndoStack.current = [];
+    undoFailure.current++;
+    setCreatingEntry(false);
+    setLabelPlusOperation(null);
+    drag.current = null;
+    for (const timer of saveTimers.current.values()) window.clearTimeout(timer);
+    saveTimers.current.clear();
+    const localDraft =
+      recoveryDraftRef.current ??
+      (dirtyRef.current.size ||
+      imagesRef.current.some((image) =>
+        image.entries.some((entry) => entry.localOnly),
+      )
+        ? createTranslationDraft(
+            user.id,
+            workId,
+            imagesRef.current,
+            editorHeadRef.current,
+            Date.now(),
+            dirtyRef.current,
+          )
+        : null);
+    if (localDraft) {
+      recoveryDraftRef.current = localDraft;
+      setRecoveryDraft(localDraft);
+      setDraftConflictKind("epoch");
+      replaceDirty(new Set());
+      void saveTranslationDraft(localDraft).catch(() => undefined);
+    }
+    setSaveState("conflict");
+    setMessage(reason ?? "正在读取当前阶段，旧编辑已暂停。");
+    const task = (async () => {
+      try {
+        await queryClient.cancelQueries({
+          queryKey: ["translation-editor", workId],
+          exact: true,
+        });
+        if (!isCurrent()) return;
+        const latest = await unwrap(
+          await client.GET("/api/works/{workId}/translations", {
+            params: { path: { workId } },
+          }),
+        );
+        if (!isCurrent()) return;
+        if (
+          latest.workRevision < editorHeadRef.current.workRevision ||
+          latest.editorEpoch < editorHeadRef.current.editorEpoch ||
+          latest.workRevision <
+            (observedStageHead.current?.workRevision ?? 0) ||
+          latest.editorEpoch < (observedStageHead.current?.editorEpoch ?? 0)
+        )
+          throw new Error("读取到旧的作品状态，请稍后重试；本地草稿已保留。");
+        queryClient.setQueryData(["translation-editor", workId], latest);
+        editorDataRef.current = latest;
+        setPresenceMode(latest.canEdit ? "edit" : "view");
+        replaceEditorHead(latest);
+        replaceImages(localDraft ? localDraft.images : latest.images);
+        setLabelPlusPreview(null);
+        setLabelPlusFile(null);
+        refreshingScopeRef.current = null;
+        setRefreshingScope(null);
+        setSaveState(localDraft ? "conflict" : "saved");
+        setMessage(reason ?? stageChangeMessage(previous, latest));
+        return latest;
+      } catch (error) {
+        if (isCurrent())
+          setMessage(
+            error instanceof Error
+              ? error.message
+              : "无法读取当前阶段；旧编辑已暂停，本地草稿仍保留，请重试。",
+          );
+      } finally {
+        if (isCurrent()) stageRefreshTask.current = null;
+      }
+    })();
+    stageRefreshTask.current = task;
+    return task;
+  }
+
+  const refreshStageStateRef = useRef(refreshStageState);
+  refreshStageStateRef.current = refreshStageState;
+  const observeEditorState = useRef<
+    (signal: Partial<EditorStateSignal>) => Promise<void>
+  >(() => Promise.resolve());
+  observeEditorState.current = async (signal) => {
+    const current = editorDataRef.current;
+    if (
+      !current ||
+      initializedKey.current !== editorScope ||
+      typeof signal.workRevision !== "number" ||
+      typeof signal.editorEpoch !== "number" ||
+      !signal.workflowStatus ||
+      !signal.reviewStatus ||
+      signal.workRevision < editorHeadRef.current.workRevision ||
+      signal.editorEpoch < editorHeadRef.current.editorEpoch
+    )
+      return;
+    if (
+      current.workflowStatus === "pending_translate" &&
+      signal.workflowStatus === "translating" &&
+      signal.editorEpoch === editorHeadRef.current.editorEpoch &&
+      signal.reviewStatus === current.reviewStatus &&
+      refreshingScopeRef.current !== editorScope
+    ) {
+      const next = {
+        ...current,
+        workflowStatus: signal.workflowStatus,
+        workRevision: signal.workRevision,
+      };
+      editorDataRef.current = next;
+      replaceEditorHead(next);
+      queryClient.setQueryData(["translation-editor", workId], next);
+      return;
+    }
+    if (
+      signal.workflowStatus !== current.workflowStatus ||
+      signal.reviewStatus !== current.reviewStatus ||
+      signal.editorEpoch !== editorHeadRef.current.editorEpoch ||
+      refreshingScopeRef.current === editorScope
+    )
+      await refreshStageState(undefined, {
+        workRevision: signal.workRevision,
+        editorEpoch: signal.editorEpoch,
+      });
+  };
+
   async function enterConflict(
     localImages: EditableTranslationImage[],
     reason: string,
     isCurrent: () => boolean = () => true,
   ) {
+    if (!isCurrent()) return;
+    const currentScope = editorScope;
+    const sequence = ++reconciliationSequence.current;
+    const previous = editorDataRef.current;
+    const conflictIsCurrent = () =>
+      editorMounted.current &&
+      editorScopeRef.current === currentScope &&
+      sequence === reconciliationSequence.current;
     markerUndoStack.current = [];
     undoFailure.current++;
     for (const timer of saveTimers.current.values()) window.clearTimeout(timer);
@@ -852,23 +1064,28 @@ export function TranslationEditorPage() {
     setMessage(reason);
     setSaveState("conflict");
     setDraftConflictKind("content");
-    const localDraft = createTranslationDraft(
-      user.id,
-      workId,
-      localImages,
-      editorHeadRef.current,
-    );
+    const localDraft =
+      recoveryDraftRef.current ??
+      createTranslationDraft(
+        user.id,
+        workId,
+        localImages,
+        editorHeadRef.current,
+        Date.now(),
+        dirtyRef.current,
+      );
     setRecoveryDraft(localDraft);
+    recoveryDraftRef.current = localDraft;
     replaceDirty(new Set());
     await saveTranslationDraft(localDraft).catch(() => undefined);
-    if (!isCurrent()) return;
+    if (!conflictIsCurrent()) return;
     try {
       const latest = await unwrap(
         await client.GET("/api/works/{workId}/translations", {
           params: { path: { workId } },
         }),
       );
-      if (!isCurrent()) return;
+      if (!conflictIsCurrent()) return;
       const crossedEpoch =
         latest.editorEpoch !== (localDraft.editorEpoch ?? 0) ||
         (latest.latestVersion?.id ?? null) !==
@@ -876,11 +1093,41 @@ export function TranslationEditorPage() {
       setDraftConflictKind(crossedEpoch ? "epoch" : "content");
       queryClient.setQueryData(["translation-editor", workId], latest);
       replaceEditorHead(latest);
-      replaceImages(latest.images);
+      const rolledBack =
+        (previous?.workflowStatus === "pending_proofread" ||
+          previous?.workflowStatus === "proofreading") &&
+        latest.workflowStatus === "translating";
+      replaceImages(rolledBack ? localDraft.images : latest.images);
+      if (rolledBack) setMessage(stageChangeMessage(previous, latest));
     } catch {
-      if (isCurrent())
+      if (conflictIsCurrent())
         setMessage("检测到版本冲突，同时无法重新读取服务端内容。请稍后重试。");
     }
+  }
+
+  async function reconcileServerImage(
+    serverImage: TranslationImage,
+    acknowledgedLocalEntryId?: string,
+    conflictMessage = "图片标记已保存，但尚未同步的译文已被其他参与者修改或删除。本地原稿已保留供核对。",
+  ) {
+    const local = imagesRef.current.find(
+      (image) => image.id === serverImage.id,
+    );
+    const merged = mergeServerImage(
+      serverImage,
+      local,
+      dirtyRef.current,
+      acknowledgedLocalEntryId,
+    );
+    const next = imagesRef.current.map((image) =>
+      image.id === serverImage.id ? merged.image : image,
+    );
+    replaceImages(next);
+    if (merged.conflictedEntryIds.size) {
+      await enterConflict(next, conflictMessage);
+      return false;
+    }
+    return true;
   }
 
   function enqueueServerMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -893,14 +1140,35 @@ export function TranslationEditorPage() {
   }
 
   function saveEntry(entryId: string) {
-    return enqueueServerMutation(() => performSaveEntry(entryId));
+    const isCurrent = requestStillCurrent();
+    return enqueueServerMutation(() =>
+      isCurrent() ? performSaveEntry(entryId) : Promise.resolve(),
+    );
   }
 
   async function performSaveEntry(entryId: string) {
+    if (
+      refreshingScopeRef.current === editorScope ||
+      !editorDataRef.current?.canEdit
+    )
+      return;
+    const isCurrent = requestStillCurrent();
     const entry = imagesRef.current
       .flatMap((image) => image.entries)
       .find((item) => item.id === entryId);
     if (!entry || entry.localOnly || !dirtyRef.current.has(entryId)) return;
+    const image = imagesRef.current.find((image) =>
+      image.entries.some((item) => item.id === entryId),
+    );
+    const access = editorDataRef.current as PageEditor | undefined;
+    if (
+      access?.editableImageIds &&
+      (!image || !access.editableImageIds.includes(image.id))
+    ) {
+      setSaveState("conflict");
+      setMessage("此页分工或提交状态已变化，本地草稿保留，请刷新后核对。");
+      return;
+    }
     if (!navigator.onLine) {
       setSaveState("offline");
       return;
@@ -912,6 +1180,11 @@ export function TranslationEditorPage() {
       const result = await client.PATCH("/api/translation-entries/{entryId}", {
         params: { path: { entryId } },
         body: {
+          ...pageAccess(
+            imagesRef.current.find((image) =>
+              image.entries.some((item) => item.id === entryId),
+            )!.id,
+          ),
           expectedRevision: sent.revision,
           expectedEditorEpoch: editorHeadRef.current.editorEpoch,
           markerX: sent.markerX,
@@ -921,10 +1194,12 @@ export function TranslationEditorPage() {
           note: sent.note?.trim() || null,
         },
       });
+      if (!isCurrent()) return;
       if (result.response.status === 409) {
         await enterConflict(
           imagesRef.current,
           "此条目已被其他参与者更新。请选择服务端内容，或明确重新应用本地译文。",
+          isCurrent,
         );
         return;
       }
@@ -956,6 +1231,7 @@ export function TranslationEditorPage() {
         finishServerMutation();
       }
     } catch (error) {
+      if (!isCurrent()) return;
       setMessage(error instanceof Error ? error.message : "保存失败");
       setSaveState(navigator.onLine ? "failed" : "offline");
     }
@@ -978,6 +1254,12 @@ export function TranslationEditorPage() {
     update: Partial<EditableTranslationEntry>,
     debounce = true,
   ) {
+    if (
+      !writableRef.current ||
+      recoveryDraftRef.current ||
+      refreshingScopeRef.current === editorScope
+    )
+      return;
     updateImages((allImages) =>
       allImages.map((image) => ({
         ...image,
@@ -1018,7 +1300,9 @@ export function TranslationEditorPage() {
     if (next.length === ordered.length || target < 0) return;
     next.splice(target, 0, entryId);
     if (next.every((id, index) => id === ordered[index])) return;
+    const isCurrent = requestStillCurrent();
     const sameWorkspace = () =>
+      isCurrent() &&
       editorMounted.current &&
       reorderContext.current.workspace === markerWorkspaceScope &&
       editorHeadRef.current.editorEpoch === editorEpoch &&
@@ -1056,6 +1340,7 @@ export function TranslationEditorPage() {
               params: { path: { imageId, entryId } },
               body: {
                 beforeMarkerId,
+                ...pageAccess(imageId),
                 expectedImageRevision: translationRevision,
                 expectedEditorEpoch: editorEpoch,
               },
@@ -1080,34 +1365,15 @@ export function TranslationEditorPage() {
             savedImage.entries.some((entry, index) => entry.id !== next[index])
           )
             throw new Error("服务端未返回已确认的标记顺序");
-          const serverRevisions = new Map(
-            savedImage.entries.map((entry) => [entry.id, entry.revision]),
-          );
-          const currentImageEntries = imagesRef.current.find(
-            (image) => image.id === imageId,
-          )?.entries;
-          if (
-            currentImageEntries?.some(
-              (entry) =>
-                dirtyRef.current.has(entry.id) &&
-                serverRevisions.get(entry.id) !== entry.revision,
-            )
-          ) {
-            await enterConflict(
-              imagesRef.current,
-              "标记顺序已保存，但有译文同时被其他参与者修改。请确认保留哪一版译文。",
-              sameWorkspace,
-            );
-            return;
-          }
           applyMutationMeta(savedImage.mutation);
-          updateImages((allImages) =>
-            allImages.map((image) =>
-              image.id === imageId
-                ? mergeServerImage(savedImage, image, dirtyRef.current)
-                : image,
-            ),
-          );
+          if (
+            !(await reconcileServerImage(
+              savedImage,
+              undefined,
+              "标记顺序已保存，但有译文同时被其他参与者修改。请确认保留哪一版译文。",
+            ))
+          )
+            return;
           finishServerMutation();
         } catch (error) {
           if (!sameWorkspace()) return;
@@ -1132,10 +1398,19 @@ export function TranslationEditorPage() {
   }
 
   function syncCreatedEntry(entryId: string) {
-    return enqueueServerMutation(() => performSyncCreatedEntry(entryId));
+    const isCurrent = requestStillCurrent();
+    return enqueueServerMutation(() =>
+      isCurrent() ? performSyncCreatedEntry(entryId) : Promise.resolve(),
+    );
   }
 
   async function performSyncCreatedEntry(entryId: string) {
+    if (
+      refreshingScopeRef.current === editorScope ||
+      !editorDataRef.current?.canEdit
+    )
+      return;
+    const isCurrent = requestStillCurrent();
     const image = imagesRef.current.find((item) =>
       item.entries.some((entry) => entry.id === entryId),
     );
@@ -1157,6 +1432,7 @@ export function TranslationEditorPage() {
       const result = await client.POST("/api/work-images/{imageId}/markers", {
         params: { path: { imageId: image.id } },
         body: {
+          ...pageAccess(image.id),
           markerX: entry.markerX,
           markerY: entry.markerY,
           markerPositionType: entry.markerPositionType,
@@ -1165,6 +1441,7 @@ export function TranslationEditorPage() {
           idempotencyKey: entry.idempotencyKey,
         },
       });
+      if (!isCurrent()) return;
       if (result.response.status === 409) {
         await enterConflict(
           imagesRef.current,
@@ -1191,21 +1468,16 @@ export function TranslationEditorPage() {
         undoFailure.current++;
         setMessage("云端标点已变化，已停止连续撤销，请检查当前图片。");
       }
-      updateImages((allImages) =>
-        allImages.map((item) =>
-          item.id === image.id
-            ? mergeServerImage(savedImage, item, dirtyRef.current)
-            : item,
-        ),
-      );
       clearDirty(entryId);
       setSelectedEntryId(created?.id ?? null);
+      if (!(await reconcileServerImage(savedImage, entryId))) return;
       finishServerMutation();
     } catch (error) {
+      if (!isCurrent()) return;
       setMessage(error instanceof Error ? error.message : "标记创建失败");
       setSaveState(navigator.onLine ? "failed" : "offline");
     } finally {
-      setCreatingEntry(false);
+      if (isCurrent()) setCreatingEntry(false);
     }
   }
 
@@ -1268,7 +1540,14 @@ export function TranslationEditorPage() {
 
   function removeEntry(entry: EditableTranslationEntry) {
     markerUndoStack.current = [];
+    const isCurrent = requestStillCurrent();
     return enqueueServerMutation(async () => {
+      if (
+        !isCurrent() ||
+        refreshingScopeRef.current === editorScope ||
+        !editorDataRef.current?.canEdit
+      )
+        return;
       const creation = markerCreations.current.get(entry.id);
       const id = creation?.entryId ?? entry.id;
       const image = imagesRef.current.find((image) =>
@@ -1284,6 +1563,7 @@ export function TranslationEditorPage() {
     image: EditableTranslationImage,
     creation?: MarkerUndo,
   ) {
+    const isCurrent = requestStillCurrent();
     if (entry.localOnly) {
       if (creation?.uncertain) {
         setMessage("创建结果尚未确认，请先同步标点，再使用删除按钮。");
@@ -1320,29 +1600,26 @@ export function TranslationEditorPage() {
       const result = await client.DELETE("/api/translation-entries/{entryId}", {
         params: { path: { entryId: entry.id } },
         body: {
+          ...pageAccess(image.id),
           expectedRevision: entry.revision,
           expectedImageRevision: image.translationRevision,
           expectedEditorEpoch: editorHeadRef.current.editorEpoch,
         },
       });
+      if (!isCurrent()) return false;
       if (result.response.status === 409) {
         await enterConflict(imagesRef.current, "删除前条目或图片顺序已更新。");
         return false;
       }
       const savedImage = await unwrap(result);
       applyMutationMeta(savedImage.mutation);
-      updateImages((allImages) =>
-        allImages.map((image) =>
-          image.id === savedImage.id
-            ? mergeServerImage(savedImage, image, dirtyRef.current)
-            : image,
-        ),
-      );
       clearDirty(entry.id);
       setSelectedEntryId(null);
+      if (!(await reconcileServerImage(savedImage))) return false;
       finishServerMutation();
       return true;
     } catch (error) {
+      if (!isCurrent()) return false;
       setMessage(error instanceof Error ? error.message : "删除失败");
       setSaveState("failed");
       return false;
@@ -1403,32 +1680,114 @@ export function TranslationEditorPage() {
       !stageContentReady ||
       !editor.data ||
       !submissionStage ||
-      !writable ||
-      hasUnsaved ||
+      !canSubmitStage ||
       !online ||
       saveState === "syncing" ||
       editor.data.reviewStatus !== "normal"
     ) {
       return;
     }
-    if (
-      editor.data.collaborationMode === "multi" &&
-      !editor.data.multiStageReady
-    ) {
-      setMessage("多人协作还有页面未分配、未完成或完成后又被修改。");
-      return;
-    }
+    const isCurrent = requestStillCurrent();
     stageSubmissionInFlight.current = true;
     try {
+      await syncAll();
+      if (!isCurrent()) return;
+      if (
+        dirtyRef.current.size ||
+        imagesRef.current.some((image) =>
+          image.entries.some((entry) => entry.localOnly),
+        )
+      )
+        throw new Error("保存尚未完成，不能提交。请先处理保存失败或版本冲突。");
+      let pageHeads:
+        | { imageId: string; generation: number; draftRevision: number }[]
+        | undefined;
+      const before = editorDataRef.current as PageEditor | undefined;
+      const pendingBefore =
+        before?.pageAssignments?.filter(
+          (page) => page.userId === user.id && !page.submittedAt,
+        ) ?? [];
+      if (
+        submissionStage === "translate" &&
+        pendingBefore.some((page) => page.draftRevision !== undefined)
+      ) {
+        const refreshed = await editor.refetch();
+        if (!isCurrent()) return;
+        if (!refreshed.data) throw new Error("无法读取提交版本，请重试。");
+        if (
+          dirtyRef.current.size ||
+          imagesRef.current.some((image) =>
+            image.entries.some((entry) => entry.localOnly),
+          )
+        )
+          throw new Error("同步期间内容又有修改，请重新提交；本地输入已保留。");
+        const latest = refreshed.data as PageEditor;
+        const pending =
+          latest.pageAssignments?.filter(
+            (page) => page.userId === user.id && !page.submittedAt,
+          ) ?? [];
+        const changed =
+          pending.length !== pendingBefore.length ||
+          pending.some((page) => {
+            const previous = pendingBefore.find(
+              (row) => row.workImageId === page.workImageId,
+            );
+            const local = imagesRef.current.find(
+              (image) => image.id === page.workImageId,
+            );
+            const cloud = latest.images.find(
+              (image) => image.id === page.workImageId,
+            );
+            return (
+              !previous ||
+              previous.generation !== page.generation ||
+              !local ||
+              !cloud ||
+              local.entries.length !== cloud.entries.length ||
+              local.entries.some(
+                (entry, index) =>
+                  entry.id !== cloud.entries[index]?.id ||
+                  !entryContentMatches(entry, cloud.entries[index]),
+              )
+            );
+          });
+        replaceEditorHead(latest);
+        replaceImages(latest.images);
+        if (changed || latest.submissionStage !== "translate")
+          throw new Error(
+            "云端负责页或归属已变化，已载入最新内容。请核对后重新提交。",
+          );
+        pageHeads = pending.map((page) => ({
+          imageId: page.workImageId,
+          generation: page.generation,
+          draftRevision: page.draftRevision!,
+        }));
+      }
+      // Let autosave metadata and draft controls commit before pinning confirmation.
+      // Otherwise the successful save itself immediately invalidates the dialog.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      if (!isCurrent()) return;
       const warnings =
         submissionStage === "translate"
-          ? checkTranslationPunctuation(imagesRef.current)
+          ? checkTranslationPunctuation(
+              imagesRef.current.filter(
+                (image) =>
+                  !editor.data?.assignedImageIds.length ||
+                  editor.data.assignedImageIds.includes(image.id),
+              ),
+            )
           : [];
       if (
+        (submissionStage !== "translate" || warnings.length > 0) &&
         !(await confirmation.confirm({
           title: `提交${submissionStage === "translate" ? "翻译" : "校对"}阶段？`,
-          description: "服务器当前内容将保存为不可变版本。",
-          confirmLabel: "确认提交",
+          description:
+            submissionStage === "translate"
+              ? "提交本人待提交页，全部必需页交齐后自动进入待校对。"
+              : "提交当前云端完整校对版本，其他校对不必逐人确认完成。",
+          confirmLabel: warnings.length ? "仍然提交" : "确认提交",
           ...(warnings.length > 0 && {
             cancelLabel: "返回修改",
             details: <SubmissionPunctuationWarnings results={warnings} />,
@@ -1436,17 +1795,20 @@ export function TranslationEditorPage() {
         }))
       )
         return;
+      if (!isCurrent()) return;
       setSaveState("syncing");
       setMessage(null);
       const result = await client.POST("/api/works/{id}/stages/submit", {
         params: { path: { id: workId } },
         body: {
           stage: submissionStage,
-          expectedRevision: editor.data.workRevision,
-          expectedEditorEpoch: editor.data.editorEpoch,
+          ...(pageHeads && { pageHeads }),
+          expectedRevision: editorHeadRef.current.workRevision,
+          expectedEditorEpoch: editorHeadRef.current.editorEpoch,
           idempotencyKey: crypto.randomUUID(),
         },
       });
+      if (!isCurrent()) return;
       if (result.response.status === 409) {
         setSaveState("conflict");
         setMessage("云端作品状态或正式版本已经变化，请重新加载后确认。");
@@ -1474,9 +1836,12 @@ export function TranslationEditorPage() {
       setSavedAt(new Date());
       setSaveState("saved");
       setMessage(
-        `阶段已提交并生成不可变版本 ${refreshed.data?.latestVersion?.versionNumber ?? ""}。`,
+        submissionStage === "translate"
+          ? "本人负责页已提交；全部必需页交齐后自动待校对。"
+          : "校对完整云端版本已提交。",
       );
     } catch (error) {
+      if (!isCurrent()) return;
       setSaveState("failed");
       setMessage(error instanceof Error ? error.message : "阶段提交失败");
     } finally {
@@ -1486,6 +1851,7 @@ export function TranslationEditorPage() {
 
   async function cancelCurrentSubmission() {
     if (
+      refreshingScopeRef.current === editorScope ||
       stageSubmissionInFlight.current ||
       !editor.data ||
       !cancelableSubmissionStage ||
@@ -1495,6 +1861,7 @@ export function TranslationEditorPage() {
     ) {
       return;
     }
+    const isCurrent = requestStillCurrent();
     if (
       !(await confirmation.confirm({
         title: `取消${stageCopy(cancelableSubmissionStage)}提交？`,
@@ -1505,6 +1872,7 @@ export function TranslationEditorPage() {
     ) {
       return;
     }
+    if (!isCurrent()) return;
     stageSubmissionInFlight.current = true;
     setSaveState("syncing");
     setMessage(null);
@@ -1521,10 +1889,14 @@ export function TranslationEditorPage() {
           },
         },
       );
+      if (!isCurrent()) return;
       if (result.response.status === 409) {
         setSaveState("conflict");
-        setMessage("下游已经开始或作品状态已变化，不能取消提交。");
-        await editor.refetch();
+        const latest = await refreshStageState();
+        if (latest) {
+          setSaveState("conflict");
+          setMessage(stageChangeMessage(editor.data, latest, "cancel"));
+        }
         return;
       }
       const updatedWork = await unwrap(result);
@@ -1547,53 +1919,11 @@ export function TranslationEditorPage() {
         `${stageCopy(cancelableSubmissionStage)}提交已取消，可以继续修改。`,
       );
     } catch (error) {
+      if (!isCurrent()) return;
       setSaveState("failed");
       setMessage(error instanceof Error ? error.message : "取消提交失败");
     } finally {
       stageSubmissionInFlight.current = false;
-    }
-  }
-
-  async function completeMyPart() {
-    if (
-      !editor.data ||
-      !submissionStage ||
-      editor.data.collaborationMode !== "multi" ||
-      !writable ||
-      hasUnsaved ||
-      !online ||
-      saveState === "syncing" ||
-      editor.data.reviewStatus !== "normal"
-    ) {
-      return;
-    }
-    if (!editor.data.assignedImageIds.length) {
-      setMessage("请先在作品协调页选择本人负责的页码。");
-      return;
-    }
-    setSaveState("syncing");
-    setMessage(null);
-    try {
-      const updatedWork = await unwrap(
-        await client.POST("/api/works/{id}/stages/contributions/complete", {
-          params: { path: { id: workId } },
-          body: {
-            stage: submissionStage as "translate" | "proofread",
-            expectedRevision: editor.data.workRevision,
-            expectedEditorEpoch: editor.data.editorEpoch,
-            idempotencyKey: crypto.randomUUID(),
-          },
-        }),
-      );
-      queryClient.setQueryData(["work", workId], updatedWork);
-      const refreshed = await editor.refetch();
-      if (refreshed.data) replaceEditorHead(refreshed.data);
-      setSavedAt(new Date());
-      setSaveState("saved");
-      setMessage("本人负责的页面已完成；页面再次修改后需要重新确认。");
-    } catch (error) {
-      setSaveState("failed");
-      setMessage(error instanceof Error ? error.message : "完成分工失败");
     }
   }
 
@@ -1656,6 +1986,7 @@ export function TranslationEditorPage() {
     if (next) {
       if (
         !target.closest(".translation-canvas, .translation-tool-group") ||
+        (!imageReady && next.value !== "pan") ||
         (!writable && next.value !== "pan") ||
         (reorderRunning.current &&
           (next.value === "add-inside" || next.value === "add-outside"))
@@ -1716,6 +2047,7 @@ export function TranslationEditorPage() {
     if ((event.target as HTMLElement).closest(".translation-page-controls")) {
       return;
     }
+    if (!imageReady) return;
     if (tool === "pan") {
       event.currentTarget.setPointerCapture(event.pointerId);
       drag.current = {
@@ -1749,6 +2081,7 @@ export function TranslationEditorPage() {
     entryId: string,
   ) {
     event.stopPropagation();
+    if (!imageReady) return;
     selectEntry(entryId);
     if (tool === "move" && writable) {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -1757,6 +2090,7 @@ export function TranslationEditorPage() {
   }
 
   function stagePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!imageReady) return;
     if (drag.current?.kind === "pan") {
       setOffset({
         x: drag.current.startX + event.clientX - drag.current.x,
@@ -1780,6 +2114,8 @@ export function TranslationEditorPage() {
   }
 
   async function resolveWithServer() {
+    if (refreshingScopeRef.current === editorScope) return;
+    const isCurrent = requestStillCurrent();
     setSaveState("syncing");
     try {
       const latest = await unwrap(
@@ -1787,23 +2123,27 @@ export function TranslationEditorPage() {
           params: { path: { workId } },
         }),
       );
+      if (!isCurrent()) return;
       queryClient.setQueryData(["translation-editor", workId], latest);
       replaceEditorHead(latest);
       replaceImages(latest.images);
       replaceDirty(new Set());
       setRecoveryDraft(null);
+      recoveryDraftRef.current = null;
       setDraftConflictKind(null);
       setMessage(null);
       setSaveState("saved");
       await deleteTranslationDraft(user.id, workId).catch(() => undefined);
     } catch {
+      if (!isCurrent()) return;
       setSaveState("conflict");
       setMessage("暂时无法读取服务端最新内容，请保持本地草稿并稍后重试。");
     }
   }
 
   async function reapplyLocalDraft() {
-    if (!recoveryDraft) return;
+    if (!recoveryDraft || refreshingScopeRef.current === editorScope) return;
+    const isCurrent = requestStillCurrent();
     setSaveState("syncing");
     try {
       const latest = await unwrap(
@@ -1811,8 +2151,34 @@ export function TranslationEditorPage() {
           params: { path: { workId } },
         }),
       );
+      if (!isCurrent()) return;
       queryClient.setQueryData(["translation-editor", workId], latest);
       replaceEditorHead(latest);
+      const access = latest as PageEditor;
+      if (!latest.canEdit)
+        throw new Error(
+          "当前阶段没有编辑权限，本地草稿已保留；请先撤回自己的提交或取得当前阶段的编辑资格。",
+        );
+      const target = reapplyDraftContent(
+        latest.images,
+        recoveryDraft.images,
+        recoveryDraft.dirtyEntryIds,
+      );
+      if (target.legacy || target.conflictedEntryIds.size)
+        throw new Error(
+          "本地草稿缺少可靠修改记录，或对应云端条目已变化；已保留本地原稿供复制核对。",
+        );
+      if (
+        access.editableImageIds &&
+        target.images.some(
+          (image) =>
+            !access.editableImageIds!.includes(image.id) &&
+            image.entries.some((entry) => target.dirtyEntryIds.has(entry.id)),
+        )
+      )
+        throw new Error(
+          "本地草稿含无权修改或已提交的页，已保留供核对，请先取得这些页的编辑资格。",
+        );
       if (draftConflictKind === "recovery") {
         const reconciliation = reconcileTranslationDraft(
           latest.images,
@@ -1830,9 +2196,10 @@ export function TranslationEditorPage() {
           );
           return;
         }
-        replaceImages(recoveryDraft.images);
+        replaceImages(reconciliation.images);
         replaceDirty(reconciliation.dirtyEntryIds);
         setRecoveryDraft(null);
+        recoveryDraftRef.current = null;
         setDraftConflictKind(null);
         setMessage("已恢复本地草稿，正在同步到云端。");
         setSaveState("local");
@@ -1842,10 +2209,14 @@ export function TranslationEditorPage() {
       const reapplied = reapplyDraftContent(
         latest.images,
         recoveryDraft.images,
+        recoveryDraft.dirtyEntryIds,
       );
+      if (reapplied.legacy || reapplied.conflictedEntryIds.size)
+        throw new Error("对应云端条目已变化，本地原稿已保留供复制核对。");
       replaceImages(reapplied.images);
       replaceDirty(reapplied.dirtyEntryIds);
       setRecoveryDraft(null);
+      recoveryDraftRef.current = null;
       setDraftConflictKind(null);
       setMessage(
         reapplied.dirtyEntryIds.size
@@ -1856,9 +2227,14 @@ export function TranslationEditorPage() {
       );
       setSaveState(reapplied.dirtyEntryIds.size ? "local" : "saved");
       for (const entryId of reapplied.dirtyEntryIds) scheduleSave(entryId);
-    } catch {
+    } catch (error) {
+      if (!isCurrent()) return;
       setSaveState("conflict");
-      setMessage("暂时无法读取服务端最新内容，本地草稿仍然保留。");
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "暂时无法读取服务端最新内容，本地草稿仍然保留。",
+      );
     }
   }
 
@@ -1870,47 +2246,20 @@ export function TranslationEditorPage() {
     presenceStartedKey.current = key;
     setActiveParticipants(initialEditor.activeParticipants);
     let cancelled = false;
-    void updateEditorPresence(workId, "view")
+    const mode = initialEditor.canEdit ? "edit" : "view";
+    setPresenceMode(mode);
+    void updateEditorPresence(workId, mode)
       .then(async (presence) => {
         if (cancelled) return;
         setActiveParticipants(presence.items);
-        const anotherEditor = presence.items.some(
-          (item) => item.mode === "edit" && !item.isCurrentSession,
+        setPresenceMode(presence.viewOnly ? "view" : mode);
+        await observeEditorState.current(
+          presence as Partial<EditorStateSignal>,
         );
-        if (initialEditor.joinableStage || anotherEditor) {
-          setPresenceMode("view");
-          setShowEntryChoice(true);
-          return;
-        }
-        if (!initialEditor.canEdit) {
-          setPresenceMode("view");
-          return;
-        }
-        try {
-          const editing = await updateEditorPresence(workId, "edit");
-          if (!cancelled) {
-            setActiveParticipants(editing.items);
-            setPresenceMode("edit");
-          }
-        } catch {
-          if (!cancelled) {
-            setPresenceMode("edit");
-            setMessage("协作状态暂时不可用，版本校验与自动保存仍然有效。");
-          }
-        }
       })
       .catch(() => {
-        if (cancelled) return;
-        const anotherEditor = initialEditor.activeParticipants.some(
-          (item) => item.mode === "edit" && !item.isCurrentSession,
-        );
-        if (initialEditor.joinableStage || anotherEditor) {
-          setPresenceMode("view");
-          setShowEntryChoice(true);
-        } else {
-          setPresenceMode(initialEditor.canEdit ? "edit" : "view");
-        }
-        setMessage("协作状态暂时不可用，版本校验与自动保存仍然有效。");
+        if (!cancelled)
+          setMessage("协作状态暂时不可用，版本校验与自动保存仍然有效。");
       });
     return () => {
       cancelled = true;
@@ -1927,18 +2276,37 @@ export function TranslationEditorPage() {
   useEffect(() => {
     if (!presenceMode) return;
     let cancelled = false;
-    const timer = window.setInterval(() => {
+    let pending = false;
+    const scope = editorScope;
+    const check = () => {
+      if (pending || document.hidden || !navigator.onLine) return;
+      pending = true;
       void updateEditorPresence(workId, presenceMode)
-        .then((presence) => {
-          if (!cancelled) setActiveParticipants(presence.items);
+        .then(async (presence) => {
+          if (cancelled || editorScopeRef.current !== scope) return;
+          setActiveParticipants(presence.items);
+          await observeEditorState.current(
+            presence as Partial<EditorStateSignal>,
+          );
+          if (!cancelled && presence.viewOnly) setPresenceMode("view");
         })
-        .catch(() => undefined);
-    }, presenceHeartbeatDelay);
+        .catch(() => undefined)
+        .finally(() => {
+          pending = false;
+        });
+    };
+    const timer = window.setInterval(check, presenceHeartbeatDelay);
+    window.addEventListener("focus", check);
+    window.addEventListener("online", check);
+    document.addEventListener("visibilitychange", check);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      window.removeEventListener("focus", check);
+      window.removeEventListener("online", check);
+      document.removeEventListener("visibilitychange", check);
     };
-  }, [presenceMode, workId]);
+  }, [presenceMode, workId, editorScope]);
 
   useEffect(() => {
     const key = `${user.id}:${workId}`;
@@ -1952,6 +2320,9 @@ export function TranslationEditorPage() {
     const initialEditor = editor.data;
     replaceEditorHead(initialEditor);
     setDraftHydrated(false);
+    setRecoveryDraft(null);
+    recoveryDraftRef.current = null;
+    replaceDirty(new Set());
     let cancelled = false;
     void loadTranslationDraft(user.id, workId)
       .then((draft) => {
@@ -1982,7 +2353,12 @@ export function TranslationEditorPage() {
             setSaveState("saved");
           }
         } else {
-          replaceImages(initialEditor.images);
+          replaceImages(
+            initialEditor.workflowStatus === "translating" &&
+              reconciliation.conflict === "epoch"
+              ? draft.images
+              : initialEditor.images,
+          );
           setRecoveryDraft(draft);
           setDraftConflictKind(reconciliation.conflict);
           setSaveState("conflict");
@@ -2009,7 +2385,12 @@ export function TranslationEditorPage() {
   }, [editor.data, editor.isError, editor.isFetching, user.id, workId]);
 
   useEffect(() => {
-    if (!draftHydrated || recoveryDraft) return;
+    if (
+      !draftHydrated ||
+      recoveryDraft ||
+      initializedKey.current !== `${user.id}:${workId}`
+    )
+      return;
     if (!hasUnsaved) {
       void deleteTranslationDraft(user.id, workId).catch(() => undefined);
       return;
@@ -2019,12 +2400,26 @@ export function TranslationEditorPage() {
       workId,
       images,
       editorHeadRef.current,
+      Date.now(),
+      dirtyRef.current,
     );
     void saveTranslationDraft(draft).catch(() => {
-      setMessage("无法写入浏览器本地草稿，请不要关闭页面。");
-      setSaveState("failed");
+      setMessage((current) =>
+        recoveryDraftRef.current
+          ? `${current ?? "检测到版本冲突。"} 浏览器本地存储不可用，请不要关闭页面。`
+          : "无法写入浏览器本地草稿，请不要关闭页面。",
+      );
+      setSaveState((current) => (current === "conflict" ? current : "failed"));
     });
-  }, [draftHydrated, hasUnsaved, images, recoveryDraft, user.id, workId]);
+  }, [
+    draftHydrated,
+    hasUnsaved,
+    images,
+    dirtyEntryIds,
+    recoveryDraft,
+    user.id,
+    workId,
+  ]);
 
   useEffect(() => {
     function onlineHandler() {
@@ -2130,6 +2525,15 @@ export function TranslationEditorPage() {
       }}
     >
       {confirmation.dialog}
+      {showPagePreview && (
+        <EditorPagePreview
+          workId={workId}
+          images={images}
+          currentIndex={pageIndex}
+          onClose={() => setShowPagePreview(false)}
+          onNavigate={goToPage}
+        />
+      )}
       {showShortcutSettings && (
         <EditorShortcutDialog
           bindings={shortcuts.bindings}
@@ -2137,65 +2541,6 @@ export function TranslationEditorPage() {
           onSave={shortcuts.save}
           onClose={() => setShowShortcutSettings(false)}
         />
-      )}
-      {showEntryChoice && (
-        <div className="translation-entry-choice-backdrop">
-          <section
-            className="translation-entry-choice"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="translation-entry-choice-title"
-          >
-            <div className="translation-entry-choice-icon">
-              <Users size={22} />
-            </div>
-            <div>
-              <p>协作状态</p>
-              <h2 id="translation-entry-choice-title">
-                {otherActiveEditors.length
-                  ? "已有成员正在编辑"
-                  : editor.data.joinableStage
-                    ? `加入${stageCopy(editor.data.joinableStage)}协作`
-                    : "进入协作编辑"}
-              </h2>
-            </div>
-            {otherActiveEditors.length > 0 && (
-              <ul>
-                {otherActiveEditors.map((participant, index) => (
-                  <li key={`${participant.userId}:${index}`}>
-                    <UserRoundCheck size={16} />
-                    <span>{participant.displayName}</span>
-                    <small>正在编辑</small>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p className="translation-entry-choice-copy">
-              {editor.data.joinableStage
-                ? `加入后会将你记录为${stageCopy(editor.data.joinableStage)}协作者，并允许共同编辑。`
-                : "协作编辑允许多人同时工作；保存时仍会校验条目版本，冲突内容不会被静默覆盖。"}
-            </p>
-            <div className="translation-entry-choice-actions">
-              <Button
-                variant="secondary"
-                disabled={entryChoicePending}
-                onClick={chooseViewMode}
-              >
-                仅查看
-              </Button>
-              {(editor.data.canEdit || editor.data.joinableStage) && (
-                <Button
-                  loading={entryChoicePending}
-                  onClick={() => void enterCollaboration()}
-                >
-                  {editor.data.joinableStage
-                    ? `加入${stageCopy(editor.data.joinableStage)}协作`
-                    : "进入协作"}
-                </Button>
-              )}
-            </div>
-          </section>
-        </div>
       )}
       {labelPlusPreview && (
         <div className="translation-entry-choice-backdrop">
@@ -2354,9 +2699,10 @@ export function TranslationEditorPage() {
               `#${editor.data.workNumber} · 待定标题`}
           </strong>
           <span>
-            第 {Math.min(pageIndex + 1, images.length || 1)} / {images.length}{" "}
-            页 · 正式版本 {editor.data.latestVersion?.versionNumber ?? 0}
+            {images.length ? `第 ${pageNumber} / ${images.length} 页` : "0 页"}{" "}
+            · 正式版本 {editor.data.latestVersion?.versionNumber ?? 0}
             {editor.data.collaborationMode === "multi" &&
+              editor.data.submissionStage !== "proofread" &&
               ` · 我的分工 ${editor.data.assignedImageIds.length} 页`}
           </span>
         </div>
@@ -2376,16 +2722,6 @@ export function TranslationEditorPage() {
             </span>
           </div>
         )}
-        {presenceMode === "view" &&
-          (editor.data.canEdit || editor.data.joinableStage) && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setShowEntryChoice(true)}
-            >
-              加入协作
-            </Button>
-          )}
         <div className={`translation-save-state is-${saveState}`} role="status">
           <SaveStateIcon state={saveState} />
           <span>{statusCopy(saveState, savedAt)}</span>
@@ -2459,62 +2795,35 @@ export function TranslationEditorPage() {
             />
           )}
         {cancelableSubmissionStage && (
-          <Button
-            size="sm"
-            variant="secondary"
-            leadingIcon={<RotateCcw size={15} />}
+          <EditorSubmissionCancelAction
+            label={`取消${stageCopy(cancelableSubmissionStage)}提交`}
+            secondary={Boolean(submissionStage)}
             disabled={
+              stageRefreshing ||
               hasUnsaved ||
               !online ||
               saveState === "syncing" ||
               Boolean(recoveryDraft)
             }
-            onClick={() => void cancelCurrentSubmission()}
-          >
-            取消{stageCopy(cancelableSubmissionStage)}提交
-          </Button>
+            onCancel={() => void cancelCurrentSubmission()}
+          />
         )}
         {submissionStage && (
           <>
-            {editor.data.collaborationMode === "multi" && (
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={
-                  !writable ||
-                  editor.data.contributionCurrent ||
-                  !editor.data.assignedImageIds.length ||
-                  hasUnsaved ||
-                  !online ||
-                  saveState === "syncing" ||
-                  editor.data.reviewStatus !== "normal"
-                }
-                onClick={() => void completeMyPart()}
-              >
-                {editor.data.contributionCurrent
-                  ? "分工已完成"
-                  : "完成我的部分"}
-              </Button>
-            )}
             <Button
               size="sm"
               disabled={
+                stageRefreshing ||
                 !stageContentReady ||
-                !writable ||
-                hasUnsaved ||
+                !canSubmitStage ||
                 !online ||
                 saveState === "syncing" ||
-                editor.data.reviewStatus !== "normal" ||
-                (editor.data.collaborationMode === "multi" &&
-                  !editor.data.multiStageReady)
+                editor.data.reviewStatus !== "normal"
               }
               title={
                 editor.data.reviewStatus !== "normal"
                   ? "审核事项解决前不能提交阶段"
-                  : editor.data.collaborationMode === "multi" &&
-                      !editor.data.multiStageReady
-                    ? "还有页面未分配、未完成或完成后又被修改"
-                    : undefined
+                  : undefined
               }
               onClick={() => void submitCurrentStage()}
             >
@@ -2535,7 +2844,7 @@ export function TranslationEditorPage() {
               aria-keyshortcuts={shortcutAria(shortcuts.bindings[value])}
               title={`${label} · 快捷键 ${shortcutLabel(shortcuts.bindings[value])}（画布或工具栏聚焦时）`}
               disabled={
-                (!writable && value !== "pan") ||
+                ((!writable || !imageReady) && value !== "pan") ||
                 (reorderPending &&
                   (value === "add-inside" || value === "add-outside"))
               }
@@ -2574,7 +2883,10 @@ export function TranslationEditorPage() {
           />
           {editor.data.editStages.length > 0 &&
             (editor.data.collaborationMode === "single" ||
-              user.roles.includes("admin")) && (
+              editor.data.editStages.includes("proofread") ||
+              (editor.data.images.length > 0 &&
+                editor.data.editableImageIds?.length ===
+                  editor.data.images.length)) && (
               <Button
                 size="sm"
                 variant="secondary"
@@ -2625,6 +2937,7 @@ export function TranslationEditorPage() {
           <IconButton
             size="sm"
             label="缩小"
+            disabled={!imageReady}
             onClick={() => setZoom((value) => clamp(value - 0.2, 0.4, 3))}
           >
             <ZoomOut size={16} />
@@ -2633,6 +2946,7 @@ export function TranslationEditorPage() {
           <IconButton
             size="sm"
             label="放大"
+            disabled={!imageReady}
             onClick={() => setZoom((value) => clamp(value + 0.2, 0.4, 3))}
           >
             <ZoomIn size={16} />
@@ -2692,14 +3006,33 @@ export function TranslationEditorPage() {
             <span>{message}</span>
             {recoveryDraft && (
               <div>
+                {showingLocalRecovery && (
+                  <p>
+                    正在显示未同步本地稿，可选取复制；该内容尚未写入当前阶段。使用服务端版本会放弃这份本地稿。
+                  </p>
+                )}
+                {!showingLocalRecovery && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => replaceImages(recoveryDraft.images)}
+                  >
+                    查看本地草稿
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="secondary"
+                  disabled={stageRefreshing || saveState === "syncing"}
                   onClick={() => void resolveWithServer()}
                 >
                   使用服务端版本
                 </Button>
-                <Button size="sm" onClick={() => void reapplyLocalDraft()}>
+                <Button
+                  size="sm"
+                  disabled={stageRefreshing || saveState === "syncing"}
+                  onClick={() => void reapplyLocalDraft()}
+                >
                   {draftConflictKind === "recovery"
                     ? "恢复本地草稿"
                     : draftConflictKind === "epoch"
@@ -2722,6 +3055,11 @@ export function TranslationEditorPage() {
                 关闭
               </button>
             )}
+            {stageRefreshing && (
+              <Button size="sm" onClick={() => void refreshStageState()}>
+                重新读取当前状态
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -2738,8 +3076,13 @@ export function TranslationEditorPage() {
         >
           {currentImage && isDisplayableImageUrl(imageUrl.data?.url) ? (
             <div
+              key={imageRequestKey}
               className="translation-image-layer"
-              style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
+              aria-hidden={!imageReady}
+              style={{
+                visibility: imageReady ? "visible" : "hidden",
+                transform: `translate(${offset.x}px, ${offset.y}px)`,
+              }}
             >
               <div className="translation-image-frame">
                 <img
@@ -2748,42 +3091,69 @@ export function TranslationEditorPage() {
                   alt={`第 ${pageIndex + 1} 页`}
                   style={{ transform: `scale(${zoom})` }}
                   draggable={false}
+                  onLoad={(event) => {
+                    if (event.currentTarget === imageRef.current)
+                      setImageLoad({ key: imageRequestKey, phase: "ready" });
+                  }}
+                  onError={(event) => {
+                    if (event.currentTarget === imageRef.current)
+                      setImageLoad({ key: imageRequestKey, phase: "failed" });
+                  }}
                 />
-                {currentEntries.map((entry, index) => (
-                  <MarkerTooltip
-                    key={`${entry.id}:${zoom}:${offset.x}:${offset.y}:${tool}`}
-                    text={entry.translatedText}
-                  >
-                    <button
-                      type="button"
-                      className={`translation-marker is-${entry.markerPositionType}${selectedEntryId === entry.id ? " is-selected" : ""}${entry.localOnly ? " is-local" : ""}`}
-                      style={{
-                        left: `${(0.5 + (entry.markerX - 0.5) * zoom) * 100}%`,
-                        top: `${(0.5 + (entry.markerY - 0.5) * zoom) * 100}%`,
-                      }}
-                      aria-label={`标记 ${index + 1}`}
-                      onPointerDown={(event) =>
-                        markerPointerDown(event, entry.id)
-                      }
-                      onClick={() => selectEntry(entry.id, true)}
+                {imageReady &&
+                  currentEntries.map((entry, index) => (
+                    <MarkerTooltip
+                      key={`${entry.id}:${zoom}:${offset.x}:${offset.y}:${tool}`}
+                      text={entry.translatedText}
                     >
-                      {index + 1}
-                    </button>
-                  </MarkerTooltip>
-                ))}
+                      <button
+                        type="button"
+                        className={`translation-marker is-${entry.markerPositionType}${selectedEntryId === entry.id ? " is-selected" : ""}${entry.localOnly ? " is-local" : ""}`}
+                        style={{
+                          left: `${(0.5 + (entry.markerX - 0.5) * zoom) * 100}%`,
+                          top: `${(0.5 + (entry.markerY - 0.5) * zoom) * 100}%`,
+                        }}
+                        aria-label={`标记 ${index + 1}`}
+                        onPointerDown={(event) =>
+                          markerPointerDown(event, entry.id)
+                        }
+                        onClick={() => selectEntry(entry.id, true)}
+                      >
+                        {index + 1}
+                      </button>
+                    </MarkerTooltip>
+                  ))}
               </div>
             </div>
-          ) : imageUrl.isPending ? (
-            <div className="translation-canvas-empty">
-              <LoaderCircle className="ui-spin" />
-              正在加载图片…
-            </div>
-          ) : (
+          ) : null}
+          {!currentImage && (
             <div className="translation-canvas-empty">
               <ImageIcon />
-              当前图片暂时无法显示
+              暂无原图
             </div>
           )}
+          {currentImage &&
+            !imageReady &&
+            (imageFailed ? (
+              <div className="translation-canvas-empty" role="alert">
+                <ImageIcon />第 {pageIndex + 1} 页图片加载失败
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setImageRetry((attempt) => attempt + 1);
+                    void imageUrl.refetch();
+                  }}
+                >
+                  重试加载图片
+                </Button>
+              </div>
+            ) : (
+              <div className="translation-canvas-empty" role="status">
+                <LoaderCircle className="ui-spin" />
+                正在加载第 {pageIndex + 1} 页
+              </div>
+            ))}
           <div className="translation-page-controls">
             <IconButton
               label="上一页"
@@ -2796,24 +3166,25 @@ export function TranslationEditorPage() {
             >
               <ChevronLeft />
             </IconButton>
-            <form className="translation-page-jump" onSubmit={submitPageJump}>
-              <label htmlFor="translation-page-jump">页码</label>
-              <input
-                id="translation-page-jump"
-                type="number"
-                min={1}
-                max={Math.max(1, images.length)}
-                inputMode="numeric"
-                value={pageJump}
-                disabled={!images.length}
-                aria-label={`跳转页码，共 ${images.length} 页`}
-                onChange={(event) => setPageJump(event.target.value)}
-                onBlur={() => {
-                  if (!pageJump) setPageJump(String(pageIndex + 1));
-                }}
-              />
-              <span>/ {images.length}</span>
-            </form>
+            <button
+              type="button"
+              className="translation-page-preview-trigger"
+              aria-haspopup="dialog"
+              aria-expanded={showPagePreview}
+              disabled={!images.length}
+              aria-label={
+                currentImage
+                  ? `预览并跳转页面，当前第 ${pageNumber} 页，共 ${images.length} 页`
+                  : "暂无可预览页面"
+              }
+              title="预览并跳转页面"
+              onClick={() => setShowPagePreview(true)}
+            >
+              <Grid2X2 size={16} aria-hidden="true" />
+              <span>
+                {pageNumber} / {images.length}
+              </span>
+            </button>
             <IconButton
               label="下一页"
               title={`下一页 · 快捷键 ${shortcutLabel(shortcuts.bindings["next-page"])}（画布或标记列表聚焦时）`}
@@ -2835,14 +3206,22 @@ export function TranslationEditorPage() {
             {!writable && <Badge tone="neutral">只读</Badge>}
           </div>
           {!writable && (
-            <p className="translation-readonly-notice">
-              {recoveryDraft
-                ? "请先处理本地与云端内容，再继续编辑。"
-                : presenceMode === "view" &&
-                    (editor.data.canEdit || editor.data.joinableStage)
-                  ? "当前以只读方式查看；加入协作后可以保存修改。"
-                  : "需要先加入翻译或校对协作，才能保存修改。"}
-            </p>
+            <div
+              className="translation-page-permission"
+              aria-label="本页编辑权限"
+            >
+              <p className="translation-readonly-notice">
+                {recoveryDraft
+                  ? "请先处理本地与云端内容，再继续编辑。"
+                  : editor.data.reviewStatus !== "normal"
+                    ? reviewStatusCopy[editor.data.reviewStatus]
+                    : cancelableSubmissionStage
+                      ? "已提交，取消本人提交后可修改。"
+                      : pageEditor?.editableImageIds
+                        ? "此页不在本人当前可编辑范围。"
+                        : "请先认领职责。"}
+              </p>
+            </div>
           )}
           <div
             className="translation-entry-list"
@@ -2920,7 +3299,7 @@ export function TranslationEditorPage() {
                     <textarea
                       {...symbolInsertion.bindTextarea(entry.id)}
                       value={entry.translatedText}
-                      disabled={!writable || entry.localOnly}
+                      readOnly={!writable || Boolean(entry.localOnly)}
                       placeholder={
                         entry.localOnly ? "标记同步后即可输入" : "输入对应译文"
                       }
@@ -2945,7 +3324,7 @@ export function TranslationEditorPage() {
                       <textarea
                         className="is-note"
                         value={entry.note ?? ""}
-                        disabled={!writable || entry.localOnly}
+                        readOnly={!writable || Boolean(entry.localOnly)}
                         placeholder="可选，仅供协作说明"
                         onFocus={() => selectEntry(entry.id)}
                         onChange={(event) =>
@@ -2964,7 +3343,9 @@ export function TranslationEditorPage() {
               <div className="translation-entry-empty">
                 <CircleDot />
                 <strong>这一页还没有标记</strong>
-                <p>选择“添加框内”或“添加框外”，再点击图片中的文字位置。</p>
+                {writable && imageReady && (
+                  <p>选择“添加框内”或“添加框外”，再点击图片中的文字位置。</p>
+                )}
               </div>
             )}
           </div>

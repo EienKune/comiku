@@ -227,12 +227,7 @@ export class DownloadsService {
             "translator" as const,
             "proofreader" as const,
           ]
-        : [
-            "operator" as const,
-            "admin" as const,
-            "reviewer" as const,
-            "typesetter" as const,
-          ];
+        : ["operator" as const];
     if (
       !(await db.user.count({
         where: {

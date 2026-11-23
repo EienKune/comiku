@@ -584,6 +584,9 @@ test("withdraw and admin decision race under real PostgreSQL locks with exactly 
         });
         await tx.workEvent.deleteMany({ where: { workId: work.id } });
         await tx.workReviewCase.deleteMany({ where: { workId: work.id } });
+        await tx.workPageAssignment.deleteMany({
+          where: { workId: work.id },
+        });
         await tx.workStageParticipant.deleteMany({
           where: { workId: work.id },
         });

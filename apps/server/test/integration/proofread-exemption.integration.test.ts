@@ -1,3 +1,4 @@
+import { translationPageHeads } from "./page-heads.js";
 import { JobsService } from "../../src/jobs/jobs.service.js";
 import "reflect-metadata";
 import assert from "node:assert/strict";
@@ -84,6 +85,7 @@ test("proofread exemption preserves versions, explicit claim consent, qualificat
           );
           const typesetter = await member(["typesetter"]);
           const admin = await member(["admin"], true);
+          const operator = await member(["operator"]);
           const session = await tx.authSession.create({
             data: {
               userId: admin.id,
@@ -196,22 +198,74 @@ test("proofread exemption preserves versions, explicit claim consent, qualificat
                   idempotencyKey: randomUUID(),
                 });
           }
+          const editorSessions = new Map<string, string>();
           async function add(actor: string, workId: string, imageId: string) {
             const head = await translations.getEditor(actor, workId);
-            const draft = await translations.createEntry(actor, imageId, {
-              markerX: 0.123,
-              markerY: 0.456,
-              markerPositionType: "inside",
-              expectedImageRevision: head.images[0].translationRevision,
-              expectedEditorEpoch: head.editorEpoch,
-              idempotencyKey: randomUUID(),
-            });
-            const entry = draft.entries.at(-1)!;
-            await translations.updateEntry(actor, entry.id, {
-              translatedText: "译文",
-              expectedRevision: entry.revision,
-              expectedEditorEpoch: draft.mutation!.editorEpoch,
-            });
+            const proofreading = ["pending_proofread", "proofreading"].includes(
+              head.workflowStatus,
+            );
+            let sessionId: string | undefined,
+              editorInstanceId: string | undefined,
+              leaseToken: string | undefined;
+            if (proofreading) {
+              sessionId = editorSessions.get(actor);
+              if (!sessionId) {
+                const member = await tx.user.findUniqueOrThrow({
+                  where: { id: actor },
+                });
+                sessionId = (await users.login(member.username, password))
+                  .sessionId;
+                editorSessions.set(actor, sessionId);
+              }
+              editorInstanceId = randomUUID();
+              leaseToken = (
+                await translations.leasePage(
+                  actor,
+                  sessionId,
+                  workId,
+                  imageId,
+                  { editorInstanceId, expectedEditorEpoch: head.editorEpoch },
+                )
+              ).leaseToken;
+            }
+            try {
+              const access = { editorInstanceId, leaseToken };
+              const draft = await translations.createEntry(
+                actor,
+                imageId,
+                {
+                  markerX: 0.123,
+                  markerY: 0.456,
+                  markerPositionType: "inside",
+                  expectedImageRevision: head.images[0].translationRevision,
+                  expectedEditorEpoch: head.editorEpoch,
+                  idempotencyKey: randomUUID(),
+                  ...access,
+                },
+                sessionId,
+              );
+              const entry = draft.entries.at(-1)!;
+              await translations.updateEntry(
+                actor,
+                entry.id,
+                {
+                  translatedText: "译文",
+                  expectedRevision: entry.revision,
+                  expectedEditorEpoch: draft.mutation!.editorEpoch,
+                  ...access,
+                },
+                sessionId,
+              );
+            } finally {
+              if (sessionId && editorInstanceId && leaseToken)
+                await translations.releaseLease(
+                  actor,
+                  sessionId,
+                  workId,
+                  imageId,
+                  { editorInstanceId, leaseToken },
+                );
+            }
           }
           async function submit(
             actor: string,
@@ -221,6 +275,9 @@ test("proofread exemption preserves versions, explicit claim consent, qualificat
             const work = await works.get(workId);
             return works.submitStage(actor, workId, {
               stage,
+              ...(stage === "translate"
+                ? { pageHeads: await translationPageHeads(tx, workId, actor) }
+                : {}),
               expectedRevision: work.revision,
               expectedEditorEpoch: work.editorEpoch,
               idempotencyKey: randomUUID(),
@@ -360,6 +417,8 @@ test("proofread exemption preserves versions, explicit claim consent, qualificat
           );
           await works.leaveStage(other.id, first.id, {
             stage: "typeset",
+            confirmClearDraft: true,
+            impactImageIds: first.images.map((i) => i.id),
             expectedRevision: (await works.get(first.id)).revision,
             idempotencyKey: randomUUID(),
           });
@@ -435,13 +494,15 @@ test("proofread exemption preserves versions, explicit claim consent, qualificat
           );
           await claim(typesetter.id, first.id, "typeset");
           await translations.beginTypesetHandoff(typesetter.id, first.id, {
-            material: "unified_handoff",
+            material: "source_images",
             fileId: image.id,
           });
           await assert.rejects(cancel(first.id), /下游已开始|下载/);
           const handing = await works.get(first.id);
           await works.leaveStage(typesetter.id, first.id, {
             stage: "typeset",
+            confirmClearDraft: true,
+            impactImageIds: first.images.map((i) => i.id),
             expectedRevision: handing.revision,
             idempotencyKey: randomUUID(),
           });
@@ -454,7 +515,7 @@ test("proofread exemption preserves versions, explicit claim consent, qualificat
               .cancelableSubmissionStage,
             null,
           );
-          await assert.rejects(cancel(first.id), /下载/);
+          await assert.rejects(cancel(first.id), /承接|下载/);
           await assert.rejects(
             translations.updateEntry(
               translator.id,
@@ -470,7 +531,7 @@ test("proofread exemption preserves versions, explicit claim consent, qualificat
 
           await claim(typesetter.id, first.id, "typeset");
           await translations.beginTypesetHandoff(typesetter.id, first.id, {
-            material: "unified_handoff",
+            material: "source_images",
             fileId: image.id,
           });
           const resultVersion = await tx.typesetImageVersion.create({
@@ -495,13 +556,13 @@ test("proofread exemption preserves versions, explicit claim consent, qualificat
             data: { currentTypesetVersionId: resultVersion.id },
           });
           await submit(typesetter.id, first.id, "typeset");
-          const publication = await publishing.view(typesetter.id, first.id);
+          const publication = await publishing.view(operator.id, first.id);
           assert.deepEqual(publication.proofreadCredits, []);
           assert.doesNotMatch(publication.generatedText, /^校对：/m);
           assert.match(publication.generatedText, /翻译：翻译昵称/);
           assert.match(publication.generatedText, /嵌字：/);
           const beforePublish = await works.get(first.id);
-          await publishing.confirm(admin.id, first.id, {
+          await publishing.confirm(operator.id, first.id, {
             expectedRevision: beforePublish.revision,
             idempotencyKey: randomUUID(),
           });
@@ -543,21 +604,52 @@ test("proofread exemption preserves versions, explicit claim consent, qualificat
           );
 
           const multi = await create("en", true);
-          await claim(translator.id, multi.id, "translate");
-          await claim(other.id, multi.id, "translate", true);
-          await add(translator.id, multi.id, multi.images[0].id);
-          await add(other.id, multi.id, multi.images[0].id);
-          const multiHead = await works.get(multi.id);
-          await works.leaveStage(other.id, multi.id, {
-            stage: "translate",
-            expectedRevision: multiHead.revision,
-            idempotencyKey: randomUUID(),
+          const pageB = await tx.workImage.create({
+            data: {
+              workId: multi.id,
+              originalFileObjectId: image.id,
+              orderIndex: 1,
+            },
           });
+          const distributed = [
+            [translator.id, multi.images[0].id],
+            [other.id, pageB.id],
+          ] as const;
+          for (const [userId, imageId] of distributed) {
+            const current = await works.get(multi.id);
+            await works.claimStage(userId, multi.id, {
+              stage: "translate",
+              imageIds: [imageId],
+              expectedRevision: current.revision,
+              idempotencyKey: randomUUID(),
+            });
+          }
+          for (const [userId, imageId] of [...distributed].reverse()) {
+            const current = await works.get(multi.id);
+            const page = await tx.workPageAssignment.findUniqueOrThrow({
+              where: {
+                workImageId_stage: { workImageId: imageId, stage: "translate" },
+              },
+            });
+            await works.submitStage(userId, multi.id, {
+              stage: "translate",
+              expectedRevision: current.revision,
+              expectedEditorEpoch: current.editorEpoch,
+              idempotencyKey: randomUUID(),
+              pageHeads: [
+                {
+                  imageId,
+                  generation: page.generation,
+                  draftRevision: page.draftRevision,
+                },
+              ],
+            });
+          }
+          // Imported legacy single-mode work can have a formal translation with two contributors.
           await tx.work.update({
             where: { id: multi.id },
             data: { collaborationMode: "single" },
           });
-          await submit(translator.id, multi.id, "translate");
           await assert.rejects(
             works.skipProofreading(
               translator.id,
@@ -620,16 +712,26 @@ test("concurrent proofreading first write and skip serialize without discarding 
       },
     });
     userIds.push(translator.id);
+    const racePassword = "race-proofreader-password";
     const proofreader = await db.user.create({
       data: {
         username: `race_${randomUUID()}`,
         displayName: "race proofreader",
-        passwordHash: "fixture",
+        passwordHash: await hashPassword(racePassword),
         mustChangePassword: false,
         roles: { create: { role: "proofreader" } },
       },
     });
     userIds.push(proofreader.id);
+    const raceUsers = new UsersService(
+      db,
+      files,
+      parseEnvironment({ NODE_ENV: "test", DATABASE_URL: testUrl }),
+    );
+    const proofSession = (
+      await raceUsers.login(proofreader.username, racePassword)
+    ).sessionId;
+
     const author = await db.author.create({
       data: { displayName: "Race fixture author", sourceLanguage: "en" },
     });
@@ -690,6 +792,7 @@ test("concurrent proofreading first write and skip serialize without discarding 
       const head = await works.get(work.id);
       const submitted = await works.submitStage(translator.id, work.id, {
         stage: "translate",
+        pageHeads: await translationPageHeads(db, work.id, translator.id),
         expectedRevision: head.revision,
         expectedEditorEpoch: head.editorEpoch,
         idempotencyKey: randomUUID(),
@@ -709,12 +812,38 @@ test("concurrent proofreading first write and skip serialize without discarding 
             .filter((p) => p.stage === "proofread" && !p.leftAt)
             .map((p) => p.id),
         });
-      const proof = () =>
-        translations.updateEntry(proofreader.id, draft.entries[0].id, {
-          expectedRevision: 0,
-          expectedEditorEpoch: claimed.editorEpoch,
-          translatedText: "accepted proofreading",
-        });
+      const proof = async () => {
+        const editorInstanceId = randomUUID();
+        const lease = await translations.leasePage(
+          proofreader.id,
+          proofSession,
+          work.id,
+          work.images[0].id,
+          { editorInstanceId, expectedEditorEpoch: claimed.editorEpoch },
+        );
+        try {
+          return await translations.updateEntry(
+            proofreader.id,
+            draft.entries[0].id,
+            {
+              expectedRevision: 0,
+              expectedEditorEpoch: lease.editorEpoch,
+              translatedText: "accepted proofreading",
+              editorInstanceId,
+              leaseToken: lease.leaseToken,
+            },
+            proofSession,
+          );
+        } finally {
+          await translations.releaseLease(
+            proofreader.id,
+            proofSession,
+            work.id,
+            work.images[0].id,
+            { editorInstanceId, leaseToken: lease.leaseToken },
+          );
+        }
+      };
       const results = await Promise.allSettled(
         iteration ? [skip(), proof()] : [proof(), skip()],
       );
@@ -756,6 +885,15 @@ test("concurrent proofreading first write and skip serialize without discarding 
     await db.translationEntry.deleteMany({
       where: { workImage: { workId: { in: workIds } } },
     });
+    await db.stageContributionSubmission.deleteMany({
+      where: { participant: { workId: { in: workIds } } },
+    });
+    await db.workStageAssignment.deleteMany({
+      where: { participant: { workId: { in: workIds } } },
+    });
+    await db.workPageAssignment.deleteMany({
+      where: { workId: { in: workIds } },
+    });
     await db.workStageParticipant.deleteMany({
       where: { workId: { in: workIds } },
     });
@@ -764,6 +902,12 @@ test("concurrent proofreading first write and skip serialize without discarding 
     await db.candidatePost.deleteMany({ where: { id: { in: candidateIds } } });
     if (authorId) await db.author.delete({ where: { id: authorId } });
     await db.fileObject.deleteMany({ where: { createdById: { in: userIds } } });
+    await db.authSession.deleteMany({ where: { userId: { in: userIds } } });
+    await db.accountAudit.deleteMany({
+      where: {
+        OR: [{ actorId: { in: userIds } }, { targetId: { in: userIds } }],
+      },
+    });
     await db.userRole.deleteMany({ where: { userId: { in: userIds } } });
     await db.user.deleteMany({ where: { id: { in: userIds } } });
     await db.$disconnect();

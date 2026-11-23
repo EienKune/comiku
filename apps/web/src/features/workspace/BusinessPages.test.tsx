@@ -673,33 +673,23 @@ test("refreshes the typeset upload revision after downloading a handoff package"
       response: new Response(null, { status: 200 }),
     } as never;
   });
-  vi.spyOn(client, "POST").mockImplementation(
-    async (path: string) =>
-      ({
-        data: path.endsWith("/deliver")
-          ? {
-              url: "https://storage.invalid/signed.zip",
-              fileName: "10_嵌字交接.zip",
-              expiresInSeconds: 300,
-            }
-          : {
-              id: "download",
-              status: "succeeded",
-              fileName: "10_嵌字交接.zip",
-              error: null,
-            },
-        response: new Response(),
-      }) as never,
+  const materialFetch = vi.fn<
+    (url: string, init?: RequestInit) => Promise<Response>
+  >(async () =>
+    Response.json({
+      id: "material",
+      fileName: "10_嵌字交接.zip",
+      translationVersionId: "formal",
+      sourceAssetRevision: 1,
+      workRevision: 4,
+      editorEpoch: 2,
+      totalBytes: 0,
+      translationFileName: "10_翻译.txt",
+      translationBase64: "",
+      images: [],
+    }),
   );
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockResolvedValue(
-      new Response(new Blob(["handoff"]), {
-        status: 200,
-        headers: { "Content-Type": "application/zip" },
-      }),
-    ),
-  );
+  vi.stubGlobal("fetch", materialFetch);
   vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:handoff");
   vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
@@ -716,10 +706,26 @@ test("refreshes the typeset upload revision after downloading a handoff package"
     </QueryClientProvider>,
   );
 
+  const uploadEntry = await screen.findByLabelText("成图图片");
+  expect((uploadEntry as HTMLInputElement).disabled).toBe(true);
   fireEvent.click(
-    await screen.findByRole("button", { name: "下载嵌字交接包" }),
+    await screen.findByRole("button", { name: "下载交接包并开始嵌字" }),
+  );
+  await waitFor(() =>
+    expect(
+      (screen.getByLabelText("成图图片") as HTMLInputElement).disabled,
+    ).toBe(false),
   );
   expect(await screen.findByText("嵌字交接包已交付浏览器下载")).toBeTruthy();
+  expect(materialFetch.mock.calls[0][0]).toBe(
+    `/api/works/${workId}/typeset/materials`,
+  );
+  expect(
+    JSON.parse(String(materialFetch.mock.calls[0][1]?.body)),
+  ).toMatchObject({ requireCurrentParticipation: true });
+  expect(materialFetch.mock.calls[1][0]).toBe(
+    `/api/works/${workId}/typeset/materials/material/deliver`,
+  );
   expect(versionRequests).toBeGreaterThanOrEqual(2);
   expect(queryClient.getQueryData(["typeset-versions", workId])).toMatchObject({
     workRevision: 4,
@@ -771,7 +777,7 @@ test("keeps submitted translator credit editable before publication", async () =
         stage: "translate",
         participationMode: "owner",
         workCreditName: "译者署名",
-        creditNameSnapshot: "译者署名",
+        creditNameSnapshot: "交稿时的旧名字",
         joinedAt: "2026-09-08T00:00:00.000Z",
         submittedAt: "2026-09-08T01:00:00.000Z",
         leftAt: null,
@@ -824,9 +830,15 @@ test("keeps submitted translator credit editable before publication", async () =
   );
 
   expect(await screen.findByText("等待校对的作品")).toBeTruthy();
-  expect(screen.getByText("已完成 · 提交时署名：译者署名")).toBeTruthy();
-  expect(screen.getByRole("textbox", { name: "翻译临时署名" })).toBeTruthy();
-  fireEvent.change(screen.getByRole("textbox", { name: "翻译临时署名" }), {
+  fireEvent.click(
+    screen.getByRole("button", { name: "翻译参与成员，1 人，查看完整名单" }),
+  );
+  expect(screen.getByText("署名：译者署名")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: "翻译参与成员，1 人，查看完整名单" }),
+  );
+  expect(screen.getByRole("textbox", { name: "翻译署名" })).toBeTruthy();
+  fireEvent.change(screen.getByRole("textbox", { name: "翻译署名" }), {
     target: { value: "新翻译署名" },
   });
   fireEvent.click(screen.getAllByRole("button", { name: "保存署名" })[0]);
@@ -842,164 +854,197 @@ test("keeps submitted translator credit editable before publication", async () =
       }),
     ),
   );
+  fireEvent.click(
+    screen.getByRole("button", { name: "翻译参与成员，1 人，查看完整名单" }),
+  );
+  expect(await screen.findByText("署名：新翻译署名")).toBeTruthy();
+  expect(screen.queryByText(/交稿时的旧名字/)).toBeNull();
   expect(
-    (screen.getByRole("textbox", { name: "嵌字临时署名" }) as HTMLInputElement)
+    (screen.getByRole("textbox", { name: "嵌字署名" }) as HTMLInputElement)
       .value,
   ).toBe("嵌字署名");
-  fireEvent.change(screen.getByRole("textbox", { name: "嵌字临时署名" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "嵌字署名" }), {
     target: { value: "新嵌字署名" },
   });
   fireEvent.click(screen.getAllByRole("button", { name: "保存署名" })[1]);
   await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
   expect(
-    (screen.getByRole("textbox", { name: "翻译临时署名" }) as HTMLInputElement)
+    (screen.getByRole("textbox", { name: "翻译署名" }) as HTMLInputElement)
       .value,
   ).toBe("新翻译署名");
   expect(screen.queryByRole("link", { name: "继续完善翻译" })).toBeNull();
   expect(screen.queryByRole("button", { name: "取消接取" })).toBeNull();
 });
 
-test("shows generated publication copy and confirmation to an operator", async () => {
-  const user: CurrentUser = {
-    canSkipProofreading: false,
-    id: "00000000-0000-4000-8000-000000000001",
-    username: "operator",
-    displayName: "运营",
-    roles: ["operator"],
-    languageCapabilities: [],
-    isActive: true,
-    mustChangePassword: false,
-    revision: 1,
-    permissions: ["works:read", "works:publish", "works:metadata"],
-  };
-  const workId = "00000000-0000-4000-8000-000000000010";
-  let publicationBody: string | null = null;
-  const work = {
-    id: workId,
-    authorId: "00000000-0000-4000-8000-000000000020",
-    authorName: "测试作者",
-    title: "待发布作品",
-    sourcePostUrl: "https://example.invalid/post",
-    sourceText: null,
-    sourceLanguage: "ja",
-    collaborationMode: "single",
-    workflowStatus: "pending_publish",
-    reviewStatus: "normal",
-    priority: 0,
-    revision: 8,
-    editorEpoch: 2,
-    translationAttentionStage: null,
-    translationAttentionVersionNumber: null,
-    imageCount: 1,
-    coverImageId: null,
-    participantCount: 3,
-    assignedStages: ["translate", "proofread", "typeset"],
-    importedAt: "2026-09-10T00:00:00.000Z",
-    publishedAt: null,
-    updatedAt: "2026-09-10T00:00:00.000Z",
-    images: [],
-    participants: [],
-    events: [],
-    openReviewCaseId: null,
-    typesetHandoffStartedAt: "2026-09-10T01:00:00.000Z",
-  };
-  vi.spyOn(client, "GET").mockImplementation(async (path) => {
-    const data =
-      path === "/api/works/{id}"
-        ? work
-        : path === "/api/works/{workId}/typeset/versions"
-          ? { items: [], currentVersionId: null, workRevision: 8 }
-          : {
-              workId,
-              workRevision: work.revision,
-              workflowStatus: "pending_publish",
-              title: "待发布作品",
-              body: publicationBody,
-              authorCredit: "@author_name",
-              sourcePostUrl: "https://example.invalid/post",
-              translationCredits: ["译者"],
-              proofreadCredits: ["校对"],
-              typesetCredits: ["嵌字"],
-              generatedText: `**${work.title}**\n${publicationBody ? `${publicationBody}\n` : ""}作者：@author_name\n\n翻译：译者\n校对：校对\n嵌字：嵌字\n点赞加关注可以看到更多汉化作品\n转载请注明原作者`,
-              templateName: "Comiku 默认发布文案",
-              templateRevision: 0,
-              currentTypesetVersionId: "00000000-0000-4000-8000-000000000030",
-              currentTypesetVersionNumber: 1,
-              imageCount: 1,
-              publishedAt: null,
-              records: [],
-            };
-    return {
-      data,
-      response: new Response(null, { status: 200 }),
-    } as never;
-  });
-  const patch = vi
-    .spyOn(client, "PATCH")
-    .mockImplementation(async (_path, options) => {
-      const body = (
-        options as { body: { title?: string; publicationBody?: string | null } }
-      ).body;
-      if (body.title !== undefined) work.title = body.title;
-      if (body.publicationBody !== undefined)
-        publicationBody = body.publicationBody;
-      work.revision += 1;
+test.each(["operator", "admin", "reviewer", "typesetter"] as const)(
+  "publishing tools follow the actual %s role even with stale publish permissions",
+  async (role) => {
+    const user: CurrentUser = {
+      canSkipProofreading: false,
+      id: "00000000-0000-4000-8000-000000000001",
+      username: "operator",
+      displayName: "运营",
+      roles: [role],
+      languageCapabilities: [],
+      isActive: true,
+      mustChangePassword: false,
+      revision: 1,
+      permissions: ["works:read", "works:publish", "works:metadata"],
+    };
+    const workId = "00000000-0000-4000-8000-000000000010";
+    let publicationBody: string | null = null;
+    const work = {
+      id: workId,
+      authorId: "00000000-0000-4000-8000-000000000020",
+      authorName: "测试作者",
+      title: "待发布作品",
+      sourcePostUrl: "https://example.invalid/post",
+      sourceText: null,
+      sourceLanguage: "ja",
+      collaborationMode: "single",
+      workflowStatus: "pending_publish",
+      reviewStatus: "normal",
+      priority: 0,
+      revision: 8,
+      editorEpoch: 2,
+      translationAttentionStage: null,
+      translationAttentionVersionNumber: null,
+      imageCount: 1,
+      coverImageId: null,
+      participantCount: 3,
+      assignedStages: ["translate", "proofread", "typeset"],
+      importedAt: "2026-09-10T00:00:00.000Z",
+      publishedAt: null,
+      updatedAt: "2026-09-10T00:00:00.000Z",
+      images: [],
+      participants: [],
+      events: [],
+      openReviewCaseId: null,
+      typesetHandoffStartedAt: "2026-09-10T01:00:00.000Z",
+    };
+    vi.spyOn(client, "GET").mockImplementation(async (path) => {
+      const data =
+        path === "/api/works/{id}"
+          ? work
+          : path === "/api/works/{workId}/typeset/versions"
+            ? { items: [], currentVersionId: null, workRevision: 8 }
+            : {
+                workId,
+                workRevision: work.revision,
+                workflowStatus: "pending_publish",
+                title: "待发布作品",
+                body: publicationBody,
+                authorCredit: "@author_name",
+                sourcePostUrl: "https://example.invalid/post",
+                translationCredits: ["译者"],
+                proofreadCredits: ["校对"],
+                typesetCredits: ["嵌字"],
+                generatedText: `${work.title}\n${publicationBody ? `${publicationBody}\n` : ""}作者：@author_name\n\n翻译：译者\n校对：校对\n嵌字：嵌字\n点赞加关注可以看到更多汉化作品\n转载请注明原作者`,
+                templateName: "Comiku 默认发布文案",
+                templateRevision: 0,
+                currentTypesetVersionId: "00000000-0000-4000-8000-000000000030",
+                currentTypesetVersionNumber: 1,
+                imageCount: 1,
+                publishedAt: null,
+                records: [],
+              };
       return {
-        data: { ...work },
+        data,
         response: new Response(null, { status: 200 }),
       } as never;
     });
+    const patch = vi
+      .spyOn(client, "PATCH")
+      .mockImplementation(async (_path, options) => {
+        const body = (
+          options as {
+            body: { title?: string; publicationBody?: string | null };
+          }
+        ).body;
+        if (body.title !== undefined) work.title = body.title;
+        if (body.publicationBody !== undefined)
+          publicationBody = body.publicationBody;
+        work.revision += 1;
+        return {
+          data: { ...work },
+          response: new Response(null, { status: 200 }),
+        } as never;
+      });
 
-  render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[`/works/${workId}`]}>
-        <Routes>
-          <Route element={<Outlet context={user} />}>
-            <Route path="/works/:id" element={<WorkDetailPage />} />
-          </Route>
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/works/${workId}`]}>
+          <Routes>
+            <Route element={<Outlet context={user} />}>
+              <Route path="/works/:id" element={<WorkDetailPage />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
 
-  expect(await screen.findByText("发布整理")).toBeTruthy();
-  expect(await screen.findByText(/作者：@author_name/)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "复制文案" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "确认已经发布" })).toBeTruthy();
-  fireEvent.change(screen.getByRole("textbox", { name: "作品标题" }), {
-    target: { value: "新作品标题" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "保存作品信息" }));
-  expect(await screen.findByText(/\*\*新作品标题\*\*/)).toBeTruthy();
-  const summary = screen.getByText("作品正文（可选）");
-  expect(summary.closest("details")?.open).toBe(false);
-  fireEvent.click(summary);
-  summary.closest("details")!.open = true;
-  fireEvent.change(screen.getByRole("textbox", { name: "作品正文" }), {
-    target: { value: "发布正文" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "保存作品正文" }));
-  expect(
-    await screen.findByText(
-      (_content, element) =>
-        element?.tagName === "PRE" &&
-        Boolean(
-          element.textContent?.startsWith("**新作品标题**\n发布正文\n作者："),
-        ),
-    ),
-  ).toBeTruthy();
-  expect(patch).toHaveBeenLastCalledWith(
-    "/api/works/{id}",
-    expect.objectContaining({
-      body: expect.objectContaining({
-        publicationBody: "发布正文",
-        expectedRevision: 9,
+    await screen.findByRole("heading", { name: "待发布作品" });
+    if (role !== "operator") {
+      expect(screen.queryByText("发布整理")).toBeNull();
+      expect(
+        screen.getByText("当前成图已经就绪，等待运营确认发布。"),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "确认已经发布" })).toBeNull();
+      expect(
+        vi
+          .mocked(client.GET)
+          .mock.calls.some(
+            (call) => call[0] === "/api/works/{workId}/publishing",
+          ),
+      ).toBe(false);
+      return;
+    }
+    expect(await screen.findByText("发布整理")).toBeTruthy();
+    expect(screen.queryByText(/Comiku 默认发布文案 r0/)).toBeNull();
+    expect(await screen.findByText(/作者：@author_name/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "复制文案" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "确认已经发布" })).toBeTruthy();
+    fireEvent.change(screen.getByRole("textbox", { name: "作品标题" }), {
+      target: { value: "新作品标题" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存作品信息" }));
+    expect(
+      await screen.findByText(
+        (_content, element) =>
+          element?.tagName === "PRE" &&
+          Boolean(element.textContent?.startsWith("新作品标题\n作者：")),
+      ),
+    ).toBeTruthy();
+    const summary = screen.getByText("作品正文（可选）");
+    expect(summary.closest("details")?.open).toBe(false);
+    fireEvent.click(summary);
+    summary.closest("details")!.open = true;
+    fireEvent.change(screen.getByRole("textbox", { name: "作品正文" }), {
+      target: { value: "发布正文" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存作品正文" }));
+    expect(
+      await screen.findByText(
+        (_content, element) =>
+          element?.tagName === "PRE" &&
+          Boolean(
+            element.textContent?.startsWith("新作品标题\n发布正文\n作者："),
+          ),
+      ),
+    ).toBeTruthy();
+    expect(patch).toHaveBeenLastCalledWith(
+      "/api/works/{id}",
+      expect.objectContaining({
+        body: expect.objectContaining({
+          publicationBody: "发布正文",
+          expectedRevision: 9,
+        }),
       }),
-    }),
-  );
-});
+    );
+  },
+);
 
-test("shows typeset and publishing evidence while a release review is open", async () => {
+test("shows typeset evidence without publishing tools for a non-operator release reviewer", async () => {
   const user: CurrentUser = {
     canSkipProofreading: false,
     id: "00000000-0000-4000-8000-000000000001",
@@ -1153,7 +1198,7 @@ test("shows typeset and publishing evidence while a release review is open", asy
 
   expect(await screen.findByText("气泡位置需要调整")).toBeTruthy();
   expect(await screen.findByText("审核发起时版本")).toBeTruthy();
-  expect(await screen.findByText("发布整理")).toBeTruthy();
+  expect(screen.queryByText("发布整理")).toBeNull();
   expect(screen.getByText("发起时成图").parentElement?.textContent).toContain(
     "v1",
   );
@@ -2183,3 +2228,118 @@ test("author-account scope is shared by work cards and album, and clearing autho
   view.unmount();
   cache.clear();
 });
+
+test.each(["outsider", "administrator", "participant"] as const)(
+  "proofreading card separates self actions, manager controls and own signature: %s",
+  async (kind) => {
+    const user: CurrentUser = {
+      id: "self",
+      username: "self",
+      displayName: "本人",
+      roles:
+        kind === "administrator" ? ["admin", "proofreader"] : ["proofreader"],
+      languageCapabilities: ["ja"],
+      isActive: true,
+      mustChangePassword: false,
+      revision: 1,
+      canSkipProofreading: false,
+      permissions:
+        kind === "administrator"
+          ? ["works:read", "works:proofread", "works:admin"]
+          : ["works:read", "works:proofread"],
+    };
+    const work = {
+      id: "proofreading-work",
+      workNumber: 18,
+      authorId: "author",
+      authorName: "合成作者",
+      title: "校对卡片测试",
+      sourcePostUrl: null,
+      sourceText: null,
+      sourceLanguage: "ja",
+      collaborationMode: "multi",
+      workflowStatus: "proofreading",
+      reviewStatus: "normal",
+      priority: 0,
+      revision: 3,
+      editorEpoch: 0,
+      translationAttentionStage: null,
+      translationAttentionVersionNumber: null,
+      imageCount: 0,
+      coverImageId: null,
+      participantCount: 1,
+      assignedStages: ["proofread"],
+      importedAt: "2026-11-20T00:00:00Z",
+      publishedAt: null,
+      updatedAt: "2026-11-20T00:00:00Z",
+      images: [],
+      pageAssignments: [],
+      participants: [
+        {
+          id: "proofreader",
+          userId: kind === "participant" ? "self" : "first",
+          displayName: "首校",
+          avatarVersion: null,
+          stage: "proofread",
+          participationMode: "owner",
+          workCreditName: null,
+          creditNameSnapshot: null,
+          joinedAt: "2026-11-20T00:00:00Z",
+          submittedAt: null,
+          leftAt: null,
+          assignedImageIds: [],
+          contributionSubmittedAt: null,
+          contributionCurrent: false,
+        },
+      ],
+      events: [],
+      openReviewCaseId: null,
+    };
+    vi.spyOn(client, "GET").mockResolvedValue({
+      data: work,
+      response: new Response(null, { status: 200 }),
+    } as never);
+    const post = vi.spyOn(client, "POST").mockResolvedValue({
+      data: { ...work, revision: 4 },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/works/${work.id}`]}>
+          <Routes>
+            <Route element={<Outlet context={user} />}>
+              <Route path="/works/:id" element={<WorkDetailPage />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByText("校对卡片测试");
+    expect(Boolean(screen.queryByRole("button", { name: "添加校对" }))).toBe(
+      kind !== "outsider",
+    );
+    expect(Boolean(screen.queryByRole("textbox", { name: "校对署名" }))).toBe(
+      kind === "participant",
+    );
+    expect(Boolean(screen.queryByRole("button", { name: "取消接取" }))).toBe(
+      kind === "participant",
+    );
+    expect(screen.queryByText("职责", { exact: true })).toBeNull();
+    if (kind !== "participant") {
+      fireEvent.click(screen.getByRole("button", { name: "加入校对" }));
+      await waitFor(() =>
+        expect(post).toHaveBeenCalledWith(
+          "/api/works/{id}/stages/claim",
+          expect.objectContaining({
+            body: expect.objectContaining({
+              stage: "proofread",
+              expectedRevision: 3,
+            }),
+          }),
+        ),
+      );
+    } else {
+      expect(screen.queryByRole("button", { name: "加入校对" })).toBeNull();
+    }
+  },
+);

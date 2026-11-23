@@ -74,35 +74,34 @@ test("freezes the full manifest, delivers a controlled queue, and keeps failed i
     data: { items: manifest },
     response: new Response(),
   } as never);
-  const post = vi
-    .spyOn(client, "POST")
-    .mockImplementation(async (path: string, input: unknown) => {
-      if (path.endsWith("/deliver"))
-        return {
-          data: {
-            url: "https://storage.invalid/signed.zip",
-            fileName: "work.zip",
-            expiresInSeconds: 300,
-          },
-          response: new Response(),
-        } as never;
-      const workId = (input as { body: { workId: string } }).body.workId;
-      if (workId === "work-0")
-        return {
-          error: { message: "清单已过期" },
-          response: new Response(null, { status: 409 }),
-        } as never;
-      return {
-        data: {
-          id: workId,
-          status: "succeeded",
-          fileName: "work.zip",
-          error: null,
+  const post = vi.spyOn(client, "POST");
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url.startsWith("https://storage.invalid/"))
+      return new Response(new Uint8Array([1, 2, 3]));
+    const workId = url.split("/")[3];
+    if (workId === "work-0")
+      return Response.json({ message: "清单已过期" }, { status: 409 });
+    return Response.json({
+      id: workId,
+      fileName: "work.zip",
+      translationVersionId: "formal",
+      sourceAssetRevision: 1,
+      workRevision: 3,
+      editorEpoch: 4,
+      totalBytes: 3,
+      translationFileName: "翻译.txt",
+      translationBase64: "",
+      images: [
+        {
+          fileName: `${workId}.png`,
+          size: 3,
+          checksum:
+            "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+          url: `https://storage.invalid/${workId}.png`,
         },
-        response: new Response(),
-      } as never;
+      ],
     });
-  const fetchMock = vi.fn();
+  });
   vi.stubGlobal("fetch", fetchMock);
   const user = {
     id: "user",
@@ -132,15 +131,12 @@ test("freezes the full manifest, delivers a controlled queue, and keeps failed i
     (screen.getByRole("button", { name: "重试此项" }) as HTMLButtonElement)
       .disabled,
   ).toBe(false);
-  expect(post).toHaveBeenCalledTimes(51);
-  expect(post.mock.calls[0]).toMatchObject([
-    "/api/transfers/downloads",
-    {
-      body: { purpose: "handoff", expectedRevision: 3, expectedEditorEpoch: 4 },
-    },
-  ]);
-  expect(fetchMock).not.toHaveBeenCalled();
-  expect(createObjectURL).not.toHaveBeenCalled();
+  expect(post).not.toHaveBeenCalled();
+  expect(fetchMock).toHaveBeenCalledTimes(76);
+  expect(fetchMock.mock.calls[0][0]).toBe(
+    "/api/works/work-0/typeset/materials",
+  );
+  expect(createObjectURL).toHaveBeenCalledTimes(25);
 });
 
 test("batch entry visibility changes only inside the topbar, leaving the list body unchanged", () => {
@@ -177,4 +173,60 @@ test("batch entry visibility changes only inside the topbar, leaving the list bo
       .getByRole("button", { name: "批量下载嵌字交接包" })
       .closest("header"),
   ).toBeTruthy();
+});
+
+test("refreshes the handoff baseline whenever the checklist is reopened after detail changes", async () => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.removeAttribute("open");
+  };
+  let revision = 3;
+  const get = vi.spyOn(client, "GET").mockImplementation(
+    async () =>
+      ({
+        data: {
+          items: [
+            {
+              workId: "work",
+              workNumber: 16,
+              title: `版本 ${revision}`,
+              imageCount: 2,
+              workRevision: revision,
+              editorEpoch: 1,
+              canDownload: true,
+              unavailableReason: null,
+            },
+          ],
+        },
+        response: new Response(),
+      }) as never,
+  );
+  render(
+    <MemoryRouter>
+      <Routes>
+        <Route
+          element={
+            <Outlet
+              context={{
+                id: "user",
+                roles: ["typesetter"],
+                permissions: ["works:typeset"],
+              }}
+            />
+          }
+        >
+          <Route path="/" element={<ToolsShell />} />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "批量下载嵌字交接包" }));
+  await screen.findByText("#16 · 版本 3");
+  fireEvent.click(screen.getByRole("button", { name: "关闭下载清单" }));
+  revision = 4;
+  fireEvent.click(screen.getByRole("button", { name: "批量下载嵌字交接包" }));
+  await screen.findByText("#16 · 版本 4");
+  expect(get).toHaveBeenCalledTimes(2);
 });

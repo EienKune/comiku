@@ -26,6 +26,8 @@ export interface TranslationDraftRecord {
   editorEpoch?: number;
   latestVersionId?: string | null;
   images: EditableTranslationImage[];
+  /** Missing on legacy snapshots, whose edited entries cannot be inferred safely. */
+  dirtyEntryIds?: string[];
 }
 
 export interface TranslationDraftHead {
@@ -36,6 +38,7 @@ export interface TranslationDraftHead {
 const databaseName = "comiku-editor";
 const storeName = "translation-drafts";
 const databaseVersion = 1;
+const pendingDraftWrites = new Map<string, Promise<unknown>>();
 export const localDraftRetentionMs = 7 * 24 * 60 * 60 * 1000;
 
 export function translationDraftKey(userId: string, workId: string) {
@@ -48,6 +51,7 @@ export function createTranslationDraft(
   images: EditableTranslationImage[],
   head: TranslationDraftHead = { editorEpoch: 0, latestVersionId: null },
   now = Date.now(),
+  dirtyEntryIds?: Iterable<string>,
 ): TranslationDraftRecord {
   return {
     version: 1,
@@ -59,6 +63,20 @@ export function createTranslationDraft(
     editorEpoch: head.editorEpoch,
     latestVersionId: head.latestVersionId,
     images,
+    ...(dirtyEntryIds === undefined
+      ? {}
+      : {
+          dirtyEntryIds: [
+            ...new Set([
+              ...dirtyEntryIds,
+              ...images.flatMap((image) =>
+                image.entries
+                  .filter((entry) => entry.localOnly)
+                  .map((entry) => entry.id),
+              ),
+            ]),
+          ],
+        }),
   };
 }
 
@@ -95,8 +113,13 @@ async function runStoreRequest<T>(
     return await new Promise<T>((resolve, reject) => {
       const transaction = database.transaction(storeName, mode);
       const request = operation(transaction.objectStore(storeName));
-      request.onsuccess = () => resolve(request.result);
+      let result: T;
+      request.onsuccess = () => {
+        result = request.result;
+      };
+      transaction.oncomplete = () => resolve(result);
       request.onerror = () => reject(request.error);
+      transaction.onerror = () => reject(transaction.error);
       transaction.onabort = () => reject(transaction.error);
     });
   } finally {
@@ -105,6 +128,9 @@ async function runStoreRequest<T>(
 }
 
 export async function loadTranslationDraft(userId: string, workId: string) {
+  await pendingDraftWrites
+    .get(translationDraftKey(userId, workId))
+    ?.catch(() => undefined);
   await cleanupExpiredTranslationDrafts();
   const key = translationDraftKey(userId, workId);
   const draft = await runStoreRequest<TranslationDraftRecord | undefined>(
@@ -144,13 +170,27 @@ export async function cleanupExpiredTranslationDrafts(now = Date.now()) {
   }
 }
 
+function enqueueDraftWrite<T>(key: string, operation: () => Promise<T>) {
+  const previous = pendingDraftWrites.get(key) ?? Promise.resolve();
+  const pending = previous.catch(() => undefined).then(operation);
+  pendingDraftWrites.set(key, pending);
+  const clear = () => {
+    if (pendingDraftWrites.get(key) === pending) pendingDraftWrites.delete(key);
+  };
+  void pending.then(clear, clear);
+  return pending;
+}
+
 export async function saveTranslationDraft(draft: TranslationDraftRecord) {
-  await runStoreRequest<IDBValidKey>("readwrite", (store) => store.put(draft));
+  await enqueueDraftWrite(draft.key, () =>
+    runStoreRequest<IDBValidKey>("readwrite", (store) => store.put(draft)),
+  );
 }
 
 export async function deleteTranslationDraft(userId: string, workId: string) {
-  await runStoreRequest<undefined>("readwrite", (store) =>
-    store.delete(translationDraftKey(userId, workId)),
+  const key = translationDraftKey(userId, workId);
+  await enqueueDraftWrite(key, () =>
+    runStoreRequest<undefined>("readwrite", (store) => store.delete(key)),
   );
 }
 
@@ -175,7 +215,12 @@ export function reconcileTranslationDraft(
     latestVersionId: null,
   },
 ) {
-  const dirtyEntryIds = new Set<string>();
+  const base = {
+    images: serverImages as EditableTranslationImage[],
+    dirtyEntryIds: new Set<string>(),
+    conflictedEntryIds: new Set<string>(),
+    legacy: draft.dirtyEntryIds === undefined,
+  };
   const draftEditorEpoch = draft.editorEpoch ?? 0;
   const draftVersionId = draft.latestVersionId ?? null;
   if (
@@ -185,100 +230,94 @@ export function reconcileTranslationDraft(
     return {
       compatible: false as const,
       conflict: "epoch" as const,
-      dirtyEntryIds,
+      ...base,
     };
   }
-  if (
-    draft.images.length !== serverImages.length ||
-    serverImages.some(
-      (serverImage) =>
-        !draft.images.some((draftImage) => draftImage.id === serverImage.id),
-    )
-  ) {
+  const result = reapplyDraftContent(
+    serverImages,
+    draft.images,
+    draft.dirtyEntryIds,
+  );
+  if (result.legacy || result.conflictedEntryIds.size) {
     return {
       compatible: false as const,
       conflict: "content" as const,
-      dirtyEntryIds,
+      ...result,
     };
   }
-  for (const draftImage of draft.images) {
-    const serverImage = serverImages.find(
-      (image) => image.id === draftImage.id,
-    );
-    if (
-      !serverImage ||
-      serverImage.translationRevision !== draftImage.translationRevision
-    ) {
-      return {
-        compatible: false as const,
-        conflict: "content" as const,
-        dirtyEntryIds,
-      };
-    }
-    const persistedEntries = draftImage.entries.filter(
-      (entry) => !entry.localOnly,
-    );
-    if (
-      persistedEntries.length !== serverImage.entries.length ||
-      serverImage.entries.some(
-        (serverEntry) =>
-          !persistedEntries.some((entry) => entry.id === serverEntry.id),
-      )
-    ) {
-      return {
-        compatible: false as const,
-        conflict: "content" as const,
-        dirtyEntryIds: new Set<string>(),
-      };
-    }
-    for (const draftEntry of draftImage.entries) {
-      if (draftEntry.localOnly) {
-        dirtyEntryIds.add(draftEntry.id);
-        continue;
-      }
-      const serverEntry = serverImage.entries.find(
-        (entry) => entry.id === draftEntry.id,
-      );
-      if (!serverEntry || serverEntry.revision !== draftEntry.revision) {
-        return {
-          compatible: false as const,
-          conflict: "content" as const,
-          dirtyEntryIds: new Set<string>(),
-        };
-      }
-      if (!sameEntryContent(draftEntry, serverEntry)) {
-        dirtyEntryIds.add(draftEntry.id);
-      }
-    }
-  }
-  return { compatible: true as const, conflict: null, dirtyEntryIds };
+  return { compatible: true as const, conflict: null, ...result };
 }
 
 export function reapplyDraftContent(
   serverImages: TranslationImage[],
   draftImages: EditableTranslationImage[],
+  trackedEntryIds?: Iterable<string>,
 ) {
   const dirtyEntryIds = new Set<string>();
+  const conflictedEntryIds = new Set<string>();
+  if (trackedEntryIds === undefined) {
+    return {
+      images: serverImages as EditableTranslationImage[],
+      dirtyEntryIds,
+      conflictedEntryIds,
+      legacy: true,
+    };
+  }
+  const tracked = new Set(trackedEntryIds);
+  for (const image of draftImages) {
+    for (const entry of image.entries) {
+      if (entry.localOnly) tracked.add(entry.id);
+    }
+  }
+  const unresolved = new Set(tracked);
   const images: EditableTranslationImage[] = serverImages.map((serverImage) => {
     const localImage = draftImages.find((image) => image.id === serverImage.id);
     if (!localImage) return serverImage;
-    const entries = serverImage.entries.map((serverEntry) => {
-      const localEntry = localImage.entries.find(
-        (entry) => entry.id === serverEntry.id && !entry.localOnly,
-      );
-      if (!localEntry) return serverEntry;
-      if (sameEntryContent(localEntry, serverEntry)) return serverEntry;
-      dirtyEntryIds.add(serverEntry.id);
-      return {
-        ...serverEntry,
-        markerX: localEntry.markerX,
-        markerY: localEntry.markerY,
-        markerPositionType: localEntry.markerPositionType,
-        translatedText: localEntry.translatedText,
-        note: localEntry.note,
-      };
-    });
+    const entries: EditableTranslationEntry[] = serverImage.entries.map(
+      (serverEntry) => {
+        const localEntry = localImage.entries.find(
+          (entry) => entry.id === serverEntry.id && tracked.has(entry.id),
+        );
+        if (!localEntry) return serverEntry;
+        unresolved.delete(localEntry.id);
+        if (localEntry.workImageId !== serverImage.id || localEntry.localOnly) {
+          conflictedEntryIds.add(localEntry.id);
+          return serverEntry;
+        }
+        if (sameEntryContent(localEntry, serverEntry)) return serverEntry;
+        if (serverEntry.revision !== localEntry.revision) {
+          conflictedEntryIds.add(localEntry.id);
+          return serverEntry;
+        }
+        dirtyEntryIds.add(serverEntry.id);
+        return {
+          ...serverEntry,
+          markerX: localEntry.markerX,
+          markerY: localEntry.markerY,
+          markerPositionType: localEntry.markerPositionType,
+          translatedText: localEntry.translatedText,
+          note: localEntry.note,
+        };
+      },
+    );
+    for (const localEntry of localImage.entries) {
+      if (!localEntry.localOnly || !unresolved.has(localEntry.id)) continue;
+      unresolved.delete(localEntry.id);
+      if (
+        localEntry.workImageId !== serverImage.id ||
+        !localEntry.idempotencyKey ||
+        serverImages.some((image) =>
+          image.entries.some((entry) => entry.id === localEntry.id),
+        )
+      ) {
+        conflictedEntryIds.add(localEntry.id);
+        continue;
+      }
+      entries.push({ ...localEntry, orderIndex: entries.length });
+      dirtyEntryIds.add(localEntry.id);
+    }
     return { ...serverImage, entries };
   });
-  return { images, dirtyEntryIds };
+  for (const entryId of unresolved) conflictedEntryIds.add(entryId);
+  return { images, dirtyEntryIds, conflictedEntryIds, legacy: false };
 }

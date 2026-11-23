@@ -15,6 +15,7 @@ import {
   type ObjectStorage,
 } from "../../src/files/object-storage.js";
 import { JobsService } from "../../src/jobs/jobs.service.js";
+import { parseLabelPlus } from "../../src/labelplus/labelplus-codec.js";
 import { DirectUploadsService } from "../../src/transfers/direct-uploads.service.js";
 import { DownloadsService } from "../../src/transfers/downloads.service.js";
 import { tokenHash } from "../../src/users/password.js";
@@ -101,8 +102,10 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
   }
   try {
     const source = await member("source"),
+      proofreader = await member("proofreader"),
       typesetter = await member("typesetter"),
       admin = await member("admin"),
+      operator = await member("operator"),
       outsider = await member("translator");
     const author = await db.author.create({
       data: {
@@ -343,6 +346,7 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
           importedById: source.id,
           sourceLanguage: "ja",
           workflowStatus: "pending_typeset",
+          editorEpoch: 1,
           title: "Synthetic export",
           images: {
             create: { originalFileObjectId: original.id, orderIndex: 0 },
@@ -355,8 +359,30 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
             },
           },
         },
+        include: { images: true },
       });
       workIds.push(work.id);
+      await db.translationVersion.create({
+        data: {
+          workId: work.id,
+          versionNumber: 1,
+          kind: "proofread_submission",
+          stage: "proofread",
+          createdById: proofreader.id,
+          editorEpoch: work.editorEpoch,
+          workRevision: work.revision,
+          entries: {
+            create: {
+              workImageId: work.images[0].id,
+              orderIndex: 0,
+              markerX: 0.5,
+              markerY: 0.5,
+              markerPositionType: "inside",
+              translatedText: "交接测试译文",
+            },
+          },
+        },
+      });
       return work;
     }
     const work = await makeWork();
@@ -376,11 +402,10 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
     assert.equal(queued.status, 200);
     assert.equal(queued.data.status, "queued");
     await run(queued.data.id, "download_handoff");
-    assert.equal(
-      (await app.get(DownloadsService).get(typesetter.id, queued.data.id))
-        .status,
-      "succeeded",
-    );
+    const prepared = await app
+      .get(DownloadsService)
+      .get(typesetter.id, queued.data.id);
+    assert.equal(prepared.status, "succeeded", prepared.error ?? undefined);
     assert.equal(
       (await db.work.findUniqueOrThrow({ where: { id: work.id } }))
         .typesetHandoffStartedAt,
@@ -433,7 +458,11 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
     });
     const zip = unzipSync((await files.read(packageTask.fileObjectId!)).body);
     assert.deepEqual(Buffer.from(zip[`${work.workNumber}-001.png`]), png);
-    assert.ok(zip[`${work.workNumber}_翻译.txt`]);
+    assert.equal(
+      parseLabelPlus(zip[`${work.workNumber}_翻译.txt`]).document.images[0]
+        .markers[0].translation,
+      "交接测试译文",
+    );
     const rendered = await prepareUpload(
       "typeset_single",
       work.id,
@@ -524,13 +553,27 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
     const publicationWork = await db.work.findUniqueOrThrow({
       where: { id: work.id },
     });
-    const publicationTask = await app.get(DownloadsService).prepare(admin.id, {
-      purpose: "publication",
-      workId: work.id,
-      expectedRevision: publicationWork.revision,
-      expectedEditorEpoch: publicationWork.editorEpoch,
-      idempotencyKey: randomUUID(),
-    });
+    for (const nonOperator of [admin, typesetter, outsider]) {
+      await assert.rejects(
+        app.get(DownloadsService).prepare(nonOperator.id, {
+          purpose: "publication",
+          workId: work.id,
+          expectedRevision: publicationWork.revision,
+          expectedEditorEpoch: publicationWork.editorEpoch,
+          idempotencyKey: randomUUID(),
+        }),
+        /当前职务不能取得该用途文件/,
+      );
+    }
+    const publicationTask = await app
+      .get(DownloadsService)
+      .prepare(operator.id, {
+        purpose: "publication",
+        workId: work.id,
+        expectedRevision: publicationWork.revision,
+        expectedEditorEpoch: publicationWork.editorEpoch,
+        idempotencyKey: randomUUID(),
+      });
     await run(publicationTask.id, "download_publication");
     const publishedFile = await db.downloadPreparation.findUniqueOrThrow({
       where: { id: publicationTask.id },
@@ -546,7 +589,7 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
       Buffer.from(publishedZip[`${work.workNumber}-001成图.png`]),
       png,
     );
-    const repeatTask = await app.get(DownloadsService).prepare(admin.id, {
+    const repeatTask = await app.get(DownloadsService).prepare(operator.id, {
       purpose: "publication",
       workId: work.id,
       expectedRevision: publicationWork.revision,
@@ -562,7 +605,7 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
       ).fileObjectId,
       publishedFile.fileObjectId,
     );
-    await app.get(DownloadsService).deliver(admin.id, repeatTask.id);
+    await app.get(DownloadsService).deliver(operator.id, repeatTask.id);
     // Expiry clears staging/cache sessions without removing adopted images or durable handoff history.
     const expiredManifest = (
       await db.directUploadSession.findUniqueOrThrow({
@@ -666,6 +709,9 @@ test("direct uploads and asynchronous ZIP delivery preserve adoption permissions
       });
       await db.labelPlusFile.deleteMany({ where: { workId: { in: workIds } } });
       await db.workEvent.deleteMany({ where: { workId: { in: workIds } } });
+      await db.workPageAssignment.deleteMany({
+        where: { workId: { in: workIds } },
+      });
       await db.workStageParticipant.deleteMany({
         where: { workId: { in: workIds } },
       });

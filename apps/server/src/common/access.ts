@@ -77,7 +77,6 @@ export function permissionsFor(
       "works:translate",
       "works:proofread",
       "works:typeset",
-      "works:publish",
       "reviews:resolve",
       "works:admin",
     );
